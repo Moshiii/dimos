@@ -194,12 +194,21 @@ def main() -> None:
     pub = lcm.LCM()
 
     # Publish camera_info up front so the binary can build its camera model
-    # before any image arrives.
-    first_ci = next(
-        iter(store.stream(args.camera_info_stream, CameraInfo).order_by("ts").limit(1)), None
-    )
+    # before any image arrives. Some recordings predate the camera_info
+    # stream (the binary then needs cam_* CLI args instead).
+    try:
+        first_ci = next(
+            iter(store.stream(args.camera_info_stream, CameraInfo).order_by("ts").limit(1)), None
+        )
+    except Exception:
+        first_ci = None
     if first_ci is not None:
         pub.publish(args.camera_info_channel, first_ci.data.lcm_encode())
+    else:
+        print(
+            f"[replay] no camera_info stream '{args.camera_info_stream}' — binary must get cam_* via CLI",
+            flush=True,
+        )
 
     first_lidar = next(
         iter(store.stream(args.lidar_stream, PointCloud2).order_by("ts").limit(1)), None
@@ -227,10 +236,18 @@ def main() -> None:
             stop_ts,
             fix_domain_latency=image_latency,
         ),
-        _stream_iter(
-            store, args.camera_info_stream, CameraInfo, args.camera_info_channel, start_ts, stop_ts
-        ),
     ]
+    if first_ci is not None:
+        sources.append(
+            _stream_iter(
+                store,
+                args.camera_info_stream,
+                CameraInfo,
+                args.camera_info_channel,
+                start_ts,
+                stop_ts,
+            )
+        )
     merged = heapq.merge(*sources, key=lambda item: item[0])
 
     wall_t0 = time.monotonic()

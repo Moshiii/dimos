@@ -99,7 +99,7 @@ class FastLivoConfig(NativeModuleConfig):
     lidar_time_offset: float = 0.0
     # imu
     imu_en: bool = True
-    gyr_cov: float = 0.5
+    gyr_cov: float = 0.3
     acc_cov: float = 0.5
     imu_int_frame: int = 3
     gravity_est_en: bool = True
@@ -108,22 +108,32 @@ class FastLivoConfig(NativeModuleConfig):
     lidar_type: int = 1
     scan_line: int = 4
     blind: float = 0.5  # spherical min range (m)
-    point_filter_num: int = 1
-    filter_size_surf: float = 0.1
+    point_filter_num: int = 3
+    filter_size_surf: float = 0.2
     # lio / voxel map
     max_layer: int = 2
-    voxel_size: float = 0.5
-    min_eigen_value: float = 0.0025
+    voxel_size: float = 1.0
+    min_eigen_value: float = 0.005
     sigma_num: float = 3.0
     beam_err: float = 0.02
     dept_err: float = 0.05
     layer_init_num: list[int] = Field(default_factory=lambda: [5, 5, 5, 5, 5])
     max_points_num: int = 50
     lio_max_iterations: int = 5
-    # local map sliding
-    map_sliding_en: bool = False
-    half_map_size: int = 100
+    # Local map sliding: bounds voxel-map memory (the map is otherwise
+    # unbounded — a 60-min outdoor run grows past 25G RSS). FAST-LIVO2 has no
+    # loop closure, so discarding far-away map costs nothing but map reuse on
+    # revisit.
+    map_sliding_en: bool = True
+    half_map_size: int = 50
     sliding_thresh: float = 8.0
+    # Same idea for the VIO visual map (not covered by map sliding): prune
+    # visual voxels farther than this from the current pose (m); 0 disables.
+    visual_map_radius: float = 60.0
+    # Process every Nth camera frame (1 = all). sync_packages slices lidar
+    # scans at image times, so a high camera rate fragments the lidar
+    # geometry per LIO update; striding rebalances that.
+    img_stride: int = 1
     # extrinsics: lidar in IMU frame (Mid-360 built-in IMU)
     extrinsic_t: list[float] = Field(default_factory=lambda: [-0.011, -0.02329, 0.04412])
     extrinsic_r: list[float] = Field(

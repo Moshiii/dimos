@@ -112,6 +112,11 @@ const std::pair<const char*, const char*> kParamMap[] = {
     {"cam_fy", "cam_fy"},
     {"cam_cx", "cam_cx"},
     {"cam_cy", "cam_cy"},
+    {"cam_d0", "cam_d0"},
+    {"cam_d1", "cam_d1"},
+    {"cam_d2", "cam_d2"},
+    {"cam_d3", "cam_d3"},
+    {"cam_d4", "cam_d4"},
 };
 
 std::atomic<bool> g_got_camera_info{false};
@@ -209,8 +214,11 @@ int main(int argc, char** argv) {
     }
 
     // The camera model must be known before LIVMapper is constructed (its
-    // ctor builds the VIO manager), so block on the first CameraInfo.
-    if (img_en) {
+    // ctor builds the VIO manager), so block on the first CameraInfo —
+    // unless a full camera model was already provided via CLI (recordings
+    // that predate the camera_info stream).
+    const bool cam_from_cli = args.has("cam_model") && args.has("cam_width") && args.has("cam_fx");
+    if (img_en && !cam_from_cli) {
         io.subscribe_camera_info(camera_info_channel, [&](const BridgeCamInfo& ci) {
             if (!g_got_camera_info.load()) {
                 apply_camera_info(ci, args);
@@ -247,6 +255,41 @@ int main(int argc, char** argv) {
             mapper.img_en, mapper.extT(0), mapper.extT(1), mapper.extT(2),
             static_cast<int>(mapper.slam_mode_));
 
+    // The VIO visual map (vio_manager->feat_map) is only freed in the
+    // destructor upstream — mapSliding() bounds the LIO voxel map but not
+    // this one, and on hour-long runs it grows without limit (~0.4 MB/s on
+    // huge_loop). Prune far-away visual voxels between estimation cycles;
+    // everything that references VisualPoint* across frames (visual_submap,
+    // sub_feat_map, retrieve_voxel_points) is rebuilt per VIO frame, so
+    // erasing here is safe. 0 disables.
+    const double visual_map_radius = args.get_double("visual_map_radius", 60.0);
+    const int prune_every = 100;  // odometry publishes (~7 s at 15 Hz)
+    int odom_since_prune = 0;
+    auto prune_visual_map = [&]() {
+        if (visual_map_radius <= 0 || !mapper.vio_manager) { return; }
+        if (++odom_since_prune < prune_every) { return; }
+        odom_since_prune = 0;
+        constexpr double kFeatMapVoxelSize = 0.5;  // hardcoded in insertPointIntoVoxelMap
+        const Eigen::Vector3d pos = mapper._state.pos_end;
+        auto& feat_map = mapper.vio_manager->feat_map;
+        size_t erased = 0;
+        for (auto it = feat_map.begin(); it != feat_map.end();) {
+            const Eigen::Vector3d center((it->first.x + 0.5) * kFeatMapVoxelSize,
+                                         (it->first.y + 0.5) * kFeatMapVoxelSize,
+                                         (it->first.z + 0.5) * kFeatMapVoxelSize);
+            if ((center - pos).norm() > visual_map_radius) {
+                delete it->second;
+                it = feat_map.erase(it);
+                ++erased;
+            } else {
+                ++it;
+            }
+        }
+        if (debug && erased > 0) {
+            fprintf(stderr, "[fastlivo] pruned %zu visual voxels (map now %zu)\n", erased, feat_map.size());
+        }
+    };
+
     // Hook LIVMapper's odometry publish onto LCM. Upstream stamps with wall
     // now(); re-stamp from the EKF update time so replayed data keeps its own
     // clock domain.
@@ -282,6 +325,7 @@ int main(int argc, char** argv) {
         out.qw = odom.pose.pose.orientation.w;
         std::memcpy(out.pose_covariance, odom.pose.covariance, sizeof(out.pose_covariance));
         io.publish_odometry(odometry_channel, out, frame_id, sensor_frame_id);
+        prune_visual_map();
     };
 
     // LCM → LIVMapper's own ROS callbacks. Dispatch happens inside
@@ -330,8 +374,16 @@ int main(int argc, char** argv) {
         mapper.imu_cbk(msg);
     });
 
+    // Process every Nth image (1 = all). In LIVO mode sync_packages slices
+    // lidar scans at image times, so a high camera rate means small lidar
+    // sub-frames per LIO update; striding trades visual rate for fuller
+    // lidar geometry per update.
+    const int img_stride = std::max(1, static_cast<int>(args.get_double("img_stride", 1)));
+    int img_counter = 0;
+
     if (img_en) {
         io.subscribe_image(image_channel, [&](const BridgeImage& img) {
+            if (img_counter++ % img_stride != 0) { return; }
             if (img.data.size() < static_cast<size_t>(img.step) * img.height) {
                 fprintf(stderr, "[fastlivo] image data shorter than step*height, dropping\n");
                 return;
