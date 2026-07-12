@@ -1,0 +1,157 @@
+{
+  "nodes": {
+    "dimos-lcm": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782118008,
+        "narHash": "sha256-z88X38ZM3vr1eneG1CkJ4GAGWBW3JYWPEX/2x7aRVJI=",
+        "owner": "dimensionalOS",
+        "repo": "dimos-lcm",
+        "rev": "0a1c24710ce2f7a569e1673617102cc5254a75e2",
+        "type": "github"
+      },
+      "original": {
+        "owner": "dimensionalOS",
+        "ref": "main",
+        "repo": "dimos-lcm",
+        "type": "github"
+      }
+    },
+    "fast-livo2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772984428,
+        "narHash": "sha256-TSMObtr8y1uBPzwcUhFgP68uPkaGCQkc2uhQwAM7t7g=",
+        "owner": "hku-mars",
+        "repo": "FAST-LIVO2",
+        "rev": "0d2c0346107b75b59934975adec9a6eeeb913c64",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hku-mars",
+        "repo": "FAST-LIVO2",
+        "rev": "0d2c0346107b75b59934975adec9a6eeeb913c64",
+        "type": "github"
+      }
+    },
+    "flake-utils": {
+      "inputs": {
+        "systems": "systems"
+      },
+      "locked": {
+        "lastModified": 1731533236,
+        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "lcm-extended": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1774902379,
+        "narHash": "sha256-gRFvEkbXCEoG4jEmsT+i0bMZ5kDHOtAaPsrbStXjdu4=",
+        "owner": "jeff-hykin",
+        "repo": "lcm_extended",
+        "rev": "7d12ad8546d3daae30528a6c28f2c9ff5b10baf7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jeff-hykin",
+        "repo": "lcm_extended",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1770841267,
+        "narHash": "sha256-9xejG0KoqsoKEGp2kVbXRlEYtFFcDTHjidiuX8hGO44=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ec7c70d12ce2fc37cb92aff673dcdca89d187bae",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ec7c70d12ce2fc37cb92aff673dcdca89d187bae",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "dimos-lcm": "dimos-lcm",
+        "fast-livo2": "fast-livo2",
+        "flake-utils": "flake-utils",
+        "lcm-extended": "lcm-extended",
+        "nixpkgs": "nixpkgs",
+        "sophus-old": "sophus-old",
+        "vikit": "vikit"
+      }
+    },
+    "sophus-old": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1345905138,
+        "narHash": "sha256-7mEFJMQmkfLQd+Vl/rKB9H7NQGwoOnXQ/upvIzsjb4w=",
+        "owner": "strasdat",
+        "repo": "Sophus",
+        "rev": "a621ff2e56c56c839a6c40418d42c3c254424b5c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "strasdat",
+        "repo": "Sophus",
+        "rev": "a621ff2e56c56c839a6c40418d42c3c254424b5c",
+        "type": "github"
+      }
+    },
+    "systems": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "vikit": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1742807319,
+        "narHash": "sha256-6q2h+yog/t7Rg6tajt7oCF7bacU+0Hk6NQ5u6d1fqBs=",
+        "owner": "xuankuzcr",
+        "repo": "rpg_vikit",
+        "rev": "6c886c8e5d83997806e00294826d528cea3581dd",
+        "type": "github"
+      },
+      "original": {
+        "owner": "xuankuzcr",
+        "repo": "rpg_vikit",
+        "rev": "6c886c8e5d83997806e00294826d528cea3581dd",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
