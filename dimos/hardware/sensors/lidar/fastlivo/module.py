@@ -97,7 +97,11 @@ class FastLivoConfig(NativeModuleConfig):
     img_time_offset: float = 0.0
     imu_time_offset: float = 0.0
     lidar_time_offset: float = 0.0
-    # imu
+    # imu — defaults tuned for stable platforms (handheld/wheeled). On
+    # vibration-heavy platforms (legged robots) raise both substantially
+    # (acc_cov 2.0, gyr_cov 1.0 tied Point-LIO on huge_loop_go2) and consider
+    # img_en=False: rolling-shutter cameras + vibration poison the visual
+    # updates long before the LIO degrades.
     imu_en: bool = True
     gyr_cov: float = 0.3
     acc_cov: float = 0.5

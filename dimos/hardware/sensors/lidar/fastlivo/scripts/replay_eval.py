@@ -71,7 +71,9 @@ def _stream_iter(
         if stop is not None and obs.ts > stop:
             return
         msg = obs.data
-        if restamp is not None:
+        if restamp is not None and abs(msg.ts - obs.ts) > _CLOCK_DOMAIN_TOLERANCE_S:
+            # Only foreign-domain stamps get mapped — streams can carry MIXED
+            # domains (go2's imu has some UTC rows among the uptime ones).
             slope, intercept = restamp
             msg.ts = slope * msg.ts + intercept
         elif fix_domain_latency is not None and abs(msg.ts - obs.ts) > _CLOCK_DOMAIN_TOLERANCE_S:
@@ -103,15 +105,24 @@ def _fit_imu_clock(store: Any, name: str, sample_stride: int = 200) -> tuple[flo
 
     msg_ts = []
     row_ts = []
+    total = 0
     for i, obs in enumerate(store.stream(name, Imu).order_by("ts")):
         if i % sample_stride != 0:
             continue
-        msg_ts.append(obs.data.ts)
-        row_ts.append(obs.ts)
+        total += 1
+        # Fit on foreign-domain samples only — streams can carry mixed clock
+        # domains (some rows already UTC-stamped).
+        if abs(obs.data.ts - obs.ts) > _CLOCK_DOMAIN_TOLERANCE_S:
+            msg_ts.append(obs.data.ts)
+            row_ts.append(obs.ts)
     if len(msg_ts) < 2:
         return None
-    if abs(msg_ts[0] - row_ts[0]) < _CLOCK_DOMAIN_TOLERANCE_S:
-        return None
+    if total > 0 and len(msg_ts) < total:
+        print(
+            f"[replay] imu stream has mixed clock domains: {len(msg_ts)}/{total} sampled rows "
+            "carry the sensor clock (only those get remapped)",
+            flush=True,
+        )
     slope, intercept = np.polyfit(np.asarray(msg_ts), np.asarray(row_ts), 1)
     residual = np.asarray(row_ts) - (slope * np.asarray(msg_ts) + intercept)
     print(
@@ -255,6 +266,7 @@ def main() -> None:
     published = 0
     last_report = time.monotonic()
 
+    skipped_bad_ts = 0
     for ts, channel, msg in merged:
         if data_t0 is None:
             data_t0 = ts
@@ -262,6 +274,13 @@ def main() -> None:
         delay = target_wall - time.monotonic()
         if delay > 0:
             time.sleep(delay)
+        # Rare rows carry garbage stamps that survive the domain repairs and
+        # overflow the wire format's int32 seconds; drop them loudly.
+        if not (0 < msg.ts < 2**31 - 1):
+            skipped_bad_ts += 1
+            if skipped_bad_ts <= 5:
+                print(f"[replay] skipping {channel} msg with bad ts {msg.ts}", flush=True)
+            continue
         pub.publish(channel, msg.lcm_encode())
         published += 1
         now = time.monotonic()
@@ -274,6 +293,8 @@ def main() -> None:
             )
             last_report = now
 
+    if skipped_bad_ts:
+        print(f"[replay] skipped {skipped_bad_ts} messages with out-of-range stamps", flush=True)
     print(
         f"[replay] feed done ({published} msgs), waiting {args.tail_wait}s for trailing odometry",
         flush=True,
