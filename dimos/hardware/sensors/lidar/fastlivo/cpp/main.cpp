@@ -23,14 +23,19 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <array>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <string>
+#include <unordered_map>
 #include <thread>
 
 #include <boost/make_shared.hpp>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/video/tracking.hpp>
 
 // Fake-ROS shims + unmodified FAST-LIVO2.
 #include "LIVMapper.h"
@@ -328,6 +333,46 @@ int main(int argc, char** argv) {
         prune_visual_map();
     };
 
+    // Optional world-map accumulation: LIVMapper publishes the registered
+    // scan on /cloud_registered every cycle (RGB-colored when vision is on);
+    // voxel-accumulate it here and write a binary PLY at shutdown.
+    const std::string map_out = args.get("map_out", "");
+    const double map_voxel = args.get_double("map_voxel", 0.25);
+    struct MapPoint { float x, y, z; uint8_t r, g, b; };
+    std::unordered_map<uint64_t, MapPoint> world_map;
+    constexpr size_t kMaxMapVoxels = 60'000'000;  // hard memory backstop (~1.6G)
+    if (!args.get("map_out", "").empty()) { world_map.reserve(8'000'000); }
+    if (!map_out.empty()) {
+        dimos_shim::publish_hooks()["/cloud_registered"] = [&](const void* msg_ptr) {
+            const auto& pc = *static_cast<const sensor_msgs::PointCloud2*>(msg_ptr);
+            if (pc.point_step < 16 || world_map.size() >= kMaxMapVoxels) { return; }
+            const bool has_rgb = pc.fields.size() > 3 && pc.fields[3].name == "rgb";
+            const size_t n = pc.width;
+            for (size_t i = 0; i < n; ++i) {
+                const uint8_t* base = pc.data.data() + i * pc.point_step;
+                float xyz[3];
+                std::memcpy(xyz, base, sizeof(xyz));
+                if (!std::isfinite(xyz[0]) || !std::isfinite(xyz[1]) || !std::isfinite(xyz[2])) { continue; }
+                const auto cell = [&](float v) {
+                    return static_cast<uint64_t>(static_cast<int64_t>(std::floor(v / map_voxel)) & 0x1FFFFF);
+                };
+                const uint64_t key = cell(xyz[0]) | (cell(xyz[1]) << 21) | (cell(xyz[2]) << 42);
+                auto [it, inserted] = world_map.try_emplace(key);
+                if (!inserted) { continue; }
+                MapPoint& mp = it->second;
+                mp.x = xyz[0]; mp.y = xyz[1]; mp.z = xyz[2];
+                if (has_rgb) {
+                    // packed float rgb (PCL convention): bytes are b,g,r
+                    mp.b = base[12]; mp.g = base[13]; mp.r = base[14];
+                } else {
+                    const float intensity = *reinterpret_cast<const float*>(base + 12);
+                    const uint8_t v = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, intensity)));
+                    mp.r = mp.g = mp.b = v;
+                }
+            }
+        };
+    }
+
     // LCM → LIVMapper's own ROS callbacks. Dispatch happens inside
     // ros::spinOnce() on the run-loop thread, matching single-threaded ROS
     // spinning, so LIVMapper's buffer locking assumptions hold.
@@ -362,6 +407,12 @@ int main(int argc, char** argv) {
         mapper.livox_pcl_cbk(msg);
     });
 
+    // Recent gyro magnitudes for the camera-quality gate (see below): ring of
+    // (stamp, |w|) covering comfortably more than one camera frame interval.
+    constexpr size_t kGyroRing = 64;
+    std::array<std::pair<double, double>, kGyroRing> gyro_ring{};
+    size_t gyro_ring_next = 0;
+
     io.subscribe_imu(imu_channel, [&](const BridgeImu& imu) {
         auto msg = boost::make_shared<sensor_msgs::Imu>();
         msg->header.stamp = ros::Time().fromSec(imu.stamp);
@@ -371,6 +422,9 @@ int main(int argc, char** argv) {
         msg->linear_acceleration.x = imu.ax;
         msg->linear_acceleration.y = imu.ay;
         msg->linear_acceleration.z = imu.az;
+        const double gyro_mag = std::sqrt(imu.wx * imu.wx + imu.wy * imu.wy + imu.wz * imu.wz);
+        gyro_ring[gyro_ring_next] = {imu.stamp, gyro_mag};
+        gyro_ring_next = (gyro_ring_next + 1) % kGyroRing;
         mapper.imu_cbk(msg);
     });
 
@@ -381,12 +435,93 @@ int main(int argc, char** argv) {
     const int img_stride = std::max(1, static_cast<int>(args.get_double("img_stride", 1)));
     int img_counter = 0;
 
+    // Camera-quality gate (same shape as gsc_pgo's lidar scan-quality gates:
+    // cheap scalar metric + calibrated threshold, 0 disables).
+    //
+    // Primary: max |gyro| in the frame's capture window. Rotation rate drives
+    // both motion-blur smear (w * exposure * fx pixels) and rolling-shutter
+    // jello (w * readout), the two things that poison FAST-LIVO2's direct
+    // photometric tracking on rolling-shutter cameras under vibration
+    // (huge_loop_go2: camera-on diverged to 373m vs 13.3m camera-off).
+    // Calibrated on huge_loop data: realsense p95 |gyro| = 0.86 rad/s (a 1.2
+    // default barely triggers there), go2 p95 = 2.42 (drops its worst ~30%).
+    //
+    // Secondary: variance-of-Laplacian sharpness vs a rolling median of
+    // recent frames — catches gross defocus/black frames. Default OFF:
+    // measured on go2, rolling-shutter jello INFLATES Laplacian variance
+    // (corr(sharpness, |gyro|) = +0.54), so it cannot detect vibration blur;
+    // only enable to catch defocus on stable rigs.
+    //
+    // Starvation guard: always accept a frame once img_accept_max_gap seconds
+    // have passed since the last accepted one — LIVO-mode sync_packages needs
+    // images to advance, so a fully closed gate would stall the pipeline.
+    // Secondary (content-based, works when no IMU covers the camera):
+    // row-strip shift variance — the direct rolling-shutter damage signature
+    // (see the check below). 0 disables.
+    // Gate mode: "soft" (default) never withholds a frame — LIVO-mode sync
+    // REQUIRES images to advance, and hard-dropping was shown to diverge on
+    // go2 (the starvation guard eventually admits damaged frames at full
+    // weight). Instead a bad frame is fed with its visual influence divided
+    // by img_bad_frame_penalty (vio_manager->img_point_cov is read live in
+    // the EKF update, so a per-frame value applies). "drop" keeps the old
+    // hard-drop behavior for experiments.
+    const std::string img_gate_mode = args.get("img_gate_mode", "soft");
+    const double img_bad_frame_penalty = args.get_double("img_bad_frame_penalty", 100.0);
+    const double img_max_gyro = args.get_double("img_max_gyro", 1.2);
+    const double img_min_sharpness_ratio = args.get_double("img_min_sharpness_ratio", 0.0);
+    const double img_max_row_shift_std = args.get_double("img_max_row_shift_std", 6.0);
+    const double img_accept_max_gap = args.get_double("img_accept_max_gap", 2.0);
+    const bool img_soft_gate = img_gate_mode != "drop";
+    const double base_img_point_cov = mapper.vio_manager ? mapper.vio_manager->img_point_cov : 100.0;
+    long imgs_downweighted = 0;
+    double last_accepted_img_ts = -1.0;
+    std::deque<double> sharpness_window;
+    cv::Mat prev_small_gray;
+    long imgs_dropped_gyro = 0, imgs_dropped_blur = 0, imgs_dropped_warp = 0, imgs_seen = 0;
+
+    // Throttled operator-facing warning when the gate is rejecting frames
+    // (at most one per window, on the data clock so replays behave the same).
+    constexpr double kGateWarnPeriodS = 5.0;
+    double last_gate_warn_ts = -1e18;
+    long warn_window_dropped = 0, warn_window_seen = 0;
+    auto note_drop = [&](double stamp, const char* reason, double value, double threshold) {
+        ++warn_window_dropped;
+        if (stamp - last_gate_warn_ts >= kGateWarnPeriodS) {
+            fprintf(stderr,
+                    "[fastlivo warn] camera quality low: %s %.2f vs limit %.2f — flagged %ld of last %ld "
+                    "frames (totals: gyro %ld, blur %ld, warp %ld)\n",
+                    reason, value, threshold, warn_window_dropped, warn_window_seen,
+                    imgs_dropped_gyro, imgs_dropped_blur, imgs_dropped_warp);
+            last_gate_warn_ts = stamp;
+            warn_window_dropped = 0;
+            warn_window_seen = 0;
+        }
+    };
+
     if (img_en) {
         io.subscribe_image(image_channel, [&](const BridgeImage& img) {
             if (img_counter++ % img_stride != 0) { return; }
             if (img.data.size() < static_cast<size_t>(img.step) * img.height) {
                 fprintf(stderr, "[fastlivo] image data shorter than step*height, dropping\n");
                 return;
+            }
+            ++imgs_seen;
+            ++warn_window_seen;
+            const bool starving =
+                last_accepted_img_ts >= 0 && img.stamp - last_accepted_img_ts > img_accept_max_gap;
+            bool bad_frame = false;
+            bool gyro_suspect = false;
+            if (img_max_gyro > 0) {
+                // Max |gyro| within the frame's capture window (exposure +
+                // rolling-shutter readout, ~40ms before the stamp).
+                constexpr double kCaptureWindowS = 0.04;
+                double peak = 0;
+                for (const auto& [ts, mag] : gyro_ring) {
+                    if (ts > img.stamp - kCaptureWindowS && ts <= img.stamp + 0.01) {
+                        peak = std::max(peak, mag);
+                    }
+                }
+                if (peak > img_max_gyro) { gyro_suspect = true; }
             }
             const cv::Mat wire(img.height, img.width,
                                img.encoding == "mono8" ? CV_8UC1 : CV_8UC3,
@@ -402,8 +537,89 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "[fastlivo] unsupported image encoding '%s', dropping\n", img.encoding.c_str());
                 return;
             }
+            if (img_min_sharpness_ratio > 0 && !bad_frame) {
+                cv::Mat gray, small, lap;
+                cv::cvtColor(msg->mat, gray, cv::COLOR_BGR2GRAY);
+                cv::resize(gray, small, cv::Size(), 0.5, 0.5, cv::INTER_AREA);
+                cv::Laplacian(small, lap, CV_64F);
+                cv::Scalar mean, stddev;
+                cv::meanStdDev(lap, mean, stddev);
+                const double sharpness = stddev[0] * stddev[0];
+                if (sharpness_window.size() >= 30) { sharpness_window.pop_front(); }
+                sharpness_window.push_back(sharpness);
+                std::vector<double> sorted(sharpness_window.begin(), sharpness_window.end());
+                std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+                const double rolling_median = sorted[sorted.size() / 2];
+                if (sharpness_window.size() >= 10 && sharpness < img_min_sharpness_ratio * rolling_median) {
+                    ++imgs_dropped_blur;
+                    note_drop(img.stamp, "sharpness ratio", sharpness / rolling_median, img_min_sharpness_ratio);
+                    bad_frame = true;
+                }
+            }
+            if (img_max_row_shift_std > 0) {
+                // Row-strip shift variance: project 5 horizontal strips to 1-D
+                // column profiles and phase-correlate each against the previous
+                // frame. A global-shutter view change shifts all strips equally;
+                // rolling-shutter jello shifts the top and bottom differently,
+                // so the stddev of the per-strip shifts (in px) measures the
+                // geometric damage directly. Calibrated: go2 0.74px at rest vs
+                // 13.2px shaking (18x); realsense p95 = 4.1px. ~0.2ms/frame,
+                // no features, no RANSAC.
+                cv::Mat gray, small;
+                cv::cvtColor(msg->mat, gray, cv::COLOR_BGR2GRAY);
+                cv::resize(gray, small, cv::Size(320, 180), 0, 0, cv::INTER_AREA);
+                small.convertTo(small, CV_32F);
+                if (!prev_small_gray.empty()) {
+                    constexpr int kStrips = 5;
+                    double shifts[kStrips];
+                    const int strip_h = small.rows / kStrips;
+                    for (int k = 0; k < kStrips; ++k) {
+                        cv::Mat a, b;
+                        cv::reduce(prev_small_gray.rowRange(k * strip_h, (k + 1) * strip_h), a, 0, cv::REDUCE_AVG, CV_32F);
+                        cv::reduce(small.rowRange(k * strip_h, (k + 1) * strip_h), b, 0, cv::REDUCE_AVG, CV_32F);
+                        shifts[k] = cv::phaseCorrelate(a, b).x;
+                    }
+                    double mean = 0;
+                    for (double v : shifts) { mean += v; }
+                    mean /= kStrips;
+                    double var = 0;
+                    for (double v : shifts) { var += (v - mean) * (v - mean); }
+                    const double shift_std = std::sqrt(var / kStrips);
+                    // AND-fusion with the gyro: fast rotation alone doesn't
+                    // damage a short-exposure global-ish camera (realsense
+                    // frames at 2 rad/s are sharp) — flag only when the image
+                    // CONTENT confirms geometric damage. v6 showed that
+                    // removing vision on merely-suspect frames starves the
+                    // estimator exactly in hard sections (t+2400 cliff:
+                    // 113s lag + 3357 nan events vs zero for ungated H).
+                    if (shift_std > img_max_row_shift_std && (img_max_gyro <= 0 || gyro_suspect)) {
+                        ++imgs_dropped_warp;
+                        note_drop(img.stamp, "row-shift stddev (px)", shift_std, img_max_row_shift_std);
+                        bad_frame = true;
+                    }
+                }
+                prev_small_gray = small;
+            }
+            if (gyro_suspect && !bad_frame) { ++imgs_dropped_gyro; }  // stat only: suspect, content-clean
+            if (bad_frame && !img_soft_gate && !starving) { return; }
+            // Drop mode admits a frame per img_accept_max_gap to keep LIVO's
+            // sync alive; those admissions are known-bad, so they carry the
+            // penalty instead of full weight (full-weight starved admissions
+            // are what diverged the first go2 hard-gate run). With tight
+            // thresholds this drives vision influence to ~zero on cameras
+            // whose damage is continuous, without stalling the pipeline.
+            const bool penalized = bad_frame || (starving && !img_soft_gate);
             msg->encoding = "bgr8";
             msg->header.stamp = ros::Time().fromSec(img.stamp);
+            last_accepted_img_ts = img.stamp;
+            if (mapper.vio_manager) {
+                // Applied when the frame is processed (buffer depth is ~1 in
+                // steady state, and quality is temporally correlated, so a
+                // one-frame skew is inconsequential).
+                mapper.vio_manager->img_point_cov =
+                    penalized ? base_img_point_cov * img_bad_frame_penalty : base_img_point_cov;
+                if (penalized) { ++imgs_downweighted; }
+            }
             mapper.img_cbk(msg);
         });
     }
@@ -418,6 +634,32 @@ int main(int argc, char** argv) {
     // dispatch) then sync_packages + estimation.
     mapper.run();
 
+    if (!map_out.empty() && !world_map.empty()) {
+        FILE* f = fopen(map_out.c_str(), "wb");
+        if (f) {
+            fprintf(f,
+                    "ply\nformat binary_little_endian 1.0\nelement vertex %zu\n"
+                    "property float x\nproperty float y\nproperty float z\n"
+                    "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n",
+                    world_map.size());
+            for (const auto& [key, mp] : world_map) {
+                fwrite(&mp.x, sizeof(float), 3, f);
+                fwrite(&mp.r, 1, 3, f);
+            }
+            fclose(f);
+            fprintf(stderr, "[fastlivo] wrote %zu map points to %s (voxel %.2fm)\n",
+                    world_map.size(), map_out.c_str(), map_voxel);
+        } else {
+            fprintf(stderr, "[fastlivo] ERROR: cannot open map_out %s\n", map_out.c_str());
+        }
+    }
+    if (imgs_seen > 0) {
+        fprintf(stderr,
+                "[fastlivo] img gate totals: %ld seen, flagged: %ld gyro / %ld blur / %ld warp, "
+                "%ld down-weighted (mode=%s)\n",
+                imgs_seen, imgs_dropped_gyro, imgs_dropped_blur, imgs_dropped_warp,
+                imgs_downweighted, img_gate_mode.c_str());
+    }
     fprintf(stderr, "[fastlivo] done\n");
     return 0;
 }

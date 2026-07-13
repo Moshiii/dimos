@@ -139,6 +139,40 @@ class FastLivoConfig(NativeModuleConfig):
     # scans at image times, so a high camera rate fragments the lidar
     # geometry per LIO update; striding rebalances that.
     img_stride: int = 1
+    # Camera-quality gate (gsc_pgo-style calibrated gates; 0 disables each).
+    # Drop frames whose capture-window peak |gyro| exceeds this (rad/s):
+    # rotation rate drives motion-blur smear AND rolling-shutter jello, the
+    # two failure modes that poisoned the go2 camera (373m vs 13.3m).
+    # Calibrated: realsense p95 = 0.86 (default barely triggers), go2 p95 =
+    # 2.42 (drops its worst ~30%).
+    img_max_gyro: float = 1.2
+    # Drop frames whose variance-of-Laplacian sharpness falls below this
+    # fraction of the rolling median — catches gross defocus/black frames.
+    # Default OFF: rolling-shutter jello INFLATES Laplacian variance
+    # (measured corr(sharpness, |gyro|) = +0.54 on go2), so it cannot detect
+    # vibration blur.
+    img_min_sharpness_ratio: float = 0.0
+    # Content-based gate (works without IMU coverage of the camera): flag a
+    # frame when the stddev of per-strip horizontal shifts vs the previous
+    # frame exceeds this many pixels. A global-shutter view change moves all
+    # strips equally; rolling-shutter jello moves top/bottom differently, so
+    # this measures RS damage directly. Calibrated: go2 0.7px rest vs 13px
+    # shaking; realsense p95 = 4.1px. ~0.2ms/frame. 0 disables.
+    img_max_row_shift_std: float = 6.0
+    # Gate mode: "soft" (default) feeds every frame but divides its visual
+    # influence by img_bad_frame_penalty when flagged (LIVO-mode sync needs
+    # images to advance — hard-dropping diverged on go2 because the
+    # starvation guard eventually admits damaged frames at full weight).
+    # "drop" = hard-drop flagged frames (experiments only).
+    img_gate_mode: str = "soft"
+    img_bad_frame_penalty: float = 10000.0
+    # Starvation guard (drop mode only): always accept a frame after this
+    # many seconds without one.
+    img_accept_max_gap: float = 2.0
+    # Debug/eval: accumulate the registered world cloud (voxel-downsampled)
+    # and write a binary PLY here at shutdown. Empty = off.
+    map_out: str = ""
+    map_voxel: float = 0.25
     # extrinsics: lidar in IMU frame (Mid-360 built-in IMU)
     extrinsic_t: list[float] = Field(default_factory=lambda: [-0.011, -0.02329, 0.04412])
     extrinsic_r: list[float] = Field(
