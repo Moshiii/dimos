@@ -8,9 +8,11 @@
 
 #include <lcm/lcm-cpp.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -70,6 +72,109 @@ static uint64_t get_timestamp_ns(const LivoxLidarEthernetPacket* pkt) {
 
 using dimos::time_from_seconds;
 using dimos::make_header;
+
+// ---------------------------------------------------------------------------
+// Sensor→host clock sync (--host_time_sync, default on)
+// ---------------------------------------------------------------------------
+// The sensor stamps packets with its own clock (uptime-since-boot unless
+// gPTP-synced). On connect we ping the command channel (query → ack) 5 times
+// and take median RTT / 2 as a constant one-way communication latency; the
+// first data packets then give the clock offset as
+// median(host_rx − device_ts) − latency. Every published stamp is converted
+// to host system time, so the sensor clock never leaks downstream. Data
+// received before the offset locks (~first 50 packets) is dropped.
+
+static bool g_host_time_sync = true;
+static std::atomic<bool> g_clock_synced{false};
+static std::atomic<int64_t> g_sensor_to_host_offset_ns{0};
+static std::mutex g_sync_mutex;
+static std::condition_variable g_ack_cv;
+static bool g_ack_pending = false;
+static std::vector<int64_t> g_raw_offset_samples;  // host_rx − device_ts (no latency)
+static int64_t g_latency_ns = 0;
+static bool g_sync_thread_started = false;
+static constexpr int kAckPings = 5;
+static constexpr size_t kOffsetSamples = 50;
+
+static int64_t host_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+static void on_sync_ack(livox_status /*status*/, uint32_t /*handle*/,
+                        LivoxLidarDiagInternalInfoResponse* /*response*/, void* /*client_data*/) {
+    std::lock_guard<std::mutex> lock(g_sync_mutex);
+    g_ack_pending = false;
+    g_ack_cv.notify_all();
+}
+
+static int64_t median_of(std::vector<int64_t> v) {
+    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+    return v[v.size() / 2];
+}
+
+// Runs once per process on device connect: measures command-channel RTT, then
+// waits for the data callbacks to fill the offset sample buffer and locks in
+// the sensor→host mapping.
+static void run_clock_sync(uint32_t handle) {
+    std::vector<int64_t> rtts;
+    for (int i = 0; i < kAckPings; ++i) {
+        std::unique_lock<std::mutex> lock(g_sync_mutex);
+        g_ack_pending = true;
+        const int64_t t0 = host_now_ns();
+        if (QueryLivoxLidarInternalInfo(handle, on_sync_ack, nullptr) != 0) {
+            g_ack_pending = false;
+            continue;
+        }
+        if (g_ack_cv.wait_for(lock, std::chrono::seconds(1), [] { return !g_ack_pending; })) {
+            rtts.push_back(host_now_ns() - t0);
+        } else {
+            g_ack_pending = false;  // timed out; count as a miss
+        }
+    }
+    if (!rtts.empty()) {
+        g_latency_ns = median_of(rtts) / 2;
+        printf("[mid360] clock sync: %zu/%d acks, latency estimate %.3f ms\n", rtts.size(),
+               kAckPings, static_cast<double>(g_latency_ns) / 1e6);
+    } else {
+        g_latency_ns = 0;
+        printf("[mid360] clock sync: no command acks; assuming zero latency\n");
+    }
+
+    // Offset samples are appended by the data callbacks; wait for enough.
+    while (g_running.load()) {
+        {
+            std::lock_guard<std::mutex> lock(g_sync_mutex);
+            if (g_raw_offset_samples.size() >= kOffsetSamples) {
+                const int64_t offset = median_of(g_raw_offset_samples) - g_latency_ns;
+                g_sensor_to_host_offset_ns.store(offset);
+                g_clock_synced.store(true);
+                printf("[mid360] clock sync: sensor→host offset %.6f s over %zu samples\n",
+                       static_cast<double>(offset) / 1e9, g_raw_offset_samples.size());
+                return;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+// Data-callback hook: while unsynced, contribute a sample and tell the caller
+// to drop the packet; once synced, map the sensor stamp into host time.
+static bool sensor_ts_to_host(uint64_t device_ns, uint64_t* host_ns) {
+    if (!g_host_time_sync) {
+        *host_ns = device_ns;
+        return true;
+    }
+    if (!g_clock_synced.load()) {
+        std::lock_guard<std::mutex> lock(g_sync_mutex);
+        g_raw_offset_samples.push_back(host_now_ns() - static_cast<int64_t>(device_ns));
+        return false;
+    }
+    *host_ns = static_cast<uint64_t>(static_cast<int64_t>(device_ns) +
+                                     g_sensor_to_host_offset_ns.load());
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Build and publish PointCloud2
@@ -181,7 +286,8 @@ static void on_point_cloud(const uint32_t /*handle*/, const uint8_t /*dev_type*/
                            LivoxLidarEthernetPacket* data, void* /*client_data*/) {
     if (!g_running.load() || data == nullptr) { return; }
 
-    uint64_t ts_ns = get_timestamp_ns(data);
+    uint64_t ts_ns;
+    if (!sensor_ts_to_host(get_timestamp_ns(data), &ts_ns)) { return; }
     uint16_t dot_num = data->dot_num;
 
     // Per-point intra-packet offset (matches livox_ros_driver2 and the pointlio
@@ -238,7 +344,9 @@ static void on_imu_data(const uint32_t /*handle*/, const uint8_t /*dev_type*/,
     if (!g_running.load() || data == nullptr || !g_lcm) return;
     if (g_imu_topic.empty()) return;
 
-    double ts = get_timestamp_ns(data) / 1e9;
+    uint64_t host_ns;
+    if (!sensor_ts_to_host(get_timestamp_ns(data), &host_ns)) { return; }
+    double ts = host_ns / 1e9;
     auto* imu_pts = reinterpret_cast<const LivoxLidarImuRawPoint*>(data->data);
     uint16_t dot_num = data->dot_num;
 
@@ -284,6 +392,14 @@ static void on_info_change(const uint32_t handle, const LivoxLidarInfo* info,
     if (!g_imu_topic.empty()) {
         EnableLivoxLidarImuData(handle, nullptr, nullptr);
     }
+
+    if (g_host_time_sync) {
+        std::lock_guard<std::mutex> lock(g_sync_mutex);
+        if (!g_sync_thread_started) {
+            g_sync_thread_started = true;
+            std::thread(run_clock_sync, handle).detach();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +432,7 @@ int main(int argc, char** argv) {
     g_frequency = mod.arg_float("frequency", 10.0f);
     g_frame_id = mod.arg("frame_id", "lidar_link");
     g_imu_frame_id = mod.arg("imu_frame_id", "imu_link");
+    g_host_time_sync = mod.arg_bool("host_time_sync", true);
     const std::string point_format = mod.arg("point_format", "minimal");
     if (point_format == "full") {
         g_point_format = PointFormat::Full;

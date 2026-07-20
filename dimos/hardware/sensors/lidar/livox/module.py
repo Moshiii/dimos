@@ -70,6 +70,11 @@ class Mid360Config(NativeModuleConfig):
     # Scan-undistorting estimators (FAST-LIVO2 etc.) need offset_time; no LIO in
     # the stack reads intensity (it only feeds viz/map coloring).
     point_format: Literal["full", "minimal", "legacy"] = "minimal"
+    # Convert sensor stamps to host system time before publishing: on connect,
+    # 5 command-channel acks give a constant latency estimate (median RTT / 2),
+    # then median(host_rx - device_ts) - latency over the first data packets
+    # locks the offset. False publishes raw sensor-clock stamps.
+    host_time_sync: bool = True
     frame_id: str = "lidar_link"
     imu_frame_id: str = "imu_link"
 
