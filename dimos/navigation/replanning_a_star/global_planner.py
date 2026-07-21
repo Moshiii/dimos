@@ -89,6 +89,7 @@ class GlobalPlanner(Resource):
     _path_length_weight: float
     _path_cell_cost_weight: float
     _heuristic_weight: float
+    _use_theta_star: bool
     _publish_raw_path: bool
     _constrained_path_smoothing_enabled: bool
     _path_smoothing_performance_logging_enabled: bool
@@ -111,6 +112,7 @@ class GlobalPlanner(Resource):
         path_length_weight: float = 1.0,
         path_cell_cost_weight: float = 3.0,
         heuristic_weight: float = 1.0,
+        use_theta_star: bool = False,
         publish_raw_path: bool = False,
         constrained_path_smoothing_enabled: bool = False,
         path_smoothing_performance_logging_enabled: bool = False,
@@ -132,6 +134,7 @@ class GlobalPlanner(Resource):
         self._path_length_weight = path_length_weight
         self._path_cell_cost_weight = path_cell_cost_weight
         self._heuristic_weight = heuristic_weight
+        self._use_theta_star = use_theta_star
         self._publish_raw_path = publish_raw_path
         self._constrained_path_smoothing_enabled = constrained_path_smoothing_enabled
         self._path_smoothing_performance_logging_enabled = (
@@ -498,6 +501,7 @@ class GlobalPlanner(Resource):
                 cell_cost_weight=self._path_cell_cost_weight,
                 heuristic_weight=self._heuristic_weight,
                 use_cpp=False,
+                use_theta_star=self._use_theta_star,
             )
             if path and path.poses:
                 logger.info(f"Found path {size}x robot width.")

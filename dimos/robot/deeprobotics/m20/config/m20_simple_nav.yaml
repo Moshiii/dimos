@@ -24,6 +24,7 @@ replanningastarplanner:
   # Increasing this value makes the search greedier (faster, may sacrifice
   # optimality). Must be >= 0.
   heuristic_weight: 1.0
+  use_theta_star: true
 
   # Publish the raw grid-cell A* path on /raw_path for Rerun comparison.
   # This does not change the controller path. This profile enables the stream so

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import heapq
+import math
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -59,6 +60,63 @@ def _heuristic(x1: int, y1: int, x2: int, y2: int) -> float:
     dy = abs(y2 - y1)
     # Octile distance: optimal for 8-connected grids with diagonal movement
     return (dx + dy) + (_dc - 2 * _sc) * min(dx, dy)
+
+
+def _line_of_sight(
+    costmap: OccupancyGrid,
+    x0: int, y0: int,
+    x1: int, y1: int,
+    cost_threshold: int,
+) -> tuple[bool, float, float]:
+    """Check LOS between (x0,y0) and (x1,y1), returning (visible, dist, safety).
+
+    Walks the straight line using Bresenham, checking every cell against the
+    costmap.  The endpoints themselves are not checked (the caller already
+    knows they are traversable).  Returns Euclidean distance and average cell
+    cost if visible, or (False, 0, 0) if blocked.
+    """
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x1 > x0 else -1
+    sy = 1 if y1 > y0 else -1
+    err = dx - dy
+
+    total_cells = 0
+    total_cost = 0.0
+    cx, cy = x0, y0
+
+    while cx != x1 or cy != y1:
+        # Step to next cell (Bresenham)
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            cx += sx
+        if e2 < dx:
+            err += dx
+            cy += sy
+
+        # Don't check the endpoint itself
+        if cx == x1 and cy == y1:
+            break
+
+        val = costmap.grid[cy, cx]
+        if val >= cost_threshold:
+            return False, 0.0, 0.0
+        if val == CostValues.UNKNOWN:
+            total_cost += cost_threshold * _UNKNOWN_PENALTY_DEFAULT
+        elif val != CostValues.FREE:
+            total_cost += float(val)
+        total_cells += 1
+
+    euclidean = math.hypot(x1 - x0, y1 - y0)
+    # Return distance in "cell units" (matching _movement_costs convention)
+    resolution = costmap.resolution
+    dist = euclidean * resolution
+    safety = (total_cost / 100.0) if total_cells > 0 else 0.0
+    return True, dist, safety
+
+
+_UNKNOWN_PENALTY_DEFAULT = 0.8
 
 
 def _reconstruct_path(
@@ -136,6 +194,7 @@ def min_cost_astar(
     cell_cost_weight: float = 1.0,
     heuristic_weight: float = 1.0,
     use_cpp: bool = True,
+    use_theta_star: bool = False,
 ) -> Path | None:
     if cost_threshold <= 0:
         raise ValueError("cost_threshold must be positive")
@@ -204,6 +263,8 @@ def min_cost_astar(
 
         closed_set.add(current)
 
+        gp = parents.get(current)  # grandparent for Theta* LOS
+
         for i, (dx, dy) in enumerate(_directions):
             neighbor_x, neighbor_y = current_x + dx, current_y + dy
             neighbor = (neighbor_x, neighbor_y)
@@ -228,8 +289,21 @@ def min_cost_astar(
             else:
                 cell_cost = neighbor_val
 
-            tentative_dist = dist_score[current] + _movement_costs[i]
-            tentative_safety = safety_score[current] + (cell_cost / cost_threshold)
+            # --- Theta*: try to bypass current via line-of-sight from grandparent ---
+            if use_theta_star and gp is not None:
+                gp_x, gp_y = gp
+                visible, los_dist, los_safety = _line_of_sight(
+                    costmap, gp_x, gp_y, neighbor_x, neighbor_y, cost_threshold
+                )
+                if visible:
+                    tentative_dist = dist_score[gp] + los_dist
+                    tentative_safety = safety_score[gp] + los_safety
+                else:
+                    tentative_dist = dist_score[current] + _movement_costs[i]
+                    tentative_safety = safety_score[current] + (cell_cost / cost_threshold)
+            else:
+                tentative_dist = dist_score[current] + _movement_costs[i]
+                tentative_safety = safety_score[current] + (cell_cost / cost_threshold)
 
             # f(n) = w1 * past_distance + w2 * past_safety + w3 * future_distance
             h_dist = _heuristic(neighbor_x, neighbor_y, goal_tuple[0], goal_tuple[1])
@@ -248,8 +322,13 @@ def min_cost_astar(
                 path_length_weight * neighbor_dist + cell_cost_weight * neighbor_safety
             )
             if tentative_g < neighbor_g:
-                # Update the neighbor's scores and parent
-                parents[neighbor] = current
+                # Update the neighbor's scores and parent.
+                # Theta*: when LOS succeeds, keep the grandparent so the chain
+                # stays sparse (and the path will not be grid-constrained).
+                if use_theta_star and gp is not None and visible:
+                    parents[neighbor] = gp
+                else:
+                    parents[neighbor] = current
                 dist_score[neighbor] = tentative_dist
                 safety_score[neighbor] = tentative_safety
 
