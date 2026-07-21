@@ -18,7 +18,12 @@ replanningastarplanner:
   # Weight for normalized costmap values in the A* objective. Increasing this
   # value favors lower-cost clearance corridors even when they are longer.
   # Must be >= 0.
-  path_cell_cost_weight: 3.0
+  path_cell_cost_weight: 0.001
+
+  # Weight for the heuristic (octile distance to goal) in the A* priority.
+  # Increasing this value makes the search greedier (faster, may sacrifice
+  # optimality). Must be >= 0.
+  heuristic_weight: 1.0
 
   # Publish the raw grid-cell A* path on /raw_path for Rerun comparison.
   # This does not change the controller path. This profile enables the stream so

@@ -132,13 +132,14 @@ def min_cost_astar(
     start: VectorLike = (0.0, 0.0),
     cost_threshold: int = 100,
     unknown_penalty: float = 0.8,
-    distance_weight: float = 0.0,
+    path_length_weight: float = 0.0,
     cell_cost_weight: float = 1.0,
+    heuristic_weight: float = 1.0,
     use_cpp: bool = True,
 ) -> Path | None:
     if cost_threshold <= 0:
         raise ValueError("cost_threshold must be positive")
-    if distance_weight < 0 or cell_cost_weight < 0:
+    if path_length_weight < 0 or cell_cost_weight < 0 or heuristic_weight < 0:
         raise ValueError("A* objective weights must be non-negative")
 
     start_vector = costmap.world_to_grid(start)
@@ -160,8 +161,9 @@ def min_cost_astar(
                 goal_tuple[1],
                 cost_threshold,
                 unknown_penalty,
-                distance_weight,
+                path_length_weight,
                 cell_cost_weight,
+                heuristic_weight,
             )
             if not path_coords:
                 return None
@@ -175,15 +177,20 @@ def min_cost_astar(
     open_set: list[tuple[float, float, tuple[int, int]]] = []  # Priority queue for nodes to explore
     closed_set: set[tuple[int, int]] = set()  # Set of explored nodes
 
-    # The scalar objective is distance plus normalized map cost. Keeping raw
-    # distance as a tiebreaker preserves legacy behavior when distance_weight is zero.
-    objective_score: dict[tuple[int, int], float] = {start_tuple: 0.0}
-    dist_score: dict[tuple[int, int], float] = {start_tuple: 0.0}  # Cumulative path length
+    # f(n) = w1 * past_distance + w2 * past_safety + w3 * future_distance
+    # Each component is accumulated bare (no weight) so the three knobs are independent.
+    dist_score: dict[tuple[int, int], float] = {start_tuple: 0.0}
+    safety_score: dict[tuple[int, int], float] = {start_tuple: 0.0}
     parents: dict[tuple[int, int], tuple[int, int]] = {}
 
-    # Priority: (objective + admissible distance heuristic, distance tiebreaker, node)
+    # Priority: (f(n), dist tiebreaker, node)
     h_dist = _heuristic(start_tuple[0], start_tuple[1], goal_tuple[0], goal_tuple[1])
-    heapq.heappush(open_set, (distance_weight * h_dist, h_dist, start_tuple))
+    f_start = (
+        path_length_weight * 0.0
+        + cell_cost_weight * 0.0
+        + heuristic_weight * h_dist
+    )
+    heapq.heappush(open_set, (f_start, h_dist, start_tuple))
 
     while open_set:
         _, _, current = heapq.heappop(open_set)
@@ -222,27 +229,33 @@ def min_cost_astar(
                 cell_cost = neighbor_val
 
             tentative_dist = dist_score[current] + _movement_costs[i]
-            tentative_objective = objective_score[current] + (
-                distance_weight * _movement_costs[i]
-                + cell_cost_weight * (cell_cost / cost_threshold)
+            tentative_safety = safety_score[current] + (cell_cost / cost_threshold)
+
+            # f(n) = w1 * past_distance + w2 * past_safety + w3 * future_distance
+            h_dist = _heuristic(neighbor_x, neighbor_y, goal_tuple[0], goal_tuple[1])
+            tentative_f = (
+                path_length_weight * tentative_dist
+                + cell_cost_weight * tentative_safety
+                + heuristic_weight * h_dist
             )
 
             # Get the current scores for the neighbor or set to infinity if not yet explored.
-            neighbor_objective = objective_score.get(neighbor, float("inf"))
             neighbor_dist = dist_score.get(neighbor, float("inf"))
+            neighbor_safety = safety_score.get(neighbor, float("inf"))
 
-            if (tentative_objective, tentative_dist) < (neighbor_objective, neighbor_dist):
+            tentative_g = path_length_weight * tentative_dist + cell_cost_weight * tentative_safety
+            neighbor_g = (
+                path_length_weight * neighbor_dist + cell_cost_weight * neighbor_safety
+            )
+            if tentative_g < neighbor_g:
                 # Update the neighbor's scores and parent
                 parents[neighbor] = current
-                objective_score[neighbor] = tentative_objective
                 dist_score[neighbor] = tentative_dist
+                safety_score[neighbor] = tentative_safety
 
-                # Cell costs are non-negative, so the geometric component remains admissible.
-                h_dist = _heuristic(neighbor_x, neighbor_y, goal_tuple[0], goal_tuple[1])
-                priority_cost = tentative_objective + distance_weight * h_dist
                 priority_dist = tentative_dist + h_dist
 
                 # Add the neighbor to the open set with its priority
-                heapq.heappush(open_set, (priority_cost, priority_dist, neighbor))
+                heapq.heappush(open_set, (tentative_f, priority_dist, neighbor))
 
     return None

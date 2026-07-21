@@ -107,7 +107,7 @@ struct Node {
  * @param goal_y Goal Y coordinate in grid cells
  * @param cost_threshold Cells with value >= this are obstacles (default: 100)
  * @param unknown_penalty Cost multiplier for unknown cells (default: 0.8)
- * @param distance_weight Weight for geometric movement distance (default: 0.0)
+ * @param path_length_weight Weight for geometric movement distance (default: 0.0)
  * @param cell_cost_weight Weight for normalized cell costs (default: 1.0)
  * @return Vector of (x, y) grid coordinates from start to goal, empty if no path
  */
@@ -119,13 +119,14 @@ std::vector<std::pair<int, int>> min_cost_astar_cpp(
     int goal_y,
     int cost_threshold = 100,
     double unknown_penalty = 0.8,
-    double distance_weight = 0.0,
-    double cell_cost_weight = 1.0
+    double path_length_weight = 0.0,
+    double cell_cost_weight = 1.0,
+    double heuristic_weight = 1.0
 ) {
     if (cost_threshold <= 0) {
         throw std::invalid_argument("cost_threshold must be positive");
     }
-    if (distance_weight < 0.0 || cell_cost_weight < 0.0) {
+    if (path_length_weight < 0.0 || cell_cost_weight < 0.0 || heuristic_weight < 0.0) {
         throw std::invalid_argument("A* objective weights must be non-negative");
     }
 
@@ -156,17 +157,18 @@ std::vector<std::pair<int, int>> min_cost_astar_cpp(
     std::unordered_map<uint64_t, uint64_t> parents;
     parents.reserve(width * height / 4);
 
-    // Score tracking (weighted objective and distance tiebreaker)
-    std::unordered_map<uint64_t, double> objective_score;
+    // Score tracking: bare distance and bare safety (weights applied at f(n) only)
     std::unordered_map<uint64_t, double> dist_score;
-    objective_score.reserve(width * height / 4);
+    std::unordered_map<uint64_t, double> safety_score;
     dist_score.reserve(width * height / 4);
+    safety_score.reserve(width * height / 4);
 
     // Initialize start node
-    objective_score[start_key] = 0.0;
     dist_score[start_key] = 0.0;
+    safety_score[start_key] = 0.0;
     double h = heuristic(start_x, start_y, goal_x, goal_y);
-    open_set.push({distance_weight * h, h, start_x, start_y});
+    double f_start = path_length_weight * 0.0 + cell_cost_weight * 0.0 + heuristic_weight * h;
+    open_set.push({f_start, h, start_x, start_y});
 
     while (!open_set.empty()) {
         Node current = open_set.top();
@@ -186,8 +188,8 @@ std::vector<std::pair<int, int>> min_cost_astar_cpp(
 
         closed_set.insert(current_key);
 
-        const double current_objective = objective_score[current_key];
         const double current_dist = dist_score[current_key];
+        const double current_safety = safety_score[current_key];
 
         // Explore all 8 neighbors
         for (int i = 0; i < 8; ++i) {
@@ -224,33 +226,33 @@ std::vector<std::pair<int, int>> min_cost_astar_cpp(
             }
 
             const double tentative_dist = current_dist + MOVE_COSTS[i];
-            const double tentative_objective = current_objective
-                + distance_weight * MOVE_COSTS[i]
-                + cell_cost_weight * (cell_cost / static_cast<double>(cost_threshold));
+            const double tentative_safety = current_safety + (cell_cost / static_cast<double>(cost_threshold));
+
+            // f(n) = w1 * past_distance + w2 * past_safety + w3 * future_distance
+            const double h_dist = heuristic(nx, ny, goal_x, goal_y);
+            const double tentative_f = path_length_weight * tentative_dist
+                + cell_cost_weight * tentative_safety
+                + heuristic_weight * h_dist;
 
             // Get existing scores (infinity if not yet visited)
-            auto objective_it = objective_score.find(neighbor_key);
             auto dist_it = dist_score.find(neighbor_key);
-            const double n_objective = (objective_it != objective_score.end())
-                ? objective_it->second
-                : INFINITY;
+            auto safety_it = safety_score.find(neighbor_key);
             const double n_dist = (dist_it != dist_score.end()) ? dist_it->second : INFINITY;
+            const double n_safety = (safety_it != safety_score.end()) ? safety_it->second : INFINITY;
 
-            // Raw distance remains the tiebreaker for legacy zero-distance weighting.
-            if (tentative_objective < n_objective ||
-                (tentative_objective == n_objective && tentative_dist < n_dist)) {
+            // Compare using weighted g(n) = w1 * dist + w2 * safety
+            const double tentative_g = path_length_weight * tentative_dist + cell_cost_weight * tentative_safety;
+            const double neighbor_g = path_length_weight * n_dist + cell_cost_weight * n_safety;
+            if (tentative_g < neighbor_g) {
 
                 // Update parent and scores
                 parents[neighbor_key] = current_key;
-                objective_score[neighbor_key] = tentative_objective;
                 dist_score[neighbor_key] = tentative_dist;
+                safety_score[neighbor_key] = tentative_safety;
 
-                // Cell costs are non-negative, so the geometric term is admissible.
-                const double h_dist = heuristic(nx, ny, goal_x, goal_y);
-                const double priority_cost = tentative_objective + distance_weight * h_dist;
                 const double priority_dist = tentative_dist + h_dist;
 
-                open_set.push({priority_cost, priority_dist, nx, ny});
+                open_set.push({tentative_f, priority_dist, nx, ny});
             }
         }
     }
@@ -271,8 +273,9 @@ PYBIND11_MODULE(min_cost_astar_ext, m) {
           "    goal_y: Goal Y coordinate in grid cells\n"
           "    cost_threshold: Cells >= this value are obstacles (default: 100)\n"
           "    unknown_penalty: Cost multiplier for unknown cells (default: 0.8)\n"
-          "    distance_weight: Weight for geometric distance (default: 0.0)\n"
-          "    cell_cost_weight: Weight for normalized cell costs (default: 1.0)\n\n"
+          "    path_length_weight: Weight for geometric distance (default: 0.0)\n"
+          "    cell_cost_weight: Weight for normalized cell costs (default: 1.0)\n"
+          "    heuristic_weight: Weight for octile heuristic (default: 1.0)\n\n"
           "Returns:\n"
           "    List of (x, y) grid coordinates from start to goal, or empty list if no path",
           py::arg("grid"),
@@ -282,6 +285,7 @@ PYBIND11_MODULE(min_cost_astar_ext, m) {
           py::arg("goal_y"),
           py::arg("cost_threshold") = 100,
           py::arg("unknown_penalty") = 0.8,
-          py::arg("distance_weight") = 0.0,
-          py::arg("cell_cost_weight") = 1.0);
+          py::arg("path_length_weight") = 0.0,
+          py::arg("cell_cost_weight") = 1.0,
+          py::arg("heuristic_weight") = 1.0);
 }

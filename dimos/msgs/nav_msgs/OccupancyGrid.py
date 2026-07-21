@@ -67,7 +67,7 @@ def _build_occupancy_lut(
 
         # Occupied (1..100) → index 2..101
         for cost in range(1, 101):
-            cost_norm = 0.5 + (cost / 100) * 0.5
+            cost_norm = cost / 100.0
             fg = np.array(cmap(cost_norm)[:3]) * 255
             blended = fg * opacity + bg_rgb * (1 - opacity)
             lut[cost + 1, :3] = blended.astype(np.uint8)
