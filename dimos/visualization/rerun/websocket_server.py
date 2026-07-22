@@ -27,6 +27,8 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
@@ -75,6 +77,7 @@ class RerunWebSocketServer(Module):
     """This handles outputs from dimos-viewer (like keyboard controls)"""
 
     clicked_point: Out[PointStamped]
+    goal_request: Out[PoseStamped]
     tele_cmd_vel: Out[Twist]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -152,15 +155,30 @@ class RerunWebSocketServer(Module):
         msg_type = msg.get("type")
 
         if msg_type == "click":
-            self.clicked_point.publish(
-                PointStamped(
-                    x=float(msg.get("x", 0)),
-                    y=float(msg.get("y", 0)),
-                    z=float(msg.get("z", 0)),
-                    ts=float(msg.get("timestamp_ms", 0)) / 1000.0,
-                    frame_id=str(msg.get("entity_path", "")),
+            x = float(msg.get("x", 0))
+            y = float(msg.get("y", 0))
+            z = float(msg.get("z", 0))
+            ts = float(msg.get("timestamp_ms", 0)) / 1000.0
+            frame_id = str(msg.get("entity_path", ""))
+            yaw_rad = msg.get("yaw_rad")
+
+            # When the viewer sends a yaw (G-mode drag), publish ONLY the
+            # oriented goal. Plain clicks (no yaw) go through clicked_point
+            # for backward compat.
+            if yaw_rad is not None:
+                yaw = float(yaw_rad)
+                self.goal_request.publish(
+                    PoseStamped(
+                        ts=ts,
+                        frame_id=frame_id,
+                        position=[x, y, z],
+                        orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
+                    )
                 )
-            )
+            else:
+                self.clicked_point.publish(
+                    PointStamped(x=x, y=y, z=z, ts=ts, frame_id=frame_id)
+                )
 
         elif msg_type == "twist":
             self.tele_cmd_vel.publish(
