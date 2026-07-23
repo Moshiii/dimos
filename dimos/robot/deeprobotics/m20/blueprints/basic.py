@@ -97,6 +97,7 @@ def _dynamic_tf_for_rerun(msg: TFMessage) -> list[tuple[str, Any]]:
 def _m20_static_scene(rr: Any) -> list[tuple[str, Any]]:
     """Build timeless base axes, camera extrinsics, and camera intrinsics."""
     scene: list[tuple[str, Any]] = [
+        ("world/tf/map", rr.TransformAxes3D(axis_length=1.0)),
         ("world/tf/base_link", rr.TransformAxes3D(axis_length=0.5)),
     ]
     scene.extend(
