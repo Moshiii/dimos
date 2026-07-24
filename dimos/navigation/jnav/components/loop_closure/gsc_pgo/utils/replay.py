@@ -147,7 +147,7 @@ class LockstepReplay(Module):
 
     config: LockstepReplayConfig
 
-    lidar: Out[PointCloud2]
+    cloud: Out[PointCloud2]
     odometry: Out[Odometry]
     corrected_odometry: In[Odometry]
 
@@ -228,7 +228,7 @@ class LockstepReplay(Module):
             frame_id = payload.frame_id or "map"
             if apply_drift:
                 points = points + (drift * (timestamp - t0)).astype(np.float32)
-            self.lidar.publish(
+            self.cloud.publish(
                 PointCloud2.from_numpy(points, frame_id=frame_id, timestamp=timestamp)
             )
             scans_sent += 1
@@ -277,7 +277,7 @@ class RateReplay(Module):
 
     config: RateReplayConfig
 
-    lidar: Out[PointCloud2]
+    cloud: Out[PointCloud2]
     odometry: Out[Odometry]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -324,7 +324,7 @@ class RateReplay(Module):
                     )
                 )
             else:
-                self.lidar.publish(
+                self.cloud.publish(
                     PointCloud2.from_numpy(
                         payload.points_f32(),
                         frame_id=payload.frame_id or "map",

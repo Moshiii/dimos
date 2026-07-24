@@ -59,13 +59,14 @@ from dimos.navigation.jnav.components.loop_closure.gsc_pgo.utils.go2_legacy impo
     normalize_go2_legacy,
 )
 from dimos.navigation.jnav.components.loop_closure.gsc_pgo.utils.replay import run_module_graph
-from dimos.navigation.jnav.components.loop_closure.loop_closure_eval import (
+from dimos.navigation.jnav.components.loop_closure.utils import (
     MAP_MAX_SCANS,
     accumulate_maps,
     load_tag_detections,
     registered_scans,
     report_dict,
     score_tags,
+    write_isometric_png,
     write_topdown_png,
 )
 from dimos.navigation.jnav.utils.module_loading import (
@@ -196,6 +197,10 @@ def evaluate(
         corrected_path,
         recording_name,
     )
+    iso_png_path = out_dir / "isometric_before_after.png"
+    write_isometric_png(
+        iso_png_path, raw_map, corrected_map, raw_path, corrected_path, recording_name
+    )
 
     summary = {
         "db": str(db_path),
@@ -221,6 +226,7 @@ def evaluate(
         "raw_path": raw_path.tolist(),
         "corrected_path": corrected_path.tolist(),
         "topdown_png": str(png_path),
+        "isometric_png": str(iso_png_path),
         "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

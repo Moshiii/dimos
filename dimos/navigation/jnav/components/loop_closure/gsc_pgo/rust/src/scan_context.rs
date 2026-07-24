@@ -336,6 +336,9 @@ pub fn yaw_from_shift(shift: i32, n_sectors: usize) -> f64 {
 /// enough at keyframe counts that a kd-tree buys nothing yet). Entries whose
 /// ring key length differs from the query (e.g. cloud-less nodes) are
 /// skipped.
+///
+/// TODO: switch to a kd-tree later for O(log n) instead of O(n) — this linear
+/// scan is O(N) per query (O(N^2) over a run) and won't scale to massive maps.
 pub fn ring_key_top_k(query_key: &RingKey, candidates: &[RingKey], k: usize) -> Vec<(f32, usize)> {
     let mut ranked: Vec<(f32, usize)> = Vec::with_capacity(candidates.len());
     for (idx, key) in candidates.iter().enumerate() {

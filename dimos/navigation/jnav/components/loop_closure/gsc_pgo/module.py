@@ -57,8 +57,8 @@ class PGOConfig(NativeModuleConfig):
     body_frame: str = "base_link"
 
     # Keyframe detection
-    key_pose_delta_deg: float = 10.0
-    key_pose_delta_trans: float = 0.5
+    keyframe_min_rotation_degrees: float = 10.0
+    keyframe_min_distance_meters: float = 0.5
 
     # Loop closure
     loop_search_radius: float = 3.0
@@ -87,7 +87,7 @@ class PGOConfig(NativeModuleConfig):
     loop_min_degeneracy: float = 0.05
 
     # basically only needed because of the go2, and partly b/c we don't have rust tf.get yet
-    unregister_input: bool = False
+    subtract_odom_from_cloud: bool = False
 
     # Debug global-map publishing — OFF by default. Emitted on the internal
     # `_global_map` port (leading underscore) so it never autoconnects to a
@@ -171,9 +171,9 @@ class PGO(NativeModule):
 
     config: PGOConfig
 
-    # named "lidar" to match the LoopClosure spec; the binary pairs it with the
+    # named "cloud" to match the LoopClosure spec; the binary pairs it with the
     # latest odometry pose internally, so a raw sensor-frame scan is expected.
-    lidar: In[PointCloud2]
+    cloud: In[PointCloud2]
     odometry: In[Odometry]
     # Optional: decoupled LocationConstraint events from a perceiver. Only
     # consumed when config.use_location_constraints is set; each becomes its own

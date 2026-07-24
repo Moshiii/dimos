@@ -28,7 +28,7 @@
 //! - `pointcloud`: the PCL pieces the core leans on — voxel-grid centroid
 //!   downsampling, kd-tree NN, point-to-point ICP with PCL convergence
 //!   semantics, and the normal-scatter degeneracy measure.
-//! - `gsc_pgo`: the `SimplePgo` port itself (keyframe gating, loop
+//! - `gsc_pgo`: the `GscPgo` port itself (keyframe gating, loop
 //!   search + gates, location constraints with revision, iSAM2 smoothing).
 //! - `msgs`: the jnav custom LCM wire formats the module executable speaks
 //!   (Graph3D / GraphDelta3D / DeformationNode encode, LocationConstraint

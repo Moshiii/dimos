@@ -269,3 +269,71 @@ def write_topdown_png(
     figure.tight_layout()
     figure.savefig(png_path, dpi=130)
     plt.close(figure)
+
+
+# Isometric view angle (degrees): a 3/4 bird's-eye that reveals z structure the
+# top-down flattens away (drift that tilts the map into vertical shows up here).
+_ISO_ELEV_DEG = 35.0
+_ISO_AZIM_DEG = -60.0
+
+
+def write_isometric_png(
+    png_path: Path,
+    raw_map: np.ndarray,
+    corrected_map: np.ndarray,
+    raw_path: np.ndarray,
+    corrected_path: np.ndarray,
+    recording_name: str,
+) -> None:
+    """Two-panel isometric (3D) scatter of the lidar map: before vs after correction.
+
+    Complements the top-down: false closures often tilt the map into z (horizontal
+    travel bleaking into vertical), which is invisible flattened but obvious here.
+    Points are colored by height so the ground plane and any tilt read at a glance."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    figure = plt.figure(figsize=(16, 8))
+    panels = (
+        (raw_map, raw_path, "raw odom (before)"),
+        (corrected_map, corrected_path, "corrected (after)"),
+    )
+    for index, (cloud, path, title) in enumerate(panels):
+        axis = figure.add_subplot(1, 2, index + 1, projection="3d")
+        if len(cloud):
+            axis.scatter(
+                cloud[:, 0],
+                cloud[:, 1],
+                cloud[:, 2],
+                s=0.3,
+                c=cloud[:, 2],
+                cmap="viridis",
+                linewidths=0,
+                rasterized=True,
+            )
+        if len(path):
+            axis.plot(path[:, 0], path[:, 1], path[:, 2], c="tab:red", linewidth=1.2, zorder=4)
+        axis.set_title(title)
+        axis.set_xlabel("x (m)")
+        axis.set_ylabel("y (m)")
+        axis.set_zlabel("z (m)")
+        axis.view_init(elev=_ISO_ELEV_DEG, azim=_ISO_AZIM_DEG)
+        if len(cloud):
+            _set_equal_3d_aspect(axis, cloud)
+    figure.suptitle(f"{recording_name}: isometric lidar map, before vs after loop closure")
+    figure.tight_layout()
+    figure.savefig(png_path, dpi=130)
+    plt.close(figure)
+
+
+def _set_equal_3d_aspect(axis: Any, cloud: np.ndarray) -> None:
+    """Equal x/y/z scale so tilt isn't hidden by axis stretching."""
+    mins = cloud.min(axis=0)
+    maxs = cloud.max(axis=0)
+    centers = (mins + maxs) / 2.0
+    half = float((maxs - mins).max()) / 2.0 or 1.0
+    axis.set_xlim(centers[0] - half, centers[0] + half)
+    axis.set_ylim(centers[1] - half, centers[1] + half)
+    axis.set_zlim(centers[2] - half, centers[2] + half)
