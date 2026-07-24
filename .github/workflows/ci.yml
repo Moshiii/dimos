@@ -522,6 +522,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           clean: false
+          # Native-module flakes pin a historical rev via a git+file self-reference;
+          # a shallow checkout omits that object and nix eval fails to fetch it.
+          fetch-depth: 0
           # If we ever allow external PRs on custom runner, persisting credentials
           # could be abused by attackers.
           persist-credentials: false
@@ -665,6 +668,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           clean: false
+          # Native-module flakes pin a historical rev via a git+file self-reference;
+          # a shallow checkout omits that object and nix eval fails to fetch it.
+          fetch-depth: 0
           # If we ever allow external PRs on custom runner, persisting credentials
           # could be abused by attackers.
           persist-credentials: false

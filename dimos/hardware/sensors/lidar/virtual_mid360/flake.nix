@@ -4,14 +4,13 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Path input to the in-repo rust crates (mirrors pointlio/cpp's path: inputs).
-    # A plain path: (not git+file:) hashes the directory contents, so it carries no
-    # git-tree NAR hash — which varies by nix version / clean-vs-dirty checkout and
-    # breaks cross-machine builds.
-    dimos-rust = { url = "path:../../../../../native/rust"; flake = false; };
+    # Relative git+file: will be deprecated (nix#12281) but there's no
+    # viable alternative for reaching local path deps outside the flake dir currently
+    # presumably an alternative will be added before this is removed.
+    dimos-repo = { url = "git+file:../../../../..?ref=main"; flake = false; };
   };
 
-  outputs = { self, nixpkgs, flake-utils, dimos-rust }:
+  outputs = { self, nixpkgs, flake-utils, dimos-repo }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -24,8 +23,8 @@
           cp ${./Cargo.lock} $out/${sub}/Cargo.lock
 
           mkdir -p $out/native/rust
-          cp -r ${dimos-rust}/dimos-module $out/native/rust/dimos-module
-          cp -r ${dimos-rust}/dimos-module-macros $out/native/rust/dimos-module-macros
+          cp -r ${dimos-repo}/native/rust/dimos-module $out/native/rust/dimos-module
+          cp -r ${dimos-repo}/native/rust/dimos-module-macros $out/native/rust/dimos-module-macros
         '';
       in {
         # Toolchain-only shell for CI fmt/clippy/test. Deliberately avoids the
