@@ -598,9 +598,11 @@ class ManipulationModule(Module):
                 # own points into the map, after which every IK and every plan
                 # -- including the retreat to init -- collides. An empty map is
                 # recoverable; a map containing the robot is not.
+                age = time.time() - cloud.ts if cloud.ts else float("nan")
                 self._warn_throttled(
                     "voxel_tf",
-                    f"No {world_frame} <- {cloud.frame_id} TF at cloud time; "
+                    f"No {world_frame} <- {cloud.frame_id} TF at cloud time "
+                    f"(cloud is {age:.1f}s old, TF buffer holds ~10s); "
                     "dropping occupancy update",
                 )
                 return

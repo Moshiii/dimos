@@ -48,6 +48,12 @@ class PointCloudSelfFilterConfig(ModuleConfig):
     regions: list[SelfFilterRegion] = Field(default_factory=list)
     tf_tolerance_s: float = 0.1
     drop_cloud_on_missing_tf: bool = False
+    # Skip clouds already older than this, before doing any work on them. A
+    # consumer slower than the publisher queues without bound, and every stale
+    # cloud it then processes is wasted effort that makes the backlog worse --
+    # the transform it needs has usually aged out of the TF buffer anyway.
+    # Dropping early lets the queue drain and the pipeline self-heal. 0 disables.
+    max_cloud_age_s: float = 1.0
 
 
 class PointCloudSelfFilter(Module):
@@ -140,6 +146,18 @@ class PointCloudSelfFilter(Module):
         return filtered
 
     def _on_pointcloud(self, cloud: PointCloud2) -> None:
+        max_age = self.filter_config.max_cloud_age_s
+        if max_age > 0.0 and cloud.ts is not None:
+            age = time.time() - cloud.ts
+            if age > max_age:
+                if self._should_warn("stale"):
+                    logger.warning(
+                        "Skipping point cloud %.1fs old (limit %.1fs); "
+                        "consumer is behind the publisher",
+                        age,
+                        max_age,
+                    )
+                return
         filtered = self.filter_cloud(cloud)
         if filtered is None:
             return
