@@ -490,9 +490,7 @@ class GlobalPlanner(Resource):
         sizes_to_try: list[float] = [1.1]
 
         for size in sizes_to_try:
-            distance = robot_pos.distance(goal)
-            navigation_map = self._navigation_map if distance > 1.5 else self._navigation_map_near
-            costmap = navigation_map.make_gradient_costmap(size)
+            costmap = self._navigation_map.binary_costmap
             path = min_cost_astar(
                 costmap,
                 goal,

@@ -63,6 +63,16 @@ def _smooth_path_for_rerun(msg: Any) -> Any:
     return msg.to_rerun(color=(0, 255, 128), z_offset=0.60, radii=0.05)
 
 
+def _render_costmap_semitransparent(grid: Any) -> Any:
+    """Render costmap at 50% opacity so the point-cloud map is visible beneath."""
+    return grid.to_rerun(z_offset=0.05, opacity=0.4)
+
+
+def _render_corridor_mask(grid: Any) -> Any:
+    """Render the path clearance corridor mask as a green overlay."""
+    return grid.to_rerun(z_offset=0.55, opacity=0.6, colormap="viridis")
+
+
 def _convert_camera_info(camera_info: Any) -> Any:
     return camera_info.to_rerun(
         image_topic="/world/color_image",
@@ -154,6 +164,7 @@ rerun = autoconnect(
             "world/camera_info_rear": None,
             "world/node_edges": _node_edges_on_surface,
             "world/raw_path": _raw_path_for_rerun,
+            "world/global_costmap": _render_costmap_semitransparent,
             "world/path": _smooth_path_for_rerun,
         },
         static={"world/tf/base_link": _m20_static_scene},

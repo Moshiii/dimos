@@ -125,6 +125,8 @@ m20_simple_nav = autoconnect(
             ignore_overhead_only=True,
         ),
         initial_safe_radius_meters=m20_width_clearance + m20_safe_radius_margin,
+        inflation_radius_m=m20_width_clearance + m20_safe_radius_margin,
+        gradient_distance_m=1.5,
     ),
     ReplanningAStarPlanner.blueprint(
         robot_width=m20_width_clearance,

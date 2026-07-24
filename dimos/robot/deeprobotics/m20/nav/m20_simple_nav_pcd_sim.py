@@ -105,6 +105,8 @@ m20_simple_nav_pcd_sim = autoconnect(
             ignore_overhead_only=True,
         ),
         initial_safe_radius_meters=m20_width_clearance + m20_safe_radius_margin,
+        inflation_radius_m=m20_width_clearance + m20_safe_radius_margin,
+        gradient_distance_m=1.5,
     ),
     ReplanningAStarPlanner.blueprint(
         robot_width=m20_width_clearance,
@@ -118,4 +120,4 @@ m20_simple_nav_pcd_sim = autoconnect(
         initial_yaw=0.0,
     ).remappings([(FakeRobotSim, "slam_odom", "slam_odom")]),
     M20TF.blueprint().remappings([(M20TF, "odometry", "slam_odom")]),
-).global_config(n_workers=10, robot_model="m20", robot_ip="127.0.0.1")
+).global_config(n_workers=10, robot_model="m20", robot_ip="127.0.0.1", robot_width=1.1)

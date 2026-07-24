@@ -130,6 +130,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
         self.register_disposable(
             Disposable(self.global_costmap.subscribe(self._planner.handle_global_costmap))
         )
+        # Bridge the local planner's corridor mask Subject to the module's LCM Out.
         self.register_disposable(
             Disposable(self.goal_request.subscribe(self._planner.handle_goal_request))
         )

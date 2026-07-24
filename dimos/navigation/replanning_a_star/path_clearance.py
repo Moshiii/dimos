@@ -13,7 +13,9 @@
 # limitations under the License.
 
 from threading import RLock
+from typing import Any
 
+import lcm
 import numpy as np
 from numpy.typing import NDArray
 
@@ -21,6 +23,9 @@ from dimos.core.global_config import GlobalConfig
 from dimos.mapping.occupancy.path_mask import make_path_mask
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
+CORRIDOR_MASK_TOPIC = "/corridor_mask#sensor_msgs.PointCloud2"
 
 
 class PathClearance:
@@ -35,12 +40,14 @@ class PathClearance:
     _lock: RLock
     _path: Path
     _pose_index: int
+    _lcm: Any = None  # lcm.LCM instance for publishing corridor mask
 
     def __init__(self, global_config: GlobalConfig, path: Path) -> None:
         self._global_config = global_config
         self._path = path
         self._pose_index = 0
         self._lock = RLock()
+        self._lcm = lcm.LCM()
 
     def update_costmap(self, costmap: OccupancyGrid) -> None:
         with self._lock:
@@ -86,7 +93,25 @@ class PathClearance:
         if costmap is None:
             return True
 
-        return bool(np.any(costmap.grid[self.mask] == CostValues.OCCUPIED))
+        try:
+            mask = self.mask
+        except ValueError:
+            # mask generation failed (e.g. >5% occupied) — treat as obstacle.
+            return True
+
+        # Publish corridor mask as sparse point cloud via LCM.
+        if mask is not None and self._lcm is not None:
+            ys, xs = np.where(mask)
+            if len(xs) > 0:
+                pts = np.column_stack([
+                    xs * costmap.resolution + costmap.origin.position.x,
+                    ys * costmap.resolution + costmap.origin.position.y,
+                    np.full(len(xs), 0.55),
+                ]).astype(np.float32)
+                msg = PointCloud2.from_numpy(pts, frame_id=costmap.frame_id, timestamp=0.0)
+                self._lcm.publish(CORRIDOR_MASK_TOPIC, msg.lcm_encode())
+
+        return bool(np.any(costmap.grid[mask] == CostValues.OCCUPIED))
 
     def _pose_distance(self, index1: int, index2: int) -> float:
         p1 = self._path.poses[index1].position

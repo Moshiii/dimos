@@ -22,6 +22,8 @@ from reactivex import combine_latest, operators as ops
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.mapping.occupancy.gradient import gradient, GradientStrategy
+from dimos.mapping.occupancy.inflation import simple_inflate
 from dimos.mapping.pointclouds.occupancy import (
     OCCUPANCY_ALGOS,
     HeightCostConfig,
@@ -39,6 +41,11 @@ class Config(ModuleConfig):
     config: OccupancyConfig = Field(default_factory=HeightCostConfig)
     # for robots that cant see directly below themself
     initial_safe_radius_meters: float = 0.0
+    # Robot half-width for obstacle inflation. 0 disables.
+    inflation_radius_m: float = 0.0
+    # Max distance for gradient cost ramp around inflated obstacles. 0 disables.
+    gradient_distance_m: float = 1.5
+    gradient_strategy: GradientStrategy = "gradient"
 
 
 class CostMapper(Module):
@@ -88,6 +95,21 @@ class CostMapper(Module):
         occupancy_function = OCCUPANCY_ALGOS[self.config.algo]
         grid = occupancy_function(msg, **asdict(self.config.config))
         self._apply_initial_safe_radius(grid)
+
+        # Apply robot-radius inflation — make obstacles fatter by the robot's
+        # half-width so A* keeps a safe lateral distance.
+        if self.config.inflation_radius_m > 0:
+            grid = simple_inflate(grid, self.config.inflation_radius_m)
+
+        # Apply continuous gradient around inflated obstacles — A* prefers
+        # routes that stay farther from walls.
+        if self.config.gradient_distance_m > 0:
+            if self.config.gradient_strategy == "gradient":
+                grid = gradient(grid, max_distance=self.config.gradient_distance_m)
+            elif self.config.gradient_strategy == "voronoi":
+                from dimos.mapping.occupancy.gradient import voronoi_gradient
+                grid = voronoi_gradient(grid, max_distance=self.config.gradient_distance_m)
+
         return grid
 
     def _apply_initial_safe_radius(self, grid: OccupancyGrid) -> None:
