@@ -35,7 +35,12 @@ _xarm7_sim_hw = make_xarm7_sim_hardware(XARM7_SIM_PATH)
 # One resolution for the map and the planning octree: the octree is built
 # straight from these points, so a mismatch either inflates every voxel or
 # leaves gaps the planner will happily route through.
-XARM_VOXEL_PLANNING_RESOLUTION = 0.05
+#
+# 1cm is fine here despite being 125x the voxel count of 5cm: measured on a
+# tabletop cloud it is ~10k voxels, 22ms to rebuild the octree and no
+# measurable collision-query cost, because RoboPlan indexes the octree
+# spatially. It also stays under the viewer's 20k point cap.
+XARM_VOXEL_PLANNING_RESOLUTION = 0.01
 
 # The wrist camera sees the gripper it is mounted on. Those points are the
 # robot, not the scene -- left in, they become an obstacle rigidly attached to
@@ -69,10 +74,16 @@ xarm_perception_sim = autoconnect(
         visualization={
             "backend": "viser",
             "scan_tool": "scan_objects",
+            # Mirrors the resting pose of each body in data/xarm7/scene.xml.
+            # Z is the object's centre, not its base: the overlay marker should
+            # land on the object, not on the table under it.
             "ground_truth_objects": [
-                {"name": "apple", "x": 0.40, "y": 0.08, "z": 0.17},
-                {"name": "orange", "x": 0.45, "y": -0.08, "z": 0.175},
-                {"name": "cup", "x": 0.50, "y": 0.0, "z": 0.19},
+                {"name": "bottle", "x": 0.52, "y": 0.15, "z": 0.24},
+                {"name": "can", "x": 0.52, "y": 0.0, "z": 0.19},
+                {"name": "cup", "x": 0.52, "y": -0.15, "z": 0.18},
+                {"name": "tape", "x": 0.36, "y": 0.15, "z": 0.148},
+                {"name": "marker", "x": 0.36, "y": 0.0, "z": 0.146},
+                {"name": "box", "x": 0.36, "y": -0.15, "z": 0.168},
             ],
         },
     ),
@@ -85,7 +96,10 @@ xarm_perception_sim = autoconnect(
         # available camera pose and were all dropped. Publish at roughly the
         # planning voxel size and well below the camera rate.
         pointcloud_fps=2.0,
-        pointcloud_voxel_size=XARM_VOXEL_PLANNING_RESOLUTION / 2.0,
+        # Match the planning grid rather than going finer: extra density is
+        # discarded by the voxel grid anyway, and near-raw 5mm clouds are what
+        # backlogged the pipeline past the TF buffer.
+        pointcloud_voxel_size=XARM_VOXEL_PLANNING_RESOLUTION,
     ),
     ObjectSceneRegistrationModule.blueprint(target_frame="world"),
     PointCloudSelfFilter.blueprint(
