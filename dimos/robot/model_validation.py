@@ -18,12 +18,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 import xml.etree.ElementTree as ET
 
 import numpy as np
 
 from dimos.core.core import rpc
-from dimos.core.module import Module
+from dimos.core.module import Module, ModuleConfig
 from dimos.manipulation.planning.kinematics.pinocchio_ik import PinocchioIK
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.world.drake_world import DrakeWorld
@@ -54,6 +55,8 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+RobotModelName = Literal["all", "piper", "xarm", "a750", "a1z", "g1"]
+
 
 @dataclass(frozen=True)
 class _FkCase:
@@ -79,8 +82,14 @@ _FK_CASES = (
 )
 
 
+class RobotModelValidationConfig(ModuleConfig):
+    model: RobotModelName = "all"
+
+
 class RobotModelValidation(Module):
     """Resolve and exercise robot models migrated away from Git LFS."""
+
+    config: RobotModelValidationConfig
 
     @rpc
     def start(self) -> None:
@@ -89,20 +98,24 @@ class RobotModelValidation(Module):
 
     @rpc
     def validate(self) -> str:
-        """Resolve every source and validate planning, FK, and G1 visualization assets."""
-        return validate_robot_models()
+        """Validate the configured robot's planning, FK, or visualization assets."""
+        return validate_robot_models(self.config.model)
 
 
-def validate_robot_models() -> str:
+def validate_robot_models(model: RobotModelName = "all") -> str:
     """Run the model checks used by the validation blueprint."""
     validated: list[str] = []
     for name, config in _PLANNING_CASES:
+        if not _is_selected(name, model):
+            continue
         world = DrakeWorld(enable_viz=False)
         world.add_robot(config)
         world.finalize()
         validated.append(f"{name}:planning")
 
     for case in _FK_CASES:
+        if not _is_selected(case.name, model):
+            continue
         solver = PinocchioIK.from_model_path(case.path, ee_joint_id=case.ee_joint_id)
         if solver.nq != case.dof:
             raise ValueError(f"{case.name} FK model has {solver.nq} DOF; expected {case.dof}")
@@ -111,9 +124,18 @@ def validate_robot_models() -> str:
             raise ValueError(f"{case.name} FK produced a non-finite pose")
         validated.append(f"{case.name}:fk")
 
-    _validate_g1_assets()
-    validated.append("g1:urdf+meshes")
+    if model in ("all", "g1"):
+        _validate_g1_assets()
+        validated.append("g1:urdf+meshes")
     return f"Validated {len(validated)} robot model behaviors: {', '.join(validated)}"
+
+
+def _is_selected(case_name: str, model: RobotModelName) -> bool:
+    if model == "all":
+        return True
+    if case_name in ("xarm6", "xarm7"):
+        return model == "xarm"
+    return case_name == model
 
 
 def _validate_g1_assets() -> None:
@@ -139,3 +161,8 @@ def _validate_g1_assets() -> None:
 
 
 robot_model_validation = RobotModelValidation.blueprint()
+robot_model_validation_piper = RobotModelValidation.blueprint(model="piper")
+robot_model_validation_xarm = RobotModelValidation.blueprint(model="xarm")
+robot_model_validation_a750 = RobotModelValidation.blueprint(model="a750")
+robot_model_validation_a1z = RobotModelValidation.blueprint(model="a1z")
+robot_model_validation_g1 = RobotModelValidation.blueprint(model="g1")
