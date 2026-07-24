@@ -11,9 +11,10 @@ instantiated `NativeModuleConfig` — robust against any refactor of how those
 fields are declared (literal vs computed vs factory), at the cost of needing
 dimos importable (run via `uv run`).
 
-A module is rebuilt only when a source file in its build directory changed
-since the last successful build (tracked with a per-module stamp file); an
-unchanged, already-built module is skipped.
+Every discovered module's `nix build` runs unconditionally; Nix content-hashes
+all inputs (including shared crates and flake inputs outside the module dir) and
+the Cachix substituter makes an unchanged closure near-instant, so incremental
+skipping here would only risk reusing a stale build.
 """
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -30,7 +31,6 @@ from dimos.core.native_module import NativeModuleConfig
 
 PACKAGE_DIR = Path(dimos.__path__[0])
 REPO_ROOT = PACKAGE_DIR.parent
-STAMP_NAME = ".native-build.stamp"
 IGNORED_DIRS = {"result", "build", "target", "__pycache__", ".git", "node_modules"}
 # Captured at import time; forked workers inherit it
 _T0 = time.monotonic()
@@ -77,18 +77,6 @@ def discover() -> tuple[type[NativeModuleConfig], ...]:
     return tuple(found.values())
 
 
-def _newest_source_mtime(build_dir: Path, stamp: Path) -> float:
-    newest = 0.0
-    for dirpath, dirnames, filenames in os.walk(build_dir):
-        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
-        for filename in filenames:
-            candidate = Path(dirpath) / filename
-            if candidate == stamp:
-                continue
-            newest = max(newest, candidate.lstat().st_mtime)
-    return newest
-
-
 def build_one(config_class: type[NativeModuleConfig]) -> str:
     name = config_class.__name__
     config = config_class()
@@ -98,16 +86,6 @@ def build_one(config_class: type[NativeModuleConfig]) -> str:
     build_dir = Path(config.cwd) if config.cwd is not None else base_dir
     if not build_dir.is_absolute():
         build_dir = base_dir / build_dir
-    executable = Path(config.executable)
-    if not executable.is_absolute():
-        executable = build_dir / executable
-    stamp = build_dir / STAMP_NAME
-    if (
-        executable.exists()
-        and stamp.exists()
-        and stamp.stat().st_mtime >= _newest_source_mtime(build_dir, stamp)
-    ):
-        return f"OK:    {name} up to date at {executable}"
     _log(f"START: {name} in {build_dir}: {config.build_command}")
     proc = subprocess.run(
         config.build_command,
@@ -120,7 +98,6 @@ def build_one(config_class: type[NativeModuleConfig]) -> str:
     body = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise RuntimeError(f"{name} exited {proc.returncode}\n{body}")
-    stamp.touch()
     return f"DONE:  {name}\n{body}".rstrip()
 
 
