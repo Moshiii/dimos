@@ -197,6 +197,7 @@ class ManipulationModule(Module):
         # Built on first use: `config` is not bound yet for every construction
         # path this module supports.
         self._snapshot: PlanningCollisionSnapshot | None = None
+        self._warned_at: dict[str, float] = {}
 
         logger.info("ManipulationModule initialized")
 
@@ -529,6 +530,18 @@ class ManipulationModule(Module):
             self._state = ManipulationState.PLANNING
         return robot[0], robot[1]
 
+    def _warn_throttled(self, key: str, message: str, interval: float = 5.0) -> None:
+        """Log a recurring warning at most once per interval.
+
+        These fire per cloud at camera rate, and unthrottled they bury every
+        other line in the log.
+        """
+        now = time.monotonic()
+        if now - self._warned_at.get(key, 0.0) < interval:
+            return
+        self._warned_at[key] = now
+        logger.warning(message)
+
     @property
     def _planning_collision_snapshot(self) -> PlanningCollisionSnapshot:
         """Occupancy snapshot, constructed from config on first use."""
@@ -556,12 +569,23 @@ class ManipulationModule(Module):
                 time_tolerance=self.config.planning_voxel_tf_tolerance_s,
             )
             if transform is None:
-                logger.warning(
-                    "No %s <- %s TF at cloud time; dropping occupancy update",
-                    world_frame,
-                    cloud.frame_id,
+                # A backlogged pipeline hands us clouds older than the TF buffer
+                # (10s by default), so the exact-time lookup expires and the map
+                # would go permanently empty. The latest pose is stale but far
+                # better than no occupancy; accumulation smears slightly rather
+                # than the planner losing every obstacle.
+                transform = self.tf.get(world_frame, cloud.frame_id)
+                if transform is None:
+                    self._warn_throttled(
+                        "voxel_tf",
+                        f"No {world_frame} <- {cloud.frame_id} TF; dropping occupancy update",
+                    )
+                    return
+                self._warn_throttled(
+                    "voxel_tf_stale",
+                    f"No {world_frame} <- {cloud.frame_id} TF at cloud time; "
+                    "registering against the latest pose instead",
                 )
-                return
             cloud = cloud.transform(transform)
         try:
             self._planning_collision_snapshot.stage(cloud)

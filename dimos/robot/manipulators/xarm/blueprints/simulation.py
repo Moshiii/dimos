@@ -79,7 +79,13 @@ xarm_perception_sim = autoconnect(
     MujocoSimModule.blueprint(
         **make_xarm7_sim_module_kwargs(XARM7_SIM_PATH),
         enable_pointcloud=True,
-        pointcloud_fps=5.0,
+        # Occupancy only needs coarse geometry, and every published point costs
+        # an LCM encode/decode on each hop. At near-raw density this backlogged
+        # past the 10s TF buffer, so clouds arrived stamped older than any
+        # available camera pose and were all dropped. Publish at roughly the
+        # planning voxel size and well below the camera rate.
+        pointcloud_fps=2.0,
+        pointcloud_voxel_size=XARM_VOXEL_PLANNING_RESOLUTION / 2.0,
     ),
     ObjectSceneRegistrationModule.blueprint(target_frame="world"),
     PointCloudSelfFilter.blueprint(

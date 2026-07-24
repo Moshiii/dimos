@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Literal
 
 import numpy as np
@@ -29,6 +30,8 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+_TF_WARN_INTERVAL_S = 5.0
 
 
 class SelfFilterRegion(BaseModel):
@@ -74,6 +77,16 @@ class PointCloudSelfFilter(Module):
     def stop(self) -> None:
         super().stop()
 
+    def _should_warn(self, key: str) -> bool:
+        """Rate-limit a recurring warning, tolerating uninitialized instances."""
+        warned_at: dict[str, float] = getattr(self, "_warned_at", None) or {}
+        self._warned_at = warned_at
+        now = time.monotonic()
+        if now - warned_at.get(key, 0.0) < _TF_WARN_INTERVAL_S:
+            return False
+        warned_at[key] = now
+        return True
+
     def filter_cloud(self, cloud: PointCloud2) -> PointCloud2 | None:
         """Filter one cloud; missing TF either skips its region or drops the cloud."""
         points = cloud.points_f32()
@@ -89,11 +102,19 @@ class PointCloudSelfFilter(Module):
                 time_tolerance=self.filter_config.tf_tolerance_s,
             )
             if transform is None:
-                logger.warning(
-                    "Missing TF for PointCloudSelfFilter region %s -> %s",
-                    cloud.frame_id,
-                    region.frame_id,
-                )
+                # Fall back to the latest pose: a backlogged pipeline delivers
+                # clouds older than the TF buffer, and without this the robot
+                # never gets filtered out of any cloud again.
+                transform = self.tf.get(cloud.frame_id, region.frame_id)
+            if transform is None:
+                # Fires per region per cloud at camera rate; throttle it or it
+                # buries every other line in the log.
+                if self._should_warn(region.frame_id):
+                    logger.warning(
+                        "Missing TF for PointCloudSelfFilter region %s -> %s",
+                        cloud.frame_id,
+                        region.frame_id,
+                    )
                 if self.filter_config.drop_cloud_on_missing_tf:
                     return None
                 continue
@@ -125,8 +146,15 @@ class PointCloudSelfFilter(Module):
 
     def _on_pointcloud(self, cloud: PointCloud2) -> None:
         filtered = self.filter_cloud(cloud)
-        if filtered is not None:
-            self.filtered_pointcloud.publish(filtered)
+        if filtered is None:
+            return
+        if filtered.ts is None:
+            # An unstamped cloud cannot be encoded (header.stamp.sec is an int)
+            # and the resulting TypeError propagates out of the LCM callback and
+            # kills the handler thread, taking every other subscription with it.
+            logger.warning("Dropping self-filtered cloud with no timestamp")
+            return
+        self.filtered_pointcloud.publish(filtered)
 
     @property
     def filter_config(self) -> PointCloudSelfFilterConfig:

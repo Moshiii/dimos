@@ -300,6 +300,11 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     camera_info_fps: float = 1.0
     # Optional MuJoCo-native lidar: cast rays from one or more named cameras
     # and publish world-frame PointCloud2 points on ``pointcloud``.
+    # Voxel size the RGB-D cloud is downsampled to before publishing. The
+    # default keeps near-raw density; consumers that only need coarse occupancy
+    # should raise it, since every published point costs LCM encode/decode on
+    # each hop and a backlog past the TF buffer makes clouds unusable.
+    pointcloud_voxel_size: float = 0.005
     enable_mujoco_lidar: bool = False
     mujoco_lidar_camera_names: list[str] = Field(default_factory=list)
     mujoco_lidar_voxel_size: float = LIDAR_RESOLUTION
@@ -1045,7 +1050,7 @@ class MujocoSimModule(
                 camera_info=self._camera_info_base,
                 depth_scale=1.0,
             )
-            pcd = pcd.voxel_downsample(0.005)
+            pcd = pcd.voxel_downsample(self.config.pointcloud_voxel_size)
             self.pointcloud.publish(pcd)
         except Exception as exc:
             logger.error("Pointcloud generation error", error=str(exc))
