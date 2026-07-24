@@ -17,8 +17,8 @@
 from pathlib import Path
 
 from dimos.constants import STATE_DIR
-from dimos.control.blueprints.teleop import coordinator_teleop_xarm7
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.robot.manipulators.xarm.blueprints.teleop import coordinator_teleop_xarm7
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
 from dimos.teleop.quest_hosted.hosted_extensions import (
     HostedArmTeleopModule,
@@ -28,7 +28,7 @@ from dimos.teleop.utils.recorder import TeleopRecorder, TeleopRecorderConfig
 
 # Single XArm7 teleop via the hosted (WebRTC) client. Pass `--simulation` to
 # run the coordinator inside MuJoCo, omit it for real hardware.
-teleop_hosted_xarm7 = (
+teleop_hosted_module_xarm7 = (
     autoconnect(
         HostedArmTeleopModule.blueprint(task_names={"right": "teleop_xarm"}),
         coordinator_teleop_xarm7,

@@ -92,17 +92,17 @@ class ExternalControlTask(BaseControlTask):
 
 @pytest.fixture(autouse=True)
 def restore_registries() -> Generator[None, None, None]:
-    manipulator_adapters = adapter_registry._adapters.copy()
-    base_adapters = twist_base_adapter_registry._adapters.copy()
-    whole_body_adapters = whole_body_adapter_registry._adapters.copy()
+    manipulator_adapters = adapter_registry._factories.copy()
+    base_adapters = twist_base_adapter_registry._factories.copy()
+    whole_body_adapters = whole_body_adapter_registry._factories.copy()
     task_paths = control_task_registry._factory_paths.copy()
     task_factories = control_task_registry._factories.copy()
     try:
         yield
     finally:
-        adapter_registry._adapters = manipulator_adapters
-        twist_base_adapter_registry._adapters = base_adapters
-        whole_body_adapter_registry._adapters = whole_body_adapters
+        adapter_registry._factories = manipulator_adapters
+        twist_base_adapter_registry._factories = base_adapters
+        whole_body_adapter_registry._factories = whole_body_adapters
         control_task_registry._factory_paths = task_paths
         control_task_registry._factories = task_factories
 
@@ -121,9 +121,9 @@ def test_register_hardware_adapter_supports_all_hardware_types() -> None:
     register_hardware_adapter(HardwareType.BASE, "Ext_Base", base_factory)
     register_hardware_adapter(HardwareType.WHOLE_BODY, "Ext_Whole_Body", whole_body_factory)
 
-    assert adapter_registry._adapters["ext_manipulator"] is manipulator_factory
-    assert twist_base_adapter_registry._adapters["ext_base"] is base_factory
-    assert whole_body_adapter_registry._adapters["ext_whole_body"] is whole_body_factory
+    assert adapter_registry._factories["ext_manipulator"] is manipulator_factory
+    assert twist_base_adapter_registry._factories["ext_base"] is base_factory
+    assert whole_body_adapter_registry._factories["ext_whole_body"] is whole_body_factory
 
 
 def test_hardware_adapter_create_uses_same_normalization_as_register() -> None:
@@ -166,9 +166,9 @@ def test_register_hardware_adapter_duplicate_policy_keeps_original(
         register_hardware_adapter(hardware_type, adapter_name, different_factory)
 
     registries = {
-        "manipulator": adapter_registry._adapters,
-        "base": twist_base_adapter_registry._adapters,
-        "whole_body": whole_body_adapter_registry._adapters,
+        "manipulator": adapter_registry._factories,
+        "base": twist_base_adapter_registry._factories,
+        "whole_body": whole_body_adapter_registry._factories,
     }
     assert registries[registry_name][adapter_name] is original_factory
 

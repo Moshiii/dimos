@@ -33,7 +33,7 @@ EXAMPLE_PACKAGE = "dimos_external_control_extension"
 
 @pytest.fixture(autouse=True)
 def restore_external_example_state() -> Generator[None, None, None]:
-    base_adapters = twist_base_adapter_registry._adapters.copy()
+    base_adapters = twist_base_adapter_registry._factories.copy()
     task_paths = control_task_registry._factory_paths.copy()
     task_factories = control_task_registry._factories.copy()
     loaded_modules = {
@@ -44,7 +44,7 @@ def restore_external_example_state() -> Generator[None, None, None]:
     try:
         yield
     finally:
-        twist_base_adapter_registry._adapters = base_adapters
+        twist_base_adapter_registry._factories = base_adapters
         control_task_registry._factory_paths = task_paths
         control_task_registry._factories = task_factories
         for name in list(sys.modules):

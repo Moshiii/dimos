@@ -21,8 +21,6 @@ from typing import TYPE_CHECKING, cast
 
 from dimos.control.components import HardwareType
 from dimos.control.tasks.registry import control_task_registry
-from dimos.control.tasks.registry_utils import normalize_task_name, validate_task_factory_path
-from dimos.hardware.registry_utils import normalize_adapter_name
 
 if TYPE_CHECKING:
     from dimos.hardware.drive_trains.spec import TwistBaseAdapter
@@ -42,7 +40,6 @@ def register_hardware_adapter(
     factory object is idempotent; registering a different factory for an
     existing name raises from the target registry.
     """
-    adapter_name = normalize_adapter_name(adapter_type)
     if not callable(factory):
         raise TypeError("Hardware adapter factory must be callable")
 
@@ -51,20 +48,20 @@ def register_hardware_adapter(
             from dimos.hardware.manipulators.registry import adapter_registry
 
             adapter_registry.register(
-                adapter_name, cast("Callable[..., ManipulatorAdapter]", factory)
+                adapter_type, cast("Callable[..., ManipulatorAdapter]", factory)
             )
         case HardwareType.BASE:
             from dimos.hardware.drive_trains.registry import twist_base_adapter_registry
 
             twist_base_adapter_registry.register(
-                adapter_name,
+                adapter_type,
                 cast("Callable[..., TwistBaseAdapter]", factory),
             )
         case HardwareType.WHOLE_BODY:
             from dimos.hardware.whole_body.registry import whole_body_adapter_registry
 
             whole_body_adapter_registry.register(
-                adapter_name,
+                adapter_type,
                 cast("Callable[..., WholeBodyAdapter]", factory),
             )
         case _:
@@ -78,6 +75,4 @@ def register_control_task(task_type: str, factory_path: str) -> None:
     resolved later by the control task registry when a coordinator creates a
     matching ``TaskConfig``.
     """
-    task_name = normalize_task_name(task_type)
-    validate_task_factory_path(factory_path, label="control task factory path")
-    control_task_registry.register_path(task_name, factory_path)
+    control_task_registry.register_path(task_type, factory_path)
