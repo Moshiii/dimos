@@ -83,7 +83,8 @@ jobs:
         id: find-crates
         run: |
           # gsc_pgo/rust links C++ gtsam via an FFI shim; it can't build on this
-          # plain-ubuntu job (no gtsam). It's built via its nix flake dev shell.
+          # plain-ubuntu job (no gtsam), so it's excluded here. It has no CI job —
+          # build/test it locally in its nix flake dev shell (`nix develop`).
           crates=$(find . -name Cargo.lock \
             -not -path './target/*' \
             -not -path './.venv/*' \
