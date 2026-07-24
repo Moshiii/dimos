@@ -158,8 +158,21 @@ class ViserManipulationVisualizer:
             current = self._adapter.get_current_joint_state(_robot_name)
             gripper = self._gripper_position(_robot_name, _config)
             self._scene.update_current_robot(str(robot_id), current, gripper)
+        self._render_planning_occupancy()
         if self._gui is not None:
             self._gui.refresh()
+
+    def _render_planning_occupancy(self) -> None:
+        """Draw the live planning occupancy, never stalling the render loop."""
+        if self._adapter is None or self._scene is None:
+            return
+        try:
+            occupancy = self._adapter.get_planning_occupancy()
+        except Exception:
+            logger.warning("Could not read planning occupancy", exc_info=True)
+            return
+        if occupancy is not None:
+            self._scene.render_planning_occupancy(*occupancy)
 
     def _gripper_position(self, robot_name: str, config: RobotModelConfig) -> float | None:
         """Last known jaw opening, polled well below the render rate.

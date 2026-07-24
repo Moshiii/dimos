@@ -158,6 +158,17 @@ class InProcessViserAdapter:
     def get_gripper(self, robot_name: RobotName) -> float | None:
         return self._module.get_gripper(robot_name)
 
+    def get_planning_occupancy(self) -> tuple[object, float] | None:
+        """Latest staged occupancy and the voxel size it will be built at.
+
+        Staged rather than committed, so the viewer shows what the next plan
+        will collide against instead of lagging a planning request behind.
+        """
+        snapshot = self._module.latest_planning_collision_snapshot()
+        if snapshot is None:
+            return None
+        return snapshot.points_f32(), float(self._module.config.planning_voxel_resolution)
+
     def set_gripper(self, position: float, robot_name: RobotName) -> bool:
         return bool(self._module.set_gripper(position, robot_name).is_success())
 

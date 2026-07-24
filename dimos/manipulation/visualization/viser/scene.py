@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, TypeAlias, cast
+from typing import Any, Protocol, TypeAlias, cast
 
 from yourdfpy import URDF  # type: ignore[import-untyped]
 
@@ -77,6 +77,9 @@ GROUND_TRUTH_COLOR = (60, 220, 120)
 DETECTION_COLOR = (255, 150, 0)
 POSE_ERROR_LINE_COLOR = (255, 80, 80)
 OVERLAY_MARKER_RADIUS = 0.02
+PLANNING_SNAPSHOT_PATH = "/planning/collision_snapshot"
+PLANNING_SNAPSHOT_COLOR = (30, 144, 255)
+PLANNING_SNAPSHOT_POINT_CAP = 20_000
 
 
 class RobotDisplayMode(StrEnum):
@@ -115,6 +118,7 @@ class ViserManipulationScene:
         # Overlay marker handles keyed by scene-node name, tracked so each
         # refresh can clear the previous set before drawing the new one.
         self._overlay_handles: dict[str, object] = {}
+        self._planning_snapshot_handle: object | None = None
         self._ensure_reference_grid()
 
     @property
@@ -320,6 +324,46 @@ class ViserManipulationScene:
         target = self._urdfs.get(f"{robot_id}:target")
         self._set_urdf_mesh_material(target, mesh_color, mesh_opacity)
 
+    def render_planning_occupancy(self, points: object, voxel_size: float) -> None:
+        """Draw the occupancy the planner is actually collision-checking against.
+
+        Rendered at the octree's own voxel size so what the viewer sees is the
+        obstacle the RRT sees, not a prettier point sprite. Never raises: this
+        runs on the loop that also refreshes the panel buttons.
+        """
+        import numpy as np
+
+        try:
+            scene = self.server.scene
+        except AttributeError:
+            return
+        array = np.asarray(points, dtype=np.float32).reshape((-1, 3))
+        if len(array) == 0:
+            self._remove_planning_occupancy()
+            return
+        if len(array) > PLANNING_SNAPSHOT_POINT_CAP:
+            array = array[:: int(np.ceil(len(array) / PLANNING_SNAPSHOT_POINT_CAP))]
+        try:
+            handle = self._planning_snapshot_handle
+            if handle is None:
+                self._planning_snapshot_handle = scene.add_point_cloud(
+                    PLANNING_SNAPSHOT_PATH,
+                    points=array,
+                    colors=PLANNING_SNAPSHOT_COLOR,
+                    point_size=voxel_size,
+                    point_shape="rounded",
+                )
+            else:
+                cast("Any", handle).points = array
+        except Exception:
+            logger.warning("Could not render planning occupancy", exc_info=True)
+
+    def _remove_planning_occupancy(self) -> None:
+        handle = self._planning_snapshot_handle
+        if handle is not None:
+            self._remove_scene_handle(handle)
+            self._planning_snapshot_handle = None
+
     def render_ground_truth(self, objects: Sequence[tuple[str, float, float, float]]) -> None:
         """Draw fixed scene-truth markers (green) under /ground_truth/."""
         self._render_markers("/ground_truth", objects, GROUND_TRUTH_COLOR, suffix="(truth)")
@@ -426,6 +470,7 @@ class ViserManipulationScene:
                 self._remove_scene_handle(handle)
 
     def close(self) -> None:
+        self._remove_planning_occupancy()
         for key in list(self._overlay_handles):
             handle = self._overlay_handles.pop(key, None)
             if handle is not None:

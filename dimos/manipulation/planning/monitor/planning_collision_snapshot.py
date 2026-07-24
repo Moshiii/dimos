@@ -31,6 +31,37 @@ from dimos.manipulation.planning.spec.models import Obstacle
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
+_PACK_BITS = 21
+"""Bits per axis in a packed voxel key: +-1e6 cells, i.e. +-52km at 5cm."""
+
+_PACK_OFFSET = 1 << (_PACK_BITS - 1)
+_PACK_MASK = (1 << _PACK_BITS) - 1
+
+
+def _pack(keys: NDArray[np.int64]) -> NDArray[np.int64]:
+    """Pack integer xyz voxel keys into one int64 each.
+
+    Deduplicating on a 1-D key is far cheaper than np.unique(axis=0), which
+    lexsorts the full Nx3 array on every incoming cloud.
+    """
+    shifted = np.clip(keys + _PACK_OFFSET, 0, _PACK_MASK)
+    return shifted[:, 0] | (shifted[:, 1] << _PACK_BITS) | (shifted[:, 2] << (2 * _PACK_BITS))
+
+
+def _unpack(packed: NDArray[np.int64]) -> NDArray[np.int64]:
+    """Invert :func:`_pack`."""
+    return (
+        np.stack(
+            [
+                packed & _PACK_MASK,
+                (packed >> _PACK_BITS) & _PACK_MASK,
+                (packed >> (2 * _PACK_BITS)) & _PACK_MASK,
+            ],
+            axis=1,
+        )
+        - _PACK_OFFSET
+    )
+
 
 class PlanningCollisionSnapshot:
     """Keep the latest planning cloud and commit it through a WorldMonitor."""
@@ -50,8 +81,10 @@ class PlanningCollisionSnapshot:
         self.resolution = resolution
         self.planning_frame = planning_frame
         self.decay_s = decay_s
-        # voxel key -> last observation time. Present only when accumulating.
-        self._voxels: dict[tuple[int, int, int], float] = {}
+        # Parallel arrays of packed voxel keys and their last observation
+        # time. Only populated when accumulating.
+        self._keys: NDArray[np.int64] = np.empty(0, dtype=np.int64)
+        self._seen: NDArray[np.float64] = np.empty(0, dtype=np.float64)
         self._lock = threading.RLock()
         self._staged: PointCloud2 | None = None
         self._committed: PointCloud2 | None = None
@@ -98,19 +131,30 @@ class PlanningCollisionSnapshot:
             # whichever cell floating-point error picks (0.2 / 0.05 is
             # 4.000000000000001) and then reports a corner, which offsets the
             # octree box by up to a full voxel from the point that created it.
-            keys = np.rint(points / self.resolution).astype(np.int64)
-            for key in map(tuple, keys):
-                self._voxels[key] = now
-        cutoff = now - self.decay_s
-        self._voxels = {key: seen for key, seen in self._voxels.items() if seen >= cutoff}
-        if not self._voxels:
+            fresh = np.unique(_pack(np.rint(points / self.resolution).astype(np.int64)))
+            keys = np.concatenate([self._keys, fresh])
+            seen = np.concatenate([self._seen, np.full(len(fresh), now)])
+        else:
+            keys, seen = self._keys, self._seen
+        if len(keys):
+            # Everything here is vectorized on a packed 1-D key: a per-point
+            # Python loop, or even np.unique(axis=0)'s lexsort, runs over every
+            # point of every cloud at camera rate and starves the simulator.
+            keys, inverse = np.unique(keys, return_inverse=True)
+            newest = np.zeros(len(keys), dtype=np.float64)
+            np.maximum.at(newest, inverse.ravel(), seen)
+            alive = newest >= now - self.decay_s
+            keys, seen = keys[alive], newest[alive]
+        self._keys, self._seen = keys, seen
+        if not len(keys):
             return np.empty((0, 3), dtype=np.float64)
-        return np.asarray(list(self._voxels), dtype=np.float64) * self.resolution
+        return _unpack(keys).astype(np.float64) * self.resolution
 
     def reset_accumulated(self) -> None:
         """Forget accumulated occupancy, e.g. after the scene is rearranged."""
         with self._lock:
-            self._voxels.clear()
+            self._keys = np.empty(0, dtype=np.int64)
+            self._seen = np.empty(0, dtype=np.float64)
             self._staged_generation += 1
 
     def set_grasp_carveout(self, key: str, center: Sequence[float], radius: float) -> None:
