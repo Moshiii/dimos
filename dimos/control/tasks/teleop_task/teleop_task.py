@@ -96,7 +96,7 @@ class TeleopIKTask(BaseControlTask):
     Outputs JointCommandOutput and participates in joint-level arbitration.
 
     Example:
-        >>> from dimos.control.blueprints._hardware import PIPER_FK_MODEL
+        >>> from dimos.robot.manipulators.piper.config import PIPER_FK_MODEL
         >>> task = TeleopIKTask(
         ...     name="teleop_arm",
         ...     config=TeleopIKTaskConfig(
@@ -150,6 +150,7 @@ class TeleopIKTask(BaseControlTask):
         self._target_pose: Pose | PoseStamped | None = None
         self._last_update_time: float = 0.0
         self._active = False
+        self._estopped = False
 
         # Initial EE pose for delta application
         self._initial_ee_pose: pinocchio.SE3 | None = None
@@ -161,11 +162,6 @@ class TeleopIKTask(BaseControlTask):
             f"TeleopIKTask {name} initialized with model: {config.model_path}, "
             f"ee_joint_id={config.ee_joint_id}, joints={config.joint_names}"
         )
-
-    @property
-    def name(self) -> str:
-        """Unique task identifier."""
-        return self._name
 
     def claim(self) -> ResourceClaim:
         """Declare resource requirements."""
@@ -181,7 +177,17 @@ class TeleopIKTask(BaseControlTask):
     def is_active(self) -> bool:
         """Check if task should run this tick."""
         with self._lock:
-            return self._active and self._target_pose is not None
+            return not self._estopped and self._active and self._target_pose is not None
+
+    def set_estop(self, estopped: bool) -> None:
+        """Latch/clear E-STOP. On latch, disengage and drop the target so the
+        task goes inert (is_active() False → compute() is skipped)."""
+        with self._lock:
+            self._estopped = estopped
+            if estopped:
+                self._active = False
+                self._target_pose = None
+                self._initial_ee_pose = None
 
     def compute(self, state: CoordinatorState) -> JointCommandOutput | None:
         """Compute IK and output joint positions.
@@ -315,6 +321,10 @@ class TeleopIKTask(BaseControlTask):
 
         return True
 
+    def on_teleop_buttons(self, msg: Buttons, t_now: float) -> bool:
+        """Uniform stream handler; ``on_buttons`` predates the (msg, t_now) contract."""
+        return self.on_buttons(msg)
+
     def on_cartesian_command(self, pose: Pose | PoseStamped, t_now: float) -> bool:
         """Handle incoming cartesian command (delta pose from teleop)"""
         with self._lock:
@@ -360,6 +370,7 @@ class TeleopIKTaskParams(BaseConfig):
     gripper_joint: str | None = None
     gripper_open_pos: float = 0.0
     gripper_closed_pos: float = 0.0
+    max_joint_delta_deg: float = TeleopIKTaskConfig.max_joint_delta_deg
 
 
 def create_task(cfg: Any, hardware: Any) -> TeleopIKTask:
@@ -375,5 +386,6 @@ def create_task(cfg: Any, hardware: Any) -> TeleopIKTask:
             gripper_joint=params.gripper_joint,
             gripper_open_pos=params.gripper_open_pos,
             gripper_closed_pos=params.gripper_closed_pos,
+            max_joint_delta_deg=params.max_joint_delta_deg,
         ),
     )

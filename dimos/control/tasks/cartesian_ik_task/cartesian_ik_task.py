@@ -86,7 +86,7 @@ class CartesianIKTask(BaseControlTask):
     outputs JointCommandOutput and participates in joint-level arbitration.
 
     Example:
-        >>> from dimos.control.blueprints._hardware import PIPER_FK_MODEL
+        >>> from dimos.robot.manipulators.piper.config import PIPER_FK_MODEL
         >>> task = CartesianIKTask(
         ...     name="cartesian_arm",
         ...     config=CartesianIKTaskConfig(
@@ -145,11 +145,6 @@ class CartesianIKTask(BaseControlTask):
             f"CartesianIKTask {name} initialized with model: {config.model_path}, "
             f"ee_joint_id={config.ee_joint_id}, joints={config.joint_names}"
         )
-
-    @property
-    def name(self) -> str:
-        """Unique task identifier."""
-        return self._name
 
     def claim(self) -> ResourceClaim:
         """Declare resource requirements."""
