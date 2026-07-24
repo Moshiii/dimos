@@ -501,12 +501,39 @@ then refreshes perception obstacles.
 
         # 2. Try each grasp candidate
         max_attempts = min(len(grasp_poses), 5)
-        for i, grasp_pose in enumerate(grasp_poses[:max_attempts]):
+        try:
+            return self._try_grasp_candidates(
+                grasp_poses[:max_attempts], max_attempts, pre_grasp_offset, rname, object_name
+            )
+        finally:
+            # The target must stop being invisible to collision the moment the
+            # pick ends, however it ended.
+            self.clear_grasp_carveout()
+
+    def _try_grasp_candidates(
+        self,
+        grasp_poses: list[Pose],
+        max_attempts: int,
+        pre_grasp_offset: float,
+        rname: str,
+        object_name: str,
+    ) -> SkillResult[ManipulationSkillError]:
+        """Attempt each grasp candidate with its target carved out of occupancy."""
+        for i, grasp_pose in enumerate(grasp_poses):
             # Reduce pre-grasp height for far objects (arm can't reach high + far)
             gp = grasp_pose.position
             xy_dist = (gp.x**2 + gp.y**2) ** 0.5
             offset = pre_grasp_offset if xy_dist < _FAR_REACH_XY_THRESHOLD else 0.05
             pre_grasp_pose = self._compute_pre_grasp_pose(grasp_pose, offset)
+
+            # The object is part of the occupancy cloud, so without this every
+            # grasp pose sits inside an obstacle and the approach can never be
+            # planned. Re-set per candidate: each one approaches from a
+            # different side. Radius covers the pre-grasp point too, so the
+            # whole approach segment is clear.
+            self.set_grasp_carveout(
+                gp.x, gp.y, gp.z, max(self.config.grasp_carveout_radius, offset + 0.02)
+            )
 
             logger.info(f"Planning approach to pre-grasp (attempt {i + 1}/{max_attempts})...")
             if not self.plan_to_pose(pre_grasp_pose, rname):

@@ -138,6 +138,10 @@ class ManipulationModuleConfig(ModuleConfig):
     # turned away from remain in the planning scene. None keeps only the
     # latest cloud, which is correct only for a fixed, whole-scene sensor.
     planning_voxel_decay_s: float | None = 30.0
+    # Radius of the occupancy sphere ignored around an active grasp target.
+    # Large enough to free the object and the fingers closing around it; much
+    # larger and it starts punching a hole through the surface underneath.
+    grasp_carveout_radius: float = 0.12
 
 
 class ManipulationModule(Module):
@@ -190,11 +194,9 @@ class ManipulationModule(Module):
 
         # Live occupancy staged off the port thread and committed to the world
         # only at planning time, so a mid-plan cloud cannot mutate the scene.
-        self._planning_collision_snapshot = PlanningCollisionSnapshot(
-            resolution=self.config.planning_voxel_resolution,
-            planning_frame=self.config.planning_world_frame,
-            decay_s=self.config.planning_voxel_decay_s,
-        )
+        # Built on first use: `config` is not bound yet for every construction
+        # path this module supports.
+        self._snapshot: PlanningCollisionSnapshot | None = None
 
         logger.info("ManipulationModule initialized")
 
@@ -211,9 +213,14 @@ class ManipulationModule(Module):
             self.coordinator_joint_state.subscribe(self._on_joint_state)
             logger.info("Subscribed to coordinator_joint_state port")
 
-        if self.planning_voxel_map is not None:
+        # Optional input: blueprints without a cloud source simply plan against
+        # whatever static obstacles they registered, so an unconnected port is a
+        # valid configuration rather than a startup failure.
+        try:
             self.planning_voxel_map.subscribe(self._on_planning_voxel_map)
             logger.info("Subscribed to planning_voxel_map port")
+        except AttributeError:
+            logger.info("No planning_voxel_map source; planning without live occupancy")
 
         logger.info("ManipulationModule started")
 
@@ -522,6 +529,17 @@ class ManipulationModule(Module):
             self._state = ManipulationState.PLANNING
         return robot[0], robot[1]
 
+    @property
+    def _planning_collision_snapshot(self) -> PlanningCollisionSnapshot:
+        """Occupancy snapshot, constructed from config on first use."""
+        if self._snapshot is None:
+            self._snapshot = PlanningCollisionSnapshot(
+                resolution=self.config.planning_voxel_resolution,
+                planning_frame=self.config.planning_world_frame,
+                decay_s=self.config.planning_voxel_decay_s,
+            )
+        return self._snapshot
+
     def _on_planning_voxel_map(self, cloud: PointCloud2) -> None:
         """Stage an occupancy cloud, resolving it into the planning frame.
 
@@ -572,18 +590,19 @@ class ManipulationModule(Module):
         return self._planning_collision_snapshot.committed()
 
     @rpc
-    def set_grasp_carveout(self, x: float, y: float, z: float, radius: float = 0.12) -> bool:
+    def set_grasp_carveout(self, x: float, y: float, z: float, radius: float | None = None) -> bool:
         """Stop treating a sphere of the occupancy map as an obstacle.
 
         The object being reached for is itself in the occupancy cloud, so
         without this every grasp pose sits inside an obstacle and planning can
         never approach it. Takes effect on the next planning request.
         """
+        effective = self.config.grasp_carveout_radius if radius is None else radius
         try:
-            self._planning_collision_snapshot.set_grasp_carveout("grasp", (x, y, z), radius)
+            self._planning_collision_snapshot.set_grasp_carveout("grasp", (x, y, z), effective)
         except ValueError as exc:
             return self._record_error(f"Invalid grasp carve-out: {exc}")
-        logger.info(f"Grasp carve-out at ({x:.3f}, {y:.3f}, {z:.3f}) r={radius:.3f}")
+        logger.info(f"Grasp carve-out at ({x:.3f}, {y:.3f}, {z:.3f}) r={effective:.3f}")
         return True
 
     @rpc
