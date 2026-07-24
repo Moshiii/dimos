@@ -12,28 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure-Python online PGO wrapper, adapted to the jnav loop-closure eval harness.
-
-Wraps the incremental ISAM2+ICP core `_PGOState` in
-`dimos/mapping/loop_closure/pgo.py` — the pure-Python PGO benchmarked against the
-Rust `gsc_pgo`. This module runs that same online-PGO logic but, instead of
-building a voxel map, emits exactly what eval.py's replay harness
-(`run_module_graph` / `GraphCapture`) consumes: `corrected_odometry` (per-scan ack +
-drift correction), `pose_graph` (Graph3D of the optimized keyframes), and
-`loop_closure_event` (one GraphDelta3D per accepted loop).
-
-Frame handling: the harness feeds SENSOR-frame scans (go2 `l1_cloud` is un-registered
-to `l1_link`; mid360 clouds are natively sensor-frame) paired with a world<-body odom
-pose — identical to what gsc_pgo receives. `_PGOState.process` wants a WORLD-frame
-cloud and unregisters it internally, so each scan is registered to world via the
-latest odom pose first (the round-trip is exact: the stored keyframe body cloud ==
-the original scan). This matches gsc_pgo's raw-scan-plus-latest-odom pairing, so the
-comparison is apples-to-apples.
-
-NOTE: `_PGOState` detects loops by KDTree radius search over optimized keyframe
-positions + ICP, NOT scan-context descriptors. So the gsc_pgo scan-context config
-knobs don't apply; this PGO runs on its own PGOConfig (Go2-tuned defaults).
-"""
+"""Vibe-adapted from the pure-modules branch to conform the spec.py"""
 
 from __future__ import annotations
 
