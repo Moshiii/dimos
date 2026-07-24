@@ -101,7 +101,9 @@ class PGOConfig(NativeModuleConfig):
     use_scan_context: bool = True
     scan_context_num_rings: int = 20
     scan_context_num_sectors: int = 60
-    scan_context_max_range_m: float = 80.0
+    # 0 = auto-scale the ring range from the first scan's extent (short-range
+    # lidars like the Go2 L1 need this; a fixed 80 m collapses them to one ring)
+    scan_context_max_range_m: float = 0.0
     scan_context_top_k: int = 10
     scan_context_match_threshold: float = 0.4
     scan_context_lidar_height_m: float = 2.0

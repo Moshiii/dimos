@@ -484,12 +484,30 @@ impl SimplePgo {
         );
 
         // Cache the Scan Context descriptor + ring-key (empty when the node
-        // has no cloud, e.g. a constraint-triggered node).
+        // has no cloud, e.g. a constraint-triggered node). A non-positive
+        // max_range means "auto": resolve it once from the first real cloud's
+        // extent and reuse it, so all descriptors share one binning.
         if let Some(cloud) = cloud {
-            let descriptor = scan_context::make_descriptor(&cloud, &self.scan_context_config);
-            self.scan_context_ring_keys
-                .push(scan_context::make_ring_key(&descriptor));
-            self.scan_context_descriptors.push(descriptor);
+            if self.scan_context_config.max_range_m <= 0.0 {
+                let auto_range = scan_context::auto_max_range(&cloud);
+                if auto_range > 0.0 {
+                    self.scan_context_config.max_range_m = auto_range;
+                    eprintln!(
+                        "scan-context: auto ring range = {auto_range:.2} m (from cloud extent)"
+                    );
+                }
+            }
+            if self.scan_context_config.max_range_m > 0.0 {
+                let descriptor = scan_context::make_descriptor(&cloud, &self.scan_context_config);
+                self.scan_context_ring_keys
+                    .push(scan_context::make_ring_key(&descriptor));
+                self.scan_context_descriptors.push(descriptor);
+            } else {
+                self.scan_context_descriptors
+                    .push(scan_context::Descriptor::empty());
+                self.scan_context_ring_keys
+                    .push(scan_context::RingKey::new());
+            }
         } else {
             self.scan_context_descriptors
                 .push(scan_context::Descriptor::empty());

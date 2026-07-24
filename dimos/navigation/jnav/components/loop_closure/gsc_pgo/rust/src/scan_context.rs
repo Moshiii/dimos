@@ -165,6 +165,29 @@ pub fn make_descriptor(points: &[[f32; 3]], config: &Config) -> Descriptor {
     descriptor
 }
 
+/// Auto-select the ring range from a scan's spatial extent, for when no
+/// explicit `max_range_m` is configured (e.g. the Go2's short-range L1 lidar,
+/// where the 80 m default collapses every point into the innermost ring). Uses
+/// a high percentile of the points' planar (xy) range so a few stray far
+/// returns don't blow the binning out; returns 0.0 for an empty cloud so the
+/// caller can leave the range unresolved. Resolve ONCE and reuse it: Scan
+/// Context descriptors only compare across scans when every scan shares the
+/// same binning.
+pub fn auto_max_range(points: &[[f32; 3]]) -> f64 {
+    const RANGE_PERCENTILE: f64 = 0.95;
+    let mut ranges: Vec<f64> = points
+        .iter()
+        .map(|point| ((point[0] as f64).powi(2) + (point[1] as f64).powi(2)).sqrt())
+        .filter(|range| *range > 1e-6)
+        .collect();
+    if ranges.is_empty() {
+        return 0.0;
+    }
+    ranges.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let index = ((ranges.len() - 1) as f64 * RANGE_PERCENTILE).round() as usize;
+    ranges[index]
+}
+
 /// Mean per row (over ALL columns, zeros included) — the retrieval key.
 pub fn make_ring_key(descriptor: &Descriptor) -> RingKey {
     let mut key = vec![0.0f32; descriptor.n_rings];
