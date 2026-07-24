@@ -40,16 +40,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use dimos_gsc_pgo::gsc_pgo::{
+    CloudWithPose, Config as PgoConfig, KeyPoseWithCloud, LocationConstraintObs, PoseWithTime,
+    SimplePgo,
+};
 use dimos_gsc_pgo::mat3::{self, Mat3, Vec3};
 use dimos_gsc_pgo::msgs::{
     DeformationNode, DeltaTransform, Edge, Graph3D, GraphDelta3D, LocationConstraint, Node3D,
     PoseStamped as WirePose,
 };
 use dimos_gsc_pgo::pointcloud::{self, PointCloud};
-use dimos_gsc_pgo::simple_pgo::{
-    CloudWithPose, Config as PgoConfig, KeyPoseWithCloud, LocationConstraintObs, PoseWithTime,
-    SimplePgo,
-};
 use dimos_module::{native_config, run_with_transport, Input, Module, Output};
 use lcm_msgs::geometry_msgs::{Point, Quaternion, Transform, TransformStamped, Vector3};
 use lcm_msgs::nav_msgs::Odometry;

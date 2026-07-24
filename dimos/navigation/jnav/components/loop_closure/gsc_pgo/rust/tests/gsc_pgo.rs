@@ -22,12 +22,12 @@
 
 use std::f64::consts::PI;
 
+use dimos_gsc_pgo::gsc_pgo::{
+    CloudWithPose, Config, LocationConstraintObs, PoseWithTime, SimplePgo,
+};
 use dimos_gsc_pgo::mat3::{self, Mat3, Vec3};
 use dimos_gsc_pgo::pointcloud::{
     cloud_degeneracy, icp_point_to_point, voxel_downsample, IcpParams,
-};
-use dimos_gsc_pgo::simple_pgo::{
-    CloudWithPose, Config, LocationConstraintObs, PoseWithTime, SimplePgo,
 };
 
 fn yaw(a: f64) -> Mat3 {

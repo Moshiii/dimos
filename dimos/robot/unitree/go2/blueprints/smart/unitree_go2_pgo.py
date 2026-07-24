@@ -55,7 +55,16 @@ def _render_pose_graph(graph: Graph3D) -> RerunMulti:
 unitree_go2_pgo = autoconnect(
     GO2Connection.blueprint().remappings([(GO2Connection, "lidar", "world_lidar")]),
     SensorFrameLidarBridge.blueprint(),
-    PGO.blueprint(),
+    PGO.blueprint(
+        # Tuned for the Go2's short-range onboard L1 lidar (~2.5 m). At the 80 m
+        # default SC range every point collapses into the innermost ring, so no
+        # loop candidates fire; the robust kernel contains the false closures the
+        # sparse lidar still produces instead of letting one blow up the graph.
+        scan_context_max_range_m=8.0,
+        loop_robust_kernel=True,
+        scan_context_match_threshold=0.35,
+        min_descriptor_std=0.1,
+    ),
     vis_module(
         "rerun",
         rerun_config={"visual_override": {_POSE_GRAPH_PATH: _render_pose_graph}},

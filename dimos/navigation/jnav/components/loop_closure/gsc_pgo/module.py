@@ -86,8 +86,8 @@ class PGOConfig(NativeModuleConfig):
     # 0 disables.
     loop_min_degeneracy: float = 0.05
 
-    # Input mode: transform world-frame scans to body-frame using odom
-    unregister_input: bool = True
+    # basically only needed because of the go2, and partly b/c we don't have rust tf.get yet
+    unregister_input: bool = False
 
     # Debug global-map publishing — OFF by default. Emitted on the internal
     # `_global_map` port (leading underscore) so it never autoconnects to a
