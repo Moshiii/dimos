@@ -93,17 +93,19 @@ class PlanningCollisionSnapshot:
         assert self.decay_s is not None
         now = float(ts if ts is not None else 0.0)
         if len(points):
-            keys = np.floor(points / self.resolution).astype(np.int64)
+            # Round rather than floor, so a voxel's representative point is its
+            # center. Flooring both keys a point on a cell boundary into
+            # whichever cell floating-point error picks (0.2 / 0.05 is
+            # 4.000000000000001) and then reports a corner, which offsets the
+            # octree box by up to a full voxel from the point that created it.
+            keys = np.rint(points / self.resolution).astype(np.int64)
             for key in map(tuple, keys):
                 self._voxels[key] = now
         cutoff = now - self.decay_s
         self._voxels = {key: seen for key, seen in self._voxels.items() if seen >= cutoff}
         if not self._voxels:
             return np.empty((0, 3), dtype=np.float64)
-        # Report voxel centers: the octree places a box of edge `resolution` at
-        # each point, so corners would offset every obstacle by half a voxel.
-        grid = np.asarray(list(self._voxels), dtype=np.float64)
-        return (grid + 0.5) * self.resolution
+        return np.asarray(list(self._voxels), dtype=np.float64) * self.resolution
 
     def reset_accumulated(self) -> None:
         """Forget accumulated occupancy, e.g. after the scene is rearranged."""
