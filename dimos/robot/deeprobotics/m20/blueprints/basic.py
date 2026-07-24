@@ -148,12 +148,12 @@ def m20_rerun_blueprint() -> Any:
 rerun = autoconnect(
     RerunBridgeModule.blueprint(
         blueprint=m20_rerun_blueprint,
-        memory_limit="1GB",
+        memory_limit="40GB",
         max_hz={
             "world/color_image": 0,
             "world/color_image_rear": 0,
-            "world/global_map": 1.0,
-            "world/local_map": 2.0,
+            "world/global_map": 100.0,
+            "world/local_map": 200.0,
         },
         visual_override={
             # slam_odom is already represented by map -> base_link. Keeping a
@@ -166,6 +166,8 @@ rerun = autoconnect(
             "world/raw_path": _raw_path_for_rerun,
             "world/global_costmap": _render_costmap_semitransparent,
             "world/path": _smooth_path_for_rerun,
+            # "world/global_costmap": _costmap_below_ground,
+            # "world/navigation_costmap": _render_costmap_semitransparent,
         },
         static={"world/tf/base_link": _m20_static_scene},
     ),

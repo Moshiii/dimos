@@ -18,6 +18,7 @@ from threading import Event, RLock, Thread, current_thread
 import time
 
 from dimos_lcm.std_msgs import Bool
+import numpy as np
 from reactivex import Subject
 from reactivex.disposable import CompositeDisposable
 
@@ -125,6 +126,9 @@ class GlobalPlanner(Resource):
         path_smoothing_backtracking_factor: float = 0.5,
         path_smoothing_max_backtracking_steps: int = 3,
         path_resample_spacing_m: float = 0.1,
+        obstacle_lookahead_min_distance_m: float = 3.0,
+        obstacle_lookahead_time_s: float = 0.0,
+        obstacle_lookahead_max_distance_m: float = 3.0,
     ) -> None:
         self.path = Subject()
         self.raw_path = Subject()
@@ -154,7 +158,12 @@ class GlobalPlanner(Resource):
         self._navigation_map = NavigationMap(self._global_config, "voronoi")
         self._navigation_map_near = NavigationMap(self._global_config, "gradient")
         self._local_planner = LocalPlanner(
-            self._global_config, self._navigation_map, self._goal_tolerance
+            self._global_config,
+            self._navigation_map,
+            self._goal_tolerance,
+            obstacle_lookahead_min_distance_m=obstacle_lookahead_min_distance_m,
+            obstacle_lookahead_time_s=obstacle_lookahead_time_s,
+            obstacle_lookahead_max_distance_m=obstacle_lookahead_max_distance_m,
         )
 
         self._replan_limiter = ReplanLimiter()
@@ -506,6 +515,42 @@ class GlobalPlanner(Resource):
                 return path, costmap
 
         return None
+
+    def _clear_robot_footprint(
+        self, costmap: OccupancyGrid, binary: OccupancyGrid, robot_pos: Vector3
+    ) -> None:
+        """Make the cells under the robot passable for planning.
+
+        A new obstacle can be observed for the first time when the robot is
+        already inside its inflation envelope (it drove there before the
+        costmap caught up). Inflation then covers the robot's cell, A* has no
+        passable start neighbors, and every replan fails no matter where the
+        goal is. The space the robot stands on is traversable by definition,
+        so drop inflated costs there to high-but-passable. Cells occupied in
+        the raw binary costmap (actually observed obstacle points) stay
+        blocked.
+        """
+        if binary.grid.shape != costmap.grid.shape or binary.origin != costmap.origin:
+            # A newer map update raced in between building the two grids;
+            # skip clearing rather than misalign cells.
+            return
+
+        center = costmap.world_to_grid(robot_pos)
+        center_x, center_y = int(center.x), int(center.y)
+        cells = int(self._global_config.robot_rotation_diameter / 2 / costmap.resolution) + 1
+
+        height, width = costmap.grid.shape
+        y0, y1 = max(0, center_y - cells), min(height, center_y + cells + 1)
+        x0, x1 = max(0, center_x - cells), min(width, center_x + cells + 1)
+        if y0 >= y1 or x0 >= x1:
+            return
+
+        region = costmap.grid[y0:y1, x0:x1]
+        binary_region = binary.grid[y0:y1, x0:x1]
+        rows, columns = np.ogrid[y0:y1, x0:x1]
+        disc = (rows - center_y) ** 2 + (columns - center_x) ** 2 <= cells**2
+        clearable = disc & (region >= CostValues.OCCUPIED) & (binary_region < CostValues.OCCUPIED)
+        region[clearable] = CostValues.OCCUPIED - 1
 
     def _find_safe_goal(self, goal: Vector3) -> Vector3 | None:
         costmap = self._navigation_map.binary_costmap

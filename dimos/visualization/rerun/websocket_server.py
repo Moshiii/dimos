@@ -154,6 +154,12 @@ class RerunWebSocketServer(Module):
 
         msg_type = msg.get("type")
 
+        # dict.get's default is only used when the key is missing — if Rerun
+        # sends a 2D-panel click the "z" key is present with value None, and
+        # `float(None)` raises.  Coerce explicitly.
+        def _num(v: Any) -> float:
+            return float(v) if v is not None else 0.0
+
         if msg_type == "click":
             x = float(msg.get("x", 0))
             y = float(msg.get("y", 0))
@@ -184,14 +190,14 @@ class RerunWebSocketServer(Module):
             self.tele_cmd_vel.publish(
                 Twist(
                     linear=Vector3(
-                        float(msg.get("linear_x", 0)),
-                        float(msg.get("linear_y", 0)),
-                        float(msg.get("linear_z", 0)),
+                        _num(msg.get("linear_x")),
+                        _num(msg.get("linear_y")),
+                        _num(msg.get("linear_z")),
                     ),
                     angular=Vector3(
-                        float(msg.get("angular_x", 0)),
-                        float(msg.get("angular_y", 0)),
-                        float(msg.get("angular_z", 0)),
+                        _num(msg.get("angular_x")),
+                        _num(msg.get("angular_y")),
+                        _num(msg.get("angular_z")),
                     ),
                 )
             )
