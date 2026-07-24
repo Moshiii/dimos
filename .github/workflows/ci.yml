@@ -133,6 +133,7 @@ jobs:
           CRATES: ${{ steps.find-crates.outputs.crates }}
         run: |
           for crate in $CRATES; do
+            # if nix, run the rust tests in nix (not plain rust)
             if [ -f "$crate/flake.nix" ]; then
               echo "::group::$crate (flake dev shell)"
               (cd "$crate" && nix develop path:. --command bash -c '
