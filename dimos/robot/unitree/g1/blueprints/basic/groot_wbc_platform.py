@@ -98,5 +98,5 @@ def resolve_g1_groot_platform() -> G1GrootPlatform:
         auto_arm=True,
         auto_dry_run=False,
         ramp_seconds=0.0,
-        n_workers=10,
+        n_workers=12,
     )

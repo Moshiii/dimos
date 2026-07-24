@@ -127,6 +127,10 @@ def _nav_path(path: NavPath) -> Any:
     return path.to_rerun(z_offset=0.3)
 
 
+def _lidar_scan(cloud: Any) -> Any:
+    return cloud.to_rerun(voxel_size=0.03, colors=[80, 210, 255], mode="points")
+
+
 def _pelvis_to_mid360() -> Any:
     if not _pelvis_mid360_cache:
         from importlib import import_module
@@ -170,16 +174,16 @@ _static_entities: dict[str, Any] = {
 _static_entities.update(scene_package_static_entities(global_config.scene_package))
 
 _rerun_config: dict[str, Any] = {
-    "memory_limit": "8GB" if _platform.simulation else "512MB",
+    "memory_limit": "1GB",
     "blueprint": _rerun_blueprint,
     "visual_override": {
         "world/color_image": None,
         "world/camera_info": None,
         "world/depth_image": None,
         "world/depth_camera_info": None,
-        "world/pimsim/pointlio_lidar": None,
         "world/pimsim/pointlio_odometry": None,
         "world/localization_anchor": None,
+        "world/lidar": _lidar_scan,
         "world/coordinator_joint_state": g1_urdf_joint_state(root_path=_RERUN_ROOT),
         "world/odometry": _real_odometry_root,
         "world/global_costmap": g1_costmap,
@@ -192,6 +196,7 @@ _rerun_config: dict[str, Any] = {
         "world/g1/motor_states": 10.0,
         "world/g1/motor_command": 10.0,
         "world/odometry": 15.0,
+        "world/lidar": 2.0,
         "world/global_map": 1.0,
         "world/global_costmap": 2.0,
         "world/navigation_costmap": 2.0,
