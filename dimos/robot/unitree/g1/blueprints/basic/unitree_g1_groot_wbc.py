@@ -14,9 +14,9 @@
 
 """Unitree G1 GR00T whole-body control, mapping, and navigation.
 
-Real hardware uses PointLIO to produce registered lidar and odometry. Simulation
-provides the same typed localization boundary from simulator truth. Both feed
-the same mapping, planning, control, and visualization modules.
+Real hardware and simulation use PointLIO to produce registered lidar and
+odometry. Both feed the same mapping, planning, control, and visualization
+modules.
 
 Usage:
     dimos run unitree-g1-groot-wbc
@@ -179,6 +179,7 @@ _rerun_config: dict[str, Any] = {
         "world/depth_camera_info": None,
         "world/lidar": None,
         "world/coordinator_joint_state": g1_urdf_joint_state(root_path=_RERUN_ROOT),
+        "world/odometry": _real_odometry_root,
         "world/global_costmap": g1_costmap,
         "world/navigation_costmap": g1_costmap,
         "world/path": _nav_path,
@@ -198,7 +199,6 @@ _rerun_config: dict[str, Any] = {
 }
 
 if not _platform.simulation:
-    _rerun_config["visual_override"]["world/odometry"] = _real_odometry_root
     _rerun_config["visual_override"]["world/global_costmap"] = _real_costmap
     _rerun_config["visual_override"]["world/navigation_costmap"] = _real_costmap
 

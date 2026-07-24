@@ -27,12 +27,14 @@ from dimos.protocol.pubsub.impl.zenohpubsub import (
     ZenohPubSubBase,
 )
 
-_LIDAR_CHANNEL = "dimos/lidar/sensor_msgs.PointCloud2"
-_ODOMETRY_CHANNEL = "dimos/odometry/nav_msgs.Odometry"
+
+class PointLioZenohRelayConfig(ModuleConfig):
+    lidar_topic: str = "lidar"
+    odometry_topic: str = "odometry"
 
 
 class PointLioZenohRelay(Module):
-    config: ModuleConfig
+    config: PointLioZenohRelayConfig
 
     @rpc
     def start(self) -> None:
@@ -42,12 +44,14 @@ class PointLioZenohRelay(Module):
         lcm.start()
         zenoh.start()
 
-        lidar = ZenohTopic("dimos/lidar", PointCloud2, qos=QOS_LATEST_WINS)
-        odometry = ZenohTopic("dimos/odometry", Odometry)
+        lidar_name = _topic_name(self.config.lidar_topic)
+        odometry_name = _topic_name(self.config.odometry_topic)
+        lidar = ZenohTopic(lidar_name, PointCloud2, qos=QOS_LATEST_WINS)
+        odometry = ZenohTopic(odometry_name, Odometry)
         self.register_disposable(
             Disposable(
                 lcm.subscribe(
-                    LCMTopic(_LIDAR_CHANNEL),
+                    LCMTopic(f"{lidar_name}/{PointCloud2.msg_name}"),
                     lambda payload, _: zenoh.publish(lidar, payload),
                 )
             )
@@ -55,10 +59,19 @@ class PointLioZenohRelay(Module):
         self.register_disposable(
             Disposable(
                 lcm.subscribe(
-                    LCMTopic(_ODOMETRY_CHANNEL),
+                    LCMTopic(f"{odometry_name}/{Odometry.msg_name}"),
                     lambda payload, _: zenoh.publish(odometry, payload),
                 )
             )
         )
         self.register_disposable(Disposable(lcm.stop))
         self.register_disposable(Disposable(zenoh.stop))
+
+
+def _topic_name(topic: str) -> str:
+    name = topic.strip("/")
+    if name.startswith("dimos/"):
+        name = name.removeprefix("dimos/")
+    if not name:
+        raise ValueError("PointLIO relay topics cannot be empty")
+    return f"dimos/{name}"

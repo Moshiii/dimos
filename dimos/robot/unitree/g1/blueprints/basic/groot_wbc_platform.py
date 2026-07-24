@@ -14,9 +14,9 @@
 
 """Platform-owned control and localization inputs for the G1 GR00T stack.
 
-Hardware uses PointLIO for ``lidar`` and ``odometry``. A simulation provider
-publishes those streams itself. Mapping and navigation remain outside this
-boundary.
+Hardware and simulation both use PointLIO for ``lidar`` and ``odometry``.
+Simulation providers supply the virtual sensor device and its world-frame
+anchor. Mapping and navigation remain outside this boundary.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class G1GrootPlatform:
 def resolve_g1_groot_platform() -> G1GrootPlatform:
     if not global_config.simulation:
         from dimos.hardware.sensors.lidar.pointlio.module import PointLio
-        from dimos.robot.unitree.g1.blueprints.basic.pointlio_zenoh_relay import (
+        from dimos.hardware.sensors.lidar.pointlio.zenoh_relay import (
             PointLioZenohRelay,
         )
         from dimos.robot.unitree.g1.wholebody_connection import G1WholeBodyConnection
