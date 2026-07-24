@@ -138,6 +138,11 @@ class ManipulationModuleConfig(ModuleConfig):
     # turned away from remain in the planning scene. None keeps only the
     # latest cloud, which is correct only for a fixed, whole-scene sensor.
     planning_voxel_decay_s: float | None = 30.0
+    # Radius around each of the robot's own link origins whose occupancy points
+    # are discarded. Backstop for the upstream self-filter: if the robot ends up
+    # in its own map, every plan collides at its start state. Set to 0 to
+    # disable.
+    robot_self_exclusion_radius: float = 0.25
     # Radius of the occupancy sphere ignored around an active grasp target.
     # Large enough to free the object and the fingers closing around it; much
     # larger and it starts punching a hole through the surface underneath.
@@ -465,6 +470,16 @@ class ManipulationModule(Module):
             self._planning_epoch += 1
         self._state = ManipulationState.IDLE
         self._error_message = ""
+        # Accumulated occupancy outlives a fault by design (decay is the only
+        # way stale geometry leaves the map), so a bad map keeps failing every
+        # retry. Reset is what both the agent and a human reach for after a
+        # collision failure, so make it the escape hatch from that too. Only
+        # touch a snapshot that already exists -- building one here would just
+        # be work to throw away.
+        snapshot: PlanningCollisionSnapshot | None = getattr(self, "_snapshot", None)
+        if snapshot is not None:
+            snapshot.clear_grasp_carveout()
+            snapshot.reset_accumulated()
         return SkillResult.ok("Reset to IDLE — ready for new commands")
 
     @rpc
@@ -536,22 +551,30 @@ class ManipulationModule(Module):
         These fire per cloud at camera rate, and unthrottled they bury every
         other line in the log.
         """
+        warned_at: dict[str, float] = getattr(self, "_warned_at", None) or {}
+        self._warned_at = warned_at
         now = time.monotonic()
-        if now - self._warned_at.get(key, 0.0) < interval:
+        if now - warned_at.get(key, 0.0) < interval:
             return
-        self._warned_at[key] = now
+        warned_at[key] = now
         logger.warning(message)
 
     @property
     def _planning_collision_snapshot(self) -> PlanningCollisionSnapshot:
-        """Occupancy snapshot, constructed from config on first use."""
-        if self._snapshot is None:
-            self._snapshot = PlanningCollisionSnapshot(
+        """Occupancy snapshot, constructed from config on first use.
+
+        Tolerates instances whose ``__init__`` never ran: subclasses and test
+        harnesses construct this module by several paths.
+        """
+        snapshot: PlanningCollisionSnapshot | None = getattr(self, "_snapshot", None)
+        if snapshot is None:
+            snapshot = PlanningCollisionSnapshot(
                 resolution=self.config.planning_voxel_resolution,
                 planning_frame=self.config.planning_world_frame,
                 decay_s=self.config.planning_voxel_decay_s,
             )
-        return self._snapshot
+            self._snapshot = snapshot
+        return snapshot
 
     def _on_planning_voxel_map(self, cloud: PointCloud2) -> None:
         """Stage an occupancy cloud, resolving it into the planning frame.
@@ -569,28 +592,61 @@ class ManipulationModule(Module):
                 time_tolerance=self.config.planning_voxel_tf_tolerance_s,
             )
             if transform is None:
-                # A backlogged pipeline hands us clouds older than the TF buffer
-                # (10s by default), so the exact-time lookup expires and the map
-                # would go permanently empty. The latest pose is stale but far
-                # better than no occupancy; accumulation smears slightly rather
-                # than the planner losing every obstacle.
-                transform = self.tf.get(world_frame, cloud.frame_id)
-                if transform is None:
-                    self._warn_throttled(
-                        "voxel_tf",
-                        f"No {world_frame} <- {cloud.frame_id} TF; dropping occupancy update",
-                    )
-                    return
+                # Deliberately drop rather than fall back to the latest pose.
+                # Registering a stale cloud against the current camera pose
+                # smears the scene along the arm's motion and paints the robot's
+                # own points into the map, after which every IK and every plan
+                # -- including the retreat to init -- collides. An empty map is
+                # recoverable; a map containing the robot is not.
                 self._warn_throttled(
-                    "voxel_tf_stale",
+                    "voxel_tf",
                     f"No {world_frame} <- {cloud.frame_id} TF at cloud time; "
-                    "registering against the latest pose instead",
+                    "dropping occupancy update",
                 )
+                return
             cloud = cloud.transform(transform)
+        cloud = self._exclude_robot_points(cloud)
         try:
             self._planning_collision_snapshot.stage(cloud)
         except ValueError as exc:
             logger.warning("Rejected planning collision snapshot: %s", exc)
+
+    def _exclude_robot_points(self, cloud: PointCloud2) -> PointCloud2:
+        """Drop points sitting on the robot's own body.
+
+        The wrist camera sees the arm it is mounted on. Those returns are the
+        robot, not the scene, and once committed they become an obstacle rigidly
+        attached to the end effector -- every plan then collides at its start
+        state, including the retreat to init, which strands the arm in FAULT.
+
+        Deliberately uses the planner's own FK at the current joint state rather
+        than TF: it needs no timestamp match, so it cannot silently mis-place
+        the exclusion the way a stale transform does.
+        """
+        radius = self.config.robot_self_exclusion_radius
+        if radius <= 0.0 or self._world_monitor is None:
+            return cloud
+        centers: list[list[float]] = []
+        for _robot_name, robot_id, config in self.robot_items():
+            links = [config.base_link, config.end_effector_link, *config.tf_extra_links]
+            for link_name in dict.fromkeys(links):
+                try:
+                    pose = self._world_monitor.get_link_pose(robot_id, link_name)
+                except Exception:
+                    continue
+                if pose is not None:
+                    centers.append([pose.position.x, pose.position.y, pose.position.z])
+        if not centers:
+            return cloud
+        points = np.asarray(cloud.points_f32(), dtype=np.float64).reshape((-1, 3))
+        if len(points) == 0:
+            return cloud
+        keep = np.ones(len(points), dtype=bool)
+        for center in np.asarray(centers, dtype=np.float64):
+            keep &= np.sum((points - center) ** 2, axis=1) > radius * radius
+        if keep.all():
+            return cloud
+        return PointCloud2.from_numpy(points[keep], frame_id=cloud.frame_id, timestamp=cloud.ts)
 
     def _synchronize_planning_collision_snapshot(self) -> None:
         """Commit the staged cloud into the planning world.

@@ -102,11 +102,6 @@ class PointCloudSelfFilter(Module):
                 time_tolerance=self.filter_config.tf_tolerance_s,
             )
             if transform is None:
-                # Fall back to the latest pose: a backlogged pipeline delivers
-                # clouds older than the TF buffer, and without this the robot
-                # never gets filtered out of any cloud again.
-                transform = self.tf.get(cloud.frame_id, region.frame_id)
-            if transform is None:
                 # Fires per region per cloud at camera rate; throttle it or it
                 # buries every other line in the log.
                 if self._should_warn(region.frame_id):
