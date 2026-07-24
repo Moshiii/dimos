@@ -60,6 +60,7 @@ SELF_HOSTED_BLUEPRINTS = frozenset(
         "learning-collect-quest-xarm7",
         "openarm-mock-planner-coordinator",
         "openarm-planner-coordinator",
+        "robot-model-validation",
         "teleop-hosted-go2",
         "teleop-hosted-go2-multicam",
         "teleop-hosted-go2-transport",

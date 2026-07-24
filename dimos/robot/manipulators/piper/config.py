@@ -38,7 +38,8 @@ PIPER_GRIPPER_COLLISION_EXCLUSIONS: list[tuple[str, str]] = [
 ]
 
 PIPER_DESCRIPTION_REPO = "https://github.com/agilexrobotics/agx_arm_urdf"
-_PIPER_REPO = RobotDescriptionSource(url=PIPER_DESCRIPTION_REPO, ref="main")
+PIPER_DESCRIPTION_REF = "f6642ce0d7872c686f29c99e9e10cd23d1d49313"
+_PIPER_REPO = RobotDescriptionSource(url=PIPER_DESCRIPTION_REPO, ref=PIPER_DESCRIPTION_REF)
 PIPER_MODEL_PATH = _PIPER_REPO / "piper" / "urdf" / "piper_with_gripper_description.xacro"
 PIPER_PACKAGE_PATHS: dict[str, Path] = {
     # Upstream URIs are package://agx_arm_description/agx_arm_urdf/..., so the

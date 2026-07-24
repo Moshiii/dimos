@@ -76,7 +76,7 @@ such as `str(path)`, `path.resolve()`, or `path.exists()`.
 Use `processing.py` for generic robot-description rendering:
 
 ```python
-from dimos.robot.assets.processing import render_urdf
+from dimos.robot.assets.processing import render_urdf, rendered_robot_description
 
 rendered_path = render_urdf(
     model_path,
@@ -84,7 +84,32 @@ rendered_path = render_urdf(
     xacro_args={"limited": "true"},
     package_uri_mode="preserve",  # or "absolute"
 )
+
+# Use a lazy handle in module-level robot configuration. No checkout or
+# rendering occurs until a consumer observes the filesystem path.
+fk_model_path = rendered_robot_description(
+    model_path,
+    package_paths,
+    xacro_args={"dof": "6", "limited": "true"},
+)
 ```
+
+`rendered_robot_description` can also derive an arm-only kinematic model with
+`removed_joint_names=frozenset({...})`. The named joint, its child link, and the
+complete descendant subtree are removed in the cached output.
 
 Keep consumer-specific processing outside this module. For example, Drake-specific
 cleanup still belongs in `dimos/manipulation/planning/utils/mesh_utils.py`.
+
+## Validating migrated models
+
+Run the self-hosted validation blueprint after changing a source URL, pinned
+commit, package root, Xacro argument, or derived-model rule:
+
+```bash
+dimos run robot-model-validation
+```
+
+At startup it resolves all migrated sources, loads Piper, xArm 6/7, A-750, and
+A1Z into Drake, runs zero-position Pinocchio FK against each coordinator model,
+and checks that the official Unitree G1 URDF resolves every visual mesh.

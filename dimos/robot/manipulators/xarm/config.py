@@ -28,6 +28,7 @@ from dimos.control.components import (
 from dimos.core.global_config import global_config
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
+from dimos.robot.assets.processing import rendered_robot_description
 from dimos.robot.assets.source import RobotDescriptionSource
 from dimos.robot.manipulators._modeling import (
     base_pose,
@@ -56,11 +57,25 @@ XARM_GRIPPER_COLLISION_EXCLUSIONS: list[tuple[str, str]] = [
 ]
 
 XARM_ROS2_REPO = "https://github.com/xArm-Developer/xarm_ros2"
-_XARM_REPO = RobotDescriptionSource(url=XARM_ROS2_REPO, ref="humble")
+XARM_ROS2_REF = "d0b95117dabd3883f41155125aa3f67d37901c18"
+_XARM_REPO = RobotDescriptionSource(url=XARM_ROS2_REPO, ref=XARM_ROS2_REF)
 XARM_MODEL_PATH = _XARM_REPO / "xarm_description" / "urdf" / "xarm_device.urdf.xacro"
 XARM_PACKAGE_PATHS: dict[str, Path] = {"xarm_description": _XARM_REPO / "xarm_description"}
-XARM6_FK_MODEL = LfsPath("xarm_description/urdf/xarm6/xarm6.urdf")
-XARM7_FK_MODEL = LfsPath("xarm_description/urdf/xarm7/xarm7.urdf")
+_XARM_FK_XACRO_ARGS = {
+    "limited": "true",
+    "attach_xyz": "0 0 0",
+    "attach_rpy": "0 0 0",
+}
+XARM6_FK_MODEL = rendered_robot_description(
+    XARM_MODEL_PATH,
+    XARM_PACKAGE_PATHS,
+    {**_XARM_FK_XACRO_ARGS, "dof": "6"},
+)
+XARM7_FK_MODEL = rendered_robot_description(
+    XARM_MODEL_PATH,
+    XARM_PACKAGE_PATHS,
+    {**_XARM_FK_XACRO_ARGS, "dof": "7"},
+)
 XARM6_SIM_PATH = LfsPath("xarm6/scene.xml")
 XARM7_SIM_PATH = LfsPath("xarm7/scene.xml")
 XARM_GRIPPER_PARAMS = {
