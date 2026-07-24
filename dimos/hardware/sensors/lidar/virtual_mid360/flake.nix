@@ -28,6 +28,13 @@
           cp -r ${dimos-rust}/dimos-module-macros $out/native/rust/dimos-module-macros
         '';
       in {
+        # Toolchain-only shell for CI fmt/clippy/test. Deliberately avoids the
+        # `src` runCommand (its relative path: input can't resolve once the
+        # flake is copied to the store), so `nix develop` stays cheap.
+        devShells.default = pkgs.mkShell {
+          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt ];
+        };
+
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "virtual-mid360";
           version = "0.1.0";
