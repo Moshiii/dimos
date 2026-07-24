@@ -3,7 +3,7 @@
 
 You add streams, system auto assigns colors
 
-```python session=plot output="assets/plot_colors.svg"
+```python session=plot output=none
 import math
 import random
 
@@ -94,7 +94,7 @@ plot.to_svg("assets/plot_robot_data.svg")
 
 Let's find some plants!
 
-```python session=robotdata
+```python session=robotdata output=none
 from dimos.memory2.vis.plot.elements import Series, HLine, Style
 from dimos.memory2.vis import color
 from dimos.memory2.transform import normalize, smooth_time
@@ -149,7 +149,7 @@ Embeddings are calculated according to some minimum picture brightness. Complete
 
 Let's investigate how our embedding stream relates to image brightness:
 
-```python session=robotdata
+```python session=robotdata output=none
 
 plot = Plot()
 
@@ -170,11 +170,12 @@ plot.to_svg("assets/plot_plantness_brightness.svg")
 ```
 
 ![output](assets/plot_plantness_brightness.svg)
+
 We see that stuff isn't embedded below some minimum brightness.
 
 Let's now fill the gaps in our semantic graph a bit, looks super ugly above, we will tell plotter to consider unmapped values as zero and connect values that are within 7.5 seconds, smooth with 5 second time window, and normalize the data
 
-```python session=robotdata
+```python session=robotdata output=none
 
 plot = Plot()
 
@@ -185,7 +186,7 @@ plot.add(
       label="plant-ness",
       color=color.green,
       gap_fill=0.0,
-      connect=7.5
+      connect=1.5
 )
 
 plot.to_svg("assets/plot_plantness_gap_fill.svg")
@@ -198,7 +199,7 @@ Looks better, these are some very obvious peaks, I'm curious let's see what was 
 
 Let's auto-detect the peaks, extract images from those moments, and run a 2D detector
 
-```python skip session=robotdata
+```python skip session=robotdata output=none
 from dimos.mapping.voxels import VoxelMapTransformer
 from dimos.memory2.vis.space.space import Space
 from dimos.memory2.transform import peaks
@@ -273,7 +274,7 @@ We got 15 peaks back, we ran a detector on all of them so we can start projectin
 
 Once we put the surviving peaks on the timeline we get two very obvious plants.
 
-```python skip session=robotdata
+```python skip session=robotdata output=none
 from dimos.memory2.transform import significant
 
 plot = Plot()
@@ -306,7 +307,7 @@ Let's focus on those two peaks. load all images in the vicinity of a detection,
 
 We'll also pull all lidar frames in their vicinity and reconstruct global maps for those areas.
 
-```python skip session=robotdata
+```python skip session=robotdata output=none
 
 from dimos.memory2.vis.space.elements import Point
 from dimos.memory2.transform import QualityWindow

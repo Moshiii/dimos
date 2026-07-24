@@ -2237,7 +2237,7 @@ tests = [
     { name = "langchain-openai", specifier = ">=1,<2" },
     { name = "lap", specifier = ">=0.5.12" },
     { name = "maturin", specifier = ">=1.7" },
-    { name = "md-babel-py", specifier = ">=1.3.0" },
+    { name = "md-babel-py", specifier = ">=1.3.1" },
     { name = "moondream" },
     { name = "mujoco", specifier = ">=3.3.4" },
     { name = "ollama", specifier = ">=0.6.0" },
@@ -2287,7 +2287,7 @@ tests-self-hosted = [
     { name = "lap", specifier = ">=0.5.12" },
     { name = "maturin", specifier = ">=1.7" },
     { name = "mcap", specifier = ">=1.2.0" },
-    { name = "md-babel-py", specifier = ">=1.3.0" },
+    { name = "md-babel-py", specifier = ">=1.3.1" },
     { name = "moondream" },
     { name = "mujoco", specifier = ">=3.3.4" },
     { name = "ollama", specifier = ">=0.6.0" },
@@ -4658,11 +4658,11 @@ wheels = [
 
 [[package]]
 name = "md-babel-py"
-version = "1.3.0"
+version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/66/06/2a79171b6f313ea7ade5c74634b7ce8cd7459dbc9a412ead4f8910932262/md_babel_py-1.3.0.tar.gz", hash = "sha256:aa0814d9ff78adadda46b6997541d266273e2bfccdec7e2c458097c1d8287c27", size = 43485, upload-time = "2026-07-24T20:28:05.631Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/72/a6167d39f115c94371b5eed9cc6a9dc54a5b4f159ae74769be50ad3c2d4b/md_babel_py-1.3.1.tar.gz", hash = "sha256:8e0a2b4bce02b064d90cd029538048f0636c1cf423923cd2f6a6b3b5764bf70a", size = 44233, upload-time = "2026-07-24T20:51:00.093Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/03/16/be57b2c0a93415467d3cfef66fafc8bea1eb92ae6fb830a837d230b87c52/md_babel_py-1.3.0-py3-none-any.whl", hash = "sha256:79ff38b21c72207b72212b88393bb76a9496643f8009ea511fdd8a6fdd757e4c", size = 34048, upload-time = "2026-07-24T20:28:04.366Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/45/a729ecbae65b1d71b85c815c6077138071597d76e76ddab0eaee9f22489c/md_babel_py-1.3.1-py3-none-any.whl", hash = "sha256:4de78141896bf63c917e277a77fd52363fe3edcf7b9a9835375d1148d2081210", size = 34406, upload-time = "2026-07-24T20:50:58.963Z" },
 ]
 
 [[package]]
