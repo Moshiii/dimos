@@ -16,8 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from dimos.core.global_config import global_config
-from dimos.core.transport_factory import rpc_backend
+from dimos.protocol.rpc.pubsubrpc import LCMRPC
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -38,7 +37,7 @@ class CoordinatorRPC:
     def serve(cls, coordinator: RPCInspectable) -> CoordinatorRPC:
         """Publish `coordinator`'s @rpc methods under the `Coordinator/` prefix."""
         cls._ensure_no_existing_service()
-        rpc = rpc_backend()()
+        rpc = LCMRPC()
         # start() before serve_module_rpc(): Zenoh's subscribe needs an open
         # session (acquired in start()), whereas LCM tolerates either order.
         rpc.start()
@@ -48,7 +47,7 @@ class CoordinatorRPC:
     @classmethod
     def connect(cls, *, timeout: float) -> CoordinatorRPC:
         """Attach to a running Coordinator, raising `TimeoutError` if none answers."""
-        rpc = rpc_backend()()
+        rpc = LCMRPC()
         rpc.start()
         client = cls(rpc)
         try:
@@ -79,7 +78,7 @@ class CoordinatorRPC:
 
     @classmethod
     def _ensure_no_existing_service(cls) -> None:
-        probe = rpc_backend()()
+        probe = LCMRPC()
         probe.start()
         try:
             try:
@@ -87,8 +86,8 @@ class CoordinatorRPC:
             except TimeoutError:
                 return
             raise RuntimeError(
-                f"another {cls.NAME} service is already running on the "
-                f"{global_config.transport} bus. Run `dimos stop` first."
+                f"another {cls.NAME} service is already running on the LCM bus. "
+                "Run `dimos stop` first."
             )
         finally:
             probe.stop()
