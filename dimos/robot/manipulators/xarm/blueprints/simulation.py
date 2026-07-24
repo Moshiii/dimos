@@ -78,12 +78,12 @@ xarm_perception_sim = autoconnect(
             # Z is the object's centre, not its base: the overlay marker should
             # land on the object, not on the table under it.
             "ground_truth_objects": [
-                {"name": "bottle", "x": 0.52, "y": 0.15, "z": 0.24},
-                {"name": "can", "x": 0.52, "y": 0.0, "z": 0.19},
-                {"name": "cup", "x": 0.52, "y": -0.15, "z": 0.18},
-                {"name": "tape", "x": 0.36, "y": 0.15, "z": 0.148},
+                {"name": "bottle", "x": 0.57, "y": 0.21, "z": 0.24},
+                {"name": "can", "x": 0.57, "y": 0.0, "z": 0.19},
+                {"name": "cup", "x": 0.57, "y": -0.21, "z": 0.18},
+                {"name": "tape", "x": 0.36, "y": 0.21, "z": 0.148},
                 {"name": "marker", "x": 0.36, "y": 0.0, "z": 0.146},
-                {"name": "box", "x": 0.36, "y": -0.15, "z": 0.168},
+                {"name": "box", "x": 0.36, "y": -0.21, "z": 0.168},
             ],
         },
     ),
