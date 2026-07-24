@@ -49,6 +49,9 @@ from dimos.manipulation.planning.kinematics.config import (
     ManipulationKinematicsConfig,
     PinkKinematicsConfig,
 )
+from dimos.manipulation.planning.monitor.planning_collision_snapshot import (
+    PlanningCollisionSnapshot,
+)
 from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.enums import IKStatus, ObstacleType
@@ -74,6 +77,7 @@ from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.utils.logging_config import setup_logger
 
@@ -123,6 +127,17 @@ class ManipulationModuleConfig(ModuleConfig):
     # to prevent the planner from routing trajectories below this height.
     # Set to None to disable.
     floor_z: float | None = None
+    # Frame the planning voxel map is expected to arrive in. Clouds in any other
+    # frame are rejected rather than silently mis-placed.
+    planning_world_frame: str = "world"
+    # Voxel edge length (meters) of the octree built from the planning voxel map.
+    planning_voxel_resolution: float = 0.05
+    # How far from a cloud's timestamp a camera pose may be and still be used.
+    planning_voxel_tf_tolerance_s: float = 0.25
+    # Occupancy accumulates across views so obstacles the wrist camera has
+    # turned away from remain in the planning scene. None keeps only the
+    # latest cloud, which is correct only for a fixed, whole-scene sensor.
+    planning_voxel_decay_s: float | None = 30.0
 
 
 class ManipulationModule(Module):
@@ -138,6 +153,9 @@ class ManipulationModule(Module):
 
     # Input: Joint state from coordinator (for world sync)
     coordinator_joint_state: In[JointState]
+
+    # Input: Accumulated world-frame occupancy used as a planning obstacle.
+    planning_voxel_map: In[PointCloud2]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -170,6 +188,14 @@ class ManipulationModule(Module):
         self._tf_stop_event = threading.Event()
         self._tf_thread: threading.Thread | None = None
 
+        # Live occupancy staged off the port thread and committed to the world
+        # only at planning time, so a mid-plan cloud cannot mutate the scene.
+        self._planning_collision_snapshot = PlanningCollisionSnapshot(
+            resolution=self.config.planning_voxel_resolution,
+            planning_frame=self.config.planning_world_frame,
+            decay_s=self.config.planning_voxel_decay_s,
+        )
+
         logger.info("ManipulationModule initialized")
 
     @rpc
@@ -184,6 +210,10 @@ class ManipulationModule(Module):
         if self.coordinator_joint_state is not None:
             self.coordinator_joint_state.subscribe(self._on_joint_state)
             logger.info("Subscribed to coordinator_joint_state port")
+
+        if self.planning_voxel_map is not None:
+            self.planning_voxel_map.subscribe(self._on_planning_voxel_map)
+            logger.info("Subscribed to planning_voxel_map port")
 
         logger.info("ManipulationModule started")
 
@@ -485,9 +515,83 @@ class ManipulationModule(Module):
             if self._state not in (ManipulationState.IDLE, ManipulationState.COMPLETED):
                 self._record_error(f"Cannot plan while state is {self._state.name}")
                 return None
+            # Commit occupancy before reserving PLANNING, while the lock still
+            # keeps a concurrent request from racing this scene mutation.
+            self._synchronize_planning_collision_snapshot()
             self._planning_epoch += 1
             self._state = ManipulationState.PLANNING
         return robot[0], robot[1]
+
+    def _on_planning_voxel_map(self, cloud: PointCloud2) -> None:
+        """Stage an occupancy cloud, resolving it into the planning frame.
+
+        The transform is looked up at the cloud's own timestamp rather than
+        "now": the camera is on the moving arm, so registering a cloud against a
+        later pose smears the occupancy along the direction of travel.
+        """
+        world_frame = self.config.planning_world_frame
+        if cloud.frame_id != world_frame:
+            transform = self.tf.get(
+                world_frame,
+                cloud.frame_id,
+                time_point=cloud.ts,
+                time_tolerance=self.config.planning_voxel_tf_tolerance_s,
+            )
+            if transform is None:
+                logger.warning(
+                    "No %s <- %s TF at cloud time; dropping occupancy update",
+                    world_frame,
+                    cloud.frame_id,
+                )
+                return
+            cloud = cloud.transform(transform)
+        try:
+            self._planning_collision_snapshot.stage(cloud)
+        except ValueError as exc:
+            logger.warning("Rejected planning collision snapshot: %s", exc)
+
+    def _synchronize_planning_collision_snapshot(self) -> None:
+        """Commit the staged cloud into the planning world.
+
+        Never allowed to raise: a mapping hiccup must not take down a planning
+        request that could still succeed against the previous occupancy.
+        """
+        if self._world_monitor is None:
+            return
+        try:
+            self._planning_collision_snapshot.synchronize(self._world_monitor)
+        except Exception:
+            logger.warning("Could not commit planning collision snapshot", exc_info=True)
+
+    def latest_planning_collision_snapshot(self) -> PointCloud2 | None:
+        """Latest validated cloud, including input not yet committed."""
+        return self._planning_collision_snapshot.staged()
+
+    def committed_planning_collision_snapshot(self) -> PointCloud2 | None:
+        """Cloud currently backing the planning octree obstacle."""
+        return self._planning_collision_snapshot.committed()
+
+    @rpc
+    def set_grasp_carveout(self, x: float, y: float, z: float, radius: float = 0.12) -> bool:
+        """Stop treating a sphere of the occupancy map as an obstacle.
+
+        The object being reached for is itself in the occupancy cloud, so
+        without this every grasp pose sits inside an obstacle and planning can
+        never approach it. Takes effect on the next planning request.
+        """
+        try:
+            self._planning_collision_snapshot.set_grasp_carveout("grasp", (x, y, z), radius)
+        except ValueError as exc:
+            return self._record_error(f"Invalid grasp carve-out: {exc}")
+        logger.info(f"Grasp carve-out at ({x:.3f}, {y:.3f}, {z:.3f}) r={radius:.3f}")
+        return True
+
+    @rpc
+    def clear_grasp_carveout(self) -> bool:
+        """Restore full occupancy after a grasp attempt."""
+        self._planning_collision_snapshot.clear_grasp_carveout("grasp")
+        logger.info("Cleared grasp carve-out")
+        return True
 
     def _record_error(self, message: str) -> bool:
         """Record an error without changing the manipulation state."""
@@ -566,6 +670,8 @@ class ManipulationModule(Module):
                     status=IKStatus.NO_SOLUTION,
                     message=f"Cannot solve IK while state is {self._state.name}",
                 )
+            if check_collision:
+                self._synchronize_planning_collision_snapshot()
             self._state = ManipulationState.PLANNING
 
         _, robot_id, _, _ = robot

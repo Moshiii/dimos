@@ -35,13 +35,23 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 class PlanningCollisionSnapshot:
     """Keep the latest planning cloud and commit it through a WorldMonitor."""
 
-    def __init__(self, resolution: float = 0.05, planning_frame: str = "world") -> None:
+    def __init__(
+        self,
+        resolution: float = 0.05,
+        planning_frame: str = "world",
+        decay_s: float | None = None,
+    ) -> None:
         if resolution <= 0:
             raise ValueError("Planning collision snapshot resolution must be positive")
         if not planning_frame:
             raise ValueError("Planning collision snapshot planning_frame must not be empty")
+        if decay_s is not None and decay_s <= 0:
+            raise ValueError("Planning collision snapshot decay_s must be positive or None")
         self.resolution = resolution
         self.planning_frame = planning_frame
+        self.decay_s = decay_s
+        # voxel key -> last observation time. Present only when accumulating.
+        self._voxels: dict[tuple[int, int, int], float] = {}
         self._lock = threading.RLock()
         self._staged: PointCloud2 | None = None
         self._committed: PointCloud2 | None = None
@@ -58,13 +68,47 @@ class PlanningCollisionSnapshot:
                 f"planning frame '{self.planning_frame}'"
             )
         points, _ = cloud.as_numpy()
-        staged = PointCloud2.from_numpy(
-            np.asarray(points, dtype=np.float64).copy(),
-            frame_id=cloud.frame_id,
-            timestamp=cloud.ts,
-        )
+        points = np.asarray(points, dtype=np.float64)
+        points = points[np.all(np.isfinite(points), axis=1)]
         with self._lock:
+            if self.decay_s is not None:
+                points = self._accumulate(points, cloud.ts)
+            staged = PointCloud2.from_numpy(
+                points.copy(),
+                frame_id=cloud.frame_id,
+                timestamp=cloud.ts,
+            )
             self._staged = staged
+            self._staged_generation += 1
+
+    def _accumulate(self, points: NDArray[np.float64], ts: float | None) -> NDArray[np.float64]:
+        """Merge a view into the running occupancy and return the whole map.
+
+        A wrist camera sees only a slice of the scene at a time. Committing just
+        the latest view would delete every obstacle the arm has turned away
+        from, so views are merged on a voxel grid and expire on a timer instead
+        -- without raycast clearing, that timer is the only thing that lets an
+        object that has moved stop being an obstacle.
+        """
+        assert self.decay_s is not None
+        now = float(ts if ts is not None else 0.0)
+        if len(points):
+            keys = np.floor(points / self.resolution).astype(np.int64)
+            for key in map(tuple, keys):
+                self._voxels[key] = now
+        cutoff = now - self.decay_s
+        self._voxels = {key: seen for key, seen in self._voxels.items() if seen >= cutoff}
+        if not self._voxels:
+            return np.empty((0, 3), dtype=np.float64)
+        # Report voxel centers: the octree places a box of edge `resolution` at
+        # each point, so corners would offset every obstacle by half a voxel.
+        grid = np.asarray(list(self._voxels), dtype=np.float64)
+        return (grid + 0.5) * self.resolution
+
+    def reset_accumulated(self) -> None:
+        """Forget accumulated occupancy, e.g. after the scene is rearranged."""
+        with self._lock:
+            self._voxels.clear()
             self._staged_generation += 1
 
     def set_grasp_carveout(self, key: str, center: Sequence[float], radius: float) -> None:
