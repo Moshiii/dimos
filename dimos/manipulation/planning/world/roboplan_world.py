@@ -196,6 +196,35 @@ class RoboPlanWorld:
             del self._obstacles[obstacle_id]
         return True
 
+    def update_obstacle(self, obstacle_id: str, obstacle: Obstacle) -> bool:
+        """Replace complete obstacle geometry while preserving its native ID.
+
+        Unlike the upstream copy-on-write scene swap, this rebuilds geometry in
+        place: every reader here already serializes on ``_scene_lock`` (the RRT
+        holds it for the whole plan), so no query can observe the scene between
+        the removal and the re-add.
+        """
+        with self._scene_lock:
+            old_obstacle = self._obstacles.get(obstacle_id)
+            if old_obstacle is None:
+                return False
+            if obstacle.name != old_obstacle.name:
+                raise ValueError(
+                    "Replacement obstacle name must match the existing logical name "
+                    f"'{old_obstacle.name}'"
+                )
+            scene = self._require_scene()
+            scene.removeGeometry(obstacle_id)
+            try:
+                self._add_obstacle_to_scene(obstacle, obstacle_id)
+            except Exception:
+                # Restore the previous geometry so a bad update cannot leave the
+                # planner with a scene that has silently lost an obstacle.
+                self._add_obstacle_to_scene(old_obstacle, obstacle_id)
+                raise
+            self._obstacles[obstacle_id] = obstacle
+        return True
+
     def update_obstacle_pose(self, obstacle_id: str, pose: PoseStamped) -> bool:
         """Update an obstacle pose and invalidate collision scratch."""
         if obstacle_id not in self._obstacles:
@@ -688,7 +717,59 @@ class RoboPlanWorld:
                 color,
             )
             return
+        if obstacle.obstacle_type == ObstacleType.OCTREE:
+            points = self._require_octree_points(obstacle)
+            resolution = self._require_octree_resolution(obstacle)
+            self._add_octree_geometry(scene, obstacle_id, points, resolution, matrix, color)
+            return
         raise ValueError(f"Unsupported obstacle type: {obstacle.obstacle_type}")
+
+    @staticmethod
+    def _require_octree_points(obstacle: Obstacle) -> NDArray[np.float64]:
+        if obstacle.points is None:
+            raise ValueError("OCTREE obstacle requires points")
+        points = np.asarray(obstacle.points, dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] == 0:
+            raise ValueError("OCTREE obstacle points must be a non-empty Nx3 array")
+        if not np.all(np.isfinite(points)):
+            raise ValueError("OCTREE obstacle points must be finite")
+        return points
+
+    @staticmethod
+    def _require_octree_resolution(obstacle: Obstacle) -> float:
+        resolution = obstacle.octree_resolution
+        if resolution is None or not np.isfinite(resolution) or resolution <= 0.0:
+            raise ValueError("OCTREE obstacle requires a positive octree_resolution")
+        return float(resolution)
+
+    def _add_octree_geometry(
+        self,
+        scene: roboplan_core.Scene,
+        obstacle_id: str,
+        points: NDArray[np.float64],
+        resolution: float,
+        matrix: NDArray[np.float64],
+        color: NDArray[np.float64],
+    ) -> None:
+        """Add an octree through RoboPlan's native geometry adapter."""
+        native_method = getattr(scene, "addOcTreeGeometry", None)
+        octree_cls = getattr(roboplan_core, "OcTree", None)
+        if not callable(native_method) or not callable(octree_cls):
+            raise NotImplementedError(
+                "RoboPlan OCTREE obstacles require roboplan_core.OcTree and a callable "
+                "scene.addOcTreeGeometry"
+            )
+        boxes = [
+            np.asarray((point[0], point[1], point[2], resolution, 1.0, 0.5), dtype=np.float64)
+            for point in points
+        ]
+        native_method(
+            obstacle_id,
+            self._geometry_frame,
+            octree_cls(boxes, resolution),
+            np.asarray(matrix, dtype=np.float64, order="F"),
+            color,
+        )
 
     def _require_dimensions(self, obstacle: Obstacle, n_dims: int) -> None:
         if len(obstacle.dimensions) != n_dims:

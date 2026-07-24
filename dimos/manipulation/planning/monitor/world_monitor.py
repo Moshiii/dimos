@@ -119,6 +119,11 @@ class WorldMonitor:
         with self._lock:
             return self._world.remove_obstacle(obstacle_id)
 
+    def update_obstacle(self, obstacle_id: str, obstacle: Obstacle) -> bool:
+        """Replace obstacle geometry in place, preserving its native ID."""
+        with self._lock:
+            return self._world.update_obstacle(obstacle_id, obstacle)
+
     def clear_obstacles(self) -> None:
         """Remove all obstacles."""
         with self._lock:

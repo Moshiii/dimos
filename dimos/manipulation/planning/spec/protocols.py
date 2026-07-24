@@ -87,6 +87,10 @@ class WorldSpec(Protocol):
         """Remove an obstacle. Returns True if removed."""
         ...
 
+    def update_obstacle(self, obstacle_id: str, obstacle: Obstacle) -> bool:
+        """Replace complete obstacle geometry while preserving its native ID."""
+        ...
+
     def update_obstacle_pose(self, obstacle_id: str, pose: PoseStamped) -> bool:
         """Update obstacle pose. Returns True if updated."""
         ...
