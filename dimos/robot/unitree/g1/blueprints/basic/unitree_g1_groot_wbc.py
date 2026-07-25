@@ -171,7 +171,8 @@ def _real_costmap(grid: Any) -> Any:
 _static_entities: dict[str, Any] = {
     _RERUN_ROOT: g1_urdf_static_robot(root_path=_RERUN_ROOT),
 }
-_static_entities.update(scene_package_static_entities(global_config.scene_package))
+if not _platform.simulation:
+    _static_entities.update(scene_package_static_entities(global_config.scene_package))
 
 _rerun_config: dict[str, Any] = {
     "memory_limit": "1GB",
@@ -204,6 +205,15 @@ _rerun_config: dict[str, Any] = {
     },
     "static": _static_entities,
 }
+
+for _section in ("static", "visual_override", "max_hz"):
+    _rerun_config[_section] = {
+        **_rerun_config.get(_section, {}),
+        **_platform.rerun_config.get(_section, {}),
+    }
+for _key, _value in _platform.rerun_config.items():
+    if _key not in {"static", "visual_override", "max_hz"}:
+        _rerun_config[_key] = _value
 
 if not _platform.simulation:
     _rerun_config["visual_override"]["world/global_costmap"] = _real_costmap

@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import importlib.metadata as importlib_metadata
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from dimos.core.coordination.blueprints import Blueprint
 
@@ -27,9 +27,9 @@ ENTRY_POINT_GROUP = "dimos.simulation.providers"
 @dataclass(frozen=True)
 class SimulationRequest:
     robot_model: str
-    model_path: str | Path
-    mesh_dir: str | Path
-    scene_package: str | Path | None
+    model_path: str | Path | None = None
+    mesh_dir: str | Path | None = None
+    scene_package: str | Path | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,7 @@ class SimulationBinding:
     backend: Blueprint
     adapter_type: str
     adapter_address: str | Path
+    rerun_config: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable

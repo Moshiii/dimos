@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.global_config import global_config
@@ -46,6 +47,7 @@ class G1GrootPlatform:
     auto_dry_run: bool
     ramp_seconds: float
     n_workers: int
+    rerun_config: dict[str, Any]
 
 
 def resolve_g1_groot_platform() -> G1GrootPlatform:
@@ -71,6 +73,7 @@ def resolve_g1_groot_platform() -> G1GrootPlatform:
             auto_dry_run=True,
             ramp_seconds=10.0,
             n_workers=10,
+            rerun_config={},
         )
 
     if global_config.simulation != "mujoco":
@@ -99,4 +102,5 @@ def resolve_g1_groot_platform() -> G1GrootPlatform:
         auto_dry_run=False,
         ramp_seconds=0.0,
         n_workers=12,
+        rerun_config=binding.rerun_config,
     )
