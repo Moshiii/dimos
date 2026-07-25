@@ -161,7 +161,9 @@ def main() -> None:
     if camera_info is None:
         print(
             f"WARNING: no {args.camera_info_stream!r} CameraInfo stream "
-            "-- AprilTag stage skipped; ICP + odom only.",
+            "-- AprilTag stage skipped; ICP + odom only. If this is a go2 "
+            "recording, add the static front-camera intrinsics first with "
+            "scripts/add_camera_info.py, then re-run.",
             flush=True,
         )
         camera_matrix, distortion = None, None
