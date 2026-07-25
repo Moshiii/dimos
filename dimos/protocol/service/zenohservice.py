@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from typing import Any
 
+from pydantic import Field
 import zenoh
 
 from dimos.protocol.service.spec import BaseConfig, Service
@@ -27,11 +29,24 @@ zenoh.init_log_from_env_or("warn")
 
 logger = setup_logger()
 
+ZENOH_ROUTER_ENDPOINT_ENV = "DIMOS_ZENOH_ROUTER_ENDPOINT"
+ZENOH_LOCAL_ROUTER_ENDPOINT = "tcp/127.0.0.1:7447"
+ZENOH_LOCAL_ROUTER_LISTEN = "tcp/[::]:7447"
+
+
+def _default_mode() -> str:
+    return "client" if os.getenv(ZENOH_ROUTER_ENDPOINT_ENV) else "peer"
+
+
+def _default_connect() -> list[str]:
+    endpoint = os.getenv(ZENOH_ROUTER_ENDPOINT_ENV)
+    return [endpoint] if endpoint else []
+
 
 class ZenohConfig(BaseConfig):
-    mode: str = "peer"
-    connect: list[str] = []
-    listen: list[str] = []
+    mode: str = Field(default_factory=_default_mode)
+    connect: list[str] = Field(default_factory=_default_connect)
+    listen: list[str] = Field(default_factory=list)
 
     @property
     def session_key(self) -> str:
@@ -70,6 +85,29 @@ class ZenohSessionPool:
 default_session_pool = ZenohSessionPool()
 
 
+class ZenohRouter:
+    def __init__(self, listen: str = ZENOH_LOCAL_ROUTER_LISTEN) -> None:
+        self._listen = listen
+        self._session: zenoh.Session | None = None
+
+    def start(self) -> None:
+        config = zenoh.Config()
+        config.insert_json5("mode", '"router"')
+        config.insert_json5("listen/endpoints", json.dumps([self._listen]))
+        try:
+            self._session = zenoh.open(config)
+            logger.info("Local Zenoh router started", endpoint=self._listen)
+        except zenoh.ZError as exc:
+            if "Address already in use" not in str(exc):
+                raise
+            logger.info("Using existing local Zenoh router", endpoint=self._listen)
+
+    def stop(self) -> None:
+        if self._session is not None:
+            self._session.close()
+            self._session = None
+
+
 class ZenohService(Service):
     config: ZenohConfig
 
@@ -81,6 +119,9 @@ class ZenohService(Service):
         self._session: zenoh.Session | None = None
 
     def start(self) -> None:
+        endpoint = os.getenv(ZENOH_ROUTER_ENDPOINT_ENV)
+        if endpoint and not self.config.model_fields_set:
+            self.config = ZenohConfig(mode="client", connect=[endpoint])
         self._session = self._session_pool.acquire(self.config)
         super().start()
 
