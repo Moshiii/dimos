@@ -22,6 +22,7 @@ Usage:
 
 from pathlib import Path
 import sys
+from typing import Any
 
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -35,7 +36,7 @@ def earliest_ts(store: SqliteStore) -> float:
     at the head of the recording timeline (0.0 if the db has no data yet)."""
     timestamps = []
     for stream_name in store.list_streams():
-        observation = next(iter(store.stream(stream_name)), None)
+        observation: Any = next(iter(store.stream(stream_name)), None)
         if observation is not None:
             timestamps.append(float(observation.ts))
     return min(timestamps) if timestamps else 0.0
