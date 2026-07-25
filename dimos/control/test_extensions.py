@@ -201,7 +201,14 @@ def test_control_task_create_uses_same_normalization_as_register(
 
 
 @pytest.mark.parametrize(
-    "factory_path", ["", "external_pkg.tasks", ":make_task", "external_pkg.tasks:"]
+    "factory_path",
+    [
+        "",
+        "external_pkg.tasks",
+        ":make_task",
+        "external_pkg.tasks:",
+        "external_pkg.tasks:make_task:extra",
+    ],
 )
 def test_register_control_task_validates_path_format_only(factory_path: str) -> None:
     with pytest.raises(ValueError):

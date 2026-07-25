@@ -62,7 +62,13 @@ def _normalize_task_name(name: str) -> str:
 def _validate_task_factory_path(factory_path: str) -> None:
     """Validate a lazy factory path of the form ``module:function``."""
     module_name, separator, attr = factory_path.partition(":")
-    if not factory_path.strip() or separator != ":" or not module_name or not attr:
+    if (
+        not factory_path.strip()
+        or separator != ":"
+        or factory_path.count(":") != 1
+        or not module_name
+        or not attr
+    ):
         raise ValueError(f"Invalid task factory path: {factory_path!r}")
 
 

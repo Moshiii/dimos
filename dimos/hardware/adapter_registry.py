@@ -69,7 +69,13 @@ class LazyAdapterRegistry(Generic[AdapterT]):
     def register_path(self, name: str, factory_path: str) -> None:
         """Register a lazy factory import path; conflicting duplicates raise."""
         module_name, separator, attr = factory_path.partition(":")
-        if not factory_path.strip() or separator != ":" or not module_name or not attr:
+        if (
+            not factory_path.strip()
+            or separator != ":"
+            or factory_path.count(":") != 1
+            or not module_name
+            or not attr
+        ):
             raise ValueError(f"Invalid adapter factory path: {factory_path!r}")
         key = _normalize_adapter_name(name)
         if key in self._factories:
