@@ -74,7 +74,6 @@ from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.g1.config import G1
 from dimos.robot.unitree.g1.g1_rerun import (
-    G1_MESH_DIR,
     G1_RERUN_ROOT,
     g1_costmap,
     g1_urdf_joint_state,
@@ -91,7 +90,7 @@ from dimos.visualization.vis_module import vis_module
 _GROOT_MODEL_DIR = LfsPath("groot")
 _MJCF_PATH = LfsPath("mujoco_sim/g1_gear_wbc.xml")
 _ROBOT_ONLY_MJCF_PATH = Path(__file__).resolve().parents[2] / "assets" / "g1_29dof.xml"
-_ROBOT_MESHDIR = G1_MESH_DIR
+_ROBOT_MESHDIR = LfsPath("g1_urdf/meshes")
 
 _adapter_address: str | Path
 _cmd_vel_topic = "/cmd_vel" if global_config.simulation else "/g1/cmd_vel"

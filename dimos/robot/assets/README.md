@@ -100,26 +100,3 @@ complete descendant subtree are removed in the cached output.
 
 Keep consumer-specific processing outside this module. For example, Drake-specific
 cleanup still belongs in `dimos/manipulation/planning/utils/mesh_utils.py`.
-
-## Validating migrated models
-
-Run the self-hosted validation blueprint after changing a source URL, pinned
-commit, package root, Xacro argument, or derived-model rule:
-
-```bash
-dimos run robot-model-validation
-```
-
-At startup it resolves all migrated sources, loads Piper, xArm 6/7, A-750, and
-A1Z into Drake, runs zero-position Pinocchio FK against each coordinator model,
-and checks that the official Unitree G1 URDF resolves every visual mesh.
-
-For a faster, isolated check, run one source at a time:
-
-```bash
-dimos run robot-model-validation-piper
-dimos run robot-model-validation-xarm
-dimos run robot-model-validation-a750
-dimos run robot-model-validation-a1z
-dimos run robot-model-validation-g1
-```

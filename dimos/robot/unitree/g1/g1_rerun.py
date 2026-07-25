@@ -20,22 +20,13 @@ from typing import Any
 
 import numpy as np
 
-from dimos.robot.assets.source import RobotDescriptionSource
 from dimos.visualization.rerun.urdf_robot import (
     UrdfRobotJointStateRerunFactory,
     UrdfRobotStaticRerunFactory,
 )
 
 G1_RERUN_ROOT = "world/odom/g1"
-G1_DESCRIPTION_REPO = "https://github.com/unitreerobotics/unitree_rl_gym"
-G1_DESCRIPTION_REF = "276801e46c5d433564f24658bac64f254b7d2d4b"
-_G1_DESCRIPTION = RobotDescriptionSource(
-    url=G1_DESCRIPTION_REPO,
-    ref=G1_DESCRIPTION_REF,
-)
-G1_DESCRIPTION_ROOT = _G1_DESCRIPTION / "resources" / "robots" / "g1_description"
-G1_RERUN_URDF = G1_DESCRIPTION_ROOT / "g1_29dof.urdf"
-G1_MESH_DIR = G1_DESCRIPTION_ROOT / "meshes"
+G1_RERUN_URDF = "g1_urdf/g1.fixed.urdf"
 
 # Classic costmap palette, indexed by grid value + 1:
 # transparent unknown, blue free, orange occupied, red lethal.
