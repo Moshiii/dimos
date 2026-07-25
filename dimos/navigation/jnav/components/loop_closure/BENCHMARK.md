@@ -25,25 +25,25 @@ input odometry, not a baseline to beat). Two PGO implementations are compared: t
 | recording | sensor | odom | closures | keyframes | raw_spread | corr_spread | tag_impr | vox_impr | note | verdict |
 |---|---|---|--:|--:|--:|--:|--:|--:|---|---|
 | outdoor_small_loop | go2 | odom | 105 | 945 | 0.122 | 0.868 | -6.126 | -0.0544 |  | HARM |
-| outdoor_small_loop | mid360 | fastlio_odometry | 77 | 1154 | 0.122 | 0.131 | -0.072 | -0.0007 |  | no-harm |
+| outdoor_small_loop | mid360 | fastlio_odometry | 93 | 1154 | 0.122 | 0.123 | -0.008 | -0.0002 |  | no-harm |
 | grassy_field | go2 | odom | 115 | 1057 | 61.010 | 57.915 | 0.051 | 0.0518 | no-harm target | improve |
-| grassy_field | mid360 | fastlio_odometry | 35 | 1308 | 61.010 | 58.498 | 0.041 | -0.0002 | no-harm target | no-harm |
+| grassy_field | mid360 | fastlio_odometry | 92 | 1308 | 61.010 | 11.569 | 0.810 | 0.0016 | no-harm target | improve |
 | gir_stairs1 | go2 | odom | 184 | 1057 | 0.035 | 1.672 | -47.201 | 0.0634 |  | HARM |
-| gir_stairs1 | mid360 | pointlio_odometry | 111 | 1283 | 0.035 | 0.051 | -0.461 | 0.0000 |  | no-harm |
+| gir_stairs1 | mid360 | pointlio_odometry | 124 | 1283 | 0.035 | 0.050 | -0.450 | 0.0009 |  | no-harm |
 | gir_stairs2 | go2 | odom | 400 | 1677 | 0.969 | 6.166 | -5.363 | -0.1087 |  | HARM |
-| gir_stairs2 | mid360 | pointlio_odometry | 307 | 1937 | 0.969 | 0.072 | 0.926 | 0.0259 |  | improve |
+| gir_stairs2 | mid360 | pointlio_odometry | 317 | 1936 | 0.969 | 0.067 | 0.931 | 0.0256 |  | improve |
 | gir_park1 | go2 | odom | 174 | 1203 | 0.048 | 8.266 | -172.581 | 0.0231 |  | HARM |
-| gir_park1 | mid360 | pointlio_odometry | 142 | 1699 | 0.048 | 0.093 | -0.951 | -0.0011 |  | HARM |
+| gir_park1 | mid360 | pointlio_odometry | 162 | 1699 | 0.048 | 0.091 | -0.911 | -0.0006 |  | HARM |
 | gir_park1_2 | go2 | go2_odom | 93 | 535 | 0.081 | 16.622 | -204.265 | -0.0174 |  | HARM |
-| gir_park1_2 | mid360 | fastlio_odometry | 26 | 606 | 0.081 | 0.136 | -0.685 | 0.0006 |  | HARM |
+| gir_park1_2 | mid360 | fastlio_odometry | 35 | 606 | 0.081 | 0.185 | -1.290 | 0.0001 |  | HARM |
 | huge_loop_go2 | go2 | odom | 228 | 2467 | 10.809 | 300.800 | -26.828 | -0.0700 |  | HARM |
-| huge_loop_go2 | mid360 | fastlio_odometry | 171 | 2649 | 59.557 | 57.670 | 0.032 | 0.0034 |  | no-harm |
-| huge_loop_go2 | mid360 | pointlio_odometry | 292 | 2479 | 10.809 | 0.329 | 0.970 | 0.0108 | loop closes | improve |
-| huge_loop_realsense | mid360 | pointlio_odometry | 387 | 2716 | — | — | — | 0.0128 | voxel-only | improve |
+| huge_loop_go2 | mid360 | fastlio_odometry | 247 | 2649 | 59.557 | 2.275 | 0.962 | 0.0089 | loop closes | improve |
+| huge_loop_go2 | mid360 | pointlio_odometry | 305 | 2479 | 10.809 | 0.093 | 0.991 | 0.0125 | loop closes | improve |
+| huge_loop_realsense | mid360 | pointlio_odometry | 347 | 2716 | — | — | — | 0.0120 | voxel-only | improve |
 | china_office1 | go2 | go2_odom | 329 | 1194 | 0.242 | 1.974 | -7.171 | 0.0142 |  | HARM |
-| china_office1 | mid360 | pointlio_odometry | 229 | 1579 | 0.242 | 0.239 | 0.012 | 0.0005 |  | no-harm |
-| sf_office_survey1 | go2 | odom | — | — | — | — | — | — | not run (see below) | — |
-| sf_office_survey2 | go2 | odom | — | — | — | — | — | — | not run (see below) | — |
+| china_office1 | mid360 | pointlio_odometry | 226 | 1579 | 0.242 | 0.239 | 0.009 | 0.0008 |  | no-harm |
+| sf_office_survey1 | go2 | go2_odom | 18 | 930 | 1.695 | 1.669 | 0.016 | 0.0043 |  | no-harm |
+| sf_office_survey2 | go2 | go2_odom | 20 | 879 | 4.044 | 4.059 | -0.004 | -0.0053 |  | HARM (marginal) |
 
 ## IvanPGO (comparison — same recordings, same odom)
 
@@ -68,17 +68,24 @@ input odometry, not a baseline to beat). Two PGO implementations are compared: t
 | china_office1 | go2 | go2_odom | 138 | 1185 | 0.242 | 2.096 | -7.680 | 0.0451 |
 | china_office1 | mid360 | pointlio_odometry | 131 | 1551 | 0.242 | 0.241 | 0.003 | -0.0022 |
 
-On the huge loop, gsc_pgo (pointlio) drops corr_spread to **0.329 m** (loop closes);
+On the huge loop, gsc_pgo (pointlio) drops corr_spread to **0.093 m** (loop closes);
 IvanPGO leaves it at **10.015 m** (barely corrected). gsc_pgo closes it; IvanPGO does not.
+With FAST-LIO odom (larger revisit drift), gsc_pgo now also closes the huge loop —
+**59.557 m → 2.275 m** — after raising `loop_candidate_max_distance_m` from 80 to 200 m so
+the far-drifted revisit still reaches ICP (the old 80 m gate skipped it). IvanPGO on the
+same fastlio run stays at **57.957 m** (does not close).
 
 ## Skipped / not run
 
 - `misc/`, `_deleted_gt_streams_backup` — not recordings.
-- `sf_office_survey1`, `sf_office_survey2` (`~/datasets/go2_recordings/`) — bare-Go2 L1
-  recordings, wired into the runner but **not benched**: every attempt wedged in zenoh
-  peer discovery because a co-resident `dim-lcm-constellation` process (deno server +
-  `spy` monitor) shares the multicast bus and its stale peers hang the eval's session
-  handshake. Not a code fault; needs a clean shell without that tool running. Re-run:
+- `sf_office_survey1`, `sf_office_survey2` now **run and benched** (rows above). The
+  co-resident `dim-lcm-constellation` peers still spam
+  `zenoh … Received a close message … Unable to connect to any locator of scouted peer`
+  warnings on the shared multicast bus, but the eval session establishes and the full
+  ~360 s lockstep replay completes anyway — the stray peers slow scouting, they do not
+  fatally wedge it. Both are bare-Go2 L1 maps, already tight (1.7 m / 4.0 m spread):
+  survey1 preserves the map (no-harm), survey2 nudges spread by 1.5 cm (marginal HARM,
+  the known go2 tight-map pattern). Re-run:
   `python temp_dont_commit.ignore/hk_scratch/demo_bench.py --only sf_office_survey1`
   (and `--only sf_office_survey2`).
 
@@ -86,6 +93,6 @@ IvanPGO leaves it at **10.015 m** (barely corrected). gsc_pgo closes it; IvanPGO
 
 Runner: `temp_dont_commit.ignore/hk_scratch/demo_bench.py` (slim-copies each recording to
 scratch, never touches originals). Per-recording before/after top-down + isometric PNGs
-land in `eval_results/<recording>__<label>__PGO/` (gitignored). go2 config =
+land in `eval_results/<recording>__<label>__GscPGO/` (gitignored). go2 config =
 `dimos/robot/unitree/go2/blueprints/smart/unitree_go2_pgo.py`; mid360 config = gsc_pgo
 module defaults.
