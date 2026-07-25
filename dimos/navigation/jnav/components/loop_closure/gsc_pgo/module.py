@@ -119,7 +119,7 @@ class PGOConfig(NativeModuleConfig):
     max_scan_queue: int = 100
 
 
-class PGO(NativeModule):
+class GscPGO(NativeModule):
     """Pose graph optimization with loop closure — Rust port of gsc_pgo."""
 
     config: PGOConfig
