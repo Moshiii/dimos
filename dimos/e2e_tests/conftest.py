@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Callable, Generator, Iterator
+import os
 import threading
 import time
 
@@ -20,9 +21,9 @@ import pytest
 
 from dimos.core.transport import pLCMTransport
 from dimos.e2e_tests.conf_types import StartPersonTrack
-from dimos.e2e_tests.dim_sim_client import DimSimClient
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
+from dimos.e2e_tests.scene_control import SceneControl, load_scene_control
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
@@ -74,10 +75,12 @@ def start_blueprint(mcp_port: int) -> Iterator[Callable[..., DimosCliCall]]:
     def set_name_and_start(
         *demo_args: str,
         simulator: str | None = None,
+        scene_package: str | None = None,
     ) -> DimosCliCall:
         dimos_robot_call.demo_args = list(demo_args)
         if simulator is not None:
             dimos_robot_call.simulator = simulator
+        dimos_robot_call.scene_package = scene_package
         dimos_robot_call.start()
         return dimos_robot_call
 
@@ -162,15 +165,20 @@ def explore_office(
 
 
 @pytest.fixture
-def dim_sim():
-    client = DimSimClient()
+def simulator_name() -> str:
+    return os.environ.get("DIMOS_E2E_SIMULATOR", "pimsim")
+
+
+@pytest.fixture
+def scene_control(simulator_name: str) -> Iterator[SceneControl]:
+    client = load_scene_control(simulator_name)
     client.start()
     yield client
     client.stop()
 
 
 @pytest.fixture
-def spawn_wall_on_pose(lcm_spy: LcmSpy, dim_sim: DimSimClient):
+def spawn_wall_on_pose(lcm_spy: LcmSpy, scene_control: SceneControl):
     """Spawn a dim_sim wall when the robot's /odom comes within `threshold` metres of `point`."""
     odom_topic = "/odom#geometry_msgs.PoseStamped"
     stop_event = threading.Event()
@@ -196,7 +204,7 @@ def spawn_wall_on_pose(lcm_spy: LcmSpy, dim_sim: DimSimClient):
                 with lcm_spy.topic_listener(odom_topic, on_odom):
                     while not stop_event.is_set():
                         if triggered.wait(timeout=0.1):
-                            dim_sim.add_wall(*wall)
+                            scene_control.add_wall(*wall)
                             return
             except BaseException as e:
                 errors.append(e)

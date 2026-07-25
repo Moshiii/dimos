@@ -16,7 +16,7 @@ import pytest
 
 
 @pytest.mark.self_hosted_large
-def test_walk_forward(lcm_spy, start_blueprint, human_input, dim_sim) -> None:
+def test_walk_forward(lcm_spy, start_blueprint, human_input, scene_control, simulator_name) -> None:
     start_blueprint(
         "run",
         "--disable",
@@ -24,13 +24,13 @@ def test_walk_forward(lcm_spy, start_blueprint, human_input, dim_sim) -> None:
         "--disable",
         "security-module",
         "unitree-go2-agentic",
-        simulator="dimsim",
+        simulator=simulator_name,
     )
     lcm_spy.save_topic("/rpc/McpClient/on_system_modules/res")
     lcm_spy.wait_for_saved_topic("/rpc/McpClient/on_system_modules/res", timeout=1200.0)
 
     origin_x, origin_y = 1, 2
-    dim_sim.set_agent_position(origin_x, origin_y)
+    scene_control.set_agent_position(origin_x, origin_y)
 
     human_input("move forward 3 meter")
 

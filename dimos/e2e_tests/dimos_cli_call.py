@@ -23,6 +23,7 @@ class DimosCliCall:
     demo_args: list[str] | None = None
     mcp_port: int | None = None
     simulator: str = "mujoco"
+    scene_package: str | None = None
 
     def __init__(self) -> None:
         self.process = None
@@ -51,20 +52,29 @@ class DimosCliCall:
             global_overrides += ["--mcp-port", str(self.mcp_port)]
             env["MCPCLIENT__MCP_SERVER_URL"] = f"http://localhost:{self.mcp_port}/mcp"
 
-        self.process = subprocess.Popen(
-            [
-                "dimos",
-                *global_overrides,
+        simulation_args = ["--simulation", self.simulator]
+        if self.simulator == "pimsim":
+            simulation_args = [
                 "--simulation",
-                self.simulator,
-                *args,
-            ],
+                "mujoco",
+                "--simulation-provider",
+                "pimsim",
+                "--scene-package",
+                self.scene_package or "dimsim-apartment",
+                "--viewer",
+                "none",
+            ]
+
+        self.process = subprocess.Popen(
+            ["dimos", *global_overrides, *simulation_args, *args],
             start_new_session=True,
             env=env,
         )
 
     def stop(self) -> None:
         if self.process is None:
+            return
+        if self.process.poll() is not None:
             return
 
         try:
