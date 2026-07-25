@@ -22,6 +22,7 @@ from dimos.robot.unitree.go2.blueprints.basic.go2_platform import (
     resolve_go2_platform,
     resolve_go2_rerun_config,
 )
+from dimos.visualization.rerun.costmap import classic_costmap
 from dimos.visualization.vis_module import vis_module
 
 
@@ -37,12 +38,7 @@ def _convert_global_map(grid: Any) -> Any:
 
 
 def _convert_navigation_costmap(grid: Any) -> Any:
-    return grid.to_rerun(
-        colormap="Accent",
-        z_offset=0.015,
-        opacity=0.2,
-        background="#484981",
-    )
+    return classic_costmap(grid, z_offset=0.015)
 
 
 def _static_base_link(rr: Any) -> list[Any]:
