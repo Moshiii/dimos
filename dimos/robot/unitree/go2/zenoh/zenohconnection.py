@@ -42,6 +42,7 @@ from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+from dimos.msgs.sensor_msgs.NavSatFix import NavSatFix
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.String import String
 from dimos.protocol.tf.static_tf_publisher import StaticTfPublisher, StaticTfPublisherConfig
@@ -77,6 +78,11 @@ class GO2Zenoh(StaticTfPublisher):
     lidar: Out[PointCloud2]  # per-scan, in the LIO's own sensor frame
     pointlio_map: Out[PointCloud2]  # accumulated world map, frame `odom`
     video: Out[CompressedVideo]  # front camera, H.264 annex-B
+    # 1 Hz GPS fix (EC25 modem GNSS via vui_service; go2web docs/gps.md). Only
+    # flows while the robot's GPS switch is on — enable from go2web's UI or
+    # `dimos-helper gps on`. Stamped `gps`, the antenna frame; the static
+    # base_link -> gps edge below anchors it. altitude is NaN (not reported).
+    gps: Out[NavSatFix]
 
     # Ours: nothing on the robot emits intrinsics.
     camera_info: Out[CameraInfo]
@@ -171,7 +177,13 @@ class GO2Zenoh(StaticTfPublisher):
             frame_id="front_camera",
             child_frame_id="camera_optical",
         )
-        return [-camera_to_mid360, -base_to_camera, camera_to_optical]
+        # Identity until someone measures where the EC25's GNSS antenna sits;
+        # GPS error is metres, so this is not the accuracy bottleneck.
+        base_to_gps = Transform(
+            frame_id="base_link",
+            child_frame_id="gps",
+        )
+        return [-camera_to_mid360, -base_to_camera, camera_to_optical, base_to_gps]
 
     def _publish_tf(self, odom: Odometry) -> None:
         """The one moving edge, odom -> mid360_link; the bridge publishes no tf."""
