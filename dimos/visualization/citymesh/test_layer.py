@@ -104,3 +104,22 @@ def test_pickle_carries_config_not_runtime(layer):
     clone = pickle.loads(pickle.dumps(layer.on_fix)).__self__
     assert clone._runtime is None
     assert clone.flat_ground is True
+
+
+def test_nan_altitude_from_altitudeless_receiver(layer):
+    """Go2's rt/gnss carries no altitude, so fixes arrive with alt=NaN.
+
+    NaN must not poison the ENU frame or disable the layer; the marker falls
+    back to z=0 until the DEM block streams in.
+    """
+    import math
+
+    out = layer.on_fix(_fix(alt=float("nan")))
+    assert type(out).__name__ == "GeoPoints"
+    assert not layer._disabled
+    runtime = layer._runtime
+    assert runtime is not None
+    assert runtime.frame.origin_msl == 0.0
+    e, n, z = runtime.trail[-1]
+    assert math.isfinite(e) and math.isfinite(n)
+    assert z == 0.0, "flat fallback until terrain arrives"

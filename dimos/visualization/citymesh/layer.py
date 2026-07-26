@@ -35,6 +35,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+import math
 import threading
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -144,9 +145,29 @@ class CityMeshLayer:
         if runtime is None:
             runtime = self._start(msg)
         frame = runtime.frame
-        enu = frame.geodetic_to_enu(msg.latitude, msg.longitude, msg.altitude, datum=self.datum)[0]
-        self._log_robot(runtime, (float(enu[0]), float(enu[1]), float(enu[2])))
-        runtime.streamer.update(enu, extra_foci=runtime.anchors_enu)
+        # The Go2's rt/gnss carries no altitude, so NavSatFix arrives with the
+        # standard "unknown" marker (NaN). The horizontal conversion barely
+        # cares (cm-scale over a city), so any finite stand-in works; the
+        # marker's z is then draped on the DEM instead of trusting the fix.
+        alt = frame.origin_msl if math.isnan(msg.altitude) else msg.altitude
+        enu = frame.geodetic_to_enu(msg.latitude, msg.longitude, alt, datum=self.datum)[0]
+        e, n = float(enu[0]), float(enu[1])
+        z = self._ground_z(runtime, e, n) if math.isnan(msg.altitude) else float(enu[2])
+        self._log_robot(runtime, (e, n, z))
+        runtime.streamer.update((e, n, z), extra_foci=runtime.anchors_enu)
+
+    def _ground_z(self, runtime: _Runtime, e: float, n: float) -> float:
+        """Terrain height under the robot, once its DEM block has streamed in."""
+        from dimos.visualization.citymesh.tiles import tile_of
+
+        terrain = runtime.streamer.builder.peek_dem(tile_of(e, n))
+        if terrain is None:
+            return 0.0
+        import numpy as np
+
+        lat, lon, _ = runtime.frame.enu_to_geodetic(np.array([[e, n, 0.0]]))
+        ground = float(terrain.sample_ground_msl(lon, lat)[0])
+        return ground - runtime.frame.origin_msl + self.marker_radius_m
 
     def _start(self, msg: Any) -> _Runtime:
         """First fix: anchor the frame, declare the scene, start the streamer."""
@@ -156,10 +177,13 @@ class CityMeshLayer:
         from dimos.visualization.citymesh.viz import RerunTileSink, init_world
 
         origin_lat, origin_lon = self.anchors[0] if self.anchors else (msg.latitude, msg.longitude)
+        # An altitude-less receiver anchors at sea level: with undulation 0 the
+        # scene stays all-MSL, terrain just draws at its true elevation.
+        origin_alt = 0.0 if math.isnan(msg.altitude) else msg.altitude
         frame = EnuFrame.at(
             origin_lat,
             origin_lon,
-            msg.altitude,
+            origin_alt,
             datum=self.datum,
             undulation=self.geoid_undulation,
         )
