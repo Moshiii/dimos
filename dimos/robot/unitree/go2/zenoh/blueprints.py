@@ -20,6 +20,8 @@ The ``unitree_go2_nav_3d`` stack minus the modules the robot now runs itself: no
 so a failure can be bisected by dropping down a level:
 
 - ``go2-zenoh-basic`` — streams plus teleop; the bridge, tf and camera, no mapping.
+- ``go2-zenoh-record`` — ``go2-zenoh-basic`` plus a memory2 recorder (odom, lidar,
+  video, gps, tf).
 - ``go2-zenoh-raycaster`` — adds :class:`RayTracingVoxelMap`.
 - ``go2-zenoh-nav`` — the full stack: planner, goal relay and path follower.
 - ``go2-zenoh-htc`` — ``go2-zenoh-nav`` with the follower swapped for the
@@ -42,6 +44,7 @@ from dimos.navigation.nav_3d.mls_planner.goal_relay import GoalRelay
 from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.navigation.nav_3d.mls_planner.odom_body_frame import OdomBodyFrame
 from dimos.navigation.nav_3d.mls_planner.viz import planner_visual_override
+from dimos.robot.unitree.go2.zenoh.recorder import GO2ZenohRecorder
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.vis_module import vis_module
 
@@ -157,6 +160,11 @@ go2_zenoh_basic = autoconnect(
     GO2Zenoh.blueprint(mid360_mount_rpy_deg=MID360_MOUNT_RPY_DEG),
     MovementManager.blueprint(),
 ).global_config(transport="zenoh", n_workers=4, robot_model="unitree_go2")
+
+go2_zenoh_record = autoconnect(
+    go2_zenoh_basic,
+    GO2ZenohRecorder.blueprint(),
+).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
 
 # global_map is remapped off so the planner runs purely on the
 # incremental local_map + region_bounds pair.
