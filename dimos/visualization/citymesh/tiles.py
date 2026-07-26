@@ -451,6 +451,7 @@ class TileBuilder:
         release: str | None = None,
         terrain_samples: int = TERRAIN_SAMPLES,
         block_tiles: int = BLOCK_TILES,
+        default_height_m: float | None = None,
     ) -> None:
         self.frame = frame
         self.theme = theme
@@ -459,6 +460,7 @@ class TileBuilder:
         self.flat_ground = flat_ground
         self.cache = cache
         self.release = release
+        self.default_height_m = default_height_m
         self.terrain_samples = terrain_samples
         self.block_tiles = max(1, int(block_tiles))
         self._dem = _BlockCache(self._fetch_dem_block)
@@ -530,9 +532,16 @@ class TileBuilder:
         e0, n0, e1, n1 = self.block_bounds(block)
         bbox = enu_bbox_deg(self.frame, e0, n0, e1, n1)
         if self.source == "osm":
-            found = fetch_buildings_osm(bbox, cache=self.cache)
+            found = fetch_buildings_osm(
+                bbox, cache=self.cache, default_height_m=self.default_height_m
+            )
         else:
-            found = fetch_buildings(bbox, release=self.release, cache=self.cache)
+            found = fetch_buildings(
+                bbox,
+                release=self.release,
+                cache=self.cache,
+                default_height_m=self.default_height_m,
+            )
         return partition_by_tile(found, self.frame, self.tile_m)
 
     # -- the whole tile ---------------------------------------------------
@@ -663,6 +672,7 @@ class TileStreamer:
         block_tiles: int = BLOCK_TILES,
         max_logs_per_update: int = 1,
         pacing: Pacing = "live",
+        default_height_m: float | None = None,
     ) -> None:
         self.frame = frame
         self.sink = sink
@@ -690,6 +700,7 @@ class TileStreamer:
             cache=cache,
             release=release,
             block_tiles=block_tiles,
+            default_height_m=default_height_m,
         )
         self.stats = StreamStats()
 

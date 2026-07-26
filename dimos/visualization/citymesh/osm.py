@@ -34,7 +34,7 @@ from shapely.geometry import MultiPolygon, Polygon
 
 from dimos.utils.logging_config import setup_logger
 
-from .overture import CACHE_DIR, Building, _resolve_height
+from .overture import CACHE_DIR, DEFAULT_HEIGHT_M, Building, _resolve_height
 
 log = setup_logger()
 
@@ -88,6 +88,7 @@ def fetch_buildings_osm(
     cache: bool = True,
     urls: list[str] | None = None,
     timeout: float = 60.0,
+    default_height_m: float | None = None,
 ) -> list[Building]:
     """Fetch buildings intersecting ``bbox`` = (min_lon, min_lat, max_lon, max_lat)."""
     min_lon, min_lat, max_lon, max_lat = bbox
@@ -148,6 +149,7 @@ def fetch_buildings_osm(
             _parse_metres(tags.get("height")) or _parse_metres(tags.get("building:height")),
             int(levels) if levels else None,
             None if cls in ("yes", None) else cls,
+            default_m=default_height_m if default_height_m is not None else DEFAULT_HEIGHT_M,
         )
         min_h = _parse_metres(tags.get("min_height")) or 0.0
         buildings.append(

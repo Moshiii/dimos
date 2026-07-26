@@ -114,6 +114,7 @@ def fetch_buildings(
     bbox: tuple[float, float, float, float],
     release: str | None = None,
     cache: bool = True,
+    default_height_m: float | None = None,
 ) -> list[Building]:
     """Fetch every building intersecting ``bbox`` = (min_lon, min_lat, max_lon, max_lat).
 
@@ -162,7 +163,12 @@ def fetch_buildings(
         geom = from_wkb(bytes(wkb))
         if geom is None or geom.is_empty:
             continue
-        h, estimated = _resolve_height(height, num_floors, cls)
+        h, estimated = _resolve_height(
+            height,
+            num_floors,
+            cls,
+            default_m=default_height_m if default_height_m is not None else DEFAULT_HEIGHT_M,
+        )
         buildings.append(
             Building(
                 id=bid,
@@ -178,7 +184,10 @@ def fetch_buildings(
 
 
 def _resolve_height(
-    height: float | None, num_floors: int | None, cls: str | None
+    height: float | None,
+    num_floors: int | None,
+    cls: str | None,
+    default_m: float = DEFAULT_HEIGHT_M,
 ) -> tuple[float, bool]:
     """Best available height, and whether it had to be guessed.
 
@@ -188,7 +197,7 @@ def _resolve_height(
         return float(height), False
     if num_floors is not None and num_floors > 0:
         return float(num_floors) * FLOOR_HEIGHT_M, True
-    return CLASS_HEIGHT_M.get(cls or "", DEFAULT_HEIGHT_M), True
+    return CLASS_HEIGHT_M.get(cls or "", default_m), True
 
 
 def height_stats(buildings: list[Building]) -> dict[str, float]:

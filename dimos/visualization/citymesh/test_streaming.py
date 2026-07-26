@@ -52,7 +52,7 @@ def test_empty_tile_is_not_an_error(frame, monkeypatch):
     ``extrude_buildings`` raises on an empty list; a streamer that let that
     propagate would die the first time the drone crossed water.
     """
-    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True: [])
+    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True, **kw: [])
     builder = TileBuilder(frame, flat_ground=True)
     data = builder.build(TileKey(0, 0))
     assert data.n_buildings == 0
@@ -73,7 +73,7 @@ def test_tile_of_only_degenerate_footprints_is_not_an_error(frame, monkeypatch):
         name=None,
         building_class=None,
     )
-    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True: [flat])
+    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True, **kw: [flat])
     builder = TileBuilder(frame, flat_ground=True)
     data = builder.build(tiles_mod.tile_of(0.0, 0.0))
     assert data.n_buildings == 1
@@ -84,7 +84,7 @@ def test_block_fetch_is_shared_by_the_tiles_it_covers(frame, monkeypatch):
     """One source request must serve every tile in its block."""
     calls: list[tuple] = []
 
-    def counting_fetch(bbox, cache=True):
+    def counting_fetch(bbox, cache=True, **kw):
         calls.append(bbox)
         return []
 
@@ -101,7 +101,7 @@ def test_block_fetch_is_shared_by_the_tiles_it_covers(frame, monkeypatch):
 
 def test_tile_grids_continue_across_a_shared_border(frame, monkeypatch):
     """Two tiles built independently must produce one continuous lattice."""
-    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True: [])
+    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True, **kw: [])
     builder = TileBuilder(frame, theme=THEMES["blueprint"], flat_ground=True)
     left = builder.build(TileKey(0, 0))
     right = builder.build(TileKey(1, 0))

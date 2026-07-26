@@ -40,6 +40,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Literal
 
+import numpy as np
+
 from dimos.utils.logging_config import setup_logger
 from dimos.visualization.citymesh.facade_icp import IcpResult, WallAccumulator
 from dimos.visualization.citymesh.georegister import Registration, TrackAligner
@@ -96,6 +98,9 @@ class _Runtime:
     # Latest (odom_xy, enu_xy) of one fix: the translation seed for the
     # orientation sweep, available from the very first fix.
     fix_pair: tuple[tuple[float, float], tuple[float, float]] | None = None
+    # Recent (fix_enu_z - odom_z) samples: the GPS altitude is good to ~1 m
+    # (verified against a known floor), it just jitters — the median is tz.
+    alt_offsets: deque[float] = field(default_factory=lambda: deque(maxlen=30))
 
 
 class CityMeshLayer:
@@ -124,6 +129,11 @@ class CityMeshLayer:
         datum: AltDatum = "msl",
         geoid_undulation: float | None = 0.0,
         marker_radius_m: float = 0.5,
+        # Untagged OSM footprints get this height. The global 9 m default is a
+        # suburb; dense-city blocks are 6-7 floors, and half-height buildings
+        # made every vertical judgement look wrong (robot "floating" while
+        # placed correctly to <1 m).
+        default_building_height_m: float = 21.0,
     ) -> None:
         self.anchors = list(anchors)
         self.theme = theme
@@ -136,6 +146,7 @@ class CityMeshLayer:
         self.datum: AltDatum = datum
         self.geoid_undulation = geoid_undulation
         self.marker_radius_m = marker_radius_m
+        self.default_building_height_m = default_building_height_m
 
         self._lock = threading.Lock()
         self._runtime: _Runtime | None = None
@@ -193,13 +204,16 @@ class CityMeshLayer:
         z = self._ground_z(runtime, e, n) if math.isnan(msg.altitude) else float(enu[2])
         self._log_robot(runtime, (e, n, z))
         runtime.streamer.update((e, n, z), extra_foci=runtime.anchors_enu)
-        self._georegister(runtime, e, n, z)
+        self._georegister(runtime, e, n, z, alt_ok=not math.isnan(msg.altitude))
 
-    def _georegister(self, runtime: _Runtime, e: float, n: float, z: float) -> None:
+    def _georegister(self, runtime: _Runtime, e: float, n: float, z: float, alt_ok: bool) -> None:
         """Pair this fix with the odom track and refresh the city's placement."""
         now = time.monotonic()
         runtime.aligner.add_fix(now, e, n)
         runtime.last_fix_enu_z = z
+        if alt_ok:
+            runtime.alt_offsets.append(z - runtime.last_odom_z)
+            runtime.tz = float(np.median(runtime.alt_offsets)) if runtime.alt_offsets else None
         if runtime.pose is not None:
             runtime.fix_pair = ((runtime.pose[0], runtime.pose[1]), (e, n))
         if now - runtime.last_solve < 2.0:
@@ -278,15 +292,20 @@ class CityMeshLayer:
         first = runtime.icp is None
         runtime.icp = result
         runtime.refine_note = "locked"
-        tz = facade_icp.fit_z(
-            spans,
-            runtime.edges,
-            result.yaw,
-            (result.t_e, result.t_n),
-            tz0=runtime.last_fix_enu_z - runtime.last_odom_z,
-        )
-        if tz is not None:
-            runtime.tz = tz
+        # GPS altitude is the vertical truth when the receiver provides it
+        # (verified to <1 m against a known floor); the wall-bottom fit only
+        # covers the altitude-less rt/gnss path, where it is the best evidence
+        # available.
+        if not runtime.alt_offsets:
+            tz = facade_icp.fit_z(
+                spans,
+                runtime.edges,
+                result.yaw,
+                (result.t_e, result.t_n),
+                tz0=runtime.last_fix_enu_z - runtime.last_odom_z,
+            )
+            if tz is not None:
+                runtime.tz = tz
         self._log_city_transform(runtime)
         (logger.info if first else logger.debug)(
             "citymesh facade-locked",
@@ -444,6 +463,7 @@ class CityMeshLayer:
             workers=self.workers,
             flat_ground=self.flat_ground,
             pacing="live",
+            default_height_m=self.default_building_height_m,
         )
         init_world(frame, root=self.root)
 

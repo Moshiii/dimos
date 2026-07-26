@@ -40,7 +40,7 @@ def recording():
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
-    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True: [])
+    monkeypatch.setattr(tiles_mod, "fetch_buildings_osm", lambda bbox, cache=True, **kw: [])
 
 
 @pytest.fixture
