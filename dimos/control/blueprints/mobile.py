@@ -20,12 +20,14 @@ Usage:
     dimos run coordinator-flowbase                       # FlowBase holonomic base (Portal RPC)
     dimos run coordinator-flowbase-keyboard-teleop       # FlowBase + WASD pygame teleop
     dimos run coordinator-flowbase-nav                   # FlowBase + FastLio2 + nav stack (click-to-drive)
+    dimos run coordinator-flowbase-autotune              # FlowBase + control-autotune excitation battery
 """
 
 from __future__ import annotations
 
 import os
 
+from dimos.control.autotune.autotune_driver import AutotuneDriver
 from dimos.control.components import (
     HardwareComponent,
     HardwareType,
@@ -113,6 +115,34 @@ coordinator_flowbase_keyboard_teleop = autoconnect(
     ),
     KeyboardTeleop.blueprint(),
 ).remappings([(ControlCoordinator, "twist_command", "cmd_vel")])
+
+# FlowBase + control-autotune: excitation battery + FOPDT fit/tune. Wheeled base,
+# fast odom -- velocity fitter reads coordinator_joint_state directly.
+#
+# KeyboardTeleop is here only for its operator_command gate stream (ENTER/skip/
+# quit between excitation runs) -- its own cmd_vel output is left unwired, since
+# AutotuneDriver is what should be driving the base during a battery run.
+coordinator_flowbase_autotune = autoconnect(
+    ControlCoordinator.blueprint(
+        hardware=[_flowbase_twist_base()],
+        tasks=[
+            TaskConfig(
+                name="vel_base",
+                type="velocity",
+                joint_names=_base_joints,
+                priority=10,
+            ),
+        ],
+    ),
+    KeyboardTeleop.blueprint(),
+    AutotuneDriver.blueprint(
+        robot_id="flowbase",
+        joint_prefix="base/",
+        channels={"vx": 0.8, "vy": 0.8, "wz": 1.2},
+        odom_type="velocity",
+        fitter="velocity",
+    ),
+).global_config(obstacle_avoidance=False)
 
 # FlowBase + Livox MID-360 + FastLio2 SLAM + nav stack with click-to-drive in Rerun. The velocity
 # sink is ControlCoordinator + FlowBaseAdapter
