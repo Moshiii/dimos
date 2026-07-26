@@ -352,11 +352,9 @@ def fit_z(
     """Vertical offset: lower from the GPS height until wall bottoms meet ground.
 
     Each matched wall implies the offset that puts its visible bottom on its
-    building's DEM elevation. Occlusion can only *hide* the bottom of a wall,
-    so it biases implied offsets low, never high — which is why the scan walks
-    DOWN from the GPS prior and accepts the first offset with enough agreeing
-    walls: the least-occluded consensus, before the occlusion artifacts below
-    it. Flat surfaces (balcony floors, roofs) never vote — only vertical
+    building's DEM elevation. The dominant cluster of implied offsets within
+    the search window below the GPS prior wins, near-ties breaking downward.
+    Flat surfaces (balcony floors, roofs) never vote — only vertical
     structure is in ``wall_spans``. Too few matches or no consensus returns
     None and the caller keeps what it had.
     """
@@ -374,8 +372,23 @@ def fit_z(
     if len(implied) < min_matches:
         return None
     threshold = max(min_matches, min_frac * len(implied))
-    for tz in np.arange(tz0 + up_m, tz0 - down_m, -step_m):
-        cluster = implied[np.abs(implied - tz) <= tol_m]
-        if len(cluster) >= threshold:
-            return float(np.median(cluster))
-    return None
+    lo, hi = tz0 - down_m, tz0 + up_m
+    in_window = implied[(implied >= lo - tol_m) & (implied <= hi + tol_m)]
+    if len(in_window) < threshold:
+        return None
+    # Dominant consensus wins; near-ties break DOWNWARD. Urban bare-earth DEM
+    # reads high between buildings, pushing implied offsets up — the sparse
+    # high tail is map error, the big low cluster is the street (measured on
+    # the balcony recording, and visible as a floating city when the high
+    # tail wins).
+    s_sorted = np.sort(in_window)
+    counts = np.searchsorted(s_sorted, s_sorted + 2 * tol_m, side="right") - np.arange(
+        len(s_sorted)
+    )
+    best = counts.max()
+    if best < threshold:
+        return None
+    near_best = np.flatnonzero(counts >= 0.9 * best)
+    start_val = s_sorted[near_best.min()]  # lowest near-best window
+    cluster = s_sorted[(s_sorted >= start_val) & (s_sorted <= start_val + 2 * tol_m)]
+    return float(np.median(cluster))
