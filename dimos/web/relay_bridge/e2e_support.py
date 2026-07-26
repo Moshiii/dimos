@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared async helpers for relay end-to-end tests."""
+"""Shared helpers for relay bridge tests."""
 
 import asyncio
 from collections.abc import Callable, Sequence
@@ -26,7 +26,21 @@ from dimos.web.relay_bridge.protocol import (
     Subs,
     Watch,
 )
+from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
 from dimos.web.relay_bridge.wt_client import RelayClient
+
+
+def stop_module(module: RelayBridgeModule) -> None:
+    """module.stop(), then reap the loop's to_thread executor threads.
+
+    The framework never shuts down the loop's default executor, so tests that
+    drive a to_thread path (spawn/stop of a relay child) would trip the
+    conftest thread-leak check on the idle asyncio_* workers.
+    """
+    loop = module._loop
+    module.stop()
+    if loop is not None and not loop.is_closed():
+        loop.run_until_complete(loop.shutdown_default_executor())
 
 
 async def next_control(client: RelayClient, timeout: float) -> Msg | None:

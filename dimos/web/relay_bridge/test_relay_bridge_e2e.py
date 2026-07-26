@@ -18,7 +18,8 @@ The module runs standalone with hand-wired LCM transports (no coordinator);
 a Python viewer drives the full session flow: robots -> watch -> manifest ->
 sub -> decoded frames, plus lazy-encode stop on unsub and relay-child-death
 recovery. One file on purpose: --dist=loadfile keeps the module-scoped
-module + relay on a single xdist worker.
+module + relay on a single xdist worker. The child-kill test gets its own
+function-scoped bridge: it destroys the relay it is given.
 
 Tests are sync and drive their viewer flows via asyncio.run: constructing a
 Module rebinds the constructing thread's current event loop (module.py
@@ -39,7 +40,7 @@ import pytest
 from dimos.core.transport import pLCMTransport
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.Image import Image
-from dimos.web.relay_bridge.e2e_support import attach_viewer, collect_until
+from dimos.web.relay_bridge.e2e_support import attach_viewer, collect_until, stop_module
 from dimos.web.relay_bridge.protocol import Unsub
 from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
 from dimos.web.relay_bridge.wt_client import RelayClient
@@ -90,8 +91,7 @@ class _Publisher:
         self.image.stop()
 
 
-@pytest.fixture(scope="module")
-def bridge() -> Iterator[RelayBridgeModule]:
+def _start_bridge() -> tuple[RelayBridgeModule, pLCMTransport, pLCMTransport]:
     module = RelayBridgeModule(local_port=0, open_browser=False, robot_id=ROBOT_ID)
     odom_tr = pLCMTransport("/rb_e2e/odom")
     image_tr = pLCMTransport("/rb_e2e/color_image")
@@ -100,10 +100,34 @@ def bridge() -> Iterator[RelayBridgeModule]:
     module.odom.transport = odom_tr
     module.color_image.transport = image_tr
     module.start()  # spawns the Deno relay, connects, registers
+    return module, odom_tr, image_tr
+
+
+@pytest.fixture(scope="module")
+def bridge() -> Iterator[RelayBridgeModule]:
+    module, _, _ = _start_bridge()
     try:
         yield module
     finally:
         module.stop()
+
+
+@pytest.fixture
+def respawn_bridge() -> Iterator[RelayBridgeModule]:
+    """Function-scoped bridge for the relay-child-kill test.
+
+    The respawn creates a fresh relay child mid-test whose reader threads live
+    as long as the bridge, so a shared module-scoped bridge would trip the
+    conftest thread-leak check. Owning the bridge scopes those threads to the
+    test, with everything reaped here.
+    """
+    module, odom_tr, image_tr = _start_bridge()
+    try:
+        yield module
+    finally:
+        stop_module(module)
+        odom_tr.stop()
+        image_tr.stop()
 
 
 @pytest.fixture(scope="module")
@@ -193,8 +217,9 @@ def test_full_session_flow_and_lazy_encode(
 
 
 def test_relay_child_death_respawns_and_recovers(
-    bridge: RelayBridgeModule, publisher: _Publisher
+    respawn_bridge: RelayBridgeModule, publisher: _Publisher
 ) -> None:
+    bridge = respawn_bridge
     assert bridge._relay is not None and bridge._relay._process is not None
     old_url = bridge._url
     bridge._relay._process.kill()  # SIGKILL: no CONNECTION_CLOSE reaches the bridge

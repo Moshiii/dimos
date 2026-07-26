@@ -40,6 +40,7 @@ from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.web.relay_bridge import relay_bridge_module
+from dimos.web.relay_bridge.e2e_support import stop_module
 from dimos.web.relay_bridge.protocol import Msg, RobotManifest, Subs
 from dimos.web.relay_bridge.relay_bridge_module import (
     CHANNELS,
@@ -160,19 +161,6 @@ class FakeRelay:
     def stop(self) -> None:
         self.stops += 1
         self.running = False
-
-
-def stop_module(module: RelayBridgeModule) -> None:
-    """module.stop(), then reap the loop's to_thread executor threads.
-
-    The framework never shuts down the loop's default executor, so tests that
-    drive a to_thread path (spawn/stop of a relay child) would trip the
-    conftest thread-leak check on the idle asyncio_* workers.
-    """
-    loop = module._loop
-    module.stop()
-    if loop is not None and not loop.is_closed():
-        loop.run_until_complete(loop.shutdown_default_executor())
 
 
 def wait_until(cond: Callable[[], bool], timeout: float = 5.0) -> bool:
