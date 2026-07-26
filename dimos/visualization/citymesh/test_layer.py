@@ -65,10 +65,23 @@ def test_first_fix_anchors_the_frame_and_returns_geopoints(layer):
     assert type(out).__name__ == "GeoPoints"
     runtime = layer._runtime
     assert runtime is not None
-    assert runtime.frame.lat0 == ATHENS[0]
-    # The fix is the origin, so the robot marker sits at ENU zero.
+    # The origin is the fix's snapped cell corner, at sea level — so the same
+    # neighborhood always produces the same frame (and the same fetch cache).
+    from dimos.visualization.citymesh.layer import snap_origin
+
+    assert (runtime.frame.lat0, runtime.frame.lon0) == snap_origin(*ATHENS)
+    assert runtime.frame.origin_msl == 0.0
     enu = runtime.frame.geodetic_to_enu(*ATHENS, 100.0)[0]
-    assert abs(enu[0]) < 1e-6 and abs(enu[1]) < 1e-6
+    assert abs(enu[0]) < 2000 and abs(enu[1]) < 2000, "fix lands near the origin"
+
+
+def test_nearby_fixes_share_a_frame_origin():
+    """Two sessions metres apart must hit the same fetch cache."""
+    from dimos.visualization.citymesh.layer import snap_origin
+
+    a = snap_origin(37.99372, 23.725171)
+    b = snap_origin(37.99379, 23.72534)
+    assert a == b
 
 
 def test_anchor_wins_over_the_fix_as_frame_origin():

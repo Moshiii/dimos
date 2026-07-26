@@ -115,7 +115,7 @@ def _rerun_blueprint(city: bool = False) -> Any:
         right = rrb.Tabs(
             world_3d,
             rrb.Spatial3DView(
-                origin="city",
+                origin="world/city",
                 name="City",
                 # The blueprint theme's night-sky background.
                 background=rrb.Background(kind="SolidColor", color=[6, 16, 48]),
@@ -128,7 +128,7 @@ def _rerun_blueprint(city: bool = False) -> Any:
                 rrb.Spatial2DView(origin="world/video", name="Camera"),
                 # GPS on OSM tiles (needs internet in the viewer). Empty until the
                 # receiver has a fix — no-fix samples are dropped by the override.
-                rrb.MapView(origin="world/gps", name="Map"),
+                rrb.MapView(origin="world/gps", name="Map", zoom=19.0),
                 row_shares=[2, 1],
             ),
             right,
@@ -168,7 +168,7 @@ def _rerun_config(
             "world/camera_info": _camera_info_to_pinhole,
             "world/gps": _render_gps,
             "world/pointlio_map": _render_map,
-            "world/lidar": None,
+            "world/lidar": _render_map,
             "world/local_map": _render_map,
             "world/global_map": _render_map,
             "world/path": _render_path,
@@ -192,16 +192,21 @@ go2_zenoh_record = autoconnect(
 ).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
 
 # City rendering rides the same NavSatFix override that feeds the MapView: the
-# layer returns GeoPoints as before and streams extruded OSM tiles under city/
-# as a side effect. Add anchors=[(lat, lon), ...] for places that should stay
-# loaded regardless of where the robot walks.
+# layer returns GeoPoints as before and streams extruded OSM tiles under
+# world/city as a side effect. The odometry override feeds the same object, so
+# it can georegister the two tracks and place the city correctly inside the 3D
+# world view once the robot has walked ~10 m (a City tab shows it standalone
+# from the first tile). Add anchors=[(lat, lon), ...] for places that should
+# stay loaded regardless of where the robot walks.
+_citymesh = CityMeshLayer()
+
 go2_zenoh_city = autoconnect(
     go2_zenoh_basic,
     # Re-declared vis module wins over basic's (autoconnect keeps the newest).
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config=_rerun_config(
-            {"world/gps": CityMeshLayer().on_fix},
+            {"world/gps": _citymesh.on_fix, "world/odometry": _citymesh.on_odom},
             blueprint=partial(_rerun_blueprint, city=True),
         ),
     ),

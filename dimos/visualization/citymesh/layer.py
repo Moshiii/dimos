@@ -37,9 +37,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 import math
 import threading
+import time
 from typing import TYPE_CHECKING, Any, Literal
 
 from dimos.utils.logging_config import setup_logger
+from dimos.visualization.citymesh.georegister import Registration, TrackAligner
 
 if TYPE_CHECKING:
     from dimos.visualization.citymesh.frame import AltDatum, EnuFrame
@@ -48,6 +50,19 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 Source = Literal["osm", "overture"]
+
+# Auto-anchors snap to this grid, and the frame origin always sits at sea
+# level: the origin is arbitrary, but block bboxes — and so the on-disk fetch
+# cache — are pure functions of it. Fix-exact origins gave every session its
+# own bbox floats and a cold cache; snapped ones make one session's Overpass
+# answers the next session's cache hits. ~1.1 km grid, well inside the
+# float32 precision budget.
+SNAP_DEG = 0.01
+
+
+def snap_origin(lat: float, lon: float) -> tuple[float, float]:
+    """The deterministic frame origin for any fix in this ~1 km cell."""
+    return (round(lat / SNAP_DEG) * SNAP_DEG, round(lon / SNAP_DEG) * SNAP_DEG)
 
 
 @dataclass
@@ -58,6 +73,14 @@ class _Runtime:
     streamer: TileStreamer
     anchors_enu: list[tuple[float, float]]
     trail: deque[tuple[float, float, float]] = field(default_factory=lambda: deque(maxlen=4096))
+    # Georegistration: odom and GPS tracks paired by bridge arrival time (the
+    # two stamps ride different clocks; arrival skew is bounded by GPS latency,
+    # well under GPS noise at walking speed).
+    aligner: TrackAligner = field(default_factory=TrackAligner)
+    registration: Registration | None = None
+    last_solve: float = 0.0
+    last_odom_z: float = 0.0
+    last_fix_enu_z: float = 0.0
 
 
 class CityMeshLayer:
@@ -78,7 +101,7 @@ class CityMeshLayer:
         anchors: Sequence[tuple[float, float]] = (),
         theme: str = "blueprint",
         source: Source = "osm",
-        root: str = "city",
+        root: str = "world/city",
         flat_ground: bool = False,
         load_radius_m: float = 400.0,
         unload_radius_m: float = 700.0,
@@ -155,6 +178,61 @@ class CityMeshLayer:
         z = self._ground_z(runtime, e, n) if math.isnan(msg.altitude) else float(enu[2])
         self._log_robot(runtime, (e, n, z))
         runtime.streamer.update((e, n, z), extra_foci=runtime.anchors_enu)
+        self._georegister(runtime, e, n, z)
+
+    def _georegister(self, runtime: _Runtime, e: float, n: float, z: float) -> None:
+        """Pair this fix with the odom track and refresh the city's placement."""
+        now = time.monotonic()
+        runtime.aligner.add_fix(now, e, n)
+        runtime.last_fix_enu_z = z
+        if now - runtime.last_solve < 2.0:
+            return
+        runtime.last_solve = now
+        registration = runtime.aligner.solve()
+        if registration is None:
+            return
+        first = runtime.registration is None
+        runtime.registration = registration
+        self._log_registration(runtime, registration)
+        log_fn = logger.info if first else logger.debug
+        log_fn(
+            "citymesh georegistered",
+            yaw_deg=round(math.degrees(registration.yaw), 1),
+            rms_m=round(registration.rms_m, 2),
+            pairs=registration.n_pairs,
+        )
+
+    def _log_registration(self, runtime: _Runtime, registration: Registration) -> None:
+        """Place the ENU scene under the odom-frame world view.
+
+        The transform on ``root`` maps its (ENU) content into the parent's
+        odom coordinates; yaw about +z only — both frames are gravity-aligned.
+        """
+        import rerun as rr
+
+        yaw, (te, tn) = registration.odom_from_enu()
+        tz = runtime.last_odom_z - runtime.last_fix_enu_z
+        rr.log(
+            self.root,
+            rr.Transform3D(
+                translation=[te, tn, tz],
+                rotation=rr.Quaternion(xyzw=[0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2)]),
+            ),
+        )
+
+    def on_odom(self, msg: Any) -> Any:
+        """Visual override for the odometry topic: feed the aligner, pass through.
+
+        Registered alongside :meth:`on_fix` so both tracks meet in this one
+        object; the message itself renders exactly as it would without us.
+        """
+        runtime = self._runtime
+        if runtime is not None and not self._disabled:
+            position = msg.pose.pose.position
+            with self._lock:
+                runtime.aligner.add_odom(time.monotonic(), float(position[0]), float(position[1]))
+                runtime.last_odom_z = float(position[2])
+        return msg
 
     def _ground_z(self, runtime: _Runtime, e: float, n: float) -> float:
         """Terrain height under the robot, once its DEM block has streamed in."""
@@ -176,14 +254,16 @@ class CityMeshLayer:
         from dimos.visualization.citymesh.tiles import TileStreamer
         from dimos.visualization.citymesh.viz import RerunTileSink, init_world
 
-        origin_lat, origin_lon = self.anchors[0] if self.anchors else (msg.latitude, msg.longitude)
-        # An altitude-less receiver anchors at sea level: with undulation 0 the
-        # scene stays all-MSL, terrain just draws at its true elevation.
-        origin_alt = 0.0 if math.isnan(msg.altitude) else msg.altitude
+        origin_lat, origin_lon = (
+            self.anchors[0] if self.anchors else snap_origin(msg.latitude, msg.longitude)
+        )
+        # Sea-level origin, always: the scene is absolute-MSL (terrain and
+        # marker at their true elevations) and the origin — hence the fetch
+        # cache — never depends on what altitude this particular fix carried.
         frame = EnuFrame.at(
             origin_lat,
             origin_lon,
-            origin_alt,
+            0.0,
             datum=self.datum,
             undulation=self.geoid_undulation,
         )
