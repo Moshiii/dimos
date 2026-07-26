@@ -52,6 +52,7 @@ from dimos.navigation.nav_3d.mls_planner.odom_body_frame import OdomBodyFrame
 from dimos.navigation.nav_3d.mls_planner.viz import planner_visual_override
 from dimos.navigation.tracer import Tracer
 from dimos.robot.unitree.go2.zenoh.recorder import GO2ZenohRecorder
+from dimos.robot.unitree.go2.zenoh.replay import GO2ZenohReplay
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.citymesh.layer import CityMeshLayer
 from dimos.visualization.vis_module import vis_module
@@ -187,11 +188,22 @@ class OdometryTracer(Tracer):
     odometry: In[Odometry]
 
 
+def _zenoh_source() -> Any:
+    """The live robot bridge, or its recorded ghost when ``--replay`` is set.
+
+    Evaluated at blueprint import, after the CLI has applied its overrides —
+    the same moment ``global_config.viewer`` is read below.
+    """
+    if global_config.replay:
+        return GO2ZenohReplay.blueprint(dataset=global_config.replay_db)
+    return GO2Zenoh.blueprint(mid360_mount_rpy_deg=MID360_MOUNT_RPY_DEG)
+
+
 # Streams + teleop only. cmd_vel still reaches the robot through MovementManager, so this
 # is the layer to drive from when something upstream is suspect.
 go2_zenoh_basic = autoconnect(
     vis_module(viewer_backend=global_config.viewer, rerun_config=_rerun_config()),
-    GO2Zenoh.blueprint(mid360_mount_rpy_deg=MID360_MOUNT_RPY_DEG),
+    _zenoh_source(),
     MovementManager.blueprint(),
     OdometryTracer.blueprint(),
 ).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
