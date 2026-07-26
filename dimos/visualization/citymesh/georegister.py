@@ -90,9 +90,11 @@ class TrackAligner:
         min_pairs: int = 8,
         max_pairs: int = 3600,
         odom_window_s: float = 30.0,
+        latest_tolerance_s: float = 0.5,
     ) -> None:
         self.min_extent_m = min_extent_m
         self.min_pairs = min_pairs
+        self.latest_tolerance_s = latest_tolerance_s
         self._odom: deque[tuple[float, float, float]] = deque()
         self._odom_window_s = odom_window_s
         self._pairs: deque[tuple[float, float, float, float]] = deque(maxlen=max_pairs)
@@ -104,8 +106,21 @@ class TrackAligner:
 
     def add_fix(self, ts: float, e: float, n: float) -> None:
         odom = self._interpolate(ts)
+        if odom is None:
+            # Live operation: the fix arrives moments AFTER the newest odom
+            # sample, so there is never a later sample to interpolate against.
+            # The newest one is milliseconds old at sensor rate — take it.
+            odom = self._newest_within(ts)
         if odom is not None:
             self._pairs.append((odom[0], odom[1], e, n))
+
+    def _newest_within(self, ts: float) -> tuple[float, float] | None:
+        if not self._odom:
+            return None
+        t, x, y = self._odom[-1]
+        if 0.0 <= ts - t <= self.latest_tolerance_s:
+            return (x, y)
+        return None
 
     def _interpolate(self, ts: float) -> tuple[float, float] | None:
         """Odom position at ``ts``, linearly interpolated between neighbours."""

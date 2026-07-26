@@ -109,3 +109,28 @@ def test_odom_from_enu_inverts_the_registration():
     c, s = math.cos(yaw_inv), math.sin(yaw_inv)
     back = np.array([[c, -s], [s, c]]) @ p_enu + np.array([te, tn])
     assert back == pytest.approx(p_odom, abs=1e-9)
+
+
+def test_live_ordering_pairs_against_the_newest_sample():
+    """Live, a fix arrives moments after the newest odom sample — it must
+    still pair (nearest-sample fallback), or no pairs ever form at all."""
+    aligner = TrackAligner(min_extent_m=5.0, min_pairs=8)
+    ts = 0.0
+    for i in range(400):
+        ts = i * 0.033  # ~30 Hz odometry, streaming in real order
+        aligner.add_odom(ts, ts * 1.0, ts * 0.7)
+        if i % 30 == 29:  # 1 Hz fix, arriving ~5 ms after the latest odom
+            fix_ts = ts + 0.005
+            e, n = _enu_of(np.array([[ts * 1.0, ts * 0.7]]))[0]
+            aligner.add_fix(fix_ts, float(e), float(n))
+    reg = aligner.solve()
+    assert reg is not None, "live-ordered streams must produce pairs"
+    assert abs(math.degrees(reg.yaw - YAW)) < 1.0
+
+
+def test_stale_odometry_does_not_pair():
+    """If odometry died seconds ago, a fix must not pair against its corpse."""
+    aligner = TrackAligner()
+    aligner.add_odom(10.0, 5.0, 5.0)
+    aligner.add_fix(13.0, 0.0, 0.0)  # 3 s later — way past tolerance
+    assert len(aligner._pairs) == 0
