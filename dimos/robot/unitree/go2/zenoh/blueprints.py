@@ -37,9 +37,11 @@ from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
+from dimos.core.stream import In
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.navigation.basic_path_follower.module import BasicPathFollower
 from dimos.navigation.dannav.holonomic_tc.module import DanHolonomicTC
 from dimos.navigation.dannav.local_planner.module import DanLocalPlanner
@@ -48,6 +50,7 @@ from dimos.navigation.nav_3d.mls_planner.goal_relay import GoalRelay
 from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.navigation.nav_3d.mls_planner.odom_body_frame import OdomBodyFrame
 from dimos.navigation.nav_3d.mls_planner.viz import planner_visual_override
+from dimos.navigation.tracer import Tracer
 from dimos.robot.unitree.go2.zenoh.recorder import GO2ZenohRecorder
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.citymesh.layer import CityMeshLayer
@@ -178,18 +181,25 @@ def _rerun_config(
     }
 
 
+class OdometryTracer(Tracer):
+    """Breadcrumb of where the robot has walked, on world/odometry_path."""
+
+    odometry: In[Odometry]
+
+
 # Streams + teleop only. cmd_vel still reaches the robot through MovementManager, so this
 # is the layer to drive from when something upstream is suspect.
 go2_zenoh_basic = autoconnect(
     vis_module(viewer_backend=global_config.viewer, rerun_config=_rerun_config()),
     GO2Zenoh.blueprint(mid360_mount_rpy_deg=MID360_MOUNT_RPY_DEG),
     MovementManager.blueprint(),
-).global_config(transport="zenoh", n_workers=4, robot_model="unitree_go2")
+    OdometryTracer.blueprint(),
+).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
 
 go2_zenoh_record = autoconnect(
     go2_zenoh_basic,
     GO2ZenohRecorder.blueprint(),
-).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
+).global_config(transport="zenoh", n_workers=6, robot_model="unitree_go2")
 
 # City rendering rides the same NavSatFix override that feeds the MapView: the
 # layer returns GeoPoints as before and streams extruded OSM tiles under
@@ -200,17 +210,27 @@ go2_zenoh_record = autoconnect(
 # stay loaded regardless of where the robot walks.
 _citymesh = CityMeshLayer()
 
+
+def _city_lidar(msg: Any) -> Any:
+    """Feed the facade accumulator, then render the scan as usual."""
+    return _render_map(_citymesh.on_lidar(msg))
+
+
 go2_zenoh_city = autoconnect(
     go2_zenoh_basic,
     # Re-declared vis module wins over basic's (autoconnect keeps the newest).
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config=_rerun_config(
-            {"world/gps": _citymesh.on_fix, "world/odometry": _citymesh.on_odom},
+            {
+                "world/gps": _citymesh.on_fix,
+                "world/odometry": _citymesh.on_odom,
+                "world/lidar": _city_lidar,
+            },
             blueprint=partial(_rerun_blueprint, city=True),
         ),
     ),
-).global_config(transport="zenoh", n_workers=4, robot_model="unitree_go2")
+).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
 
 # global_map is remapped off so the planner runs purely on the
 # incremental local_map + region_bounds pair.
@@ -245,7 +265,7 @@ go2_zenoh_raycaster = autoconnect(
         max_health=5,
         support_min=4,
     ),
-).global_config(transport="zenoh", n_workers=6, robot_model="unitree_go2")
+).global_config(transport="zenoh", n_workers=7, robot_model="unitree_go2")
 
 
 go2_zenoh_nav = autoconnect(
@@ -257,7 +277,7 @@ go2_zenoh_nav = autoconnect(
         [(BasicPathFollower, "odometry", "body_odometry")]
     ),
     MovementManager.blueprint(),
-).global_config(transport="zenoh", n_workers=8, robot_model="unitree_go2")
+).global_config(transport="zenoh", n_workers=9, robot_model="unitree_go2")
 
 # The nav stack with BasicPathFollower swapped for the DanLocalPlanner + DanHolonomicTC
 # pair from unitree-go2-mls-htc. The raw planner stream moves to planner_path; the gate
@@ -278,4 +298,4 @@ go2_zenoh_htc = autoconnect(
         [(DanHolonomicTC, "odom", "start_pose")]
     ),
     MovementManager.blueprint(),
-).global_config(transport="zenoh", n_workers=9, robot_model="unitree_go2")
+).global_config(transport="zenoh", n_workers=10, robot_model="unitree_go2")

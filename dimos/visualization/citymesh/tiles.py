@@ -401,6 +401,11 @@ class _BlockCache(Generic[T]):
         with self._guard:
             return self._items.get(block)
 
+    def peek_all(self) -> list[T]:
+        """Snapshot of every cached value — never computes, never blocks."""
+        with self._guard:
+            return list(self._items.values())
+
     def get(self, block: tuple[int, int]) -> T:
         with self._guard:
             hit = self._cached(block)
@@ -486,6 +491,22 @@ class TileBuilder:
     def peek_dem(self, key: TileKey) -> Terrain | None:
         """The DEM block under a tile if it is already in memory, else None."""
         return self._dem.peek(self.block_of(key))
+
+    def cached_buildings(self) -> list[Building]:
+        """Every building fetched so far, deduped — no network, no blocking.
+
+        A footprint intersecting two block bboxes is returned by both fetches,
+        so dedupe by source id.
+        """
+        seen: set[str] = set()
+        out: list[Building] = []
+        for block in self._buildings.peek_all():
+            for buildings in block.values():
+                for b in buildings:
+                    if b.id not in seen:
+                        seen.add(b.id)
+                        out.append(b)
+        return out
 
     def _terrain_z_range(self, block_terrain: Terrain) -> tuple[float, float]:
         """Elevation range for terrain colouring, fixed after the first block.

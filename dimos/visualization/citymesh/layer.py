@@ -41,9 +41,11 @@ import time
 from typing import TYPE_CHECKING, Any, Literal
 
 from dimos.utils.logging_config import setup_logger
+from dimos.visualization.citymesh.facade_icp import IcpResult, WallAccumulator
 from dimos.visualization.citymesh.georegister import Registration, TrackAligner
 
 if TYPE_CHECKING:
+    from dimos.visualization.citymesh.facade_icp import Edges
     from dimos.visualization.citymesh.frame import AltDatum, EnuFrame
     from dimos.visualization.citymesh.tiles import TileStreamer
 
@@ -81,6 +83,15 @@ class _Runtime:
     last_solve: float = 0.0
     last_odom_z: float = 0.0
     last_fix_enu_z: float = 0.0
+    # Facade refinement: walls accumulated from lidar, matched to OSM edges.
+    walls: WallAccumulator = field(default_factory=WallAccumulator)
+    pose: tuple[float, ...] | None = None  # latest full odom pose (x y z qx qy qz qw)
+    pose_at: float = 0.0
+    edges: Edges | None = None
+    edges_from: int = -1  # building count the edges were built from
+    icp: IcpResult | None = None
+    last_icp: float = 0.0
+    tz: float | None = None  # DEM-fitted vertical offset; GPS-derived until set
 
 
 class CityMeshLayer:
@@ -189,34 +200,117 @@ class CityMeshLayer:
             return
         runtime.last_solve = now
         registration = runtime.aligner.solve()
-        if registration is None:
+        if registration is not None:
+            first = runtime.registration is None
+            runtime.registration = registration
+            self._log_city_transform(runtime)
+            log_fn = logger.info if first else logger.debug
+            log_fn(
+                "citymesh georegistered",
+                yaw_deg=round(math.degrees(registration.yaw), 1),
+                rms_m=round(registration.rms_m, 2),
+                pairs=registration.n_pairs,
+            )
+        if runtime.registration is not None and now - runtime.last_icp >= 10.0:
+            runtime.last_icp = now
+            self._refine_against_facades(runtime)
+
+    def _refine_against_facades(self, runtime: _Runtime) -> None:
+        """Snap the GPS placement onto OSM footprints using the walls seen so far."""
+        from dimos.visualization.citymesh import facade_icp
+
+        walls = runtime.walls.walls()
+        if len(walls) < 80:
             return
-        first = runtime.registration is None
-        runtime.registration = registration
-        self._log_registration(runtime, registration)
-        log_fn = logger.info if first else logger.debug
-        log_fn(
-            "citymesh georegistered",
-            yaw_deg=round(math.degrees(registration.yaw), 1),
-            rms_m=round(registration.rms_m, 2),
-            pairs=registration.n_pairs,
+        buildings = runtime.streamer.builder.cached_buildings()
+        if runtime.edges is None or runtime.edges_from != len(buildings):
+            runtime.edges = facade_icp.build_edges(buildings, runtime.frame)
+            runtime.edges_from = len(buildings)
+        if runtime.edges is None:
+            return
+        seed = runtime.icp or runtime.registration
+        assert seed is not None
+        result = facade_icp.refine(walls, runtime.edges, seed.yaw, (seed.t_e, seed.t_n))
+        if result is None:
+            return
+        first = runtime.icp is None
+        runtime.icp = result
+        self._fit_tz(runtime)
+        self._log_city_transform(runtime)
+        (logger.info if first else logger.debug)(
+            "citymesh facade-locked",
+            yaw_deg=round(math.degrees(result.yaw), 1),
+            rms_m=round(result.rms_m, 2),
+            inliers=round(result.inlier_frac, 2),
+            walls=result.n_walls,
         )
 
-    def _log_registration(self, runtime: _Runtime, registration: Registration) -> None:
+    def _fit_tz(self, runtime: _Runtime) -> None:
+        """Vertical offset from the lowest lidar-visible surfaces vs the DEM.
+
+        GPS altitude on a weak receiver is metres of bias; the ground the robot
+        (or its balcony) looks down on is in both the lidar and the DEM. Only
+        the lowest quartile of flat voxels participates — roofs are flat too,
+        but bare-earth DEM knows nothing about them.
+        """
+        import numpy as np
+
+        from dimos.visualization.citymesh import facade_icp
+        from dimos.visualization.citymesh.tiles import tile_of
+
+        registration = runtime.icp
+        if registration is None:
+            return
+        grounds = runtime.walls.grounds()
+        if len(grounds) < 40:
+            return
+        low = grounds[grounds[:, 2] <= np.percentile(grounds[:, 2], 25.0)]
+        low = low[:: max(1, len(low) // 300)]
+        enu = facade_icp.apply2d(
+            registration.yaw, np.array([registration.t_e, registration.t_n]), low[:, :2]
+        )
+        lat, lon, _ = runtime.frame.enu_to_geodetic(np.column_stack([enu, np.zeros(len(enu))]))
+        terrains: dict[Any, Any] = {}
+        samples: list[float] = []
+        for (e, n), la, lo, gz in zip(enu, lat, lon, low[:, 2], strict=True):
+            key = tile_of(float(e), float(n))
+            if key not in terrains:
+                terrains[key] = runtime.streamer.builder.peek_dem(key)
+            terrain = terrains[key]
+            if terrain is None:
+                continue
+            dem = float(terrain.sample_ground_msl(np.array([lo]), np.array([la]))[0])
+            samples.append(dem - float(gz))
+        if len(samples) >= 30:
+            runtime.tz = float(np.median(samples))
+
+    def _log_city_transform(self, runtime: _Runtime) -> None:
         """Place the ENU scene under the odom-frame world view.
 
-        The transform on ``root`` maps its (ENU) content into the parent's
-        odom coordinates; yaw about +z only — both frames are gravity-aligned.
+        Facade-refined when available, GPS otherwise. The transform on ``root``
+        maps its (ENU) content into the parent's odom coordinates; yaw about
+        +z only — both frames are gravity-aligned.
         """
         import rerun as rr
 
-        yaw, (te, tn) = registration.odom_from_enu()
-        tz = runtime.last_odom_z - runtime.last_fix_enu_z
+        best = runtime.icp or runtime.registration
+        if best is None:
+            return
+        # Invert enu = R(yaw) @ odom + t for the parent-from-child transform.
+        c, s = math.cos(best.yaw), math.sin(best.yaw)
+        yaw_inv = -best.yaw
+        te = -(c * best.t_e + s * best.t_n)
+        tn = -(-s * best.t_e + c * best.t_n)
+        # DEM-fitted when available (enu_z = odom_z + tz, so the parent-from-
+        # child z is -tz); the biased GPS altitude only until then.
+        tz = -runtime.tz if runtime.tz is not None else runtime.last_odom_z - runtime.last_fix_enu_z
         rr.log(
             self.root,
             rr.Transform3D(
                 translation=[te, tn, tz],
-                rotation=rr.Quaternion(xyzw=[0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2)]),
+                rotation=rr.Quaternion(
+                    xyzw=[0.0, 0.0, math.sin(yaw_inv / 2), math.cos(yaw_inv / 2)]
+                ),
             ),
         )
 
@@ -229,9 +323,49 @@ class CityMeshLayer:
         runtime = self._runtime
         if runtime is not None and not self._disabled:
             position = msg.pose.pose.position
+            orientation = msg.pose.pose.orientation
             with self._lock:
                 runtime.aligner.add_odom(time.monotonic(), float(position[0]), float(position[1]))
                 runtime.last_odom_z = float(position[2])
+                runtime.pose = (
+                    float(position[0]),
+                    float(position[1]),
+                    float(position[2]),
+                    float(orientation[0]),
+                    float(orientation[1]),
+                    float(orientation[2]),
+                    float(orientation[3]),
+                )
+                runtime.pose_at = time.monotonic()
+        return msg
+
+    def on_lidar(self, msg: Any) -> Any:
+        """Visual override for the lidar topic: grow the wall map, pass through.
+
+        Scans arrive in the sensor frame moments after the odometry that
+        places them; the latest pose is used when fresh (well under a scan
+        period of drift at walking speed).
+        """
+        runtime = self._runtime
+        if runtime is None or self._disabled:
+            return msg
+        with self._lock:
+            pose, pose_at = runtime.pose, runtime.pose_at
+        if pose is None or time.monotonic() - pose_at > 0.3:
+            return msg
+        try:
+            points = msg.points_f32()
+            if points is None or len(points) == 0:
+                return msg
+            from scipy.spatial.transform import Rotation
+
+            world = Rotation.from_quat(pose[3:]).apply(points) + pose[:3]
+            d2 = ((world[:, :2] - pose[:2]) ** 2).sum(axis=1)
+            world = world[(d2 > 16.0) & (d2 < 8100.0)]  # 4..90 m of horizontal range
+            with self._lock:
+                runtime.walls.add_scan(world, (pose[0], pose[1]))
+        except Exception:
+            logger.exception("citymesh wall accumulation failed, skipping this scan")
         return msg
 
     def _ground_z(self, runtime: _Runtime, e: float, n: float) -> float:
