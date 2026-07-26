@@ -352,9 +352,11 @@ def fit_z(
     """Vertical offset: lower from the GPS height until wall bottoms meet ground.
 
     Each matched wall implies the offset that puts its visible bottom on its
-    building's DEM elevation. The dominant cluster of implied offsets within
-    the search window below the GPS prior wins, near-ties breaking downward.
-    Flat surfaces (balcony floors, roofs) never vote — only vertical
+    building's DEM elevation. The evidence is contaminated both ways —
+    occluded bottoms and rooftop verticals (antennas) imply too low, DEM
+    canyon error and reflection phantoms too high — so the estimate is the
+    median of the in-window offsets, gated on a dense cluster existing at
+    all. Flat surfaces (balcony floors, roofs) never vote — only vertical
     structure is in ``wall_spans``. Too few matches or no consensus returns
     None and the caller keeps what it had.
     """
@@ -385,10 +387,6 @@ def fit_z(
     counts = np.searchsorted(s_sorted, s_sorted + 2 * tol_m, side="right") - np.arange(
         len(s_sorted)
     )
-    best = counts.max()
-    if best < threshold:
+    if counts.max() < threshold:
         return None
-    near_best = np.flatnonzero(counts >= 0.9 * best)
-    start_val = s_sorted[near_best.min()]  # lowest near-best window
-    cluster = s_sorted[(s_sorted >= start_val) & (s_sorted <= start_val + 2 * tol_m)]
-    return float(np.median(cluster))
+    return float(np.median(in_window))
