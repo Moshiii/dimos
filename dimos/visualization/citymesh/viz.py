@@ -81,13 +81,25 @@ def init_world(frame: EnuFrame, root: str = WORLD) -> None:
 
 
 def log_mesh(path: str, mesh: Mesh, theme: Theme = THEMES["day"], static: bool = True) -> None:
-    """Log a mesh, and its wireframe strips (if any) as a sibling entity."""
+    """Log a mesh, and its wireframe strips (if any) as a sibling entity.
+
+    A theme alpha rides the vertex colors, but the viewer selects its
+    translucent pipeline off the *material's* albedo alpha — vertex alpha on
+    an opaque material renders solid. Move the alpha to ``albedo_factor`` and
+    keep the vertices fully opaque so it applies exactly once.
+    """
+    colors = mesh.colors
+    albedo_factor = None
+    if colors is not None and colors.ndim == 2 and colors.shape[1] == 4:
+        albedo_factor = [255, 255, 255, int(colors[:, 3].max())]
+        colors = np.column_stack([colors[:, :3], np.full(len(colors), 255, dtype=colors.dtype)])
     rr.log(
         path,
         rr.Mesh3D(
             vertex_positions=mesh.vertices,
             triangle_indices=mesh.triangles,
-            vertex_colors=mesh.colors,
+            vertex_colors=colors,
+            albedo_factor=albedo_factor,
         ),
         static=static,
     )

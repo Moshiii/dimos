@@ -200,7 +200,9 @@ THEMES: dict[str, Theme] = {
         background=(5, 12, 40),
         building_low=(14, 28, 64),
         building_high=(30, 54, 104),
-        building_alpha=170,
+        # Low enough that lidar returns inside/behind a building stay legible
+        # when the city overlays the live map.
+        building_alpha=120,
         estimated_tint=(1.0, 1.0, 1.0),  # the wireframe look doesn't mark guesses
         edges=True,
         edge_color=(214, 230, 255),

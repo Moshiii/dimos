@@ -222,3 +222,26 @@ class _NoBackoff(dict):
 
     def get(self, key, default=0.0):
         return 0.0
+
+
+def test_theme_alpha_reaches_the_material_not_just_vertices(frame, monkeypatch):
+    """The viewer's translucent pipeline keys off albedo_factor alpha; vertex
+    alpha alone renders solid. log_mesh must move the theme alpha across."""
+    from dimos.visualization.citymesh.extrude import Mesh
+    from dimos.visualization.citymesh.viz import log_mesh
+
+    logged = {}
+
+    def capture(path, archetype, **kw):
+        logged[path] = archetype
+
+    monkeypatch.setattr(rr, "log", capture)
+    colors = np.tile(np.array([[20, 40, 80, 120]], dtype=np.uint8), (3, 1))
+    mesh = Mesh(
+        vertices=np.zeros((3, 3), dtype=np.float32),
+        triangles=np.array([[0, 1, 2]], dtype=np.uint32),
+        colors=colors,
+    )
+    log_mesh("x", mesh)
+    arch = logged["x"]
+    assert arch.albedo_factor is not None, "translucency must ride the material"
