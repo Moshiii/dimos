@@ -86,7 +86,13 @@ def _rerun_blueprint() -> Any:
 
     return rrb.Blueprint(
         rrb.Horizontal(
-            rrb.Spatial2DView(origin="world/video", name="Camera"),
+            rrb.Vertical(
+                rrb.Spatial2DView(origin="world/video", name="Camera"),
+                # GPS on OSM tiles (needs internet in the viewer). Empty until the
+                # receiver has a fix — no-fix samples are dropped by the override.
+                rrb.MapView(origin="world/gps", name="Map"),
+                row_shares=[2, 1],
+            ),
             rrb.Spatial3DView(
                 origin="world",
                 name="3D",
@@ -98,6 +104,7 @@ def _rerun_blueprint() -> Any:
                     "world/pointlio_map": rrb.EntityBehavior(visible=False),
                     "world/lidar": rrb.EntityBehavior(visible=False),
                     "world/nodes": rrb.EntityBehavior(visible=False),
+                    "world/gps": rrb.EntityBehavior(visible=False),
                 },
             ),
             column_shares=[1, 2],
@@ -119,12 +126,19 @@ def _render_path(msg: Any) -> Any:
     return msg
 
 
+def _render_gps(msg: Any) -> Any:
+    # GeoPoints for the MapView; None while searching (stale coords would pin
+    # the robot somewhere it isn't).
+    return msg.to_rerun()
+
+
 def _rerun_config(visual_override: dict[str, Any] | None = None) -> dict[str, Any]:
     """The bridge's own view, plus whatever the layer above it adds."""
     return {
         "blueprint": _rerun_blueprint,
         "visual_override": {
             "world/camera_info": _camera_info_to_pinhole,
+            "world/gps": _render_gps,
             "world/pointlio_map": _render_map,
             "world/lidar": None,
             "world/local_map": _render_map,

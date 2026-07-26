@@ -69,6 +69,26 @@ class NavSatFix(Timestamped):
     def has_fix(self) -> bool:
         return self.status >= self.STATUS_FIX
 
+    def to_rerun(self):  # type: ignore[no-untyped-def]
+        """One GeoPoint for rerun's MapView, sized by the horizontal 1-sigma.
+
+        None without a fix: the receiver keeps sending its last coordinates
+        while searching, and plotting those would pin the robot somewhere it
+        isn't. The radius floor keeps the dot visible when covariance is 0.
+        """
+        import math
+
+        import rerun as rr
+
+        if not self.has_fix:
+            return None
+        radius = max(math.sqrt(self.position_covariance[0]), 1.0)
+        return rr.GeoPoints(
+            lat_lon=[[self.latitude, self.longitude]],
+            radii=[radius],
+            colors=[[64, 158, 255]],
+        )
+
     def lcm_encode(self) -> bytes:
         msg = LCMNavSatFix()
         [msg.header.stamp.sec, msg.header.stamp.nsec] = self.ros_timestamp()
