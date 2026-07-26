@@ -255,6 +255,19 @@ unitree = [
     "unitree-webrtc-connect>=2.1.2",
 ]
 
+# Extruded city rendering around GPS fixes (dimos.visualization.citymesh).
+# Heavy geo stack; everything is lazy-imported so the package itself loads
+# without the extra installed.
+citymesh = [
+    "shapely>=2.1.2",
+    "requests>=2.32",
+    "pyproj>=3.6",     # EGM2008 geoid lookup (optional at runtime)
+    "rasterio>=1.4",   # Copernicus DEM COG windows
+    "duckdb>=1.1",     # Overture parquet source (osm source needs only requests)
+    "trimesh>=4.0.0",
+    "mapbox-earcut>=1.0.0",  # trimesh's polygon triangulation backend
+]
+
 unitree-dds = [
     "dimos[unitree]",
     "unitree-sdk2py-dimos>=1.0.2",
@@ -416,7 +429,7 @@ tests = [
 
     # Deps the lint job swaps for stubs (`stubs/<pkg>/` or `types-*`):
     # the real packages are needed at test time, stubs cover mypy.
-    "dimos[apriltag,mapping,drone,cpu,learning]",
+    "dimos[apriltag,mapping,drone,cpu,learning,citymesh]",
     # Scene-cooking tests need these two from the `scene` extra. The full
     # extra can't be included: usd-core ships no linux-aarch64 wheel.
     "coacd>=1.0.0",
@@ -614,6 +627,13 @@ module = [
     "pxr.*",
     "trimesh",
     "trimesh.*",
+    "shapely",
+    "shapely.*",
+    "pyproj",
+    "pyproj.*",
+    "rasterio",
+    "rasterio.*",
+    "duckdb",
 ]
 ignore_missing_imports = true
 

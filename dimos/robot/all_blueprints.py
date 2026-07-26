@@ -65,6 +65,7 @@ all_blueprints = {
     "dual-xarm6-planner": "dimos.robot.manipulators.xarm.blueprints.basic:dual_xarm6_planner",
     "dual-xarm6-planner-coordinator": "dimos.robot.manipulators.xarm.blueprints.basic:dual_xarm6_planner_coordinator",
     "go2-zenoh-basic": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_basic",
+    "go2-zenoh-city": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_city",
     "go2-zenoh-htc": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_htc",
     "go2-zenoh-nav": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_nav",
     "go2-zenoh-raycaster": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_raycaster",

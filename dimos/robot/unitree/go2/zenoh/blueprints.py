@@ -26,8 +26,12 @@ so a failure can be bisected by dropping down a level:
 - ``go2-zenoh-nav`` — the full stack: planner, goal relay and path follower.
 - ``go2-zenoh-htc`` — ``go2-zenoh-nav`` with the follower swapped for the
   ``DanLocalPlanner`` + ``DanHolonomicTC`` pair from ``unitree-go2-mls-htc``.
+- ``go2-zenoh-city`` — ``go2-zenoh-basic`` with :class:`CityMeshLayer` on the GPS
+  stream: extruded OSM buildings around the fix in a City tab (the viewer machine
+  needs internet and the ``citymesh`` extra).
 """
 
+from functools import partial
 import math
 from typing import Any
 
@@ -46,6 +50,7 @@ from dimos.navigation.nav_3d.mls_planner.odom_body_frame import OdomBodyFrame
 from dimos.navigation.nav_3d.mls_planner.viz import planner_visual_override
 from dimos.robot.unitree.go2.zenoh.recorder import GO2ZenohRecorder
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
+from dimos.visualization.citymesh.layer import CityMeshLayer
 from dimos.visualization.vis_module import vis_module
 
 voxel_size = 0.08
@@ -78,14 +83,44 @@ def _camera_info_to_pinhole(camera_info: Any) -> Any:
     return camera_info.to_rerun(image_topic="world/video")
 
 
-def _rerun_blueprint() -> Any:
+def _rerun_blueprint(city: bool = False) -> Any:
     """Split layout: camera feed + 3D world, as the WebRTC go2 blueprint has.
 
     The 2D view sits on ``world/video``, not ``world/color_image`` — over zenoh the camera
     arrives as H.264 on the ``video`` port, which is also where the pinhole is logged.
+
+    ``city`` adds a City tab next to the 3D view: the ENU scene CityMeshLayer
+    streams under ``city/``, deliberately a separate root — ``world`` is the odom
+    frame, and without georegistration the two must not share a view.
     """
     import rerun as rr
     import rerun.blueprint as rrb
+
+    world_3d = rrb.Spatial3DView(
+        origin="world",
+        name="3D",
+        background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
+        line_grid=rrb.LineGrid3D(plane=rr.components.Plane3D.XY.with_distance(0.5)),
+        # Hidden rather than dropped: still in the entity tree, tickable in the
+        # viewer.
+        overrides={
+            "world/pointlio_map": rrb.EntityBehavior(visible=False),
+            "world/lidar": rrb.EntityBehavior(visible=False),
+            "world/nodes": rrb.EntityBehavior(visible=False),
+            "world/gps": rrb.EntityBehavior(visible=False),
+        },
+    )
+    right: Any = world_3d
+    if city:
+        right = rrb.Tabs(
+            world_3d,
+            rrb.Spatial3DView(
+                origin="city",
+                name="City",
+                # The blueprint theme's night-sky background.
+                background=rrb.Background(kind="SolidColor", color=[6, 16, 48]),
+            ),
+        )
 
     return rrb.Blueprint(
         rrb.Horizontal(
@@ -96,20 +131,7 @@ def _rerun_blueprint() -> Any:
                 rrb.MapView(origin="world/gps", name="Map"),
                 row_shares=[2, 1],
             ),
-            rrb.Spatial3DView(
-                origin="world",
-                name="3D",
-                background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
-                line_grid=rrb.LineGrid3D(plane=rr.components.Plane3D.XY.with_distance(0.5)),
-                # Hidden rather than dropped: still in the entity tree, tickable in the
-                # viewer.
-                overrides={
-                    "world/pointlio_map": rrb.EntityBehavior(visible=False),
-                    "world/lidar": rrb.EntityBehavior(visible=False),
-                    "world/nodes": rrb.EntityBehavior(visible=False),
-                    "world/gps": rrb.EntityBehavior(visible=False),
-                },
-            ),
+            right,
             column_shares=[1, 2],
         ),
         rrb.TimePanel(state="hidden"),
@@ -135,10 +157,13 @@ def _render_gps(msg: Any) -> Any:
     return msg.to_rerun()
 
 
-def _rerun_config(visual_override: dict[str, Any] | None = None) -> dict[str, Any]:
+def _rerun_config(
+    visual_override: dict[str, Any] | None = None,
+    blueprint: Any = _rerun_blueprint,
+) -> dict[str, Any]:
     """The bridge's own view, plus whatever the layer above it adds."""
     return {
-        "blueprint": _rerun_blueprint,
+        "blueprint": blueprint,
         "visual_override": {
             "world/camera_info": _camera_info_to_pinhole,
             "world/gps": _render_gps,
@@ -165,6 +190,22 @@ go2_zenoh_record = autoconnect(
     go2_zenoh_basic,
     GO2ZenohRecorder.blueprint(),
 ).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
+
+# City rendering rides the same NavSatFix override that feeds the MapView: the
+# layer returns GeoPoints as before and streams extruded OSM tiles under city/
+# as a side effect. Add anchors=[(lat, lon), ...] for places that should stay
+# loaded regardless of where the robot walks.
+go2_zenoh_city = autoconnect(
+    go2_zenoh_basic,
+    # Re-declared vis module wins over basic's (autoconnect keeps the newest).
+    vis_module(
+        viewer_backend=global_config.viewer,
+        rerun_config=_rerun_config(
+            {"world/gps": CityMeshLayer().on_fix},
+            blueprint=partial(_rerun_blueprint, city=True),
+        ),
+    ),
+).global_config(transport="zenoh", n_workers=4, robot_model="unitree_go2")
 
 # global_map is remapped off so the planner runs purely on the
 # incremental local_map + region_bounds pair.
