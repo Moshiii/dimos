@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from typing import Any
 
 import requests
@@ -45,6 +46,26 @@ OVERPASS_URLS = [
     "https://overpass.private.coffee/api/interpreter",
 ]
 USER_AGENT = "citymesh/0.1 (github.com/leshy; robotics visualization)"
+
+# Session-sticky instance order: a streaming run fetches many blocks, and the
+# primary rate-limits after the first couple (504/429), so paying its timeout
+# again on every block wastes 2-15 s each. Success promotes an instance to the
+# front, failure demotes it to the back; the healthiest answers first.
+_instance_order = list(OVERPASS_URLS)
+_instance_lock = threading.Lock()
+
+
+def _reorder(url: str, worked: bool) -> None:
+    with _instance_lock:
+        if url in _instance_order:
+            _instance_order.remove(url)
+            _instance_order.insert(0 if worked else len(_instance_order), url)
+
+
+def _instances() -> list[str]:
+    with _instance_lock:
+        return list(_instance_order)
+
 
 _NUM = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -89,7 +110,7 @@ def fetch_buildings_osm(
         """
         data = None
         errors = []
-        for url in urls or OVERPASS_URLS:
+        for url in urls or _instances():
             log.info("querying %s ...", url)
             try:
                 resp = requests.post(
@@ -100,9 +121,11 @@ def fetch_buildings_osm(
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                _reorder(url, worked=True)
                 break
             except requests.RequestException as exc:
                 errors.append(f"{url}: {exc}")
+                _reorder(url, worked=False)
                 log.warning("Overpass instance failed, trying next: %s", exc)
         if data is None:
             raise RuntimeError("all Overpass instances failed:\n  " + "\n  ".join(errors))
