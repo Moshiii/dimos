@@ -25,7 +25,9 @@ from dimos.visualization.citymesh.facade_icp import (
     WallAccumulator,
     apply2d,
     build_edges,
+    fit_z,
     refine,
+    refine_global,
 )
 from dimos.visualization.citymesh.frame import EnuFrame
 from dimos.visualization.citymesh.overture import Building
@@ -138,3 +140,67 @@ def test_apply2d_matches_rotation_convention():
     p = np.array([[1.0, 0.0]])
     out = apply2d(math.pi / 2, np.zeros(2), p)[0]
     assert out == pytest.approx([0.0, 1.0], abs=1e-12)
+
+
+def test_refine_global_finds_orientation_without_a_seed():
+    """One GPS fix + walls: the yaw sweep must find the basin on its own."""
+    edges = build_edges(BLOCKS, FRAME)
+    true_yaw, true_t = math.radians(101.0), np.array([12.0, -7.0])
+    enu_walls = _walls_from_edges(edges)
+    c, s = math.cos(true_yaw), math.sin(true_yaw)
+    odom_walls = (enu_walls - true_t) @ np.array([[c, s], [-s, c]]).T
+    rng = np.random.default_rng(5)
+    odom_walls = odom_walls + rng.normal(0, 0.15, odom_walls.shape)
+
+    # A robot standing at odom (3, 4); its fix in ENU per the true transform,
+    # plus GPS-grade noise. The lidar only saw walls *facing* the robot, so
+    # the fixture must too — the visibility test culls the rest.
+    robot_odom = np.array([3.0, 4.0])
+    robot_enu_true = np.array([[c, -s], [s, c]]) @ robot_odom + true_t
+    facing = ((robot_enu_true - edges.samples[::3]) * edges.normals[::3]).sum(axis=1) > 0
+    odom_walls = odom_walls[facing]
+    robot_enu = [*robot_enu_true, 2.0, -3.0]
+    result = refine_global(
+        odom_walls, edges, (robot_odom[0], robot_odom[1]), (robot_enu[0], robot_enu[1])
+    )
+    assert result is not None
+    assert abs(math.degrees(result.yaw - true_yaw)) < 1.0
+    assert result.inlier_frac > 0.9
+
+
+def test_fit_z_lowers_from_the_gps_height_onto_footprint_ground():
+    """Wall bottoms meet their buildings' DEM ground; flat surfaces don't vote."""
+    edges = build_edges(BLOCKS, FRAME, ground_at=lambda lat, lon: 80.0)
+    # Walls in odom: bottoms at z=-15 (a balcony robot looking down); the true
+    # offset therefore puts odom -15 at ENU 80 -> tz = 95. GPS says 87.
+    xy = _walls_from_edges(edges)  # identity transform for simplicity
+    spans = np.column_stack([xy, np.full(len(xy), -15.0), np.full(len(xy), -3.0)])
+    tz = fit_z(spans, edges, 0.0, (0.0, 0.0), tz0=87.0)
+    assert tz is not None
+    assert abs(tz - 95.0) < 0.5
+
+
+def test_fit_z_ignores_occluded_bottoms_when_a_consensus_exists():
+    edges = build_edges(BLOCKS, FRAME, ground_at=lambda lat, lon: 80.0)
+    xy = _walls_from_edges(edges)
+    bottoms = np.full(len(xy), -15.0)
+    bottoms[::4] = -8.0  # a quarter of the walls are occluded partway up
+    spans = np.column_stack([xy, bottoms, np.full(len(xy), -3.0)])
+    tz = fit_z(spans, edges, 0.0, (0.0, 0.0), tz0=87.0)
+    assert tz is not None
+    assert abs(tz - 95.0) < 0.5, "the majority's ground wins, not the occluded tail"
+
+
+def test_fit_z_refuses_without_consensus():
+    edges = build_edges(BLOCKS, FRAME, ground_at=lambda lat, lon: 80.0)
+    xy = _walls_from_edges(edges)
+    rng = np.random.default_rng(6)
+    spans = np.column_stack([xy, rng.uniform(-80, 0, len(xy)), np.full(len(xy), 5.0)])
+    assert fit_z(spans, edges, 0.0, (0.0, 0.0), tz0=87.0) is None
+
+
+def test_fit_z_needs_known_grounds():
+    edges = build_edges(BLOCKS, FRAME)  # no ground_at: all NaN
+    xy = _walls_from_edges(edges)
+    spans = np.column_stack([xy, np.full(len(xy), -15.0), np.full(len(xy), -3.0)])
+    assert fit_z(spans, edges, 0.0, (0.0, 0.0), tz0=87.0) is None

@@ -34,6 +34,7 @@ Three pieces, pure numpy/scipy like :mod:`.georegister`:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import itertools
 import math
@@ -119,17 +120,38 @@ class WallAccumulator:
         sel = self._select(wall=True)
         return sel[:, :2] if len(sel) else np.empty((0, 2))
 
+    def wall_spans(self) -> np.ndarray:
+        """(N, 4) wall voxels as ``x, y, z_min, z_max`` — the z fit's evidence.
+
+        Only vertical structure participates in vertical placement: a balcony
+        floor or a roof is flat and cannot pretend to be the street, while a
+        facade's visible bottom is where it meets its footprint's ground.
+        """
+        out = []
+        for cell in self._cells.values():
+            if cell[2] < self.min_points:
+                continue
+            if cell[1] - cell[0] >= self.wall_span_m:
+                n = cell[2]
+                out.append((cell[3] / n, cell[4] / n, cell[0], cell[1]))
+        return np.array(out) if out else np.empty((0, 4))
+
     def grounds(self) -> np.ndarray:
-        """(N, 3) centroids of flat voxels — candidates for the DEM z fit."""
+        """(N, 3) centroids of flat voxels."""
         return self._select(wall=False)
 
 
 @dataclass
 class Edges:
-    """Footprint boundaries as dense samples with unit normals, plus a tree."""
+    """Footprint boundaries as dense samples with unit normals, plus a tree.
+
+    ``ground`` is the DEM elevation at each sample's building (NaN when the
+    terrain block hasn't streamed in yet) — the anchor for the vertical fit.
+    """
 
     samples: np.ndarray  # (M, 2) ENU
     normals: np.ndarray  # (M, 2)
+    ground: np.ndarray  # (M,) ENU z of the building's ground, NaN unknown
     tree: object  # scipy cKDTree
 
     @property
@@ -137,29 +159,52 @@ class Edges:
         return len(self.samples)
 
 
-def build_edges(buildings: list[Building], frame: EnuFrame, sample_m: float = 0.5) -> Edges | None:
-    """OSM footprints -> ENU edge samples + normals. None when there are none."""
+def build_edges(
+    buildings: list[Building],
+    frame: EnuFrame,
+    sample_m: float = 0.5,
+    ground_at: Callable[[float, float], float | None] | None = None,
+) -> Edges | None:
+    """OSM footprints -> ENU edge samples + normals. None when there are none.
+
+    ``ground_at(lat, lon)`` supplies the DEM elevation at a building's
+    centroid; omitted or returning None leaves that building's ground NaN.
+    """
     from scipy.spatial import cKDTree
 
     samples: list[np.ndarray] = []
     normals: list[np.ndarray] = []
+    grounds: list[np.ndarray] = []
     for b in buildings:
         for g in getattr(b.geometry, "geoms", [b.geometry]):
-            coords = np.asarray(g.exterior.coords)
+            ring = g.exterior
+            coords = np.asarray(ring.coords)
             enu = frame.geodetic_to_enu(coords[:, 1], coords[:, 0], 0.0, datum="ellipsoidal")[:, :2]
+            # OSM ring winding is arbitrary; the visibility test needs normals
+            # that genuinely point out of the building.
+            sign = -1.0 if ring.is_ccw else 1.0
+            gz = math.nan
+            if ground_at is not None:
+                centroid = g.centroid
+                got = ground_at(float(centroid.y), float(centroid.x))
+                if got is not None:
+                    gz = got
             for a, c in itertools.pairwise(enu):
                 length = float(np.linalg.norm(c - a))
                 if length < 0.5:
                     continue
                 tangent = (c - a) / length
-                normal = np.array([-tangent[1], tangent[0]])
+                normal = sign * np.array([-tangent[1], tangent[0]])
                 pts = np.linspace(a, c, max(2, int(length / sample_m)))
                 samples.append(pts)
                 normals.append(np.tile(normal, (len(pts), 1)))
+                grounds.append(np.full(len(pts), gz))
     if not samples:
         return None
     s = np.vstack(samples)
-    return Edges(samples=s, normals=np.vstack(normals), tree=cKDTree(s))
+    return Edges(
+        samples=s, normals=np.vstack(normals), ground=np.concatenate(grounds), tree=cKDTree(s)
+    )
 
 
 @dataclass(frozen=True)
@@ -191,6 +236,7 @@ def refine(
     min_walls: int = 80,
     min_inlier_frac: float = 0.45,
     inlier_m: float = 1.5,
+    viewpoint_odom: tuple[float, float] | None = None,
 ) -> IcpResult | None:
     """Annealed point-to-line ICP from the GPS seed; None when unconvincing.
 
@@ -198,6 +244,12 @@ def refine(
     seed can start ~20 m and ~15 degrees off. The final inlier fraction is
     the accept gate — a scene without enough agreeing walls (open field,
     unmapped buildings) keeps the GPS answer rather than a confident hallucination.
+
+    ``viewpoint_odom`` (the robot's odom position) arms the visibility test:
+    lidar only sees facades that *face* the robot, so an inlier must put the
+    robot on its matched edge's outward side. This is what breaks the 180°
+    street-grid symmetry — the flipped solution matches walls geometrically
+    but from inside the buildings, and its inliers collapse.
     """
     if len(walls_xy) < min_walls:
         return None
@@ -226,8 +278,16 @@ def refine(
             t += dx[1:]
             if np.abs(dx).max() < 1e-4:
                 break
-    dist, _ = edges.tree.query(apply2d(yaw, t, walls_xy), distance_upper_bound=inlier_m)  # type: ignore[attr-defined]
+    dist, idx = edges.tree.query(apply2d(yaw, t, walls_xy), distance_upper_bound=inlier_m)  # type: ignore[attr-defined]
     ok = np.isfinite(dist)
+    if viewpoint_odom is not None and ok.any():
+        robot = apply2d(yaw, t, np.asarray(viewpoint_odom)[None, :])[0]
+        q = edges.samples[idx[ok]]
+        n = edges.normals[idx[ok]]
+        facing = ((robot - q) * n).sum(axis=1) > 0.0
+        visible = ok.copy()
+        visible[np.flatnonzero(ok)[~facing]] = False
+        ok = visible
     frac = float(ok.mean())
     if frac < min_inlier_frac:
         return None
@@ -239,3 +299,83 @@ def refine(
         inlier_frac=frac,
         n_walls=len(walls_xy),
     )
+
+
+def refine_global(
+    walls_xy: np.ndarray,
+    edges: Edges,
+    odom_at_fix: tuple[float, float],
+    enu_at_fix: tuple[float, float],
+    seeds: tuple[tuple[float, tuple[float, float]], ...] = (),
+    yaw_step_deg: float = 15.0,
+) -> IcpResult | None:
+    """Orientation search: no track registration needed, one GPS fix will do.
+
+    Every candidate yaw gets the translation that puts the robot's odom
+    position on its fix (``t = enu - R(yaw) @ odom``), plus any caller seeds
+    (e.g. the track registration when it exists). Each candidate runs the full
+    annealed refine; the gates discard the wrong basins and the best inlier
+    fraction wins. Costs a couple of seconds once — after the first lock,
+    callers seed :func:`refine` directly.
+    """
+    odom = np.asarray(odom_at_fix)
+    enu = np.asarray(enu_at_fix)
+    candidates: list[tuple[float, tuple[float, float]]] = list(seeds)
+    for k in range(round(360.0 / yaw_step_deg)):
+        yaw = math.radians(k * yaw_step_deg)
+        c, s = math.cos(yaw), math.sin(yaw)
+        t = enu - np.array([[c, -s], [s, c]]) @ odom
+        candidates.append((yaw, (float(t[0]), float(t[1]))))
+    best: IcpResult | None = None
+    viewpoint = (float(odom[0]), float(odom[1]))
+    for yaw0, t0 in candidates:
+        result = refine(walls_xy, edges, yaw0, t0, viewpoint_odom=viewpoint)
+        if result is not None and (best is None or result.inlier_frac > best.inlier_frac):
+            best = result
+    return best
+
+
+def fit_z(
+    wall_spans: np.ndarray,
+    edges: Edges,
+    yaw: float,
+    t: tuple[float, float],
+    tz0: float,
+    down_m: float = 40.0,
+    up_m: float = 8.0,
+    tol_m: float = 1.75,
+    step_m: float = 0.25,
+    match_m: float = 1.5,
+    min_matches: int = 20,
+    min_frac: float = 0.12,
+) -> float | None:
+    """Vertical offset: lower from the GPS height until wall bottoms meet ground.
+
+    Each matched wall implies the offset that puts its visible bottom on its
+    building's DEM elevation. Occlusion can only *hide* the bottom of a wall,
+    so it biases implied offsets low, never high — which is why the scan walks
+    DOWN from the GPS prior and accepts the first offset with enough agreeing
+    walls: the least-occluded consensus, before the occlusion artifacts below
+    it. Flat surfaces (balcony floors, roofs) never vote — only vertical
+    structure is in ``wall_spans``. Too few matches or no consensus returns
+    None and the caller keeps what it had.
+    """
+    if len(wall_spans) < min_matches:
+        return None
+    moved = apply2d(yaw, np.asarray(t), wall_spans[:, :2])
+    dist, idx = edges.tree.query(moved, distance_upper_bound=match_m)  # type: ignore[attr-defined]
+    ok = np.isfinite(dist)
+    if not ok.any():
+        return None
+    ground = edges.ground[idx[ok]]
+    bottoms = wall_spans[ok, 2]
+    known = np.isfinite(ground)
+    implied = ground[known] - bottoms[known]  # tz that puts each bottom on its ground
+    if len(implied) < min_matches:
+        return None
+    threshold = max(min_matches, min_frac * len(implied))
+    for tz in np.arange(tz0 + up_m, tz0 - down_m, -step_m):
+        cluster = implied[np.abs(implied - tz) <= tol_m]
+        if len(cluster) >= threshold:
+            return float(np.median(cluster))
+    return None

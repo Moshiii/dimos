@@ -93,6 +93,9 @@ class _Runtime:
     last_icp: float = 0.0
     tz: float | None = None  # DEM-fitted vertical offset; GPS-derived until set
     refine_note: str = ""
+    # Latest (odom_xy, enu_xy) of one fix: the translation seed for the
+    # orientation sweep, available from the very first fix.
+    fix_pair: tuple[tuple[float, float], tuple[float, float]] | None = None
 
 
 class CityMeshLayer:
@@ -197,6 +200,8 @@ class CityMeshLayer:
         now = time.monotonic()
         runtime.aligner.add_fix(now, e, n)
         runtime.last_fix_enu_z = z
+        if runtime.pose is not None:
+            runtime.fix_pair = ((runtime.pose[0], runtime.pose[1]), (e, n))
         if now - runtime.last_solve < 2.0:
             return
         runtime.last_solve = now
@@ -212,35 +217,76 @@ class CityMeshLayer:
                 rms_m=round(registration.rms_m, 2),
                 pairs=registration.n_pairs,
             )
-        if runtime.registration is not None and now - runtime.last_icp >= 10.0:
+        if now - runtime.last_icp >= 10.0:
             runtime.last_icp = now
             self._refine_against_facades(runtime)
 
     def _refine_against_facades(self, runtime: _Runtime) -> None:
-        """Snap the GPS placement onto OSM footprints using the walls seen so far."""
+        """Snap the placement onto OSM footprints using the walls seen so far.
+
+        Needs no track registration: with walls and a single fix, an
+        orientation sweep finds the yaw from the facades themselves — the city
+        can lock while the robot is still parked. The track registration, when
+        it exists, is just an extra seed.
+        """
+        import numpy as np
+
         from dimos.visualization.citymesh import facade_icp
 
-        walls = runtime.walls.walls()
-        if len(walls) < 80:
-            self._note_refine(runtime, f"waiting for walls ({len(walls)}/80)")
+        spans = runtime.walls.wall_spans()
+        if len(spans) < 80:
+            self._note_refine(runtime, f"waiting for walls ({len(spans)}/80)")
             return
+        walls = np.asarray(spans[:, :2])
         buildings = runtime.streamer.builder.cached_buildings()
-        if runtime.edges is None or runtime.edges_from != len(buildings):
-            runtime.edges = facade_icp.build_edges(buildings, runtime.frame)
+        # Rebuild when the building set grows, and while grounds are still all
+        # unknown — the DEM blocks usually land moments after the footprints.
+        if (
+            runtime.edges is None
+            or runtime.edges_from != len(buildings)
+            or bool(np.isnan(runtime.edges.ground).all())
+        ):
+            runtime.edges = facade_icp.build_edges(
+                buildings,
+                runtime.frame,
+                ground_at=lambda lat, lon: self._dem_ground(runtime, lat, lon),
+            )
             runtime.edges_from = len(buildings)
         if runtime.edges is None:
             self._note_refine(runtime, "no footprints fetched yet")
             return
-        seed = runtime.icp or runtime.registration
-        assert seed is not None
-        result = facade_icp.refine(walls, runtime.edges, seed.yaw, (seed.t_e, seed.t_n))
+        viewpoint = runtime.fix_pair[0] if runtime.fix_pair is not None else None
+        if runtime.icp is not None:
+            result = facade_icp.refine(
+                walls,
+                runtime.edges,
+                runtime.icp.yaw,
+                (runtime.icp.t_e, runtime.icp.t_n),
+                viewpoint_odom=viewpoint,
+            )
+        elif runtime.fix_pair is not None:
+            self._note_refine(runtime, f"searching orientation over {len(walls)} walls")
+            seeds = ((r.yaw, (r.t_e, r.t_n)),) if (r := runtime.registration) is not None else ()
+            result = facade_icp.refine_global(
+                walls, runtime.edges, runtime.fix_pair[0], runtime.fix_pair[1], seeds=seeds
+            )
+        else:
+            return
         if result is None:
             self._note_refine(runtime, f"rejected (walls={len(walls)}, low inlier fraction)")
             return
         first = runtime.icp is None
         runtime.icp = result
         runtime.refine_note = "locked"
-        self._fit_tz(runtime)
+        tz = facade_icp.fit_z(
+            spans,
+            runtime.edges,
+            result.yaw,
+            (result.t_e, result.t_n),
+            tz0=runtime.last_fix_enu_z - runtime.last_odom_z,
+        )
+        if tz is not None:
+            runtime.tz = tz
         self._log_city_transform(runtime)
         (logger.info if first else logger.debug)(
             "citymesh facade-locked",
@@ -248,6 +294,7 @@ class CityMeshLayer:
             rms_m=round(result.rms_m, 2),
             inliers=round(result.inlier_frac, 2),
             walls=result.n_walls,
+            tz=None if runtime.tz is None else round(runtime.tz, 1),
         )
 
     def _note_refine(self, runtime: _Runtime, note: str) -> None:
@@ -256,44 +303,17 @@ class CityMeshLayer:
             runtime.refine_note = note
             logger.info("citymesh facade refine", state=note)
 
-    def _fit_tz(self, runtime: _Runtime) -> None:
-        """Vertical offset from the lowest lidar-visible surfaces vs the DEM.
-
-        GPS altitude on a weak receiver is metres of bias; the ground the robot
-        (or its balcony) looks down on is in both the lidar and the DEM. Only
-        the lowest quartile of flat voxels participates — roofs are flat too,
-        but bare-earth DEM knows nothing about them.
-        """
+    def _dem_ground(self, runtime: _Runtime, lat: float, lon: float) -> float | None:
+        """DEM elevation at a building's centroid, from already-streamed blocks."""
         import numpy as np
 
-        from dimos.visualization.citymesh import facade_icp
         from dimos.visualization.citymesh.tiles import tile_of
 
-        registration = runtime.icp
-        if registration is None:
-            return
-        grounds = runtime.walls.grounds()
-        if len(grounds) < 40:
-            return
-        low = grounds[grounds[:, 2] <= np.percentile(grounds[:, 2], 25.0)]
-        low = low[:: max(1, len(low) // 300)]
-        enu = facade_icp.apply2d(
-            registration.yaw, np.array([registration.t_e, registration.t_n]), low[:, :2]
-        )
-        lat, lon, _ = runtime.frame.enu_to_geodetic(np.column_stack([enu, np.zeros(len(enu))]))
-        terrains: dict[Any, Any] = {}
-        samples: list[float] = []
-        for (e, n), la, lo, gz in zip(enu, lat, lon, low[:, 2], strict=True):
-            key = tile_of(float(e), float(n))
-            if key not in terrains:
-                terrains[key] = runtime.streamer.builder.peek_dem(key)
-            terrain = terrains[key]
-            if terrain is None:
-                continue
-            dem = float(terrain.sample_ground_msl(np.array([lo]), np.array([la]))[0])
-            samples.append(dem - float(gz))
-        if len(samples) >= 30:
-            runtime.tz = float(np.median(samples))
+        e, n, _ = runtime.frame.geodetic_to_enu(lat, lon, 0.0)[0]
+        terrain = runtime.streamer.builder.peek_dem(tile_of(float(e), float(n)))
+        if terrain is None:
+            return None
+        return float(terrain.sample_ground_msl(np.array([lon]), np.array([lat]))[0])
 
     def _log_city_transform(self, runtime: _Runtime) -> None:
         """Place the ENU scene under the odom-frame world view.
