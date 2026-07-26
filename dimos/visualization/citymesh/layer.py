@@ -92,6 +92,7 @@ class _Runtime:
     icp: IcpResult | None = None
     last_icp: float = 0.0
     tz: float | None = None  # DEM-fitted vertical offset; GPS-derived until set
+    refine_note: str = ""
 
 
 class CityMeshLayer:
@@ -221,20 +222,24 @@ class CityMeshLayer:
 
         walls = runtime.walls.walls()
         if len(walls) < 80:
+            self._note_refine(runtime, f"waiting for walls ({len(walls)}/80)")
             return
         buildings = runtime.streamer.builder.cached_buildings()
         if runtime.edges is None or runtime.edges_from != len(buildings):
             runtime.edges = facade_icp.build_edges(buildings, runtime.frame)
             runtime.edges_from = len(buildings)
         if runtime.edges is None:
+            self._note_refine(runtime, "no footprints fetched yet")
             return
         seed = runtime.icp or runtime.registration
         assert seed is not None
         result = facade_icp.refine(walls, runtime.edges, seed.yaw, (seed.t_e, seed.t_n))
         if result is None:
+            self._note_refine(runtime, f"rejected (walls={len(walls)}, low inlier fraction)")
             return
         first = runtime.icp is None
         runtime.icp = result
+        runtime.refine_note = "locked"
         self._fit_tz(runtime)
         self._log_city_transform(runtime)
         (logger.info if first else logger.debug)(
@@ -244,6 +249,12 @@ class CityMeshLayer:
             inliers=round(result.inlier_frac, 2),
             walls=result.n_walls,
         )
+
+    def _note_refine(self, runtime: _Runtime, note: str) -> None:
+        """One info line per state change — a silently-refused ICP is undebuggable."""
+        if note != runtime.refine_note:
+            runtime.refine_note = note
+            logger.info("citymesh facade refine", state=note)
 
     def _fit_tz(self, runtime: _Runtime) -> None:
         """Vertical offset from the lowest lidar-visible surfaces vs the DEM.
