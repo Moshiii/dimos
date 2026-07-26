@@ -223,9 +223,17 @@ go2_zenoh_record = autoconnect(
 _citymesh = CityMeshLayer()
 
 
-def _city_lidar(msg: Any) -> Any:
-    """Feed the facade accumulator, then render the scan as usual."""
-    return _render_map(_citymesh.on_lidar(msg))
+def _city_lidar(layer: CityMeshLayer, msg: Any) -> Any:
+    """Feed the facade accumulator, then render the scan as usual.
+
+    Takes the layer as a partial-bound argument, NOT via the module global: a
+    module-level function unpickles by reference in the bridge worker, where a
+    fresh import would hand it a different CityMeshLayer than the bound
+    methods below — and the walls would accumulate into an orphan. The partial
+    pickles the instance by value, and pickle's memo makes it the same object
+    as on_fix/on_odom's.
+    """
+    return _render_map(layer.on_lidar(msg))
 
 
 go2_zenoh_city = autoconnect(
@@ -237,7 +245,7 @@ go2_zenoh_city = autoconnect(
             {
                 "world/gps": _citymesh.on_fix,
                 "world/odometry": _citymesh.on_odom,
-                "world/lidar": _city_lidar,
+                "world/lidar": partial(_city_lidar, _citymesh),
             },
             blueprint=partial(_rerun_blueprint, city=True),
         ),

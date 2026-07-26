@@ -136,3 +136,22 @@ def test_nan_altitude_from_altitudeless_receiver(layer):
     e, n, z = runtime.trail[-1]
     assert math.isfinite(e) and math.isfinite(n)
     assert z == 0.0, "flat fallback until terrain arrives"
+
+
+def test_blueprint_overrides_share_one_layer_after_pickling():
+    """The lidar hook must reach the same instance as on_fix/on_odom once the
+    bridge worker unpickles the config — a module-level function resolves by
+    reference to a fresh import's orphan layer, and walls vanish into it."""
+    import pickle
+
+    from dimos.robot.unitree.go2.zenoh import blueprints as bp
+
+    override = {
+        "world/gps": bp._citymesh.on_fix,
+        "world/odometry": bp._citymesh.on_odom,
+        "world/lidar": __import__("functools").partial(bp._city_lidar, bp._citymesh),
+    }
+    d = pickle.loads(pickle.dumps(override))
+    layer = d["world/gps"].__self__
+    assert d["world/odometry"].__self__ is layer
+    assert d["world/lidar"].args[0] is layer
