@@ -13,37 +13,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir "uv==${UV_VERSION}"
 COPY pyproject.toml uv.lock /src/
-# pygame (sim extra), the Pink solver runtime (manipulation extra) and
-# the websocket-vis runtime are exported separately: mixing unhashed
-# extra pins into the hashed main export fails the install. The Pink
-# subset is exactly what the teleop solver needs beyond the main closure
-# (pinocchio is already in it). The vis/web subset exists because
-# vis_module imports socketio and the quest server imports fastapi
-# unconditionally, while those ship only in dev groups or extras;
-# versions still come from the lockfile.
+# Two lockfile exports, both hash-complete: the base project closure and
+# the r1lite-runtime dependency group (teleop solver stack plus the
+# web/vis packages the blueprints import at module scope). The group is
+# maintained in pyproject.toml, so its transitive closure and hashes
+# come from uv.lock rather than hand-enumerated pins.
 RUN cd /src && uv export --frozen --no-emit-project --no-default-groups \
         --format requirements-txt -o /requirements.txt \
     && test -s /requirements.txt \
     && grep -q '^typer==' /requirements.txt \
     && ! grep -qE '^(torch|mujoco|pyaudio)==' /requirements.txt \
-    && uv export --frozen --no-emit-project --no-default-groups --extra sim \
-        --format requirements-txt \
-        | grep -E '^pygame==' | cut -d' ' -f1 > /pygame.txt \
-    && [ "$(grep -c '^pygame==' /pygame.txt)" = "1" ] \
-    && uv export --frozen --no-emit-project --no-default-groups --extra manipulation \
-        --format requirements-txt \
-        | grep -E '^(pin-pink|qpsolvers|proxsuite|loop-rate-limiters)==' \
-        | cut -d' ' -f1 > /pink.txt \
-    && [ "$(wc -l < /pink.txt)" = "4" ] \
-    && uv export --frozen --no-emit-project --no-default-groups --group lint \
-        --format requirements-txt \
-        | grep -E '^(python-socketio|bidict|python-engineio|simple-websocket|wsproto|h11|starlette|uvicorn|anyio|sniffio|exceptiongroup)==' \
-        | cut -d' ' -f1 > /vis.txt \
-    && uv export --frozen --no-emit-project --no-default-groups --extra web \
-        --format requirements-txt \
-        | grep -E '^(fastapi|ffmpeg-python|sse-starlette|soundfile|future)==' \
-        | cut -d' ' -f1 >> /vis.txt \
-    && [ "$(wc -l < /vis.txt)" = "16" ]
+    && uv export --frozen --no-emit-project --no-default-groups \
+        --group r1lite-runtime \
+        --format requirements-txt -o /r1lite-runtime.txt \
+    && grep -q '^pin-pink==' /r1lite-runtime.txt \
+    && grep -q '^fastapi==' /r1lite-runtime.txt \
+    && ! grep -qE '^(torch|mujoco|pyaudio)==' /r1lite-runtime.txt
 
 FROM ${ROS_BASE} AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -73,18 +58,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # export is a complete closure slice and re-resolving breaks on
 # override-dependencies.
 RUN --mount=type=bind,from=lockexport,source=/requirements.txt,target=/tmp/requirements.txt \
-    --mount=type=bind,from=lockexport,source=/pygame.txt,target=/tmp/pygame.txt \
-    --mount=type=bind,from=lockexport,source=/pink.txt,target=/tmp/pink.txt \
+    --mount=type=bind,from=lockexport,source=/r1lite-runtime.txt,target=/tmp/r1lite-runtime.txt \
     pip install --no-cache-dir "uv==${UV_VERSION}" \
     && uv pip install --system --no-cache --no-deps -r /tmp/requirements.txt \
-    && uv pip install --system --no-cache --no-deps -r /tmp/pygame.txt \
-    && uv pip install --system --no-cache --no-deps -r /tmp/pink.txt \
+    && uv pip install --system --no-cache --no-deps -r /tmp/r1lite-runtime.txt \
     && pip uninstall -y uv
-
-# Separate small layer: the vis subset iterates independently of the big
-# dependency layer above.
-RUN --mount=type=bind,from=lockexport,source=/vis.txt,target=/tmp/vis.txt \
-    pip install --no-cache-dir --no-deps -r /tmp/vis.txt
 
 RUN --mount=type=bind,from=builder,source=/wheels,target=/tmp/wheels \
     pip install --no-cache-dir --no-deps /tmp/wheels/dimos-*.whl
@@ -98,6 +76,19 @@ USER dimos
 ENV HOME=/home/dimos
 ENV PYTHONUNBUFFERED=1 \
     ROS_DOMAIN_ID=2
+
+# Metadata consistency gate. Exactly two failures are known and accepted:
+# ipywidgets is dropped from the locked closure by the project's
+# override-dependencies (open3d declares it but the r1lite path never
+# imports it), and colcon-core comes from the base image's apt with a
+# setuptools<80 bound while the locked closure pins a newer setuptools.
+# Anything else failing pip check fails the build.
+RUN python3 -m pip check > /tmp/pipcheck.txt; \
+    grep -vE '^(open3d [0-9.]+ requires ipywidgets, which is not installed\.|colcon-core [0-9.]+ has requirement setuptools(<80,)?>=30\.3\.0, but you have setuptools [0-9.]+\.)$' /tmp/pipcheck.txt > /tmp/pipcheck_unexpected.txt || true; \
+    if [ -s /tmp/pipcheck_unexpected.txt ]; then \
+        echo "pip check found undocumented inconsistencies:"; \
+        cat /tmp/pipcheck_unexpected.txt; exit 1; \
+    fi
 
 # Build-time gate, run as the runtime user. Constructing a teleop task
 # builds a real PinkStepper, which imports pink and verifies the QP

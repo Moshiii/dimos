@@ -24,3 +24,21 @@ dist
 *.mcap
 *.log
 recordings
+# Machine-local and security-sensitive material the dirty-tree check
+# cannot see (git-ignored files still enter COPY . and the build cache).
+**/.env
+**/.env.*
+.envrc*
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.claude
+.idea
+.vscode
+**/*.pem
+**/*.key
+**/id_rsa*
+**/id_ed25519*
+.ssh
+**/credentials*
+**/*.secret

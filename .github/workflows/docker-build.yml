@@ -9,6 +9,15 @@ on:
   schedule:
     - cron: '0 4 * * 1' # Weekly Monday 4am UTC for base image security patches
   workflow_dispatch:
+    inputs:
+      r1lite:
+        description: "Build only the R1 Lite image (skips the base images)"
+        type: boolean
+        default: false
+      r1lite-dev-number:
+        description: "N in the r1lite dev tag (digits only)"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -18,9 +27,10 @@ jobs:
   check-changes:
     runs-on: [self-hosted, Linux]
     outputs:
-      ros:        ${{ steps.force.outputs.force == 'true' && 'true' || steps.filter.outputs.ros }}
-      python:     ${{ steps.force.outputs.force == 'true' && 'true' || steps.filter.outputs.python }}
-      dev:        ${{ steps.force.outputs.force == 'true' && 'true' || steps.filter.outputs.dev }}
+      # An r1lite-only dispatch skips every base image.
+      ros:        ${{ inputs.r1lite == true && 'false' || (steps.force.outputs.force == 'true' && 'true' || steps.filter.outputs.ros) }}
+      python:     ${{ inputs.r1lite == true && 'false' || (steps.force.outputs.force == 'true' && 'true' || steps.filter.outputs.python) }}
+      dev:        ${{ inputs.r1lite == true && 'false' || (steps.force.outputs.force == 'true' && 'true' || steps.filter.outputs.dev) }}
       branch-tag: ${{ steps.set-tag.outputs.branch_tag }}
     steps:
       - name: Fix permissions
@@ -150,3 +160,14 @@ jobs:
           exit 1
       - name: Build passed
         run: echo "All build jobs passed or were intentionally skipped"
+
+  # Bootstrap for the R1 Lite image: workflow_dispatch only registers
+  # docker-build-r1lite.yml once it reaches the default branch, so until
+  # then this registered workflow is dispatched with --ref on the feature
+  # branch and calls it here.
+  r1lite:
+    needs: [check-changes]
+    if: inputs.r1lite == true
+    uses: ./.github/workflows/docker-build-r1lite.yml
+    with:
+      dev-number: ${{ inputs.r1lite-dev-number || '0' }}

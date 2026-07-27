@@ -2,15 +2,23 @@ name: docker-build-r1lite
 
 # Development image for the Galaxea R1 Lite, built on the org's
 # self-hosted runners and pushed with the workflow token, so no personal
-# credential is involved. Manual dispatch only while the integration
-# branch is in review; the schedule/main-path triggers stay with the
-# production build ticket.
+# credential is involved.
+#
+# workflow_dispatch only registers once this file reaches the default
+# branch; until then the registered docker-build workflow calls this one
+# (workflow_call) and is dispatched with --ref on the feature branch.
 
 on:
   workflow_dispatch:
     inputs:
       dev-number:
-        description: "N in the <version>-r1lite-dev.N tag"
+        description: "N in the <version>-r1lite-dev.N tag (digits only)"
+        required: false
+        default: "0"
+  workflow_call:
+    inputs:
+      dev-number:
+        type: string
         required: false
         default: "0"
 
@@ -18,9 +26,18 @@ jobs:
   build:
     runs-on: [self-hosted, Linux]
     timeout-minutes: 60
+    # Job-level so it applies on both the dispatch and workflow_call
+    # paths: one publisher per dev tag at a time, so a second run with
+    # the same input waits instead of racing the first between push and
+    # digest capture.
+    concurrency:
+      group: docker-build-r1lite-publish-${{ inputs.dev-number || '0' }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
+    env:
+      DEV_NUMBER: ${{ inputs.dev-number || '0' }}
 
     steps:
       - name: Fix permissions
@@ -29,11 +46,20 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      - name: Compute tag
+      - name: Compute tags
         id: tag
         run: |
+          if ! printf '%s' "$DEV_NUMBER" | grep -qE '^[0-9]+$'; then
+            echo "dev-number must be digits only, got: $DEV_NUMBER" >&2
+            exit 1
+          fi
           VERSION=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
-          echo "tag=ghcr.io/dimensionalos/dimos-r1lite:${VERSION}-r1lite-dev.${{ inputs.dev-number }}" >> "$GITHUB_OUTPUT"
+          IMAGE=ghcr.io/dimensionalos/dimos-r1lite
+          {
+            echo "version=${VERSION}-r1lite-dev.${DEV_NUMBER}"
+            echo "dev_tag=${IMAGE}:${VERSION}-r1lite-dev.${DEV_NUMBER}"
+            echo "sha_tag=${IMAGE}:sha-${GITHUB_SHA}"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v4.4.0
         with:
@@ -51,19 +77,29 @@ jobs:
           use: true
 
       - uses: docker/build-push-action@v7.3.0
+        id: build
         with:
           push: true
           context: .
           file: docker/galaxea-r1lite/Dockerfile
           platforms: linux/amd64
-          tags: ${{ steps.tag.outputs.tag }}
+          tags: |
+            ${{ steps.tag.outputs.dev_tag }}
+            ${{ steps.tag.outputs.sha_tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/dimensionalOS/dimos
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
           cache-from: type=gha,scope=galaxea-r1lite
           cache-to: type=gha,mode=max,scope=galaxea-r1lite
 
-      - name: Report digest
+      - name: Record immutable identity
         run: |
-          docker buildx imagetools inspect ${{ steps.tag.outputs.tag }} --format '{{ json .Manifest.Digest }}'
+          {
+            echo "## dimos-r1lite image"
+            echo "- revision: \`${GITHUB_SHA}\`"
+            echo "- dev tag: \`${{ steps.tag.outputs.dev_tag }}\`"
+            echo "- sha tag: \`${{ steps.tag.outputs.sha_tag }}\`"
+            echo "- digest: \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "digest=${{ steps.build.outputs.digest }}"

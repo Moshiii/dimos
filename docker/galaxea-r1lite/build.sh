@@ -20,6 +20,10 @@ fi
 REVISION="$(git rev-parse HEAD)"
 VERSION="$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')"
 DEV_N="${1:-0}"
+if ! printf '%s' "$DEV_N" | grep -qE '^[0-9]+$'; then
+    echo "FAIL: tag suffix must be digits only, got: $DEV_N" >&2
+    exit 1
+fi
 TAG="ghcr.io/dimensionalos/dimos-r1lite:${VERSION}-r1lite-dev.${DEV_N}"
 
 docker build \
