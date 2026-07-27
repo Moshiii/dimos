@@ -747,3 +747,86 @@ def test_solve_pose_targets_auxiliary_only_retains_seed_selection_order(
     assert result.joint_state.name == ["arm/joint_c", "arm/joint_a", "arm/joint_b"]
     assert result.joint_state.position == [0.3, 0.1, 0.2]
     assert world.joint_state_calls == 0
+
+
+class TestPinkStepper:
+    """Real-time stepping primitive: caller-order mapping, best-effort returns."""
+
+    MODEL = "dimos/robot/galaxea/r1lite/assets/r1lite_left_arm.urdf"
+    NAMES = [f"left_arm_joint{i}" for i in range(1, 7)]
+
+    def _stepper(self, **kw: Any) -> Any:
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        defaults = {"iterations": 3, "orientation_cost": 1.0, "posture_cost": 0.05}
+        defaults.update(kw)
+        return PinkStepper(self.MODEL, 6, self.NAMES, **defaults)
+
+    def test_progress_toward_reachable_target(self) -> None:
+        import numpy as np
+        import pinocchio
+
+        s = self._stepper()
+        q = np.array([0.3, 0.6, -0.05, 0.2, -0.3, 0.1])
+        start = s.forward_kinematics(q)
+        target = pinocchio.SE3(start.rotation, start.translation + np.array([0.0, 0.03, 0.0]))
+        before = float(np.linalg.norm(target.translation - start.translation))
+        q2, _, err = s.solve(target, q)
+        after = float(np.linalg.norm(target.translation - s.forward_kinematics(q2).translation))
+        assert after < before
+        assert err < before
+
+    def test_best_effort_on_unreachable_target(self) -> None:
+        import numpy as np
+        import pinocchio
+
+        s = self._stepper()
+        q = np.zeros(6)
+        far = pinocchio.SE3(np.eye(3), np.array([5.0, 0.0, 0.0]))
+        q2, converged, err = s.solve(far, q)
+        assert not converged
+        assert q2.shape == (6,)
+        assert np.isfinite(err)
+
+    def test_wrong_joint_name_fails_construction(self) -> None:
+        import pytest
+
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        with pytest.raises(ValueError):
+            PinkStepper(self.MODEL, 6, ["nope", *self.NAMES[1:]])
+
+    def test_wrong_joint_count_fails_construction(self) -> None:
+        import pytest
+
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        with pytest.raises(ValueError):
+            PinkStepper(self.MODEL, 6, self.NAMES[:5])
+
+    def test_bad_ee_joint_fails_construction(self) -> None:
+        import pytest
+
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        with pytest.raises(ValueError):
+            PinkStepper(self.MODEL, 99, self.NAMES)
+
+    def test_caller_order_maps_by_name_not_chain_order(self) -> None:
+        import numpy as np
+
+        s_fwd = self._stepper()
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        s_rev = PinkStepper(
+            self.MODEL,
+            6,
+            list(reversed(self.NAMES)),
+            iterations=3,
+            orientation_cost=1.0,
+            posture_cost=0.05,
+        )
+        q = np.array([0.1, 0.2, -0.3, 0.4, -0.5, 0.6])
+        pose_fwd = s_fwd.forward_kinematics(q)
+        pose_rev = s_rev.forward_kinematics(np.array(list(reversed(q.tolist()))))
+        assert np.allclose(pose_fwd.translation, pose_rev.translation)

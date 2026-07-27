@@ -16,7 +16,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 ROS_NODE_NAME = "dimos_r1lite_connection"
+
+_ASSETS = Path(__file__).parent / "assets"
+# Kinematic models derived from Galaxea's published R1 Lite description;
+# provenance in each file's header comment.
+R1LITE_LEFT_ARM_MODEL = _ASSETS / "r1lite_left_arm.urdf"
+R1LITE_RIGHT_ARM_MODEL = _ASSETS / "r1lite_right_arm.urdf"
 
 ARM_DOF = 6
 TORSO_DOF = 4
@@ -25,6 +33,11 @@ TORSO_DOF = 4
 LEFT_ARM_JOINTS: list[str] = [f"r1lite/left_arm_joint{i}" for i in range(1, ARM_DOF + 1)]
 RIGHT_ARM_JOINTS: list[str] = [f"r1lite/right_arm_joint{i}" for i in range(1, ARM_DOF + 1)]
 R1LITE_ARM_JOINTS: list[str] = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
+
+# The same joints in the URDF namespace (no hardware prefix), used by the
+# pink solver's joint mapping.
+LEFT_ARM_URDF_JOINTS: list[str] = [f"left_arm_joint{i}" for i in range(1, ARM_DOF + 1)]
+RIGHT_ARM_URDF_JOINTS: list[str] = [f"right_arm_joint{i}" for i in range(1, ARM_DOF + 1)]
 
 # torso_joint4 is the fourth HDAS motor value the URDF's 3-joint linkage
 # model does not expose. Feedback only; never commanded.

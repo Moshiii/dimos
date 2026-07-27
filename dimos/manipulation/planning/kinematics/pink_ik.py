@@ -813,3 +813,151 @@ def _collision_failure(result: IKResult) -> IKResult:
         iterations=result.iterations,
         message="Pink IK solution rejected by collision check",
     )
+
+
+class PinkStepper:
+    """Bounded differential-IK stepping for real-time control loops.
+
+    Runs a fixed number of velocity-QP steps toward a target pose each
+    call and always returns the best-effort configuration, unlike
+    ``PinkIK.solve`` which requires a finalized world and returns no
+    joint state on non-convergence. Joint position and velocity limits
+    are hard constraints inside the QP; a posture task regularizes the
+    remaining freedom. Objects persist across calls so a 100 Hz caller
+    pays no per-tick construction cost.
+
+    Raises :class:`PinkIKDependencyError` at construction when Pink,
+    Pinocchio, or the configured QP backend is unavailable.
+    """
+
+    def __init__(
+        self,
+        model_path: str,
+        ee_joint_id: int,
+        urdf_joint_names: Sequence[str],
+        iterations: int = 3,
+        dt: float = 0.1,
+        position_cost: float = 1.0,
+        orientation_cost: float = 1.0,
+        posture_cost: float = 1e-2,
+        qp_solver: str = "proxqp",
+    ) -> None:
+        modules = _load_optional_dependencies(qp_solver)
+        pinocchio = modules.pinocchio
+        path = Path(model_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Robot model not found: {path}")
+        if path.suffix == ".xml":
+            self._model = pinocchio.buildModelFromMJCF(str(path))
+        else:
+            self._model = pinocchio.buildModelFromUrdf(str(path))
+        self._data = self._model.createData()
+        self._pin = pinocchio
+        self._pink = modules.pink
+        self._iterations = iterations
+        self._dt = dt
+        self._qp_solver = qp_solver
+
+        # Caller order maps to Pinocchio q indices by joint name, never by
+        # chain order.
+        self._idx_q: list[int] = []
+        for name in urdf_joint_names:
+            joint_id = _get_joint_id(self._model, name)
+            joint = self._model.joints[joint_id]
+            if int(getattr(joint, "nq", 1)) != 1:
+                raise ValueError(f"PinkStepper supports one-DoF joints; '{name}' does not comply")
+            self._idx_q.append(int(joint.idx_q))
+        if len(self._idx_q) != int(self._model.nq):
+            raise ValueError(
+                f"model has nq={int(self._model.nq)} but {len(self._idx_q)} "
+                "joint names were configured"
+            )
+        if not 0 < ee_joint_id < len(self._model.names):
+            raise ValueError(f"ee_joint_id {ee_joint_id} outside model joints")
+        self._ee_joint_id = ee_joint_id
+        frame_name = str(self._model.names[ee_joint_id])
+        _get_frame_id(self._model, frame_name)
+
+        self._frame_task = self._pink.tasks.FrameTask(
+            frame_name,
+            position_cost=position_cost,
+            orientation_cost=orientation_cost,
+        )
+        self._posture_task = self._pink.tasks.PostureTask(cost=posture_cost)
+
+    @property
+    def nq(self) -> int:
+        return int(self._model.nq)
+
+    @property
+    def ee_joint_id(self) -> int:
+        return self._ee_joint_id
+
+    @property
+    def model(self) -> Any:
+        return self._model
+
+    def _to_model_q(self, q: NDArray[np.float64]) -> NDArray[np.float64]:
+        out = np.array(self._pin.neutral(self._model), dtype=np.float64)
+        for value, idx in zip(q, self._idx_q, strict=True):
+            out[idx] = float(value)
+        return out
+
+    def _to_caller_q(self, q: NDArray[np.float64]) -> NDArray[np.float64]:
+        return np.array([q[idx] for idx in self._idx_q], dtype=np.float64)
+
+    def solve(
+        self,
+        target_pose: Any,
+        q_init: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], bool, float]:
+        """Step toward target_pose from q_init (caller joint order).
+
+        Returns (best-effort q in caller order, converged, final error).
+        Matches the PinocchioIK call surface so TeleopIKTask can hold
+        either solver.
+        """
+        # A seed on or past a position bound makes the QP degenerate;
+        # clamp strictly inside.
+        eps_q = 1e-3
+        q_model = np.clip(
+            self._to_model_q(np.asarray(q_init, dtype=np.float64)),
+            self._model.lowerPositionLimit + eps_q,
+            self._model.upperPositionLimit - eps_q,
+        )
+        configuration = self._pink.Configuration(self._model, self._data, q_model)
+        self._frame_task.set_target(target_pose)
+        self._posture_task.set_target(q_model)
+        tasks = (self._frame_task, self._posture_task)
+
+        error = self._pose_error(configuration.q, target_pose)
+        for _ in range(self._iterations):
+            if error < 1e-3:
+                return self._to_caller_q(configuration.q), True, error
+            try:
+                velocity = self._pink.solve_ik(
+                    configuration,
+                    tasks,
+                    self._dt,
+                    solver=self._qp_solver,
+                    damping=1e-10,
+                    safety_break=False,
+                )
+            except self._pink.exceptions.NoSolutionFound:
+                break
+            configuration.integrate_inplace(velocity, self._dt)
+            error = self._pose_error(configuration.q, target_pose)
+        return self._to_caller_q(configuration.q), error < 1e-3, error
+
+    def forward_kinematics(self, joint_positions: NDArray[np.float64]) -> Any:
+        q_model = self._to_model_q(np.asarray(joint_positions, dtype=np.float64))
+        self._pin.forwardKinematics(self._model, self._data, q_model)
+        return self._data.oMi[self._ee_joint_id].copy()
+
+    def _pose_error(self, q_model: NDArray[np.float64], target_pose: Any) -> float:
+        self._pin.forwardKinematics(self._model, self._data, q_model)
+        return float(
+            np.linalg.norm(
+                self._pin.log(self._data.oMi[self._ee_joint_id].actInv(target_pose)).vector
+            )
+        )
