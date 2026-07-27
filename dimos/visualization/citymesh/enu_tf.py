@@ -18,10 +18,11 @@
 A compass-equipped autopilot (DJI) fuses GPS into its odometry, so its world
 frame is ENU-aligned and GPS-anchored by construction. The fix and the pose
 then come from the same estimate — their difference is not noise but the
-EKF's origin, one constant. So georegistration is a single static transform:
-measure it from the first (fix, pose) pair and republish it on tf forever.
-That is all :class:`~dimos.visualization.citymesh.module.CityMeshModule`
-needs to land in the world view.
+EKF's origin. So georegistration needs no history: every (fix, pose) pair
+pins the transform outright, and publishing it per fix simply tracks the
+autopilot's current best estimate. That is all
+:class:`~dimos.visualization.citymesh.module.CityMeshModule` needs to land
+in the world view.
 
 The robot's position comes from the tf tree (``parent -> robot_frame``), not
 from an Odometry topic: every dimos robot has tf, not all have odometry
@@ -85,7 +86,13 @@ class Config(ModuleConfig):
 
 
 class EnuSnapTF(Module):
-    """Measures ``world -> enu`` once, then republishes it on every fix."""
+    """Publishes ``world -> enu`` on every fix, from that fix and the tf pose.
+
+    Recomputed each time rather than measured once: the pair always encodes
+    the autopilot's current estimate, so the transform improves whenever the
+    EKF's does. The pose is looked up at the fix's own timestamp, so motion
+    between the two samples doesn't smear into the transform.
+    """
 
     config: Config
     gps: In[NavSatFix]
@@ -93,23 +100,28 @@ class EnuSnapTF(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self._transform: Transform | None = None
+        self._snapped = False
         self.register_disposable(self.gps.observable().subscribe(self._on_fix))  # type: ignore[no-untyped-call]
 
     def _on_fix(self, msg: NavSatFix) -> None:
         try:
-            if self._transform is None:
-                pose = self.tf.get(self.config.parent, self.config.robot_frame, time_tolerance=1.0)
-                if pose is None:
-                    return
-                self._transform = snap_transform(
-                    msg, pose.translation, frame_id=self.config.frame, parent=self.config.parent
-                )
-                if self._transform is not None:
-                    t = self._transform.translation
-                    logger.info("enu snapped", x=round(t.x, 2), y=round(t.y, 2), z=round(t.z, 2))
+            pose = self.tf.get(
+                self.config.parent,
+                self.config.robot_frame,
+                time_point=msg.ts,
+                time_tolerance=1.0,
+            )
+            if pose is None:
+                return
+            transform = snap_transform(
+                msg, pose.translation, frame_id=self.config.frame, parent=self.config.parent
+            )
         except Exception:
             logger.exception("enu snap failed")
             return
-        if self._transform is not None:
-            self.tf.publish(self._transform.now())
+        if transform is not None:
+            if not self._snapped:
+                t = transform.translation
+                logger.info("enu snapped", x=round(t.x, 2), y=round(t.y, 2), z=round(t.z, 2))
+                self._snapped = True
+            self.tf.publish(transform.now())
