@@ -33,6 +33,7 @@ from dimos.core.stream import In
 from dimos.hardware.sensors.lidar.pointlio.recorder import PointlioRecorder
 from dimos.memory2.module import pose_setter_for
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -45,6 +46,7 @@ class StereoMountRecorder(PointlioRecorder):
     # pointlio_odometry / pointlio_lidar are inherited from PointlioRecorder.
     color_image_left: In[Image]
     color_image_right: In[Image]
+    zed_imu: In[Imu]  # ZED-M onboard IMU, ~800 Hz
 
     _watchdog_running: bool = False
     _last_lidar_at: float | None = None

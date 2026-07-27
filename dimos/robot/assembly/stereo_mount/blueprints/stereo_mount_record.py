@@ -31,6 +31,7 @@ from pathlib import Path
 from dimos.constants import RECORDINGS_DIR
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
+from dimos.hardware.sensors.camera.zed.imu import ZedImu
 from dimos.hardware.sensors.camera.zed.uvc import ZedUvcCamera
 from dimos.hardware.sensors.lidar.pointlio.module import PointLio
 from dimos.robot.assembly.stereo_mount.assembly import StereoMountStaticTf
@@ -51,6 +52,8 @@ _RECORDING_DIR = _default_recording_dir()
 
 stereo_mount_record = autoconnect(
     ZedUvcCamera.blueprint(),
+    # ZED-M onboard IMU at ~800 Hz (SDK-free HID; name matches the recorder In).
+    ZedImu.blueprint(),
     # world -> lidar_link is the moving odometry edge; lidar_link is the mid360
     # point-cloud origin in stereo_mount.urdf, tying odometry into the rig tree.
     PointLio.blueprint(frame_id="world", sensor_frame_id="lidar_link").remappings(

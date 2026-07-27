@@ -91,6 +91,16 @@
   </joint>
   <link name="zed_right_optical_frame"/>
 
+  <!-- ZED-M onboard IMU. Placeholder extrinsic ≈ left eye (datasheet); the
+       factory cam-IMU transform is SDK-only. Refine by calibration if used
+       for VI-SLAM — the frame is here so recorded zed_imu resolves in tf. -->
+  <joint name="zed_to_imu" type="fixed">
+    <parent link="zed_link"/>
+    <child link="zed_imu_link"/>
+    <origin xyz="0 0.0315 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed_imu_link"/>
+
   <!-- ═══ Mid-360 (behind and above the ZED, pitched down 30 deg) ═══ -->
 
   <joint name="base_to_mid360" type="fixed">
