@@ -18,16 +18,20 @@
 phase1: run BEFORE dimos starts. Verifies vendor feedback rates and that
 ZERO publishers exist on every actuator command topic.
 
-arm: run while dimos runs disarmed. Verifies rates, verifies the
-publisher-count matrix (exactly one dimos publisher on dimos-owned
-topics, zero on torso topics), reads the arming nonce from the
-connection status stream, asks the operator to type the arming
-attestation, publishes it, and then waits for the connection to report
-ARMED. Success is claimed only from an observed state transition.
+phase2: run while dimos runs disarmed. Verifies rates and the sole-writer
+publisher matrix, requires the connection to report READY_DISARMED with a
+valid nonce, and exits. It never publishes to the arming topic, so the
+connection stays DISARMED.
 
-Both subcommands exit nonzero at the first failed check.
+arm: run while dimos runs disarmed. Performs the phase2 checks, then asks
+the operator to type the arming attestation, publishes it, and waits for
+the connection to report ARMED. Success is claimed only from an observed
+state transition.
+
+All subcommands exit nonzero at the first failed check.
 
     python scripts/r1lite_test/preflight.py phase1
+    python scripts/r1lite_test/preflight.py phase2
     python scripts/r1lite_test/preflight.py arm
 """
 
@@ -48,10 +52,10 @@ ARM_OBSERVE_TIMEOUT_S = 5.0
 def check_rates(measured: dict[str, float], phase: str) -> list[str]:
     """Errors for the feedback-rate contract, empty when the phase passes.
 
-    Topics with a pinned nominal must measure at least half of it in both
-    phases. A topic with no pinned nominal must be present with a positive
-    measured rate in phase1, and always fails the arm phase: arming stays
-    closed until a hardware session pins the nominal in config.
+    Topics with a pinned nominal must measure at least half of it in every
+    phase. A topic with no pinned nominal must be present with a positive
+    measured rate in phase1 and phase2, and always fails the arm phase:
+    arming stays closed until a hardware session pins the nominal in config.
     """
     errors: list[str] = []
     for topic, nominal in cfg.FEEDBACK_NOMINAL_HZ.items():
@@ -185,9 +189,63 @@ def _send_arm(nonce: str) -> None:
     transport.stop()
 
 
+def run_phase(
+    phase: str,
+    rates: dict[str, float],
+    publishers: dict[str, list[str]],
+    read_status: Callable[[], dict[str, str]],
+    ask: Callable[[str], str],
+    send_arm: Callable[[str], None],
+) -> None:
+    """Decide one preflight phase from measured inputs.
+
+    Only the arm phase reaches send_arm, and only after the operator types
+    the exact attestation.
+    """
+    for error in check_rates(rates, phase):
+        _fail(error)
+    for topic, nominal in cfg.FEEDBACK_NOMINAL_HZ.items():
+        print(f"OK   {topic} {rates.get(topic, 0.0):.0f} Hz (nominal {nominal})")
+    for error in check_matrix(publishers, phase):
+        _fail(error)
+    for topic, names in publishers.items():
+        print(f"OK   {topic} publishers={names or 'none'}")
+
+    if phase == "phase1":
+        print("PASS phase1: zero actuator publishers, feedback healthy")
+        return
+
+    status = read_status()
+    if status.get("state") != "READY_DISARMED" or not status.get("nonce"):
+        _fail(f"connection status {status or 'absent'}; need READY_DISARMED with a nonce")
+    nonce = status["nonce"]
+
+    if phase == "phase2":
+        print("PASS phase2: sole writer verified, connection DISARMED")
+        return
+
+    print(
+        "Arming attestation: confirm the RC is ON with all switches in "
+        "position 1 (mode 5) and you hold the e-stop."
+    )
+    answer = ask(f"Type exactly 'ARM RC5 {nonce}' to arm: ").strip()
+    if answer != f"ARM RC5 {nonce}":
+        _fail("attestation text did not match; not arming")
+    send_arm(nonce)
+
+    observed = wait_for_status(
+        read_status,
+        lambda s: s.get("state") == "ARMED",
+        deadline=time.monotonic() + ARM_OBSERVE_TIMEOUT_S,
+    )
+    if observed.get("state") != "ARMED":
+        _fail(f"connection did not report ARMED (last status {observed or 'absent'})")
+    print("PASS arm: connection reports ARMED")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=["phase1", "arm"])
+    parser.add_argument("phase", choices=["phase1", "phase2", "arm"])
     args = parser.parse_args()
 
     import rclpy
@@ -196,44 +254,12 @@ def main() -> None:
     node = rclpy.create_node("dimos_r1lite_preflight")
     try:
         rates = _measure_rates(node, list(cfg.FEEDBACK_NOMINAL_HZ))
-        for error in check_rates(rates, args.phase):
-            _fail(error)
-        for topic, nominal in cfg.FEEDBACK_NOMINAL_HZ.items():
-            print(f"OK   {topic} {rates.get(topic, 0.0):.0f} Hz (nominal {nominal})")
         publishers = {t: _publisher_node_names(node, t) for t in cfg.ARMING_MATRIX}
-        for error in check_matrix(publishers, args.phase):
-            _fail(error)
-        for topic, names in publishers.items():
-            print(f"OK   {topic} publishers={names or 'none'}")
     finally:
         node.destroy_node()
         rclpy.shutdown()
 
-    if args.phase == "phase1":
-        print("PASS phase1: zero actuator publishers, feedback healthy")
-        return
-
-    status = _read_status_lcm()
-    if status.get("state") != "READY_DISARMED" or not status.get("nonce"):
-        _fail(f"connection status {status or 'absent'}; need READY_DISARMED with a nonce")
-    nonce = status["nonce"]
-    print(
-        "Arming attestation: confirm the RC is ON with all switches in "
-        "position 1 (mode 5) and you hold the e-stop."
-    )
-    answer = input(f"Type exactly 'ARM RC5 {nonce}' to arm: ").strip()
-    if answer != f"ARM RC5 {nonce}":
-        _fail("attestation text did not match; not arming")
-    _send_arm(nonce)
-
-    observed = wait_for_status(
-        _read_status_lcm,
-        lambda s: s.get("state") == "ARMED",
-        deadline=time.monotonic() + ARM_OBSERVE_TIMEOUT_S,
-    )
-    if observed.get("state") != "ARMED":
-        _fail(f"connection did not report ARMED (last status {observed or 'absent'})")
-    print("PASS arm: connection reports ARMED")
+    run_phase(args.phase, rates, publishers, _read_status_lcm, input, _send_arm)
 
 
 if __name__ == "__main__":
