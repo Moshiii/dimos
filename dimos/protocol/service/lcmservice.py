@@ -91,7 +91,10 @@ def lcm_url_for_channel(channel: str) -> str:
     """
     if not _STREAM_BUS_URLS:
         return _DEFAULT_LCM_URL
-    index = zlib.crc32(channel.encode()) % len(_STREAM_BUS_URLS)
+    # Typed LCM channels are "/path#pkg.Msg"; shard on the path so transports
+    # that hash the topic string and spies that see the wire name meet.
+    path = channel.split("#", 1)[0]
+    index = zlib.crc32(path.encode()) % len(_STREAM_BUS_URLS)
     return _STREAM_BUS_URLS[index]
 
 

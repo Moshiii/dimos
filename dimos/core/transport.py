@@ -140,7 +140,7 @@ class LCMTransport(PubSubTransport[T]):
     def __init__(self, topic: str, type: type, **kwargs) -> None:  # type: ignore[no-untyped-def]
         super().__init__(LCMTopic(topic, type))
         if not hasattr(self, "lcm"):
-            kwargs.setdefault("url", lcm_url_for_channel(str(self.topic)))
+            kwargs.setdefault("url", lcm_url_for_channel(topic))
             self.lcm = LCM(**kwargs)
 
     def start(self) -> None:
@@ -171,7 +171,7 @@ class JpegLcmTransport(LCMTransport):  # type: ignore[type-arg]
             JpegLCM,
         )  # ~330ms: deferred to avoid pulling in Image/cv2/rerun
 
-        kwargs.setdefault("url", lcm_url_for_channel(str(LCMTopic(topic, type))))
+        kwargs.setdefault("url", lcm_url_for_channel(topic))
         self.lcm = JpegLCM(**kwargs)  # type: ignore[assignment]
         super().__init__(topic, type)
 
