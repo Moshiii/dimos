@@ -32,9 +32,8 @@ from dimos.core.stream import In
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.navigation.tracer import Tracer
-from dimos.perception.fiducial.marker_detection_stream_module import MarkerDetectionStreamModule
+from dimos.perception.fiducial.marker_detection_stream_module import VideoMarkerDetectionModule
 from dimos.perception.fiducial.marker_tf_module import MarkerTfModule
-from dimos.perception.video.h264_decoder_module import H264DecoderModule
 from dimos.robot.unitree.go2.zenoh.replay import GO2ZenohReplay
 from dimos.visualization.citymesh.enu_tf import EnuSnapTF
 from dimos.visualization.citymesh.module import CityMeshModule
@@ -109,14 +108,14 @@ drone_city_replay = autoconnect(
         robot_frame="drone/base_link",
         altitude_offset_m=TAKEOFF_MSL_M,
     ),
-    # AprilTags: decode the H.264 stream at a detection-friendly rate, find
-    # DICT_APRILTAG_36h11 markers, and put each one on tf under drone/world —
-    # the detector poses frames via the recorded tf tree (world -> optical).
-    H264DecoderModule.blueprint(emit_hz=5.0),
-    MarkerDetectionStreamModule.blueprint(
+    # AprilTags, straight from the H.264 stream: the H264InputMixin decodes
+    # into the recognizer's own image input. DICT_APRILTAG_36h11 markers land
+    # on tf under drone/world, posed via the recorded tree (world -> optical).
+    VideoMarkerDetectionModule.blueprint(
         marker_length_m=APRILTAG_EDGE_M,
         camera_info=DRONE_CAMERA_INFO,
         world_frame="drone/world",
+        decode_hz=5.0,
     ),
     MarkerTfModule.blueprint(world_frame="drone/world"),
     vis_module(
@@ -125,10 +124,10 @@ drone_city_replay = autoconnect(
             "blueprint": _rerun_blueprint,
             "visual_override": {
                 "world/camera_info": _camera_info_to_pinhole,
-                # Decoded frames exist for the tag detector; the viewer already
-                # plays the H.264 stream on world/video.
+                # The mixin's decoded frames ride the color_image topic (for
+                # any pixel consumer); the viewer already plays world/video.
                 "world/color_image": None,
             },
         },
     ),
-).global_config(transport="zenoh", n_workers=7)
+).global_config(transport="zenoh", n_workers=6)
