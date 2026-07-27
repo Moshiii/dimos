@@ -26,49 +26,36 @@ stream resolves against ``world``. The lidar IP comes from Point-LIO's own confi
 """
 
 from datetime import datetime
-from pathlib import Path
 
 from dimos.constants import RECORDINGS_DIR
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.coordination.module_coordinator import ModuleCoordinator
-from dimos.hardware.sensors.camera.zed.imu import ZedImu
-from dimos.hardware.sensors.camera.zed.uvc import ZedUvcCamera
+from dimos.hardware.sensors.camera.zed.sdkless_camera import ZedUvcCamera
+from dimos.hardware.sensors.camera.zed.sdkless_imu import ZedImu
 from dimos.hardware.sensors.lidar.pointlio.module import PointLio
 from dimos.robot.assembly.stereo_mount.assembly import StereoMountStaticTf
 from dimos.robot.assembly.stereo_mount.record import StereoMountRecorder
 
+run_start = datetime.now().astimezone()
 
-def _default_recording_dir() -> Path:
-    # Local time, with the machine's actual zone abbreviation (not a hardcoded PST).
-    now = datetime.now().astimezone()
-    stamp = (
-        now.strftime("%Y-%m-%d") + "_" + now.strftime("%I-%M%p").lower() + "-" + now.strftime("%Z")
-    )
-    return RECORDINGS_DIR / stamp
-
-
-_RECORDING_DIR = _default_recording_dir()
-
-
-stereo_mount_record = autoconnect(
+zed_mid360_record = autoconnect(
     ZedUvcCamera.blueprint(encoder="h264_nvenc"),
     # ZED-M onboard IMU at ~800 Hz (SDK-free HID; name matches the recorder In).
     ZedImu.blueprint(),
     # world -> lidar_link is the moving odometry edge; lidar_link is the mid360
     # point-cloud origin in stereo_mount.urdf, tying odometry into the rig tree.
-    PointLio.blueprint(frame_id="world", sensor_frame_id="lidar_link").remappings(
-        [
-            (PointLio, "lidar", "pointlio_lidar"),
-            (PointLio, "odometry", "pointlio_odometry"),
-        ]
+    PointLio.blueprint(frame_id="world", sensor_frame_id="lidar_link"),
+    StereoMountRecorder.blueprint(
+        db_path=str(
+            RECORDINGS_DIR
+            + "/zed_mid360__"
+            + run_start.strftime("%Y-%m-%d")
+            + "_"
+            + run_start.strftime("%I-%M%p").lower()
+            + "-"
+            + run_start.strftime("%Z")
+            + ".db"
+        )
     ),
-    StereoMountRecorder.blueprint(db_path=str(_RECORDING_DIR / "mem2.db")),
     # Continuously republishes the rig's urdf mount frames onto tf (no latched static tf).
     StereoMountStaticTf.blueprint(),
 ).global_config(n_workers=4)
-
-
-if __name__ == "__main__":
-    _RECORDING_DIR.mkdir(parents=True, exist_ok=True)
-    coordinator = ModuleCoordinator.build(stereo_mount_record)
-    coordinator.loop()
