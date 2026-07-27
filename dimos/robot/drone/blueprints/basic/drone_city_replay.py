@@ -123,7 +123,12 @@ drone_city_replay = autoconnect(
         viewer_backend=global_config.viewer,
         rerun_config={
             "blueprint": _rerun_blueprint,
-            "visual_override": {"world/camera_info": _camera_info_to_pinhole},
+            "visual_override": {
+                "world/camera_info": _camera_info_to_pinhole,
+                # Decoded frames exist for the tag detector; the viewer already
+                # plays the H.264 stream on world/video.
+                "world/color_image": None,
+            },
         },
     ),
 ).global_config(transport="zenoh", n_workers=7)
