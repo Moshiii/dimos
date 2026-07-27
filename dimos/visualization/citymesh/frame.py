@@ -52,6 +52,19 @@ _E2 = _F * (2.0 - _F)
 
 AltDatum = Literal["ellipsoidal", "msl"]
 
+# Auto-anchors snap to this grid, and the frame origin always sits at sea
+# level: the origin is arbitrary, but block bboxes — and so the on-disk fetch
+# cache — are pure functions of it. Fix-exact origins gave every session its
+# own bbox floats and a cold cache; snapped ones make one session's Overpass
+# answers the next session's cache hits. ~1.1 km grid, well inside the
+# float32 precision budget.
+SNAP_DEG = 0.01
+
+
+def snap_origin(lat: float, lon: float) -> tuple[float, float]:
+    """The deterministic frame origin for any fix in this ~1 km cell."""
+    return (round(lat / SNAP_DEG) * SNAP_DEG, round(lon / SNAP_DEG) * SNAP_DEG)
+
 
 class GeoidUnavailableError(RuntimeError):
     """Raised when the geoid model needed for an MSL conversion cannot be loaded."""

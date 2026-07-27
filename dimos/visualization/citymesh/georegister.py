@@ -18,9 +18,9 @@
 The Go2 has no compass — IMU yaw is relative, GPS fixes are headingless — so
 the rotation between the odom frame and ENU is unobservable until the robot
 *moves*: then the two tracks share a shape, and the rigid transform between
-them is a 2D Procrustes solve. Pure math here, no topics and no rerun; the
-:class:`~dimos.visualization.citymesh.layer.CityMeshLayer` feeds it and
-consumes the estimate.
+them is a 2D Procrustes solve. Pure math here, no topics and no rerun — the
+building block for a compass-free ``world -> enu`` tf module (the pluggable
+counterpart of :class:`~dimos.visualization.citymesh.enu_tf.EnuSnapTF`).
 """
 
 from __future__ import annotations

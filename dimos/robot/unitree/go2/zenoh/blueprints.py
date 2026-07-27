@@ -26,9 +26,9 @@ so a failure can be bisected by dropping down a level:
 - ``go2-zenoh-nav`` — the full stack: planner, goal relay and path follower.
 - ``go2-zenoh-htc`` — ``go2-zenoh-nav`` with the follower swapped for the
   ``DanLocalPlanner`` + ``DanHolonomicTC`` pair from ``unitree-go2-mls-htc``.
-- ``go2-zenoh-city`` — ``go2-zenoh-basic`` with :class:`CityMeshLayer` on the GPS
-  stream: extruded OSM buildings around the fix in a City tab (the viewer machine
-  needs internet and the ``citymesh`` extra).
+- ``go2-zenoh-city`` — ``go2-zenoh-basic`` plus :class:`CityMeshModule`: extruded
+  OSM buildings stream around the GPS fix as EntityMesh messages, shown in a City
+  tab (the city worker needs internet and the ``citymesh`` extra).
 """
 
 from functools import partial
@@ -54,7 +54,7 @@ from dimos.navigation.tracer import Tracer
 from dimos.robot.unitree.go2.zenoh.recorder import GO2ZenohRecorder
 from dimos.robot.unitree.go2.zenoh.replay import GO2ZenohReplay
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
-from dimos.visualization.citymesh.layer import CityMeshLayer
+from dimos.visualization.citymesh.module import CityMeshModule
 from dimos.visualization.vis_module import vis_module
 
 voxel_size = 0.08
@@ -93,9 +93,9 @@ def _rerun_blueprint(city: bool = False) -> Any:
     The 2D view sits on ``world/video``, not ``world/color_image`` — over zenoh the camera
     arrives as H.264 on the ``video`` port, which is also where the pinhole is logged.
 
-    ``city`` adds a City tab next to the 3D view: the ENU scene CityMeshLayer
-    streams under ``city/``, deliberately a separate root — ``world`` is the odom
-    frame, and without georegistration the two must not share a view.
+    ``city`` adds a City tab next to the 3D view: the ENU scene CityMeshModule
+    streams under ``world/city``, placed in the world by tf once something
+    publishes ``world -> enu`` and standalone in its own tab regardless.
     """
     import rerun as rr
     import rerun.blueprint as rrb
@@ -213,44 +213,20 @@ go2_zenoh_record = autoconnect(
     GO2ZenohRecorder.blueprint(),
 ).global_config(transport="zenoh", n_workers=6, robot_model="unitree_go2")
 
-# City rendering rides the same NavSatFix override that feeds the MapView: the
-# layer returns GeoPoints as before and streams extruded OSM tiles under
-# world/city as a side effect. The odometry override feeds the same object, so
-# it can georegister the two tracks and place the city correctly inside the 3D
-# world view once the robot has walked ~10 m (a City tab shows it standalone
-# from the first tile). Add anchors=[(lat, lon), ...] for places that should
-# stay loaded regardless of where the robot walks.
-_citymesh = CityMeshLayer()
-
-
-def _city_lidar(layer: CityMeshLayer, msg: Any) -> Any:
-    """Feed the facade accumulator, then render the scan as usual.
-
-    Takes the layer as a partial-bound argument, NOT via the module global: a
-    module-level function unpickles by reference in the bridge worker, where a
-    fresh import would hand it a different CityMeshLayer than the bound
-    methods below — and the walls would accumulate into an orphan. The partial
-    pickles the instance by value, and pickle's memo makes it the same object
-    as on_fix/on_odom's.
-    """
-    return _render_map(layer.on_lidar(msg))
-
-
+# The module publishes EntityMesh tiles under world/city in the `enu` frame;
+# the bridge renders them like any other topic. Without a `world -> enu` tf
+# publisher the city shows only in its own City tab — on the compass-less Go2
+# the registration module that would place it in the world view is still to
+# come.
 go2_zenoh_city = autoconnect(
     go2_zenoh_basic,
+    CityMeshModule.blueprint(),
     # Re-declared vis module wins over basic's (autoconnect keeps the newest).
     vis_module(
         viewer_backend=global_config.viewer,
-        rerun_config=_rerun_config(
-            {
-                "world/gps": _citymesh.on_fix,
-                "world/odometry": _citymesh.on_odom,
-                "world/lidar": partial(_city_lidar, _citymesh),
-            },
-            blueprint=partial(_rerun_blueprint, city=True),
-        ),
+        rerun_config=_rerun_config(blueprint=partial(_rerun_blueprint, city=True)),
     ),
-).global_config(transport="zenoh", n_workers=5, robot_model="unitree_go2")
+).global_config(transport="zenoh", n_workers=6, robot_model="unitree_go2")
 
 # global_map is remapped off so the planner runs purely on the
 # incremental local_map + region_bounds pair.

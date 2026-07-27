@@ -16,7 +16,7 @@
 """Warm the citymesh fetch cache for an area, so live runs never wait on Overpass.
 
 Builds every tile within the radius through the same frame origin a live
-session would use (:func:`~dimos.visualization.citymesh.layer.snap_origin`),
+session would use (:func:`~dimos.visualization.citymesh.frame.snap_origin`),
 so the block bboxes — and hence the on-disk cache keys — match exactly.
 Sequential on purpose: one polite Overpass request at a time.
 
@@ -27,9 +27,8 @@ from __future__ import annotations
 
 import argparse
 
-from dimos.visualization.citymesh.frame import EnuFrame
-from dimos.visualization.citymesh.layer import Source, snap_origin
-from dimos.visualization.citymesh.tiles import TileBuilder, tiles_within
+from dimos.visualization.citymesh.frame import EnuFrame, snap_origin
+from dimos.visualization.citymesh.tiles import Source, TileBuilder, tiles_within
 
 
 def main() -> None:
