@@ -100,7 +100,6 @@ class EnuSnapTF(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self._snapped = False
         self.register_disposable(self.gps.observable().subscribe(self._on_fix))  # type: ignore[no-untyped-call]
 
     def _on_fix(self, msg: NavSatFix) -> None:
@@ -120,8 +119,4 @@ class EnuSnapTF(Module):
             logger.exception("enu snap failed")
             return
         if transform is not None:
-            if not self._snapped:
-                t = transform.translation
-                logger.info("enu snapped", x=round(t.x, 2), y=round(t.y, 2), z=round(t.z, 2))
-                self._snapped = True
             self.tf.publish(transform.now())
