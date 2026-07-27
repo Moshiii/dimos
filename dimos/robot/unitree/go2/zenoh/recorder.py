@@ -14,19 +14,21 @@
 
 """Record the go2web zenoh bridge's streams into a memory2 SQLite db.
 
-Everything GO2Zenoh puts on the graph except ``pointlio_map`` — the accumulated
-map is Point-LIO's product and rebuildable from ``lidar`` + ``odometry``, so
-recording each (growing) snapshot would only bloat the db. The tf tree is
-recorded by the ``Recorder`` base, so the mount frames and the live
-``odom -> mid360_link`` edge come along for free.
+Everything GO2Zenoh puts on the graph. The tf tree is recorded by the
+``Recorder`` base (``record_tf``), so the mount frames and the live
+``odom -> mid360_link`` edge come along for free — do NOT declare a ``tf``
+In port for it: ``Module.tf`` is a property, the annotation silently loses
+to it and the coordinator dies with "Output tf is not a valid stream".
 
-Poses anchor in ``odom`` (there is no ``world`` on this rig): odometry carries
-its own pose, everything else resolves through tf via its ``frame_id``.
+Poses anchor in ``odom`` (there is no ``world`` on this rig) and come from
+the odometry stream, as in ``PointlioRecorder``: every sensor observation is
+stamped with the latest odometry pose so the recording carries the trajectory.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from dimos.core.stream import In
 from dimos.memory2.module import Recorder, RecorderConfig, pose_setter_for
@@ -47,9 +49,17 @@ class GO2ZenohRecorder(Recorder):
 
     odometry: In[Odometry]
     lidar: In[PointCloud2]  # Mid-360 per-scan cloud, frame mid360_link
+    pointlio_map: In[PointCloud2]  # Point-LIO global keyframe cloud, frame odom
     video: In[CompressedVideo]  # front camera, H.264 annex-B
     gps: In[NavSatFix]
 
+    _last_odom_pose: Pose | None = None
+
     @pose_setter_for("odometry")
     async def _odom_pose(self, msg: Odometry) -> Pose | None:
-        return msg.pose.pose
+        self._last_odom_pose = msg.pose.pose
+        return self._last_odom_pose
+
+    @pose_setter_for("lidar", "pointlio_map", "video", "gps")
+    async def _sensor_pose(self, msg: Any) -> Pose | None:
+        return self._last_odom_pose

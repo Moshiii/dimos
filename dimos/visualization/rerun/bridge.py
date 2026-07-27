@@ -593,8 +593,9 @@ def run_bridge(
     rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT,
     rerun_web: bool = RERUN_ENABLE_WEB,
 ) -> None:
-    """Start a RerunBridgeModule with default LCM config and block until interrupted."""
-    autoconf(check_only=True)
+    """Start a RerunBridgeModule on the active transport and block until interrupted."""
+    if global_config.transport != "zenoh":
+        autoconf(check_only=True)
 
     bridge = RerunBridgeModule(
         memory_limit=memory_limit,
