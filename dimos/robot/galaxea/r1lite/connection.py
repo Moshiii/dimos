@@ -173,6 +173,7 @@ def _header_frame(msg: Any) -> str:
     return str(getattr(getattr(msg, "header", None), "frame_id", "") or "")
 
 
+# One fallback counter per output stream.
 _STAMP_STREAMS = (
     "arm_left",
     "arm_right",
@@ -180,9 +181,10 @@ _STAMP_STREAMS = (
     "gripper_left",
     "gripper_right",
     "odom",
-    "camera",
-    "depth",
-    "imu",
+    "imu_chassis",
+    "imu_torso",
+    *_COMPRESSED_CAMERAS,
+    *_DEPTH_CAMERAS,
 )
 
 
@@ -207,7 +209,6 @@ class R1LiteConnectionConfig(ModuleConfig):
     feedback_stale_after_s: float = Field(default=0.5)
     # On stop(), stream chassis zeros for this long before ROS teardown.
     stop_zero_duration_s: float = Field(default=0.3)
-    frame_id: str = Field(default="r1lite_base_link")
 
 
 class R1LiteConnection(Module):
@@ -345,6 +346,12 @@ class R1LiteConnection(Module):
                 self._start_resources()
             except Exception:
                 self._release_resources()
+                try:
+                    # FAILED means cleanup already ran, including the
+                    # Module-owned resources; Module teardown is idempotent.
+                    super().stop()
+                except Exception:
+                    logger.exception("module teardown after failed start raised")
                 with self._lifecycle_lock:
                     self._state = ConnectionState.FAILED
                 raise
@@ -441,23 +448,32 @@ class R1LiteConnection(Module):
 
             self._stop_event.set()
             self._sensor_stop.set()
+            loop_alive = False
             if self._publish_thread is not None and self._publish_thread.is_alive():
                 self._publish_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
-                if self._publish_thread.is_alive():
-                    # The loop is inert in STOPPING (every snapshot refuses),
-                    # but its survival is a defect worth shouting about.
-                    logger.error(
-                        "publish thread did not terminate within %.1fs; "
-                        "proceeding with stop, loop is inert in STOPPING",
-                        DEFAULT_THREAD_JOIN_TIMEOUT,
-                    )
+                loop_alive = self._publish_thread.is_alive()
 
             if was_running:
+                # The safety zero is still correct with a surviving loop:
+                # STOPPING makes every ordinary snapshot refuse to publish.
                 self._stop_zero_allowed = True
                 try:
                     self._stream_chassis_zero(self.config.stop_zero_duration_s)
                 finally:
                     self._stop_zero_allowed = False
+
+            if loop_alive:
+                # Termination invariant violated: keep the thread reference,
+                # keep the resources it can still reach, and refuse to claim
+                # STOPPED. The connection ends FAILED and loud.
+                logger.error(
+                    "publish thread did not terminate within %.1fs; refusing "
+                    "teardown of resources it can reach; connection is FAILED",
+                    DEFAULT_THREAD_JOIN_TIMEOUT,
+                )
+                with self._lifecycle_lock:
+                    self._state = ConnectionState.FAILED
+                return
 
             self._release_resources()
             with self._lifecycle_lock:
@@ -484,8 +500,15 @@ class R1LiteConnection(Module):
                 logger.warning(f"cleanup of {name} raised: {exc}")
 
     def _release_publish_thread(self) -> None:
-        if self._publish_thread is not None and self._publish_thread.is_alive():
-            self._publish_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+        thread = self._publish_thread
+        if thread is None:
+            return
+        if thread.is_alive():
+            thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+        if thread.is_alive():
+            # Never discard a live thread reference.
+            logger.error("publish thread still alive; keeping its reference")
+            return
         self._publish_thread = None
 
     def _release_control_ros(self) -> None:
@@ -649,8 +672,9 @@ class R1LiteConnection(Module):
         logger.info("R1Lite sensor streams up (isolated DDS context)")
 
     def _release_sensor_spin(self) -> None:
-        if self._sensor_spin_thread is not None and self._sensor_spin_thread.is_alive():
-            self._sensor_spin_thread.join(timeout=2.0)
+        thread = self._sensor_spin_thread
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         self._sensor_spin_thread = None
 
     def _release_sensor_workers(self) -> None:
@@ -666,7 +690,10 @@ class R1LiteConnection(Module):
             except queue.Full:
                 pass
         for t in self._sensor_workers:
-            t.join(timeout=1.0)
+            # ident is None for a constructed-but-never-started thread;
+            # joining one raises, and an interrupted start loop leaves them.
+            if t.ident is not None:
+                t.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         self._sensor_workers.clear()
         self._cam_queues.clear()
         self._depth_queues.clear()
@@ -1143,7 +1170,7 @@ class R1LiteConnection(Module):
                     list(self._torso.dq),
                     list(self._torso.eff),
                     self._torso.stamp,
-                    self._torso.frame or self.config.frame_id,
+                    self._torso.frame,
                 )
                 if torso_ok
                 else None
@@ -1167,7 +1194,9 @@ class R1LiteConnection(Module):
             self.motor_states.publish(
                 JointState(
                     ts=arm_stamp,
-                    frame_id=self.config.frame_id,
+                    # Aggregated across two vendor frames: no single frame
+                    # is authoritative, per the timestamp table.
+                    frame_id="",
                     name=cfg.R1LITE_ARM_JOINTS,
                     position=positions,
                     velocity=velocities,
@@ -1307,7 +1336,7 @@ class R1LiteConnection(Module):
                 bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if bgr is None:
                     continue
-                ts = self._stamp_or_fallback(msg, "camera")
+                ts = self._stamp_or_fallback(msg, stream_name)
                 frame = _header_frame(msg) or stream_name
                 out.publish(Image(bgr, format=ImageFormat.BGR, frame_id=frame, ts=ts))
             except Exception:
@@ -1327,7 +1356,7 @@ class R1LiteConnection(Module):
             try:
                 converted = cast("Image", ros_to_dimos(msg, Image))
                 if converted.ts <= 0.0:
-                    converted.ts = self._stamp_or_fallback(msg, "depth")
+                    converted.ts = self._stamp_or_fallback(msg, stream_name)
                 out.publish(converted)
             except Exception:
                 logger.exception(f"R1Lite {stream_name} decode error")
@@ -1346,7 +1375,7 @@ class R1LiteConnection(Module):
             try:
                 imu = cast("Imu", ros_to_dimos(msg, Imu))
                 if imu.ts <= 0.0:
-                    imu.ts = self._stamp_or_fallback(msg, "imu")
+                    imu.ts = self._stamp_or_fallback(msg, which)
                 with self._lifecycle_lock:
                     setattr(self, target_attr, imu)
             except Exception:

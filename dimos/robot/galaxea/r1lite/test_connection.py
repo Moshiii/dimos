@@ -587,7 +587,12 @@ def test_single_use_start_after_stop_raises() -> None:
 
 
 class _FakeIn:
+    def __init__(self, fail: bool = False) -> None:
+        self._fail = fail
+
     def subscribe(self, _cb: Any) -> Any:
+        if self._fail:
+            raise RuntimeError("injected: input subscribe")
         return lambda: None
 
 
@@ -646,6 +651,8 @@ def _install_fake_ros_stack(monkeypatch: Any, harness: _RosHarness) -> None:
             h.events.append("sensor_node_created")
 
         def create_subscription(self, *_a: Any, **_kw: Any) -> Any:
+            if h.fail_at == "sensor_subscription":
+                raise RuntimeError("injected: sensor subscription")
             h.events.append("sensor_subscription")
             return object()
 
@@ -659,7 +666,8 @@ def _install_fake_ros_stack(monkeypatch: Any, harness: _RosHarness) -> None:
             h.events.append("sensor_executor_created")
 
         def add_node(self, _node: Any) -> None:
-            pass
+            if h.fail_at == "sensor_add_node":
+                raise RuntimeError("injected: executor add_node")
 
         def shutdown(self, timeout_sec: float = 0.0) -> None:
             h.events.append("sensor_executor_shutdown")
@@ -713,6 +721,17 @@ def _lifecycle_conn(monkeypatch: Any, harness: _RosHarness) -> R1LiteConnection:
     for name in ("CompressedImage", "Image", "Imu"):
         monkeypatch.setattr(sensor_msg_mod, name, type(name, (), {}), raising=False)
     monkeypatch.setattr(conn_mod, "_FEEDBACK_DISCOVERY_TIMEOUT_S", 0.05)
+
+    real_thread = threading.Thread
+
+    class SelectiveThread(real_thread):
+        def start(self) -> None:
+            if harness.fail_at == f"thread:{self.name}":
+                raise RuntimeError(f"injected: thread start {self.name}")
+            super().start()
+
+    monkeypatch.setattr(conn_mod, "Thread", SelectiveThread)
+
     c = _construct()
     c.config.enable_cameras = False
     for stream in (
@@ -720,9 +739,9 @@ def _lifecycle_conn(monkeypatch: Any, harness: _RosHarness) -> R1LiteConnection:
         "cmd_vel",
         "gripper_left_command",
         "gripper_right_command",
-        "arming",
     ):
         setattr(c, stream, _FakeIn())
+    c.arming = _FakeIn(fail=harness.fail_at == "input_subscribe")  # type: ignore[assignment]
     for stream in ("connection_status",):
         setattr(c, stream, _FakeOut())
     return c
@@ -737,6 +756,12 @@ def _lifecycle_conn(monkeypatch: Any, harness: _RosHarness) -> R1LiteConnection:
         "sensor_context",
         "sensor_node",
         "sensor_executor",
+        "sensor_add_node",
+        "sensor_subscription",
+        "thread:r1lite-imu_chassis",
+        "thread:r1lite-sensor-spin",
+        "input_subscribe",
+        "thread:r1lite-publish",
     ],
 )
 def test_partial_start_releases_every_created_resource(monkeypatch: Any, fail_at: str) -> None:
@@ -824,6 +849,80 @@ def test_gripper_range_validated_and_streamed_while_fresh() -> None:
     assert c._run_one_tick()
     gl = [m for t, m in c._ros.published if t == "gl"]  # type: ignore[union-attr]
     assert gl and gl[0].position == [50.0]
+
+
+def test_stop_with_stuck_publish_thread_ends_failed_not_stopped(monkeypatch: Any) -> None:
+    c = _armed(_bare())
+    c.config.stop_zero_duration_s = 0.01
+    monkeypatch.setattr(conn_mod, "DEFAULT_THREAD_JOIN_TIMEOUT", 0.05)
+    release = threading.Event()
+    stuck = threading.Thread(target=release.wait, name="r1lite-publish-stuck")
+    stuck.start()
+    c._publish_thread = stuck
+    try:
+        c.stop()
+        assert c._state is ConnectionState.FAILED
+        assert c._publish_thread is stuck
+        # Resources the thread can reach were not torn down.
+        assert c._ros is not None
+        # The safety zero still ran: STOPPING made ordinary publication inert.
+        speeds = [m for t, m in c._ros.published if t == "speed"]  # type: ignore[union-attr]
+        assert speeds and speeds[-1].twist.linear.x == 0.0
+    finally:
+        release.set()
+        stuck.join(timeout=2.0)
+
+
+def test_arming_required_set_reconciles_with_preflight_config() -> None:
+    # The connection's arming invariant must cover exactly the preflight
+    # feedback set minus the documented preflight-only topics.
+    expected = {
+        cfg.FB_ARM_LEFT,
+        cfg.FB_ARM_RIGHT,
+        cfg.FB_TORSO,
+        cfg.FB_GRIPPER_LEFT,
+        cfg.FB_GRIPPER_RIGHT,
+        cfg.FB_CHASSIS_SPEED,
+    }
+    assert cfg.ARMING_REQUIRED_FEEDBACK == expected
+    assert cfg.PREFLIGHT_ONLY_FEEDBACK == {cfg.FB_CHASSIS}
+    # And the implementation tracks one freshness source per required topic.
+    c = _bare()
+    with c._lifecycle_lock:
+        assert c._stale_required_sources_locked(time.monotonic()) == []
+    assert len(expected) == 6
+
+
+def test_motor_states_has_no_frame() -> None:
+    c = _bare()
+    c._publish_feedback_streams()
+    assert c.motor_states.msgs[0].frame_id == ""
+
+
+def test_per_output_fallback_counters_are_independent() -> None:
+    c = _bare()
+    zero = _fb([0.0], stamp_sec=0)
+    for key in ("head_left_color", "wrist_left_depth", "imu_chassis", "imu_torso"):
+        c._stamp_or_fallback(zero, key)
+    assert c._stamp_fallbacks["head_left_color"] == 1
+    assert c._stamp_fallbacks["wrist_left_depth"] == 1
+    assert c._stamp_fallbacks["imu_chassis"] == 1
+    assert c._stamp_fallbacks["imu_torso"] == 1
+    assert c._stamp_fallbacks["head_right_color"] == 0
+
+
+def test_stamp_or_fallback_preserves_vendor_stamp() -> None:
+    c = _bare()
+    assert c._stamp_or_fallback(_fb([0.0], stamp_sec=9), "head_left_color") == 9.0
+    assert c._stamp_fallbacks["head_left_color"] == 0
+
+
+def test_torso_frame_is_vendor_only() -> None:
+    c = _bare()
+    c._on_torso_feedback(_fb([0.0] * 4, stamp_sec=2), None)
+    c._publish_feedback_streams()
+    # The fake feedback carries no frame_id: the output must not invent one.
+    assert c.torso_states.msgs[-1].frame_id == ""
 
 
 # Import hygiene

@@ -80,4 +80,14 @@ FEEDBACK_NOMINAL_HZ: dict[str, float | None] = {
     FB_CHASSIS_SPEED: None,
 }
 
+# Preflight-only vendor-health topics. FB_CHASSIS (wheel joint states) is
+# checked before dimos starts to prove the vendor chassis node is alive,
+# but the connection consumes no data from it, so it is not part of the
+# connection's arming invariant. The arming invariant covers exactly the
+# sources the connection consumes for control and safety decisions.
+PREFLIGHT_ONLY_FEEDBACK: frozenset[str] = frozenset({FB_CHASSIS})
+
+# The feedback sources whose freshness gates ARM and holds it.
+ARMING_REQUIRED_FEEDBACK: frozenset[str] = frozenset(FEEDBACK_NOMINAL_HZ) - PREFLIGHT_ONLY_FEEDBACK
+
 ARMING_TOPIC = "/r1lite/arming"
