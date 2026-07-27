@@ -89,21 +89,6 @@ def make_connection(ip: str, cfg: GlobalConfig) -> BoosterRPCConnection:
     return BoosterRPCConnection(ip)
 
 
-def _camera_info_static() -> CameraInfo:
-    return CameraInfo(
-        frame_id="camera_optical",
-        height=CAMERA_HEIGHT,
-        width=CAMERA_WIDTH,
-        distortion_model="plumb_bob",
-        D=[0.0, 0.0, 0.0, 0.0, 0.0],
-        K=[CAMERA_FX, 0.0, CAMERA_CX, 0.0, CAMERA_FY, CAMERA_CY, 0.0, 0.0, 1.0],
-        R=[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-        P=[CAMERA_FX, 0.0, CAMERA_CX, 0.0, 0.0, CAMERA_FY, CAMERA_CY, 0.0, 0.0, 0.0, 1.0, 0.0],
-        binning_x=0,
-        binning_y=0,
-    )
-
-
 class K1Connection(Module, Camera):
     """Booster K1 humanoid: exposes camera + velocity control as DimOS streams/RPCs."""
 
@@ -115,7 +100,15 @@ class K1Connection(Module, Camera):
     color_image: Out[Image]
     camera_info: Out[CameraInfo]
 
-    camera_info_static: CameraInfo = _camera_info_static()
+    camera_info_static: CameraInfo = CameraInfo.from_intrinsics(
+        CAMERA_FX,
+        CAMERA_FY,
+        CAMERA_CX,
+        CAMERA_CY,
+        CAMERA_WIDTH,
+        CAMERA_HEIGHT,
+        frame_id="camera_optical",
+    )
     _latest_frame: Image | None = None
     _camera_future: Future[None] | None = None
     _sender_future: Future[None] | None = None
@@ -163,7 +156,7 @@ class K1Connection(Module, Camera):
 
     @rpc
     def stop(self) -> None:
-        for future in (self._camera_future, self._camera_info_future):
+        for future in (self._camera_future, self._sender_future, self._camera_info_future):
             if future is not None:
                 future.cancel()
         self._connection.stop()

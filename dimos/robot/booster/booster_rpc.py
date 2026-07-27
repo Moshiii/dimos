@@ -139,6 +139,7 @@ class BoosterRPCConnection:
         was_active = False
         self._sender_stop.clear()
         self._sender_done.clear()
+        next_tick = time.monotonic() + period
         try:
             while not self._sender_stop.is_set():
                 with self._cmd_lock:
@@ -150,7 +151,8 @@ class BoosterRPCConnection:
                     # one dead-man stop on active->idle, then go quiet
                     await asyncio.to_thread(self._send, 0.0, 0.0, 0.0)
                 was_active = active
-                await asyncio.sleep(period)
+                next_tick = max(next_tick + period, time.monotonic())
+                await asyncio.sleep(next_tick - time.monotonic())
         finally:
             self._sender_done.set()
 
