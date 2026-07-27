@@ -32,7 +32,8 @@ from dimos.core.core import rpc
 from dimos.core.stream import In
 from dimos.hardware.sensors.lidar.pointlio.recorder import PointlioRecorder
 from dimos.memory2.module import pose_setter_for
-from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.utils.logging_config import setup_logger
 
@@ -44,8 +45,10 @@ LIDAR_LOSS_TIMEOUT = 5.0
 
 class StereoMountRecorder(PointlioRecorder):
     # pointlio_odometry / pointlio_lidar are inherited from PointlioRecorder.
-    color_image_left: In[Image]
-    color_image_right: In[Image]
+    color_image_left: In[CompressedVideo]  # h264; decode with H264Decoder
+    color_image_right: In[CompressedVideo]
+    camera_info_left: In[CameraInfo]
+    camera_info_right: In[CameraInfo]
     zed_imu: In[Imu]  # ZED-M onboard IMU, ~800 Hz
 
     _watchdog_running: bool = False
