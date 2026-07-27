@@ -46,7 +46,7 @@ import secrets
 import threading
 from threading import Thread
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import Field
 from reactivex.disposable import Disposable
@@ -112,9 +112,9 @@ class _Segment:
     seen: bool = False
     rx_monotonic: float = 0.0
     # Vendor header stamp in epoch seconds; receive wall time when the
-    # vendor stamp was missing or zero (stamp_fallbacks counts those).
+    # vendor stamp was missing or zero (counted per stream).
     stamp: float = 0.0
-    stamp_fallbacks: int = 0
+    frame: str = ""
 
     def __post_init__(self) -> None:
         self.q = [0.0] * self.dof
@@ -161,17 +161,29 @@ def _make_cmd_qos() -> Any:
     )
 
 
-def _header_stamp_or_fallback(msg: Any, segment: _Segment) -> None:
-    """Record the vendor header stamp, or receive wall time when absent."""
+def _header_seconds(msg: Any) -> float:
+    """Vendor header stamp in epoch seconds, or 0.0 when absent."""
     stamp = getattr(getattr(msg, "header", None), "stamp", None)
-    seconds = 0.0
-    if stamp is not None:
-        seconds = float(stamp.sec) + float(stamp.nanosec) * 1e-9
-    if seconds > 0.0:
-        segment.stamp = seconds
-    else:
-        segment.stamp = time.time()
-        segment.stamp_fallbacks += 1
+    if stamp is None:
+        return 0.0
+    return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+
+def _header_frame(msg: Any) -> str:
+    return str(getattr(getattr(msg, "header", None), "frame_id", "") or "")
+
+
+_STAMP_STREAMS = (
+    "arm_left",
+    "arm_right",
+    "torso",
+    "gripper_left",
+    "gripper_right",
+    "odom",
+    "camera",
+    "depth",
+    "imu",
+)
 
 
 class R1LiteConnectionConfig(ModuleConfig):
@@ -234,9 +246,12 @@ class R1LiteConnection(Module):
         # Lock order everywhere: _publish_gate outer, _lifecycle_lock inner.
         # The gate serializes ordinary vendor publication against the
         # STOPPING transition; the lifecycle lock guards state, the armed
-        # latch, caches, and feedback segments.
+        # latch, caches, and feedback segments. _lifecycle_op_lock
+        # serializes whole start() and stop() calls so neither can observe
+        # the other mid-flight; it never nests inside the other two.
         self._publish_gate = threading.Lock()
         self._lifecycle_lock = threading.Lock()
+        self._lifecycle_op_lock = threading.Lock()
         self._state = ConnectionState.CREATED
         self._armed = False
         self._arming_nonce = ""
@@ -270,6 +285,13 @@ class R1LiteConnection(Module):
         self._last_chassis_lin = 0.0
         self._last_chassis_ang = 0.0
         self._last_chassis_fb_ts = 0.0
+        self._chassis_speed_seen = False
+        # Gripper feedback freshness (values passthrough, not cached).
+        self._gripper_fb_seen: dict[str, bool] = {"left": False, "right": False}
+        self._gripper_fb_rx: dict[str, float] = {"left": 0.0, "right": 0.0}
+        # Per-stream count of missing/zero vendor stamps replaced by
+        # receive time; reported on the TELEM line.
+        self._stamp_fallbacks: dict[str, int] = dict.fromkeys(_STAMP_STREAMS, 0)
 
         # Odom dead-reckoning, integrated from chassis speed feedback.
         self._odom_x = 0.0
@@ -310,26 +332,27 @@ class R1LiteConnection(Module):
 
     @rpc
     def start(self) -> None:
-        with self._lifecycle_lock:
-            if self._state is not ConnectionState.CREATED:
-                raise RuntimeError(
-                    f"R1LiteConnection is single-use; start() from {self._state.name}"
-                )
-            self._state = ConnectionState.STARTING
-        super().start()
-
-        try:
-            self._start_resources()
-        except Exception:
-            self._release_resources()
+        with self._lifecycle_op_lock:
             with self._lifecycle_lock:
-                self._state = ConnectionState.FAILED
-            raise
+                if self._state is not ConnectionState.CREATED:
+                    raise RuntimeError(
+                        f"R1LiteConnection is single-use; start() from {self._state.name}"
+                    )
+                self._state = ConnectionState.STARTING
 
-        with self._lifecycle_lock:
-            self._state = ConnectionState.READY_DISARMED
-            self._arming_nonce = secrets.token_hex(3)
-            nonce = self._arming_nonce
+            try:
+                super().start()
+                self._start_resources()
+            except Exception:
+                self._release_resources()
+                with self._lifecycle_lock:
+                    self._state = ConnectionState.FAILED
+                raise
+
+            with self._lifecycle_lock:
+                self._state = ConnectionState.READY_DISARMED
+                self._arming_nonce = secrets.token_hex(3)
+                nonce = self._arming_nonce
         logger.info(
             "R1LiteConnection started DISARMED. Arm with preflight.py "
             "(nonce %s); actuator output is inert until then.",
@@ -389,39 +412,58 @@ class R1LiteConnection(Module):
 
     @rpc
     def stop(self) -> None:
-        # Step 1: atomic STOPPING + disarm behind the publication gate, so
-        # no ordinary vendor publication straddles or follows the transition.
-        with self._publish_gate:
+        with self._lifecycle_op_lock:
+            # Step 1: atomic STOPPING + disarm behind the publication gate,
+            # so no ordinary vendor publication straddles or follows the
+            # transition.
+            with self._publish_gate:
+                with self._lifecycle_lock:
+                    if self._state is ConnectionState.STOPPED:
+                        # Idempotent: base teardown already ran.
+                        return
+                    if self._state is ConnectionState.CREATED:
+                        self._state = ConnectionState.STOPPED
+                        stop_base_only = True
+                    else:
+                        stop_base_only = False
+                        was_running = self._state in (
+                            ConnectionState.READY_DISARMED,
+                            ConnectionState.ARMED,
+                        )
+                        self._state = ConnectionState.STOPPING
+                        self._armed = False
+                        self._clear_command_caches_locked()
+
+            if stop_base_only:
+                # The Module constructor already created framework resources.
+                super().stop()
+                return
+
+            self._stop_event.set()
+            self._sensor_stop.set()
+            if self._publish_thread is not None and self._publish_thread.is_alive():
+                self._publish_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+                if self._publish_thread.is_alive():
+                    # The loop is inert in STOPPING (every snapshot refuses),
+                    # but its survival is a defect worth shouting about.
+                    logger.error(
+                        "publish thread did not terminate within %.1fs; "
+                        "proceeding with stop, loop is inert in STOPPING",
+                        DEFAULT_THREAD_JOIN_TIMEOUT,
+                    )
+
+            if was_running:
+                self._stop_zero_allowed = True
+                try:
+                    self._stream_chassis_zero(self.config.stop_zero_duration_s)
+                finally:
+                    self._stop_zero_allowed = False
+
+            self._release_resources()
             with self._lifecycle_lock:
-                if self._state in (ConnectionState.STOPPED, ConnectionState.CREATED):
-                    # Idempotent: repeated stop and stop-before-start no-op.
-                    self._state = ConnectionState.STOPPED
-                    return
-                was_running = self._state in (
-                    ConnectionState.READY_DISARMED,
-                    ConnectionState.ARMED,
-                )
-                self._state = ConnectionState.STOPPING
-                self._armed = False
-                self._clear_command_caches_locked()
-
-        self._stop_event.set()
-        self._sensor_stop.set()
-        if self._publish_thread is not None and self._publish_thread.is_alive():
-            self._publish_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
-
-        if was_running:
-            self._stop_zero_allowed = True
-            try:
-                self._stream_chassis_zero(self.config.stop_zero_duration_s)
-            finally:
-                self._stop_zero_allowed = False
-
-        self._release_resources()
-        with self._lifecycle_lock:
-            self._state = ConnectionState.STOPPED
-        logger.info("R1LiteConnection stopped")
-        super().stop()
+                self._state = ConnectionState.STOPPED
+            logger.info("R1LiteConnection stopped")
+            super().stop()
 
     def _clear_command_caches_locked(self) -> None:
         """Drop every cached actuator command. Caller holds _lifecycle_lock."""
@@ -592,9 +634,11 @@ class R1LiteConnection(Module):
             )
         )
 
+        # Cleanup entry precedes the starts so an interrupted start loop
+        # still tears down every already-running worker.
+        self._cleanup_stack.append(("sensor_workers", self._release_sensor_workers))
         for t in self._sensor_workers:
             t.start()
-        self._cleanup_stack.append(("sensor_workers", self._release_sensor_workers))
 
         self._sensor_spin_thread = Thread(
             target=self._sensor_spin, daemon=True, name="r1lite-sensor-spin"
@@ -666,8 +710,13 @@ class R1LiteConnection(Module):
             if payload == "DISARM":
                 if self._armed:
                     self._armed = False
+                    self._state = ConnectionState.READY_DISARMED
                     self._clear_command_caches_locked()
-                    logger.info("R1LiteConnection disarmed by operator")
+                    self._arming_nonce = secrets.token_hex(3)
+                    logger.info(
+                        "R1LiteConnection disarmed by operator (new nonce %s)",
+                        self._arming_nonce,
+                    )
                 return
             expected = f"ARM RC5 {self._arming_nonce}" if self._arming_nonce else None
             if expected is None or payload != expected:
@@ -676,9 +725,9 @@ class R1LiteConnection(Module):
             if self._state is not ConnectionState.READY_DISARMED:
                 logger.warning(f"arming rejected in state {self._state.name}")
                 return
-            now = time.monotonic()
-            if self._segment_stale(self._left, now) or self._segment_stale(self._right, now):
-                logger.warning("arming rejected: arm feedback unseen or stale")
+            stale = self._stale_required_sources_locked(time.monotonic())
+            if stale:
+                logger.warning(f"arming rejected: feedback unseen or stale: {stale}")
                 return
             self._state = ConnectionState.ARMED
             self._armed = True
@@ -688,6 +737,28 @@ class R1LiteConnection(Module):
 
     def _segment_stale(self, segment: _Segment, now: float) -> bool:
         return not segment.seen or (now - segment.rx_monotonic) > self.config.feedback_stale_after_s
+
+    def _stale_required_sources_locked(self, now: float) -> list[str]:
+        """Names of required feedback sources that are unseen or stale.
+
+        The required set for holding ARMED matches the preflight rate
+        checks: both arms, torso, both grippers, and chassis speed. Caller
+        holds _lifecycle_lock.
+        """
+        window = self.config.feedback_stale_after_s
+        stale: list[str] = []
+        if self._segment_stale(self._left, now):
+            stale.append("arm_left")
+        if self._segment_stale(self._right, now):
+            stale.append("arm_right")
+        if self._segment_stale(self._torso, now):
+            stale.append("torso")
+        for side in ("left", "right"):
+            if not self._gripper_fb_seen[side] or (now - self._gripper_fb_rx[side]) > window:
+                stale.append(f"gripper_{side}")
+        if not self._chassis_speed_seen or (now - self._last_chassis_fb_ts) > window:
+            stale.append("chassis_speed")
+        return stale
 
     # Control input handlers: cache only, never publish (see _publish_loop).
 
@@ -756,13 +827,32 @@ class R1LiteConnection(Module):
 
     # Feedback callbacks
 
+    def _record_segment_meta(self, msg: Any, segment: _Segment, stream: str) -> None:
+        """Record stamp and frame for a segment. Caller holds _lifecycle_lock."""
+        seconds = _header_seconds(msg)
+        if seconds > 0.0:
+            segment.stamp = seconds
+        else:
+            segment.stamp = time.time()
+            self._stamp_fallbacks[stream] += 1
+        segment.frame = _header_frame(msg)
+
+    def _stamp_or_fallback(self, msg: Any, stream: str) -> float:
+        """Vendor stamp, or receive time plus a counted fallback mark."""
+        seconds = _header_seconds(msg)
+        if seconds > 0.0:
+            return seconds
+        with self._lifecycle_lock:
+            self._stamp_fallbacks[stream] += 1
+        return time.time()
+
     def _on_arm_feedback(self, side: str, msg: Any) -> None:
         segment = self._left if side == "left" else self._right
         with self._lifecycle_lock:
             if self._copy_segment(msg, segment):
                 segment.seen = True
                 segment.rx_monotonic = time.monotonic()
-                _header_stamp_or_fallback(msg, segment)
+                self._record_segment_meta(msg, segment, f"arm_{side}")
             else:
                 self._warn_bad_feedback(side, msg)
 
@@ -771,22 +861,23 @@ class R1LiteConnection(Module):
             if self._copy_segment(msg, self._torso):
                 self._torso.seen = True
                 self._torso.rx_monotonic = time.monotonic()
-                _header_stamp_or_fallback(msg, self._torso)
+                self._record_segment_meta(msg, self._torso, "torso")
             else:
                 self._warn_bad_feedback("torso", msg)
 
     def _on_gripper_feedback(self, side: str, msg: Any) -> None:
         if not msg.position:
             return
-        stamp = getattr(getattr(msg, "header", None), "stamp", None)
-        seconds = 0.0
-        if stamp is not None:
-            seconds = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+        ts = self._stamp_or_fallback(msg, f"gripper_{side}")
+        with self._lifecycle_lock:
+            self._gripper_fb_seen[side] = True
+            self._gripper_fb_rx[side] = time.monotonic()
+        frame = _header_frame(msg) or f"r1lite_gripper_{side}"
         out = self.gripper_left_state if side == "left" else self.gripper_right_state
         out.publish(
             JointState(
-                ts=seconds if seconds > 0.0 else time.time(),
-                frame_id=f"r1lite_gripper_{side}",
+                ts=ts,
+                frame_id=frame,
                 name=[f"r1lite/{side}_gripper"],
                 position=[float(msg.position[0])],
                 velocity=[float(msg.velocity[0])] if msg.velocity else [],
@@ -832,11 +923,14 @@ class R1LiteConnection(Module):
             self._last_chassis_lin = max(abs(msg.twist.linear.x), abs(msg.twist.linear.y))
             self._last_chassis_ang = abs(msg.twist.angular.z)
             self._last_chassis_fb_ts = time.monotonic()
+            self._chassis_speed_seen = True
         if not self.config.publish_odom:
             return
-        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        stamp = _header_seconds(msg)
         if stamp <= 0.0:
             stamp = time.time()
+            with self._lifecycle_lock:
+                self._stamp_fallbacks["odom"] += 1
         if self._odom_last_ts is None:
             self._odom_last_ts = stamp
             return
@@ -871,19 +965,21 @@ class R1LiteConnection(Module):
         """One atomic authorization snapshot. Caller holds _publish_gate."""
         now = time.monotonic()
         with self._lifecycle_lock:
-            # Stale arm feedback while armed disarms; recovery never rearms.
-            if self._armed and (
-                self._segment_stale(self._left, now) or self._segment_stale(self._right, now)
-            ):
-                self._armed = False
-                self._state = ConnectionState.READY_DISARMED
-                self._clear_command_caches_locked()
-                self._arming_nonce = secrets.token_hex(3)
-                logger.warning(
-                    "arm feedback stale while armed: DISARMED, caches cleared; "
-                    "re-arm required after recovery (nonce %s)",
-                    self._arming_nonce,
-                )
+            # Stale required feedback while armed disarms; recovery never
+            # rearms without a fresh operator action.
+            if self._armed:
+                stale = self._stale_required_sources_locked(now)
+                if stale:
+                    self._armed = False
+                    self._state = ConnectionState.READY_DISARMED
+                    self._clear_command_caches_locked()
+                    self._arming_nonce = secrets.token_hex(3)
+                    logger.warning(
+                        "required feedback stale while armed (%s): DISARMED, caches "
+                        "cleared; re-arm required after recovery (nonce %s)",
+                        stale,
+                        self._arming_nonce,
+                    )
             arm_cmd = None
             if (
                 self._arm_cmd is not None
@@ -1047,6 +1143,7 @@ class R1LiteConnection(Module):
                     list(self._torso.dq),
                     list(self._torso.eff),
                     self._torso.stamp,
+                    self._torso.frame or self.config.frame_id,
                 )
                 if torso_ok
                 else None
@@ -1078,11 +1175,11 @@ class R1LiteConnection(Module):
                 )
             )
         if torso is not None:
-            t_q, t_dq, t_eff, t_stamp = torso
+            t_q, t_dq, t_eff, t_stamp, t_frame = torso
             self.torso_states.publish(
                 JointState(
                     ts=t_stamp,
-                    frame_id=self.config.frame_id,
+                    frame_id=t_frame,
                     name=cfg.R1LITE_TORSO_JOINTS,
                     position=t_q,
                     velocity=t_dq,
@@ -1106,9 +1203,7 @@ class R1LiteConnection(Module):
             self._telem_cmd_vel_count = 0
             cv = self._latest_cmd_vel
             fallbacks = (
-                self._left.stamp_fallbacks
-                + self._right.stamp_fallbacks
-                + self._torso.stamp_fallbacks
+                ",".join(f"{k}:{v}" for k, v in self._stamp_fallbacks.items() if v) or "none"
             )
         # track_err compares latest cached command with latest cached
         # feedback: session-level following evidence, not per-command
@@ -1117,7 +1212,7 @@ class R1LiteConnection(Module):
         err_r = max(abs(a - b) for a, b in zip(cr, fr, strict=False)) if cr else float("nan")
         logger.info(
             "TELEM conn: state=%s armed=%s arm_cmd_hz=%d cmdvel_hz=%d "
-            "track_err_deg L=%.1f R=%.1f cmd_vel=(%.2f,%.2f,%.2f) stamp_fallbacks=%d",
+            "track_err_deg L=%.1f R=%.1f cmd_vel=(%.2f,%.2f,%.2f) stamp_fallbacks=%s",
             state.name,
             armed,
             n_arm,
@@ -1149,11 +1244,40 @@ class R1LiteConnection(Module):
             self._publish_telemetry()
         return True
 
+    def _safe_tick(self) -> bool:
+        """One tick behind the failure boundary. Returns False to exit.
+
+        The loop is the sole vendor publisher AND the chassis dead-man, so
+        it must never die silently: any tick failure disarms, clears every
+        cached command, marks the connection FAILED, and makes one bounded
+        best-effort attempt to leave the chassis latch at zero.
+        """
+        try:
+            return self._run_one_tick()
+        except Exception:
+            logger.exception("publish tick failed; disarming and entering FAILED")
+            with self._publish_gate, self._lifecycle_lock:
+                self._armed = False
+                self._state = ConnectionState.FAILED
+                self._clear_command_caches_locked()
+            self._stop_zero_allowed = True
+            try:
+                self._stream_chassis_zero(self.config.stop_zero_duration_s)
+            except Exception:
+                logger.exception("chassis zero attempt after tick failure also failed")
+            finally:
+                self._stop_zero_allowed = False
+            try:
+                self.connection_status.publish(String(data="state=FAILED nonce="))
+            except Exception:
+                logger.exception("status publish after tick failure failed")
+            return False
+
     def _publish_loop(self) -> None:
         period = 1.0 / float(self.config.publish_rate_hz)
         next_tick = time.perf_counter()
         while not self._stop_event.is_set():
-            if not self._run_one_tick():
+            if not self._safe_tick():
                 break
             next_tick += period
             sleep_for = next_tick - time.perf_counter()
@@ -1183,8 +1307,9 @@ class R1LiteConnection(Module):
                 bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if bgr is None:
                     continue
-                ts = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                out.publish(Image(bgr, format=ImageFormat.BGR, frame_id=stream_name, ts=ts))
+                ts = self._stamp_or_fallback(msg, "camera")
+                frame = _header_frame(msg) or stream_name
+                out.publish(Image(bgr, format=ImageFormat.BGR, frame_id=frame, ts=ts))
             except Exception:
                 logger.exception(f"R1Lite camera {stream_name} decode error")
 
@@ -1200,7 +1325,10 @@ class R1LiteConnection(Module):
             if msg is None:
                 break
             try:
-                out.publish(ros_to_dimos(msg, Image))
+                converted = cast("Image", ros_to_dimos(msg, Image))
+                if converted.ts <= 0.0:
+                    converted.ts = self._stamp_or_fallback(msg, "depth")
+                out.publish(converted)
             except Exception:
                 logger.exception(f"R1Lite {stream_name} decode error")
 
@@ -1216,7 +1344,9 @@ class R1LiteConnection(Module):
             if msg is None:
                 break
             try:
-                imu = ros_to_dimos(msg, Imu)
+                imu = cast("Imu", ros_to_dimos(msg, Imu))
+                if imu.ts <= 0.0:
+                    imu.ts = self._stamp_or_fallback(msg, "imu")
                 with self._lifecycle_lock:
                     setattr(self, target_attr, imu)
             except Exception:

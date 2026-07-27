@@ -21,8 +21,9 @@ ZERO publishers exist on every actuator command topic.
 arm: run while dimos runs disarmed. Verifies rates, verifies the
 publisher-count matrix (exactly one dimos publisher on dimos-owned
 topics, zero on torso topics), reads the arming nonce from the
-connection status stream, asks the operator to confirm RC mode 5, and
-publishes the arming message.
+connection status stream, asks the operator to type the arming
+attestation, publishes it, and then waits for the connection to report
+ARMED. Success is claimed only from an observed state transition.
 
 Both subcommands exit nonzero at the first failed check.
 
@@ -33,12 +34,79 @@ Both subcommands exit nonzero at the first failed check.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import sys
 import time
 
 from dimos.robot.galaxea.r1lite import config as cfg
 
 RATE_MEASURE_WINDOW_S = 2.0
+ARM_OBSERVE_TIMEOUT_S = 5.0
+
+
+def check_rates(measured: dict[str, float], phase: str) -> list[str]:
+    """Errors for the feedback-rate contract, empty when the phase passes.
+
+    Topics with a pinned nominal must measure at least half of it in both
+    phases. A topic with no pinned nominal must be present with a positive
+    measured rate in phase1, and always fails the arm phase: arming stays
+    closed until a hardware session pins the nominal in config.
+    """
+    errors: list[str] = []
+    for topic, nominal in cfg.FEEDBACK_NOMINAL_HZ.items():
+        rate = measured.get(topic, 0.0)
+        if nominal is None:
+            if phase == "arm":
+                errors.append(
+                    f"{topic} has no pinned nominal rate; measure it and pin it "
+                    f"in r1lite config before arming (measured {rate:.0f} Hz)"
+                )
+            elif rate <= 0.0:
+                errors.append(f"{topic} absent or silent (measured 0 Hz)")
+            continue
+        if rate < nominal / 2.0:
+            errors.append(f"{topic} at {rate:.0f} Hz, below half of nominal {nominal:.0f} Hz")
+    return errors
+
+
+def check_matrix(publishers: dict[str, list[str]], phase: str) -> list[str]:
+    """Errors for the publisher-count matrix, empty when the phase passes.
+
+    publishers maps topic to the exact node names currently publishing.
+    Identity is exact equality with the connection node name.
+    """
+    column = 0 if phase == "phase1" else 1
+    errors: list[str] = []
+    for topic, counts in cfg.ARMING_MATRIX.items():
+        allowed = counts[column]
+        names = publishers.get(topic, [])
+        if len(names) > allowed:
+            errors.append(f"{topic} has publishers {names}; allowed {allowed} in {phase}")
+        elif allowed == 1:
+            if not names:
+                errors.append(f"{topic} has no publisher; dimos connection is not running")
+            elif names[0] != cfg.ROS_NODE_NAME:
+                errors.append(f"{topic} publisher is {names[0]!r}, not {cfg.ROS_NODE_NAME!r}")
+    return errors
+
+
+def wait_for_status(
+    read_status: Callable[[], dict[str, str]],
+    predicate: Callable[[dict[str, str]], bool],
+    deadline: float,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, str]:
+    """Poll read_status until predicate passes or the deadline expires.
+
+    Returns the last observed status; the caller decides pass or fail from
+    the predicate on that value.
+    """
+    status = read_status()
+    while not predicate(status) and now() < deadline:
+        sleep(0.1)
+        status = read_status()
+    return status
 
 
 def _fail(message: str) -> None:
@@ -46,8 +114,15 @@ def _fail(message: str) -> None:
     sys.exit(1)
 
 
+def _import_msg_type(type_name: str) -> object:
+    import importlib
+
+    package, _, name = type_name.partition("/msg/")
+    module = importlib.import_module(f"{package}.msg")
+    return getattr(module, name)
+
+
 def _measure_rates(node: object, topics: list[str]) -> dict[str, float]:
-    """Count messages per topic for a fixed window using raw subscriptions."""
     import rclpy
     from rclpy.qos import QoSProfile, ReliabilityPolicy
 
@@ -57,7 +132,6 @@ def _measure_rates(node: object, topics: list[str]) -> dict[str, float]:
     for topic in topics:
         infos = node.get_publishers_info_by_topic(topic)  # type: ignore[attr-defined]
         if not infos:
-            counts[topic] = 0
             continue
         msg_type = _import_msg_type(infos[0].topic_type)
 
@@ -73,47 +147,12 @@ def _measure_rates(node: object, topics: list[str]) -> dict[str, float]:
     return {t: c / RATE_MEASURE_WINDOW_S for t, c in counts.items()}
 
 
-def _import_msg_type(type_name: str) -> object:
-    import importlib
-
-    package, _, name = type_name.partition("/msg/")
-    module = importlib.import_module(f"{package}.msg")
-    return getattr(module, name)
-
-
-def _check_rates(node: object) -> None:
-    topics = list(cfg.FEEDBACK_NOMINAL_HZ)
-    rates = _measure_rates(node, topics)
-    for topic, nominal in cfg.FEEDBACK_NOMINAL_HZ.items():
-        measured = rates.get(topic, 0.0)
-        if nominal is None:
-            print(f"INFO {topic} measured {measured:.0f} Hz (no pinned nominal yet)")
-            continue
-        if measured < nominal / 2.0:
-            _fail(f"{topic} at {measured:.0f} Hz, below half of nominal {nominal:.0f} Hz")
-        print(f"OK   {topic} {measured:.0f} Hz (nominal {nominal:.0f})")
-
-
-def _publishers(node: object, topic: str) -> list[str]:
+def _publisher_node_names(node: object, topic: str) -> list[str]:
     infos = node.get_publishers_info_by_topic(topic)  # type: ignore[attr-defined]
-    return [f"{info.node_namespace.rstrip('/')}/{info.node_name}".lstrip("/") for info in infos]
+    return [str(info.node_name) for info in infos]
 
 
-def _check_matrix(node: object, phase: str) -> None:
-    column = 0 if phase == "phase1" else 1
-    for topic, counts in cfg.ARMING_MATRIX.items():
-        allowed = counts[column]
-        names = _publishers(node, topic)
-        if len(names) > allowed:
-            _fail(f"{topic} has publishers {names}; allowed {allowed} in {phase}")
-        if allowed == 1 and len(names) == 1 and cfg.ROS_NODE_NAME not in names[0]:
-            _fail(f"{topic} publisher is {names[0]}, not {cfg.ROS_NODE_NAME}")
-        if allowed == 1 and len(names) == 0:
-            _fail(f"{topic} has no publisher; dimos connection is not running")
-        print(f"OK   {topic} publishers={names or 'none'}")
-
-
-def _read_nonce() -> str:
+def _read_status_lcm() -> dict[str, str]:
     from dimos.core.transport import LCMTransport
     from dimos.msgs.std_msgs.String import String
 
@@ -123,22 +162,16 @@ def _read_nonce() -> str:
     def _on_status(msg: String) -> None:
         for part in msg.data.split():
             key, _, value = part.partition("=")
-            if key == "nonce" and value:
-                holder["nonce"] = value
-            if key == "state":
-                holder["state"] = value
+            if key:
+                holder[key] = value
 
     unsub = transport.subscribe(_on_status)
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline and "nonce" not in holder:
-        time.sleep(0.1)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "state" not in holder:
+        time.sleep(0.05)
     unsub()
     transport.stop()
-    if holder.get("state") not in (None, "READY_DISARMED"):
-        _fail(f"connection state is {holder.get('state')}, not READY_DISARMED")
-    if "nonce" not in holder:
-        _fail("no connection status received; is the dimos blueprint running?")
-    return holder["nonce"]
+    return holder
 
 
 def _send_arm(nonce: str) -> None:
@@ -149,7 +182,6 @@ def _send_arm(nonce: str) -> None:
     transport.publish(String(data=f"ARM RC5 {nonce}"))
     time.sleep(0.2)
     transport.stop()
-    print("OK   arming message sent")
 
 
 def main() -> None:
@@ -162,8 +194,16 @@ def main() -> None:
     rclpy.init()
     node = rclpy.create_node("dimos_r1lite_preflight")
     try:
-        _check_rates(node)
-        _check_matrix(node, args.phase)
+        rates = _measure_rates(node, list(cfg.FEEDBACK_NOMINAL_HZ))
+        for error in check_rates(rates, args.phase):
+            _fail(error)
+        for topic, nominal in cfg.FEEDBACK_NOMINAL_HZ.items():
+            print(f"OK   {topic} {rates.get(topic, 0.0):.0f} Hz (nominal {nominal})")
+        publishers = {t: _publisher_node_names(node, t) for t in cfg.ARMING_MATRIX}
+        for error in check_matrix(publishers, args.phase):
+            _fail(error)
+        for topic, names in publishers.items():
+            print(f"OK   {topic} publishers={names or 'none'}")
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -172,7 +212,10 @@ def main() -> None:
         print("PASS phase1: zero actuator publishers, feedback healthy")
         return
 
-    nonce = _read_nonce()
+    status = _read_status_lcm()
+    if status.get("state") != "READY_DISARMED" or not status.get("nonce"):
+        _fail(f"connection status {status or 'absent'}; need READY_DISARMED with a nonce")
+    nonce = status["nonce"]
     print(
         "Arming attestation: confirm the RC is ON with all switches in "
         "position 1 (mode 5) and you hold the e-stop."
@@ -181,7 +224,15 @@ def main() -> None:
     if answer != f"ARM RC5 {nonce}":
         _fail("attestation text did not match; not arming")
     _send_arm(nonce)
-    print("PASS arm: check the blueprint log for 'ARMED by operator'")
+
+    observed = wait_for_status(
+        _read_status_lcm,
+        lambda s: s.get("state") == "ARMED",
+        deadline=time.monotonic() + ARM_OBSERVE_TIMEOUT_S,
+    )
+    if observed.get("state") != "ARMED":
+        _fail(f"connection did not report ARMED (last status {observed or 'absent'})")
+    print("PASS arm: connection reports ARMED")
 
 
 if __name__ == "__main__":

@@ -155,6 +155,11 @@ def _bare(state: ConnectionState = ConnectionState.READY_DISARMED) -> R1LiteConn
     _fresh_segment(c._left, [0.1] * 6)
     _fresh_segment(c._right, [0.2] * 6)
     _fresh_segment(c._torso, [0.3] * 4)
+    now = time.monotonic()
+    c._gripper_fb_seen = {"left": True, "right": True}
+    c._gripper_fb_rx = {"left": now, "right": now}
+    c._chassis_speed_seen = True
+    c._last_chassis_fb_ts = now
     c._state = state
     c._arming_nonce = "abc123"
     for stream in (
@@ -268,7 +273,7 @@ def test_motor_states_ts_is_older_arm_stamp() -> None:
 def test_zero_vendor_stamp_falls_back_and_counts() -> None:
     c = _bare()
     c._on_arm_feedback("left", _fb([1.0] * 6, stamp_sec=0))
-    assert c._left.stamp_fallbacks == 1
+    assert c._stamp_fallbacks["arm_left"] == 1
     assert c._left.stamp > 1e9
 
 
@@ -278,11 +283,43 @@ def test_vendor_stamp_preserved() -> None:
     assert c._left.stamp == 42.0
 
 
-def test_gripper_feedback_passthrough_stamp() -> None:
+def test_gripper_feedback_passthrough_stamp_and_frame() -> None:
     c = _bare()
-    c._on_gripper_feedback("left", _fb([55.0], stamp_sec=7))
-    assert c.gripper_left_state.msgs[0].ts == 7.0
-    assert c.gripper_left_state.msgs[0].position == [55.0]
+    msg = _fb([55.0], stamp_sec=7)
+    msg.header.frame_id = "vendor_gripper_frame"
+    c._on_gripper_feedback("left", msg)
+    out = c.gripper_left_state.msgs[0]
+    assert out.ts == 7.0
+    assert out.frame_id == "vendor_gripper_frame"
+    assert out.position == [55.0]
+
+
+def test_gripper_zero_stamp_counts_fallback() -> None:
+    c = _bare()
+    c._on_gripper_feedback("right", _fb([10.0], stamp_sec=0))
+    assert c._stamp_fallbacks["gripper_right"] == 1
+
+
+def test_torso_stream_preserves_vendor_frame() -> None:
+    c = _bare()
+    msg = _fb([0.0] * 4, stamp_sec=3)
+    msg.header.frame_id = "vendor_torso_frame"
+    c._on_torso_feedback(msg, None)
+    c._publish_feedback_streams()
+    assert c.torso_states.msgs[0].frame_id == "vendor_torso_frame"
+
+
+def test_odom_zero_stamp_counts_fallback() -> None:
+    c = _bare()
+
+    def speed(sec: int) -> Any:
+        return _Msg(
+            header=_ns(stamp=_ns(sec=sec, nanosec=0)),
+            twist=_ns(linear=_ns(x=1.0, y=0.0, z=0.0), angular=_ns(x=0.0, y=0.0, z=0.0)),
+        )
+
+    c._on_chassis_speed(speed(0), None)
+    assert c._stamp_fallbacks["odom"] == 1
 
 
 def test_odom_derived_from_chassis_speed_with_vendor_stamp() -> None:
@@ -338,14 +375,56 @@ def test_arm_rejected_when_feedback_stale() -> None:
     assert not c._armed
 
 
-def test_disarm_clears_caches() -> None:
+def test_disarm_returns_to_ready_and_can_rearm() -> None:
     c = _armed(_bare())
     c._on_motor_command(_motor_cmd())
     c._on_cmd_vel(Twist(linear=Vector3(0.5, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0)))
     c._on_arming(String(data="DISARM"))
     assert not c._armed
+    assert c._state is ConnectionState.READY_DISARMED
     assert c._arm_cmd is None
     assert c._latest_cmd_vel is None
+    # A fresh ARM with the rotated nonce works without a restart.
+    c._on_arming(String(data=f"ARM RC5 {c._arming_nonce}"))
+    assert c._armed
+    assert c._state is ConnectionState.ARMED
+
+
+@pytest.mark.parametrize(
+    "make_stale",
+    [
+        lambda c: setattr(c._left, "rx_monotonic", c._left.rx_monotonic - 10.0),
+        lambda c: setattr(c._right, "rx_monotonic", c._right.rx_monotonic - 10.0),
+        lambda c: setattr(c._torso, "rx_monotonic", c._torso.rx_monotonic - 10.0),
+        lambda c: c._gripper_fb_rx.__setitem__("left", 0.0),
+        lambda c: c._gripper_fb_rx.__setitem__("right", 0.0),
+        lambda c: setattr(c, "_last_chassis_fb_ts", 0.0),
+    ],
+    ids=["arm_left", "arm_right", "torso", "gripper_left", "gripper_right", "chassis_speed"],
+)
+def test_arm_rejected_per_stale_required_source(make_stale: Any) -> None:
+    c = _bare()
+    make_stale(c)
+    c._on_arming(String(data="ARM RC5 abc123"))
+    assert not c._armed
+
+
+@pytest.mark.parametrize(
+    "make_stale",
+    [
+        lambda c: setattr(c._left, "rx_monotonic", 0.0),
+        lambda c: setattr(c._torso, "rx_monotonic", 0.0),
+        lambda c: c._gripper_fb_rx.__setitem__("right", 0.0),
+        lambda c: setattr(c, "_last_chassis_fb_ts", 0.0),
+    ],
+    ids=["arm_left", "torso", "gripper_right", "chassis_speed"],
+)
+def test_stale_required_source_while_armed_disarms(make_stale: Any) -> None:
+    c = _armed(_bare())
+    make_stale(c)
+    assert c._run_one_tick()
+    assert not c._armed
+    assert c._state is ConnectionState.READY_DISARMED
 
 
 def test_stale_feedback_disarms_and_recovery_never_rearms() -> None:
@@ -368,19 +447,37 @@ def test_stale_feedback_disarms_and_recovery_never_rearms() -> None:
 # Publish-gate linearization
 
 
-def test_stop_transition_blocks_all_later_publication() -> None:
+class _GateProbe:
+    """Lock wrapper that reports when a named thread waits to acquire it."""
+
+    def __init__(self, inner: threading.Lock, watch_thread_name: str) -> None:
+        self._inner = inner
+        self._watch = watch_thread_name
+        self.waiting = threading.Event()
+
+    def __enter__(self) -> None:
+        if threading.current_thread().name == self._watch:
+            self.waiting.set()
+        self._inner.acquire()
+
+    def __exit__(self, *exc: Any) -> None:
+        self._inner.release()
+
+
+def test_stop_wins_gate_then_nothing_publishes() -> None:
     c = _armed(_bare())
+    c.config.stop_zero_duration_s = 0.01
     c._on_motor_command(_motor_cmd())
-    with c._publish_gate, c._lifecycle_lock:
-        c._state = ConnectionState.STOPPING
-        c._armed = False
-        c._clear_command_caches_locked()
+    c.stop()
+    assert c._state is ConnectionState.STOPPED
+    assert _vendor_arm_msgs(c) == []
     assert c._run_one_tick() is False
     assert _vendor_arm_msgs(c) == []
 
 
-def test_inflight_tick_completes_before_stop_transition() -> None:
+def test_tick_wins_gate_completes_before_stop_transition() -> None:
     c = _armed(_bare())
+    c.config.stop_zero_duration_s = 0.01
     c._on_motor_command(_motor_cmd())
     entered = threading.Event()
     release = threading.Event()
@@ -392,26 +489,62 @@ def test_inflight_tick_completes_before_stop_transition() -> None:
         original(snap)
 
     c._publish_vendor_commands = blocking_publish  # type: ignore[method-assign]
-    tick = threading.Thread(target=c._run_one_tick)
+    probe = _GateProbe(c._publish_gate, watch_thread_name="stopper")
+    c._publish_gate = probe  # type: ignore[assignment]
+
+    tick = threading.Thread(target=c._run_one_tick, name="tick")
     tick.start()
     assert entered.wait(timeout=5.0)
 
-    stopper = threading.Thread(target=c.stop)
+    stopper = threading.Thread(target=c.stop, name="stopper")
     stopper.start()
-    time.sleep(0.05)
-    # stop() is blocked on the gate: the transition has not happened.
+    # Proof, not sleep: the stop thread has reached the gate and is blocked
+    # there while the tick holds it; the transition has not happened.
+    assert probe.waiting.wait(timeout=5.0)
     assert c._state is ConnectionState.ARMED
-    published_at_release = len(_vendor_arm_msgs(c))
-    assert published_at_release == 0
+    assert _vendor_arm_msgs(c) == []
+
     release.set()
     tick.join(timeout=5.0)
     stopper.join(timeout=10.0)
-    # The in-flight publication landed, then stop transitioned; nothing after.
-    msgs = _vendor_arm_msgs(c)
-    assert len(msgs) == 2
+    assert not tick.is_alive() and not stopper.is_alive()
+    # The in-flight publication landed, then stop transitioned; no arm
+    # command follows the transition (stop's own zero stream may follow).
+    assert len(_vendor_arm_msgs(c)) == 2
     assert c._state is ConnectionState.STOPPED
     assert c._run_one_tick() is False
     assert len(_vendor_arm_msgs(c)) == 2
+
+
+@pytest.mark.parametrize(
+    "failing_method",
+    ["_publish_vendor_commands", "_publish_feedback_streams", "_publish_telemetry"],
+)
+def test_tick_failure_disarms_fails_and_zeros_chassis(failing_method: str) -> None:
+    c = _armed(_bare())
+    c.config.stop_zero_duration_s = 0.02
+    c._on_motor_command(_motor_cmd())
+    c._on_cmd_vel(Twist(linear=Vector3(0.5, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0)))
+    c._telem_tick = int(c.config.publish_rate_hz) - 1
+
+    def boom(*args: Any, **kw: Any) -> None:
+        raise RuntimeError("injected publish failure")
+
+    setattr(c, failing_method, boom)
+    assert c._safe_tick() is False
+    assert not c._armed
+    assert c._state is ConnectionState.FAILED
+    assert c._arm_cmd is None
+    assert c._latest_cmd_vel is None
+    speeds = [m for t, m in c._ros.published if t == "speed"]  # type: ignore[union-attr]
+    assert speeds, "failure path must attempt a chassis zero stream"
+    # A publication authorized before the failure may carry the live
+    # command; everything from the failure onward must be zeros.
+    assert speeds[-1].twist.linear.x == 0.0
+    zero_tail = [m for m in speeds if m.twist.linear.x == 0.0]
+    assert len(zero_tail) >= 1
+    with pytest.raises(RuntimeError):
+        c._stream_chassis_zero(0.01)
 
 
 # Stop sequence and lifecycle
@@ -453,23 +586,202 @@ def test_single_use_start_after_stop_raises() -> None:
         c.start()
 
 
-def test_partial_start_unwinds_cleanup_stack_in_reverse() -> None:
+class _FakeIn:
+    def subscribe(self, _cb: Any) -> Any:
+        return lambda: None
+
+
+class _RosHarness:
+    """Records every resource the production start path creates/releases."""
+
+    def __init__(self, fail_at: str | None) -> None:
+        self.fail_at = fail_at
+        self.events: list[str] = []
+
+
+def _install_fake_ros_stack(monkeypatch: Any, harness: _RosHarness) -> None:
+    h = harness
+
+    class FakeRawROSTopic:
+        def __init__(self, name: str, _msg_type: Any, qos: Any = None) -> None:
+            self.name = name
+
+    class FakeRawROS:
+        def __init__(self, node_name: str) -> None:
+            h.events.append(f"ros_created:{node_name}")
+
+        def start(self) -> None:
+            if h.fail_at == "ros_start":
+                raise RuntimeError("injected: ros start")
+            h.events.append("ros_started")
+
+        def subscribe(self, topic: Any, _cb: Any) -> Any:
+            if h.fail_at == f"sub:{topic.name}":
+                raise RuntimeError(f"injected: subscribe {topic.name}")
+            h.events.append(f"subscribed:{topic.name}")
+            return lambda: h.events.append(f"unsubscribed:{topic.name}")
+
+        def stop(self) -> None:
+            h.events.append("ros_stopped")
+
+        def now_stamp(self) -> Any:
+            return _Msg(sec=1, nanosec=0)
+
+        def publish(self, topic: Any, message: Any) -> None:
+            h.events.append(f"published:{getattr(topic, 'name', topic)}")
+
+    fake_rospubsub = types.ModuleType("dimos.protocol.pubsub.impl.rospubsub")
+    fake_rospubsub.RawROS = FakeRawROS  # type: ignore[attr-defined]
+    fake_rospubsub.RawROSTopic = FakeRawROSTopic  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "dimos.protocol.pubsub.impl.rospubsub", fake_rospubsub)
+
+    class FakeContext:
+        def ok(self) -> bool:
+            return True
+
+    class FakeNode:
+        def __init__(self, _name: str, context: Any = None) -> None:
+            if h.fail_at == "sensor_node":
+                raise RuntimeError("injected: sensor node")
+            h.events.append("sensor_node_created")
+
+        def create_subscription(self, *_a: Any, **_kw: Any) -> Any:
+            h.events.append("sensor_subscription")
+            return object()
+
+        def destroy_node(self) -> None:
+            h.events.append("sensor_node_destroyed")
+
+    class FakeExecutor:
+        def __init__(self, num_threads: int = 1, context: Any = None) -> None:
+            if h.fail_at == "sensor_executor":
+                raise RuntimeError("injected: sensor executor")
+            h.events.append("sensor_executor_created")
+
+        def add_node(self, _node: Any) -> None:
+            pass
+
+        def shutdown(self, timeout_sec: float = 0.0) -> None:
+            h.events.append("sensor_executor_shutdown")
+
+        def spin_once(self, timeout_sec: float = 0.0) -> None:
+            time.sleep(0.01)
+
+    fake_rclpy = types.ModuleType("rclpy")
+
+    def _init(context: Any = None) -> None:
+        if h.fail_at == "sensor_context":
+            raise RuntimeError("injected: sensor context")
+        h.events.append("rclpy_init")
+
+    def _shutdown(context: Any = None) -> None:
+        h.events.append("rclpy_shutdown")
+
+    fake_rclpy.init = _init  # type: ignore[attr-defined]
+    fake_rclpy.shutdown = _shutdown  # type: ignore[attr-defined]
+    ctx_mod = types.ModuleType("rclpy.context")
+    ctx_mod.Context = FakeContext  # type: ignore[attr-defined]
+    exec_mod = types.ModuleType("rclpy.executors")
+    exec_mod.MultiThreadedExecutor = FakeExecutor  # type: ignore[attr-defined]
+    node_mod = types.ModuleType("rclpy.node")
+    node_mod.Node = FakeNode  # type: ignore[attr-defined]
+    qos_mod = types.ModuleType("rclpy.qos")
+
+    class _QoSProfile:
+        def __init__(self, **kw: Any) -> None:
+            pass
+
+    class _Policy:
+        BEST_EFFORT = RELIABLE = VOLATILE = 0
+
+    qos_mod.QoSProfile = _QoSProfile  # type: ignore[attr-defined]
+    qos_mod.ReliabilityPolicy = _Policy  # type: ignore[attr-defined]
+    qos_mod.DurabilityPolicy = _Policy  # type: ignore[attr-defined]
+    for name, mod in (
+        ("rclpy", fake_rclpy),
+        ("rclpy.context", ctx_mod),
+        ("rclpy.executors", exec_mod),
+        ("rclpy.node", node_mod),
+        ("rclpy.qos", qos_mod),
+    ):
+        monkeypatch.setitem(sys.modules, name, mod)
+
+
+def _lifecycle_conn(monkeypatch: Any, harness: _RosHarness) -> R1LiteConnection:
+    _install_fake_ros_stack(monkeypatch, harness)
+    sensor_msg_mod = sys.modules["sensor_msgs.msg"]
+    for name in ("CompressedImage", "Image", "Imu"):
+        monkeypatch.setattr(sensor_msg_mod, name, type(name, (), {}), raising=False)
+    monkeypatch.setattr(conn_mod, "_FEEDBACK_DISCOVERY_TIMEOUT_S", 0.05)
     c = _construct()
-    order: list[str] = []
+    c.config.enable_cameras = False
+    for stream in (
+        "motor_command",
+        "cmd_vel",
+        "gripper_left_command",
+        "gripper_right_command",
+        "arming",
+    ):
+        setattr(c, stream, _FakeIn())
+    for stream in ("connection_status",):
+        setattr(c, stream, _FakeOut())
+    return c
 
-    def failing_start() -> None:
-        c._cleanup_stack.append(("first", lambda: order.append("first")))
-        c._cleanup_stack.append(("second", lambda: order.append("second")))
-        raise RuntimeError("resource three failed")
 
-    c._start_resources = failing_start  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError):
+@pytest.mark.parametrize(
+    "fail_at",
+    [
+        "ros_start",
+        "sub:/hdas/feedback_arm_left",
+        "sub:/motion_control/chassis_speed",
+        "sensor_context",
+        "sensor_node",
+        "sensor_executor",
+    ],
+)
+def test_partial_start_releases_every_created_resource(monkeypatch: Any, fail_at: str) -> None:
+    harness = _RosHarness(fail_at)
+    c = _lifecycle_conn(monkeypatch, harness)
+    threads_before = {t.name for t in threading.enumerate()}
+    with pytest.raises(RuntimeError, match="injected"):
         c.start()
-    assert order == ["second", "first"]
-    assert c._cleanup_stack == []
     assert c._state is ConnectionState.FAILED
+    assert c._cleanup_stack == []
+    # Every successful subscribe was unsubscribed, in reverse order.
+    subs = [e.split(":", 1)[1] for e in harness.events if e.startswith("subscribed:")]
+    unsubs = [e.split(":", 1)[1] for e in harness.events if e.startswith("unsubscribed:")]
+    assert unsubs == list(reversed(subs))
+    if "ros_started" in harness.events:
+        assert "ros_stopped" in harness.events
+    if "rclpy_init" in harness.events:
+        assert "rclpy_shutdown" in harness.events
+    if "sensor_node_created" in harness.events:
+        assert "sensor_node_destroyed" in harness.events
+    # No connection-owned thread survives.
+    leaked = {t.name for t in threading.enumerate()} - threads_before
+    assert not {n for n in leaked if n.startswith("r1lite")}
     c.stop()
     assert c._state is ConnectionState.STOPPED
+
+
+def test_full_start_then_stop_releases_everything(monkeypatch: Any) -> None:
+    harness = _RosHarness(fail_at=None)
+    c = _lifecycle_conn(monkeypatch, harness)
+    threads_before = {t.name for t in threading.enumerate()}
+    c.config.stop_zero_duration_s = 0.01
+    c.start()
+    assert c._state is ConnectionState.READY_DISARMED
+    c.stop()
+    assert c._state is ConnectionState.STOPPED
+    assert c._cleanup_stack == []
+    subs = [e.split(":", 1)[1] for e in harness.events if e.startswith("subscribed:")]
+    unsubs = [e.split(":", 1)[1] for e in harness.events if e.startswith("unsubscribed:")]
+    assert unsubs == list(reversed(subs))
+    assert "ros_stopped" in harness.events and "rclpy_shutdown" in harness.events
+    leaked = {t.name for t in threading.enumerate()} - threads_before
+    assert not {n for n in leaked if n.startswith("r1lite")}
+    with pytest.raises(RuntimeError):
+        c.start()
 
 
 # Chassis dead-man and command mapping
