@@ -20,9 +20,17 @@ import pytest
 from typer.testing import CliRunner
 
 from dimos.core.coordination.blueprints import autoconnect
+import dimos.core.coordination.worker_manager_python as worker_manager_python
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
-from dimos.robot.cli.dimos import _normalize_simulation_argv, arg_help, main
+from dimos.robot import external_blueprints as external
+from dimos.robot.cli.dimos import (
+    _normalize_simulation_argv,
+    _with_relay_bridge,
+    arg_help,
+    load_config_args,
+    main,
+)
 import dimos.utils.cli.spy.run_spy as run_spy
 
 
@@ -142,6 +150,48 @@ def test_blueprint_arg_help_extra_args():
     ]
 
 
+def test_load_config_args_merges_cli_g_overrides(tmp_path):
+    """CLI flags (--transport, --local-relay, ...) must merge into the g
+    subtree built from config file / G__* env / -o g.* args, not replace it:
+    a replace silently reverts every other g.* key to its default."""
+
+    class Config(ModuleConfig):
+        pass
+
+    class TestModuleG(Module):
+        config: Config
+
+    blueprint = TestModuleG.blueprint()
+    kwargs = load_config_args(
+        blueprint.config(),
+        ["g.robot_id=go2-lab", "g.local_relay=false"],
+        tmp_path / "config.json",
+        cli_g_overrides={"local_relay": True},
+    )
+    assert kwargs["g"]["robot_id"] == "go2-lab"  # survives the CLI overrides
+    assert kwargs["g"]["local_relay"] is True  # the explicit flag wins its own key
+
+
+def test_run_composition_leaves_blueprint_alone_when_relay_disabled() -> None:
+    class Config(ModuleConfig):
+        pass
+
+    class TestModule(Module):
+        config: Config
+
+    original_local_relay = global_config.local_relay
+    original_relay_url = global_config.relay_url
+    global_config.update(local_relay=False, relay_url=None)
+    try:
+        source = TestModule.blueprint()
+        assert _with_relay_bridge(source) is source
+    finally:
+        global_config.update(
+            local_relay=original_local_relay,
+            relay_url=original_relay_url,
+        )
+
+
 def test_blueprint_arg_help_required():
     """Test required arguments."""
 
@@ -163,6 +213,75 @@ def test_blueprint_arg_help_required():
         "      * testmodule.spam: str (default: eggs)",
         "",
     ]
+
+
+def test_list_blueprints_groups_builtin_and_external(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        external,
+        "list_external_blueprint_names",
+        lambda: ["my-test-stack.demo", "my-test-stack.keyboard-teleop"],
+    )
+
+    result = CliRunner().invoke(main, ["list"])
+
+    assert result.exit_code == 0
+    assert "Built-in blueprints:" in result.output
+    assert "  unitree-go2" in result.output
+    assert "demo-agent" not in result.output
+    assert "External blueprints:" in result.output
+    assert "  my-test-stack.demo" in result.output
+    assert "  my-test-stack.keyboard-teleop" in result.output
+
+
+def test_list_blueprints_without_external_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(external, "list_external_blueprint_names", lambda: [])
+
+    result = CliRunner().invoke(main, ["list"])
+
+    assert result.exit_code == 0
+    assert "Built-in blueprints:" in result.output
+    assert "External blueprints:" not in result.output
+
+
+def test_list_blueprints_reports_external_discovery_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_error() -> list[str]:
+        raise external.ExternalBlueprintError("external metadata is invalid")
+
+    monkeypatch.setattr(external, "list_external_blueprint_names", raise_error)
+
+    result = CliRunner().invoke(main, ["list"])
+
+    assert result.exit_code == 1
+    assert "external metadata is invalid" in result.output
+
+
+def test_run_reports_external_resolution_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_error(name: str):
+        raise external.ExternalBlueprintError(
+            "Failed to load external blueprint "
+            f"{name!r} from entry point 'my_test_stack.missing:demo_blueprint': "
+            "ModuleNotFoundError: No module named 'my_test_stack.missing'"
+        )
+
+    monkeypatch.setattr(
+        "dimos.robot.get_all_blueprints.resolve_external_blueprint_by_name",
+        raise_error,
+    )
+
+    result = CliRunner().invoke(main, ["run", "my-test-stack.demo"])
+
+    assert result.exit_code == 1
+    assert "Failed to load external blueprint 'my-test-stack.demo'" in result.output
+    assert "my_test_stack.missing:demo_blueprint" in result.output
+
+
+def test_run_reports_unknown_bare_blueprint() -> None:
+    result = CliRunner().invoke(main, ["run", "missing-bare-blueprint"])
+
+    assert result.exit_code == 1
+    assert "Unknown blueprint or module: missing-bare-blueprint" in result.output
 
 
 @pytest.fixture
@@ -259,3 +378,48 @@ def test_blueprint_arg_help_uses_nested_backend_defaults():
         in output
     )
     assert "        * testmodule.nested.level: int (default: 3)" in output
+
+
+def test_nested_blueprint_config_defaults_survive_cli_override(tmp_path, monkeypatch):
+    class NestedConfig(BaseModel):
+        enabled: bool = True
+        mode: str = "auto"
+
+    class Config(ModuleConfig):
+        nested: NestedConfig = Field(default_factory=NestedConfig)
+
+    class TestModule(Module):
+        config: Config
+
+    class FakeWorker:
+        dedicated = False
+        module_count = 0
+
+        def reserve_slot(self):
+            self.module_count += 1
+
+        def deploy_module(self, _module_class, _global_config, kwargs):
+            return kwargs
+
+    monkeypatch.setattr(
+        worker_manager_python, "RPCClient", lambda actor, _module_class, _instance_name: actor
+    )
+
+    blueprint = TestModule.blueprint(nested={"mode": "manual"})
+    blueprint_args = load_config_args(
+        blueprint.config(),
+        ["testmodule.nested.enabled=false"],
+        tmp_path / "config.json",
+    )
+    worker_manager = worker_manager_python.WorkerManagerPython(global_config)
+    worker_manager._started = True
+    worker_manager._workers = [FakeWorker()]
+
+    deployed_configs = worker_manager.deploy_parallel(
+        [(TestModule, global_config, blueprint.blueprints[0].kwargs.copy())],
+        blueprint_args,
+    )
+    config = Config(**deployed_configs[0])
+
+    assert config.nested.enabled is False
+    assert config.nested.mode == "manual"

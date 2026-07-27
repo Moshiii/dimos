@@ -84,7 +84,7 @@ Quick view on performance of our pubsub backends:
 python -m pytest -sv -k "not bytes" dimos/protocol/pubsub/benchmark/tool_benchmark.py
 ```
 
-![Benchmark results](../assets/pubsub_benchmark.png)
+![Benchmark results](https://raw.githubusercontent.com/dimensionalOS/dimos-docs-assets/main/usage/assets/pubsub_benchmark.png)
 
 ## Abstraction layers
 
@@ -116,17 +116,7 @@ text "pub/sub API" at P.s + (0, -0.2in)
 
 </details>
 
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
+![output](../assets/abstraction_layers.svg)
 
 We’ll go through these layers top-down.
 
@@ -260,7 +250,7 @@ dimos spy --transport zenoh   # filter to one transport (repeatable flag)
 dimos lcmspy                  # deprecated alias for: dimos spy --transport lcm
 ```
 
-![dimos spy](../assets/lcmspy.png)
+![dimos spy](https://raw.githubusercontent.com/dimensionalOS/dimos-docs-assets/main/usage/assets/lcmspy.png)
 
 `dimos topic echo /topic` listens on typed channels like `/topic#pkg.Msg` and decodes automatically:
 
