@@ -91,6 +91,8 @@ all_blueprints = {
     "openarm-planner-coordinator": "dimos.robot.manipulators.openarm.blueprints.planner:openarm_planner_coordinator",
     "openyam-planner-coordinator": "dimos.robot.manipulators.openyam.blueprints.basic:openyam_planner_coordinator",
     "path-planner-eval": "dimos.navigation.nav_3d.evaluator.blueprints:path_planner_eval",
+    "r1lite-coordinator": "dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_coordinator:r1lite_coordinator",
+    "r1lite-keyboard-teleop": "dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_keyboard_teleop:r1lite_keyboard_teleop",
     "teleop-hosted-go2-multicam": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_go2_multicam",
     "teleop-hosted-go2-transport": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_go2_transport",
     "teleop-hosted-xarm6": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_xarm6",
