@@ -30,11 +30,14 @@ import types
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from dimos_lcm.geometry_msgs import PoseStamped as LCMPoseStamped
+from dimos_lcm.sensor_msgs import Joy as LCMJoy
 import numpy as np
 import pinocchio
 import pytest
 
 from dimos.control.coordinator import ControlCoordinator
+from dimos.control.tasks.teleop_task.teleop_task import create_task
 import dimos.core.module as module_mod
 from dimos.manipulation.planning.kinematics.pinocchio_ik import PinocchioIK
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -44,6 +47,7 @@ from dimos.msgs.sensor_msgs.Joy import Joy
 from dimos.protocol.rpc.spec import RPCSpec
 from dimos.robot.galaxea.r1lite import config as cfg
 from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import (
+    _teleop_tasks,
     r1lite_quest_teleop,
     r1lite_quest_teleop_sim,
 )
@@ -598,12 +602,6 @@ class _FakeJoints:
 
 
 def test_replay_fixture_drives_production_pipeline() -> None:
-    from dimos_lcm.geometry_msgs import PoseStamped as LCMPoseStamped
-    from dimos_lcm.sensor_msgs import Joy as LCMJoy
-
-    from dimos.control.tasks.teleop_task.teleop_task import create_task
-    from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
-
     left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
     task = create_task(left_cfg, None)
     task.start()
@@ -681,9 +679,6 @@ def test_replay_fixture_drives_production_pipeline() -> None:
 
 
 def test_engaged_task_times_out_when_stream_stops() -> None:
-    from dimos.control.tasks.teleop_task.teleop_task import create_task
-    from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
-
     left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
     task = create_task(left_cfg, None)
     task.start()
@@ -816,9 +811,6 @@ def test_malformed_stream_storm_forces_stale_release() -> None:
 
 
 def test_stale_stream_release_reaches_production_task() -> None:
-    from dimos.control.tasks.teleop_task.teleop_task import create_task
-    from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
-
     left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
     task = create_task(left_cfg, None)
     task.start()

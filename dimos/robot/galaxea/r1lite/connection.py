@@ -1238,6 +1238,16 @@ class R1LiteConnection(Module):
             logger.warning("chassis stop unconfirmed: no fresh chassis feedback after stop")
         elif lin > 0.02 or ang > 0.05:
             logger.error("chassis not settled after stop: lin=%.3f ang=%.3f", lin, ang)
+        else:
+            # The positive settling proof the motion runbook checks for:
+            # feedback received after the zero stream began showed the
+            # chassis stationary.
+            logger.info(
+                "chassis stop settled: lin=%.3f ang=%.3f fb_age_s=%.2f",
+                lin,
+                ang,
+                time.monotonic() - fb_ts,
+            )
 
     def _publish_feedback_streams(self) -> None:
         """Publish motor/torso states and IMUs. Not actuator output."""
