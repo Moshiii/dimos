@@ -28,11 +28,16 @@ the operator to type the arming attestation, publishes it, and waits for
 the connection to report ARMED. Success is claimed only from an observed
 state transition.
 
+disarm: publishes DISARM and succeeds only on an observed transition to
+READY_DISARMED. Runs no ownership checks: dropping to disarmed must never
+be blocked by an unhealthy topic.
+
 All subcommands exit nonzero at the first failed check.
 
     python scripts/r1lite_test/preflight.py phase1
     python scripts/r1lite_test/preflight.py phase2
     python scripts/r1lite_test/preflight.py arm
+    python scripts/r1lite_test/preflight.py disarm
 """
 
 from __future__ import annotations
@@ -189,6 +194,46 @@ def _send_arm(nonce: str) -> None:
     transport.stop()
 
 
+def _send_disarm() -> None:
+    from dimos.core.transport import LCMTransport
+    from dimos.msgs.std_msgs.String import String
+
+    transport: Any = LCMTransport(cfg.ARMING_TOPIC, String)
+    transport.publish(String(data="DISARM"))
+    time.sleep(0.2)
+    transport.stop()
+
+
+def run_disarm(
+    read_status: Callable[[], dict[str, str]],
+    send_disarm: Callable[[], None],
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Publish DISARM and require an observed READY_DISARMED transition.
+
+    When the connection was ARMED, the nonce must also have rotated, which
+    proves the connection processed this DISARM rather than reporting an
+    old state.
+    """
+    before = read_status()
+    if not before.get("state"):
+        _fail("no connection status; is the blueprint running?")
+    send_disarm()
+    observed = wait_for_status(
+        read_status,
+        lambda s: s.get("state") == "READY_DISARMED" and bool(s.get("nonce")),
+        deadline=now() + ARM_OBSERVE_TIMEOUT_S,
+        now=now,
+        sleep=sleep,
+    )
+    if observed.get("state") != "READY_DISARMED" or not observed.get("nonce"):
+        _fail(f"connection did not report READY_DISARMED (last status {observed or 'absent'})")
+    if before.get("state") == "ARMED" and observed["nonce"] == before.get("nonce"):
+        _fail("nonce did not rotate after DISARM; state report may be stale")
+    print(f"PASS disarm: connection reports READY_DISARMED, nonce {observed['nonce']}")
+
+
 def run_phase(
     phase: str,
     rates: dict[str, float],
@@ -245,8 +290,12 @@ def run_phase(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=["phase1", "phase2", "arm"])
+    parser.add_argument("phase", choices=["phase1", "phase2", "arm", "disarm"])
     args = parser.parse_args()
+
+    if args.phase == "disarm":
+        run_disarm(_read_status_lcm, _send_disarm)
+        return
 
     import rclpy
 

@@ -309,10 +309,12 @@ def test_arm_model_header_names_provenance(model: Path) -> None:
     assert "2e5d31e1784481a34d178006c0d0e18e0a84a82a" in text
 
 
-# Offline chase regression (the wedge class)
+# Offline chase characterization (the wedge class). This models the chase
+# algorithm on a DLS solver to characterize the wedge failure mode; the
+# production-path evidence is test_replay_fixture_drives_production_pipeline.
 
 
-def test_teleop_chases_through_folded_home_and_teleports() -> None:
+def test_chase_algorithm_characterization_folded_home_teleport() -> None:
     # From the folded home, small cartesian targets need large joint
     # motion, and pose-stream gaps teleport the target. The chase window
     # recentered on the EE, bounded steps, and the 45 degree backstop must
@@ -345,8 +347,8 @@ def test_teleop_chases_through_folded_home_and_teleports() -> None:
     while np.linalg.norm(ik.forward_kinematics(q).translation - target.translation) >= 0.005:
         ticks += 1
         assert ticks <= 600, "teleported target not reached in 600 ticks"
-        # Production behavior: full window first, quartered backoff if the
-        # solution trips the branch-flip gate. Zero final rejections.
+        # Models production's ordering: full window first, quartered backoff
+        # if the solution trips the branch-flip gate. Zero final rejections.
         accepted = None
         for scale in (1.0, 0.25):
             q_sol, _, _ = ik.solve(windowed(q, scale), q)
@@ -499,31 +501,62 @@ def test_recovery_with_button_still_held_stays_released() -> None:
 
 # Full vendor-chain pinning
 
+# Every rpy is zero: the A1X chain encodes orientation entirely through
+# joint axes and translations, in the vendor publication and the on-robot
+# capture alike. A nonzero rpy appearing is a chain change and must fail.
 _EXPECTED_CHAIN = {
     "left": [
-        ("left_arm_joint1", "0 0 0.08605", "0 0 1", -2.86234670748, 2.86234670748),
-        ("left_arm_joint2", "0 0.03075 0.04925", "0 1 0", 0.01745329252, 3.12414670748),
-        ("left_arm_joint3", "-0.3 0.00025004 0", "0 1 0", -3.29864670748, -0.01745329252),
-        ("left_arm_joint4", "0.1747 0.00049739 0.075485", "0 1 0", -1.55334670748, 1.55334670748),
-        ("left_arm_joint5", "0.08 -0.031498 0.0405", "0 0 1", -1.55334670748, 1.55334670748),
-        ("left_arm_joint6", "0.022503 0 -0.0405", "1 0 0", -2.86234670748, 2.86234670748),
+        ("left_arm_joint1", "0 0 0.08605", "0 0 0", "0 0 1", -2.86234670748, 2.86234670748),
+        ("left_arm_joint2", "0 0.03075 0.04925", "0 0 0", "0 1 0", 0.01745329252, 3.12414670748),
+        ("left_arm_joint3", "-0.3 0.00025004 0", "0 0 0", "0 1 0", -3.29864670748, -0.01745329252),
+        (
+            "left_arm_joint4",
+            "0.1747 0.00049739 0.075485",
+            "0 0 0",
+            "0 1 0",
+            -1.55334670748,
+            1.55334670748,
+        ),
+        (
+            "left_arm_joint5",
+            "0.08 -0.031498 0.0405",
+            "0 0 0",
+            "0 0 1",
+            -1.55334670748,
+            1.55334670748,
+        ),
+        ("left_arm_joint6", "0.022503 0 -0.0405", "0 0 0", "1 0 0", -2.86234670748, 2.86234670748),
     ],
     "right": [
-        ("right_arm_joint1", "0 0 0.08605", "0 0 1", -2.86234670748, 2.86234670748),
-        ("right_arm_joint2", "0 0.03075 0.04925", "0 1 0", 0.01745329252, 3.12414670748),
-        ("right_arm_joint3", "-0.3 0.00025004 0", "0 1 0", -3.29864670748, -0.01745329252),
-        ("right_arm_joint4", "0.1747 0.00049739 0.075485", "0 1 0", -1.55334670748, 1.55334670748),
-        ("right_arm_joint5", "0.08 -0.031498 0.0405", "0 0 1", -1.55334670748, 1.55334670748),
-        ("right_arm_joint6", "0.022503 0 -0.0405", "1 0 0", -2.86234670748, 2.86234670748),
+        ("right_arm_joint1", "0 0 0.08605", "0 0 0", "0 0 1", -2.86234670748, 2.86234670748),
+        ("right_arm_joint2", "0 0.03075 0.04925", "0 0 0", "0 1 0", 0.01745329252, 3.12414670748),
+        ("right_arm_joint3", "-0.3 0.00025004 0", "0 0 0", "0 1 0", -3.29864670748, -0.01745329252),
+        (
+            "right_arm_joint4",
+            "0.1747 0.00049739 0.075485",
+            "0 0 0",
+            "0 1 0",
+            -1.55334670748,
+            1.55334670748,
+        ),
+        (
+            "right_arm_joint5",
+            "0.08 -0.031498 0.0405",
+            "0 0 0",
+            "0 0 1",
+            -1.55334670748,
+            1.55334670748,
+        ),
+        ("right_arm_joint6", "0.022503 0 -0.0405", "0 0 0", "1 0 0", -2.86234670748, 2.86234670748),
     ],
 }
 
 
 @pytest.mark.parametrize("side", ["left", "right"])
 def test_every_joint_origin_axis_and_limit_is_pinned(side: str) -> None:
-    # The complete deterministic chain comparison: every origin, axis, and
-    # limit of both shipped models, pinned to the values verified against
-    # the vendor publication and the on-robot capture.
+    # The complete deterministic chain comparison: every origin xyz and rpy,
+    # axis, and limit of both shipped models, pinned to the values verified
+    # against the vendor publication and the on-robot capture.
     model = cfg.R1LITE_LEFT_ARM_MODEL if side == "left" else cfg.R1LITE_RIGHT_ARM_MODEL
     root = ET.parse(model).getroot()
     actual = []
@@ -531,10 +564,12 @@ def test_every_joint_origin_axis_and_limit_is_pinned(side: str) -> None:
         if j.get("type") != "revolute":
             continue
         lim = j.find("limit")
+        origin = j.find("origin")
         actual.append(
             (
                 j.get("name"),
-                j.find("origin").get("xyz"),
+                origin.get("xyz"),
+                origin.get("rpy", "0 0 0"),
                 j.find("axis").get("xyz"),
                 float(lim.get("lower")),
                 float(lim.get("upper")),
@@ -546,8 +581,9 @@ def test_every_joint_origin_axis_and_limit_is_pinned(side: str) -> None:
         assert got[0] == want[0]
         assert got[1] == want[1]
         assert got[2] == want[2]
-        assert got[3] == pytest.approx(want[3])
+        assert got[3] == want[3]
         assert got[4] == pytest.approx(want[4])
+        assert got[5] == pytest.approx(want[5])
 
 
 # Production replay: fixture frames through the module into production tasks
@@ -659,3 +695,189 @@ def test_engaged_task_times_out_when_stream_stops() -> None:
     # No further commands: past the configured timeout the task goes inert.
     late = types.SimpleNamespace(t_now=1.02 + 2.0, joints=_FakeJoints(positions))
     assert task.compute(late) is None
+
+
+# Malformed Quest input (non-finite and invalid values at ingress)
+
+
+def _joy_frame(
+    frame_id: str,
+    *,
+    stick_x: float = 0.0,
+    stick_y: float = 0.0,
+    trigger: float = 0.0,
+    grip: float = 0.0,
+    primary: bool = False,
+) -> bytes:
+    return Joy(
+        ts=1.0,
+        frame_id=frame_id,
+        axes=[stick_x, stick_y, trigger, grip],
+        buttons=[0, 0, 0, 0, int(primary), 0, 0],
+    ).lcm_encode()
+
+
+def _pose_frame(
+    frame_id: str,
+    x: float = 0.0,
+    y: float = 0.0,
+    z: float = 0.0,
+    q: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+) -> bytes:
+    return PoseStamped(
+        ts=1.0,
+        frame_id=frame_id,
+        position=Vector3(x=x, y=y, z=z),
+        orientation=Quaternion(q[0], q[1], q[2], q[3]),
+    ).lcm_encode()
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        _joy_frame("left", trigger=float("nan")),
+        _joy_frame("left", grip=float("inf")),
+        _joy_frame("left", stick_x=float("nan")),
+        _joy_frame("left", stick_y=float("-inf")),
+    ],
+    ids=["nan_trigger", "inf_grip", "nan_stick_x", "neg_inf_stick_y"],
+)
+def test_non_finite_joy_axes_rejected_without_refreshing_freshness(frame: bytes) -> None:
+    m = _module()
+    m._on_joy_bytes(frame)
+    assert m._controllers.get(Hand.LEFT) is None
+    assert m._joy_rx_ts[Hand.LEFT] == 0.0
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        _pose_frame("left", x=float("nan")),
+        _pose_frame("left", z=float("inf")),
+        _pose_frame("left", q=(float("nan"), 0.0, 0.0, 1.0)),
+        _pose_frame("left", q=(0.0, 0.0, 0.0, 0.0)),
+        _pose_frame("head"),
+    ],
+    ids=["nan_position", "inf_position", "nan_quaternion", "zero_quaternion", "unknown_frame"],
+)
+def test_malformed_pose_rejected_without_refreshing_freshness(frame: bytes) -> None:
+    m = _module()
+    m._on_pose_bytes(frame)
+    assert m._current_poses.get(Hand.LEFT) is None
+    assert m._pose_rx_ts[Hand.LEFT] == 0.0
+
+
+def test_valid_frames_still_cached_and_fresh() -> None:
+    m = _module()
+    m._on_joy_bytes(_joy_frame("left", trigger=0.5, primary=True))
+    m._on_pose_bytes(_pose_frame("left", x=0.1))
+    assert m._controllers[Hand.LEFT] is not None
+    assert m._controllers[Hand.LEFT].trigger == pytest.approx(0.5)
+    assert m._joy_rx_ts[Hand.LEFT] > 0.0
+    assert m._current_poses[Hand.LEFT] is not None
+    assert m._pose_rx_ts[Hand.LEFT] > 0.0
+
+
+def test_non_finite_trigger_never_publishes_gripper_command() -> None:
+    # Defense in depth: even if a non-finite trigger reached the cache, the
+    # gripper publisher must drop it, not convert it into a valid command.
+    m = _module()
+    assert m._gripper_command(float("nan")) is None
+    _feed_fresh(m, Hand.LEFT, primary=True)
+    with m._lock:
+        m._handle_engage()
+    m._controllers[Hand.LEFT] = _controller(is_left=True, primary=True, trigger=float("nan"))
+    with m._lock:
+        m._publish_button_state(m._controllers[Hand.LEFT], None)
+    assert m.gripper_left_command.msgs == []
+
+
+def test_malformed_stream_storm_forces_stale_release() -> None:
+    # A stream stuck on malformed frames must not keep itself fresh: with
+    # only bad frames arriving, the engaged hand takes the stale release.
+    m = _module()
+    _feed_fresh(m, Hand.LEFT, primary=True)
+    with m._lock:
+        m._handle_engage()
+    assert m._is_engaged[Hand.LEFT]
+    m._joy_rx_ts[Hand.LEFT] -= 10.0
+    m._pose_rx_ts[Hand.LEFT] -= 10.0
+    for _ in range(3):
+        m._on_joy_bytes(_joy_frame("left", trigger=float("nan"), primary=True))
+        m._on_pose_bytes(_pose_frame("left", x=float("nan")))
+    assert m._joy_rx_ts[Hand.LEFT] < time.monotonic() - 5.0
+    with m._lock:
+        m._handle_engage()
+    assert not m._is_engaged[Hand.LEFT]
+    assert m._require_release[Hand.LEFT]
+
+
+# Stale release end to end: module stream loss through the production task
+
+
+def test_stale_stream_release_reaches_production_task() -> None:
+    from dimos.control.tasks.teleop_task.teleop_task import create_task
+    from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
+
+    left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
+    task = create_task(left_cfg, None)
+    task.start()
+
+    m = _module(
+        task_names={"left": "teleop_left_arm", "right": "teleop_right_arm"},
+        local_rotation=True,
+    )
+    lower = task._ik.lower_limits
+    upper = task._ik.upper_limits
+    q_start = (lower + upper) / 2.0
+    positions = dict(zip(cfg.LEFT_ARM_JOINTS, q_start.tolist(), strict=True))
+
+    def tick(t_now: float) -> Any:
+        with m._lock:
+            m._handle_engage()
+            if m._should_publish(Hand.LEFT):
+                pose = m._get_output_pose(Hand.LEFT)
+                if pose is not None:
+                    m._publish_msg(Hand.LEFT, pose)
+            m._publish_button_state(m._controllers.get(Hand.LEFT), m._controllers.get(Hand.RIGHT))
+        task.on_teleop_buttons(m.teleop_buttons.msgs[-1], t_now)
+        for routed in m.left_controller_output.msgs:
+            task.on_cartesian_command(routed, t_now)
+        m.left_controller_output.msgs.clear()
+        state = types.SimpleNamespace(t_now=t_now, joints=_FakeJoints(positions))
+        return task.compute(state)
+
+    # An active production command is established through the real path.
+    m._on_pose_bytes(_pose_frame("left"))
+    m._on_joy_bytes(_joy_frame("left", primary=True))
+    tick(0.02)
+    m._on_pose_bytes(_pose_frame("left", x=0.05))
+    out = tick(0.04)
+    assert out is not None
+    positions = dict(zip(cfg.LEFT_ARM_JOINTS, out.positions, strict=True))
+
+    # Both streams die mid-motion. The module tick publishes the released
+    # button state, the task routes it, and the task goes inert.
+    with m._lock:
+        m._joy_rx_ts[Hand.LEFT] -= 10.0
+        m._pose_rx_ts[Hand.LEFT] -= 10.0
+    assert tick(0.06) is None
+    assert not m._is_engaged[Hand.LEFT]
+    assert tick(0.08) is None
+
+    # The stream recovers with the primary STILL held: no engagement, no
+    # command, end to end.
+    m._on_joy_bytes(_joy_frame("left", primary=True))
+    m._on_pose_bytes(_pose_frame("left", x=0.08))
+    assert tick(0.10) is None
+    assert not m._is_engaged[Hand.LEFT]
+
+    # Observed release, fresh press: commands flow again.
+    m._on_joy_bytes(_joy_frame("left", primary=False))
+    assert tick(0.12) is None
+    m._on_joy_bytes(_joy_frame("left", primary=True))
+    m._on_pose_bytes(_pose_frame("left", x=0.08))
+    tick(0.14)
+    m._on_pose_bytes(_pose_frame("left", x=0.11))
+    assert tick(0.16) is not None
+    assert m._is_engaged[Hand.LEFT]

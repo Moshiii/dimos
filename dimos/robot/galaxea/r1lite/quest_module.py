@@ -45,6 +45,7 @@ from dimos.msgs.sensor_msgs.Joy import Joy
 from dimos.robot.galaxea.r1lite import config as cfg
 from dimos.teleop.quest.quest_extensions import VideoArmTeleopConfig, VideoArmTeleopModule
 from dimos.teleop.quest.quest_types import Hand, QuestControllerState
+from dimos.teleop.utils.teleop_transforms import webxr_to_robot
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -153,6 +154,17 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
                 f"buttons={len(msg.buttons or [])}"
             )
             return
+        analogs = (
+            controller.trigger,
+            controller.grip,
+            controller.thumbstick.x,
+            controller.thumbstick.y,
+        )
+        if not all(math.isfinite(v) for v in analogs):
+            # Rejected whole without refreshing freshness, so a stream stuck
+            # on bad values trips the stale release path.
+            logger.warning(f"Joy for {hand.name} with non-finite axes rejected")
+            return
         with self._lock:
             self._controllers[hand] = controller
             now = time.monotonic()
@@ -165,14 +177,30 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
             self._joy_rx_ts[hand] = now
 
     def _on_pose_bytes(self, data: bytes) -> None:
-        super()._on_pose_bytes(data)
-        frame_id = PoseStamped.lcm_decode(data).frame_id
+        # Full override of the base handler: a pose is validated before it is
+        # stored or counts as freshness, so malformed data cannot reach IK and
+        # a stream stuck on bad values trips the stale release path.
+        msg = PoseStamped.lcm_decode(data)
+        if msg.frame_id == "left":
+            hand = Hand.LEFT
+        elif msg.frame_id == "right":
+            hand = Hand.RIGHT
+        else:
+            logger.warning(f"Pose with unknown frame_id {msg.frame_id!r} rejected")
+            return
+        p, o = msg.position, msg.orientation
+        values = (p.x, p.y, p.z, o.x, o.y, o.z, o.w)
+        if not all(math.isfinite(v) for v in values):
+            logger.warning(f"Pose for {hand.name} with non-finite values rejected")
+            return
+        if math.sqrt(o.x * o.x + o.y * o.y + o.z * o.z + o.w * o.w) < 1e-3:
+            logger.warning(f"Pose for {hand.name} with near-zero quaternion rejected")
+            return
+        robot_pose = webxr_to_robot(msg, is_left_controller=(hand == Hand.LEFT))
         with self._lock:
+            self._current_poses[hand] = robot_pose
             self._telem_pose_count += 1
-            if frame_id == "left":
-                self._pose_rx_ts[Hand.LEFT] = time.monotonic()
-            elif frame_id == "right":
-                self._pose_rx_ts[Hand.RIGHT] = time.monotonic()
+            self._pose_rx_ts[hand] = time.monotonic()
 
     def _stick(self, v: float) -> float:
         """Sanitized stick value: finite, clamped to [-1, 1], deadzoned."""
@@ -244,7 +272,11 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
             twist.angular.z = -self._stick(right_live.thumbstick.x) * self.config.angular_speed
         return twist
 
-    def _gripper_command(self, trigger: float) -> JointState:
+    def _gripper_command(self, trigger: float) -> JointState | None:
+        # Defense in depth behind the Joy ingress check: a non-finite trigger
+        # must never collapse into a valid open or close command.
+        if not math.isfinite(trigger):
+            return None
         clamped = max(0.0, min(1.0, trigger))
         span = self.config.gripper_closed - self.config.gripper_open
         return JointState(position=[self.config.gripper_open + span * clamped])
@@ -279,6 +311,10 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
             self._telem_loop_gap_max = 0.0
         self.cmd_vel.publish(self._chassis_twist(left, right, now))
         if left is not None and self._is_engaged[Hand.LEFT] and self._fresh(Hand.LEFT, now):
-            self.gripper_left_command.publish(self._gripper_command(left.trigger))
+            cmd = self._gripper_command(left.trigger)
+            if cmd is not None:
+                self.gripper_left_command.publish(cmd)
         if right is not None and self._is_engaged[Hand.RIGHT] and self._fresh(Hand.RIGHT, now):
-            self.gripper_right_command.publish(self._gripper_command(right.trigger))
+            cmd = self._gripper_command(right.trigger)
+            if cmd is not None:
+                self.gripper_right_command.publish(cmd)

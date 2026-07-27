@@ -336,3 +336,65 @@ class TestArm:
         )
         assert sent == ["abc123"]
         assert "PASS arm" in capsys.readouterr().out
+
+
+# run_disarm flow
+
+
+class TestRunDisarm:
+    def test_disarms_from_armed_and_requires_nonce_rotation(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        sent = {"n": 0}
+        state = {"value": {"state": "ARMED", "nonce": "old111"}}
+
+        def send_disarm() -> None:
+            sent["n"] += 1
+            state["value"] = {"state": "READY_DISARMED", "nonce": "new222"}
+
+        preflight.run_disarm(lambda: dict(state["value"]), send_disarm)
+        assert sent["n"] == 1
+        assert "PASS disarm" in capsys.readouterr().out
+
+    def test_fails_when_nonce_does_not_rotate(self) -> None:
+        state = {"value": {"state": "ARMED", "nonce": "old111"}}
+
+        def send_disarm() -> None:
+            state["value"] = {"state": "READY_DISARMED", "nonce": "old111"}
+
+        with pytest.raises(SystemExit):
+            preflight.run_disarm(lambda: dict(state["value"]), send_disarm)
+
+    def test_fails_when_state_never_reaches_ready_disarmed(self) -> None:
+        clock = {"t": 0.0}
+
+        def now() -> float:
+            return clock["t"]
+
+        def sleep(seconds: float) -> None:
+            clock["t"] += seconds
+
+        with pytest.raises(SystemExit):
+            preflight.run_disarm(
+                lambda: {"state": "ARMED", "nonce": "old111"},
+                lambda: None,
+                now=now,
+                sleep=sleep,
+            )
+
+    def test_fails_without_any_status(self) -> None:
+        sent = {"n": 0}
+
+        def send_disarm() -> None:
+            sent["n"] += 1
+
+        with pytest.raises(SystemExit):
+            preflight.run_disarm(lambda: {}, send_disarm)
+        assert sent["n"] == 0
+
+    def test_idempotent_when_already_disarmed(self, capsys: pytest.CaptureFixture[str]) -> None:
+        preflight.run_disarm(
+            lambda: {"state": "READY_DISARMED", "nonce": "abc123"},
+            lambda: None,
+        )
+        assert "PASS disarm" in capsys.readouterr().out
