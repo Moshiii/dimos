@@ -13,25 +13,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``world -> enu`` for platforms whose odometry is already north-aligned.
+"""``world -> enu`` for platforms whose world frame is already north-aligned.
 
-A compass-equipped autopilot (DJI) boots its odometry frame ENU-aligned, so
+A compass-equipped autopilot (DJI) boots its world frame ENU-aligned, so
 georegistration reduces to a translation: where the shared ENU origin sits
-in the world frame. This module measures it as the median offset between
-odometry and the GPS fix expressed in ENU, and publishes the transform on
-tf — which is all :class:`~dimos.visualization.citymesh.module.CityMeshModule`
-needs to land in the world view.
+in the world frame. This module measures it as the median offset between the
+robot's tf pose and the GPS fix expressed in ENU, and publishes the
+transform on tf — which is all
+:class:`~dimos.visualization.citymesh.module.CityMeshModule` needs to land
+in the world view.
 
-It is the simplest member of a pluggable family: any module that publishes
-``world -> enu`` (a connection module that knows its own alignment, a
-compass-free track or facade registration) replaces it without either side
-changing. Compass-free platforms (Go2) must NOT use it — their world frame
-has arbitrary yaw, and this module assumes yaw zero.
+The robot's position comes from the tf tree (``parent -> robot_frame``), not
+from an Odometry topic: every dimos robot has tf, not all have odometry
+messages. It is one of a pluggable pair of registration strategies: the
+other, still to be built on :mod:`.georegister`, recovers the yaw from the
+track shape for compass-free platforms (Go2). Those must NOT use this one —
+their world frame has arbitrary yaw, and this module assumes yaw zero.
 """
 
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Sequence
 import math
 from typing import TYPE_CHECKING
 
@@ -41,7 +44,6 @@ from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.NavSatFix import NavSatFix
 from dimos.utils.logging_config import setup_logger
 
@@ -52,7 +54,7 @@ logger = setup_logger()
 
 
 class EnuSnap:
-    """The estimator: odometry + fixes in, a ``world -> enu`` transform out.
+    """The estimator: robot positions + fixes in, a ``world -> enu`` transform out.
 
     The frame is anchored exactly as CityMeshModule anchors its own —
     ``snap_origin`` of the first fix, sea level — so the two agree on what
@@ -70,17 +72,15 @@ class EnuSnap:
         self.parent = parent
         self.min_samples = min_samples
         self.frame: EnuFrame | None = None
-        self._odom: Odometry | None = None
         self._offsets: deque[tuple[float, float, float]] = deque(maxlen=window)
 
-    def add_odom(self, msg: Odometry) -> None:
-        self._odom = msg
+    def add_fix(self, msg: NavSatFix, position: Sequence[float]) -> Transform | None:
+        """Fold in one fix paired with the robot's position in the parent frame.
 
-    def add_fix(self, msg: NavSatFix) -> Transform | None:
-        """Fold in one fix; a transform once enough samples agree, else None."""
+        Returns a transform once enough samples agree, else None. The median
+        over the window is what makes a single wild fix harmless.
+        """
         if not msg.has_fix or not (math.isfinite(msg.latitude) and math.isfinite(msg.longitude)):
-            return None
-        if self._odom is None:
             return None
         if self.frame is None:
             from dimos.visualization.citymesh.frame import EnuFrame, snap_origin
@@ -91,8 +91,8 @@ class EnuSnap:
 
         alt = self.frame.origin_msl if math.isnan(msg.altitude) else msg.altitude
         e, n, u = self.frame.geodetic_to_enu(msg.latitude, msg.longitude, alt, datum="msl")[0]
-        p = self._odom.position
-        self._offsets.append((p.x - float(e), p.y - float(n), p.z - float(u)))
+        x, y, z = (float(c) for c in position)
+        self._offsets.append((x - float(e), y - float(n), z - float(u)))
         if len(self._offsets) < self.min_samples:
             return None
 
@@ -109,6 +109,7 @@ class EnuSnap:
 class Config(ModuleConfig):
     frame: str = "enu"
     parent: str = "world"
+    robot_frame: str = "base_link"
     window: int = 30
     min_samples: int = 3
 
@@ -118,7 +119,6 @@ class EnuSnapTF(Module):
 
     config: Config
     gps: In[NavSatFix]
-    odometry: In[Odometry]
 
     @rpc
     def start(self) -> None:
@@ -129,12 +129,14 @@ class EnuSnapTF(Module):
             window=self.config.window,
             min_samples=self.config.min_samples,
         )
-        self.register_disposable(self.odometry.observable().subscribe(self._snap.add_odom))  # type: ignore[no-untyped-call]
         self.register_disposable(self.gps.observable().subscribe(self._on_fix))  # type: ignore[no-untyped-call]
 
     def _on_fix(self, msg: NavSatFix) -> None:
         try:
-            transform = self._snap.add_fix(msg)
+            pose = self.tf.get(self.config.parent, self.config.robot_frame, time_tolerance=1.0)
+            if pose is None:
+                return
+            transform = self._snap.add_fix(msg, pose.translation)
         except Exception:
             logger.exception("enu snap failed")
             return
