@@ -381,10 +381,13 @@ def main(
                 rr.log("world/camera/image", img_obs.data.to_rerun())
 
     print(f"wrote {out}")
+    # dimos-viewer, not stock rerun: the tf tree rides the fork's named
+    # transform frames, which the stock viewer silently ignores (leaving
+    # framed entities like the camera unposed).
     if no_gui:
-        print(f"open with: rerun {out}")
+        print(f"open with: dimos-viewer {out}")
     else:
-        subprocess.Popen(["rerun", str(out)])
+        subprocess.Popen(["dimos-viewer", str(out)])
 
 
 if __name__ == "__main__":

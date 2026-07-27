@@ -27,7 +27,9 @@ go2-zenoh blueprint.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
+import time
 from typing import Any
 
 from dimos.core.core import rpc
@@ -91,15 +93,27 @@ class GO2ZenohReplay(Module):
             if name is None:
                 logger.warning("replay: stream missing from recording", stream=names[0])
                 continue
-            self._subscriptions.append(replay.stream(name).observable().subscribe(out.publish))
+            self._subscriptions.append(
+                replay.stream(name).observable().subscribe(partial(self._publish_restamped, out))
+            )
         if "tf" in available:
             self._subscriptions.append(
                 replay.stream("tf").observable().subscribe(self._republish_tf)
             )
         logger.info("replaying", dataset=str(path), streams=sorted(available))
 
+    def _publish_restamped(self, out: Any, msg: Any) -> None:
+        """Replayed messages pretend to be live.
+
+        Consumers pair streams by timestamp (EnuSnapTF matches each fix to a
+        tf pose); recorded stamps against a wall-clock tf buffer never pair,
+        so everything leaves on one clock: now.
+        """
+        msg.ts = time.time()
+        out.publish(msg)
+
     def _republish_tf(self, msg: TFMessage) -> None:
-        self.tf.publish(*msg.transforms)
+        self.tf.publish(*(t.now() for t in msg.transforms))
 
     @rpc
     def stop(self) -> None:
