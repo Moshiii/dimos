@@ -34,10 +34,15 @@ LEFT_ARM_JOINTS: list[str] = [f"r1lite/left_arm_joint{i}" for i in range(1, ARM_
 RIGHT_ARM_JOINTS: list[str] = [f"r1lite/right_arm_joint{i}" for i in range(1, ARM_DOF + 1)]
 R1LITE_ARM_JOINTS: list[str] = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
 
-# The same joints in the URDF namespace (no hardware prefix), used by the
-# pink solver's joint mapping.
-LEFT_ARM_URDF_JOINTS: list[str] = [f"left_arm_joint{i}" for i in range(1, ARM_DOF + 1)]
-RIGHT_ARM_URDF_JOINTS: list[str] = [f"right_arm_joint{i}" for i in range(1, ARM_DOF + 1)]
+
+def strip_hardware_prefix(names: list[str]) -> list[str]:
+    """Hardware joint names to URDF names: drop the leading namespace."""
+    return [name.split("/", 1)[1] for name in names]
+
+
+# The same joints in the URDF namespace, derived so the lists cannot drift.
+LEFT_ARM_URDF_JOINTS: list[str] = strip_hardware_prefix(LEFT_ARM_JOINTS)
+RIGHT_ARM_URDF_JOINTS: list[str] = strip_hardware_prefix(RIGHT_ARM_JOINTS)
 
 # torso_joint4 is the fourth HDAS motor value the URDF's 3-joint linkage
 # model does not expose. Feedback only; never commanded.

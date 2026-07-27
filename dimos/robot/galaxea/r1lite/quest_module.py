@@ -82,6 +82,10 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._joy_rx_ts: dict[Hand, float] = {Hand.LEFT: 0.0, Hand.RIGHT: 0.0}
+        self._pose_rx_ts: dict[Hand, float] = {Hand.LEFT: 0.0, Hand.RIGHT: 0.0}
+        # Set when a stale stream forced a release; engagement stays blocked
+        # until a fresh Joy shows the primary button released.
+        self._require_release: dict[Hand, bool] = {Hand.LEFT: False, Hand.RIGHT: False}
         # Telemetry (TELEM lines, 1 Hz from the control loop)
         self._telem_joy_count: dict[Hand, int] = {Hand.LEFT: 0, Hand.RIGHT: 0}
         self._telem_joy_gap_max: dict[Hand, float] = {Hand.LEFT: 0.0, Hand.RIGHT: 0.0}
@@ -134,7 +138,13 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
 
     def _on_joy_bytes(self, data: bytes) -> None:
         msg = Joy.lcm_decode(data)
-        hand = Hand.LEFT if msg.frame_id == "left" else Hand.RIGHT
+        if msg.frame_id == "left":
+            hand = Hand.LEFT
+        elif msg.frame_id == "right":
+            hand = Hand.RIGHT
+        else:
+            logger.warning(f"Joy with unknown frame_id {msg.frame_id!r} rejected")
+            return
         try:
             controller = QuestControllerState.from_joy(msg, is_left=(hand == Hand.LEFT))
         except ValueError:
@@ -156,14 +166,61 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
 
     def _on_pose_bytes(self, data: bytes) -> None:
         super()._on_pose_bytes(data)
+        frame_id = PoseStamped.lcm_decode(data).frame_id
         with self._lock:
             self._telem_pose_count += 1
+            if frame_id == "left":
+                self._pose_rx_ts[Hand.LEFT] = time.monotonic()
+            elif frame_id == "right":
+                self._pose_rx_ts[Hand.RIGHT] = time.monotonic()
 
-    def _deadzone(self, v: float) -> float:
+    def _stick(self, v: float) -> float:
+        """Sanitized stick value: finite, clamped to [-1, 1], deadzoned."""
+        if not math.isfinite(v):
+            return 0.0
+        v = max(-1.0, min(1.0, v))
         return 0.0 if abs(v) < self.config.deadzone else v
 
     def _fresh(self, hand: Hand, now: float) -> bool:
         return (now - self._joy_rx_ts[hand]) < self.config.joy_timeout
+
+    def _pose_fresh(self, hand: Hand, now: float) -> bool:
+        return (now - self._pose_rx_ts[hand]) < self.config.joy_timeout
+
+    def _handle_engage(self) -> None:
+        """Fail-closed engagement: both streams must be live.
+
+        A hand whose Joy or pose stream goes stale is force-released
+        (anchor drops, the released button state reaches the tasks), and
+        cannot re-engage until a fresh Joy shows the primary button
+        released. Runs under the control-loop lock.
+        """
+        now = time.monotonic()
+        for hand in Hand:
+            controller = self._controllers.get(hand)
+            if controller is None:
+                continue
+            if not (self._fresh(hand, now) and self._pose_fresh(hand, now)):
+                if self._is_engaged[hand]:
+                    self._disengage(hand)
+                    self._require_release[hand] = True
+                    logger.warning(
+                        f"{hand.name} headset stream stale while engaged: forced "
+                        "release; press again after the stream recovers"
+                    )
+                # Drop the cached controller so the published button state
+                # reports released and the chassis path sees no input.
+                self._controllers[hand] = None
+                continue
+            if self._require_release[hand]:
+                if controller.primary:
+                    continue
+                self._require_release[hand] = False
+            if controller.primary:
+                if not self._is_engaged[hand]:
+                    self._engage(hand)
+            elif self._is_engaged[hand]:
+                self._disengage(hand)
 
     def _chassis_twist(
         self,
@@ -181,10 +238,10 @@ class R1LiteQuestTeleopModule(VideoArmTeleopModule):
         ):
             return twist
         if left_live is not None:
-            twist.linear.x = -self._deadzone(left_live.thumbstick.y) * self.config.linear_speed
-            twist.linear.y = -self._deadzone(left_live.thumbstick.x) * self.config.linear_speed
+            twist.linear.x = -self._stick(left_live.thumbstick.y) * self.config.linear_speed
+            twist.linear.y = -self._stick(left_live.thumbstick.x) * self.config.linear_speed
         if right_live is not None:
-            twist.angular.z = -self._deadzone(right_live.thumbstick.x) * self.config.angular_speed
+            twist.angular.z = -self._stick(right_live.thumbstick.x) * self.config.angular_speed
         return twist
 
     def _gripper_command(self, trigger: float) -> JointState:

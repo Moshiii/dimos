@@ -61,6 +61,7 @@ from dimos.core.stream import In, Out
 from dimos.hardware.whole_body.spec import VEL_STOP
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -198,6 +199,10 @@ class R1LiteConnectionConfig(ModuleConfig):
     acc_limit_x: float = Field(default=0.5)
     acc_limit_y: float = Field(default=0.5)
     acc_limit_yaw: float = Field(default=0.5)
+    # Hard ceilings on chassis command magnitudes, enforced here as the
+    # final layer regardless of what any teleop frontend sends.
+    max_cmd_linear_mps: float = Field(default=0.5)
+    max_cmd_angular_rps: float = Field(default=1.0)
     # Cached commands older than these stream nothing (dead-man; the
     # chassis node latches its last target forever, so its timeout must
     # live here).
@@ -855,6 +860,12 @@ class R1LiteConnection(Module):
                     f"got {msg.num_joints}"
                 )
             return
+        if not all(math.isfinite(float(v)) for v in list(msg.q) + list(msg.dq)):
+            now = time.monotonic()
+            if now - self._bad_fb_warn_ts >= _WARN_PERIOD_S:
+                self._bad_fb_warn_ts = now
+                logger.warning("motor_command with non-finite values rejected")
+            return
         with self._lifecycle_lock:
             if not self._armed:
                 self._drop_disarmed("motor_command")
@@ -893,11 +904,37 @@ class R1LiteConnection(Module):
             self._gripper_ts[side] = time.monotonic()
 
     def _on_cmd_vel(self, msg: Twist) -> None:
+        # Final validation layer: whatever frontend produced this command,
+        # non-finite values are rejected whole and magnitudes are clamped
+        # to the configured ceilings before anything is cached.
+        values = (
+            msg.linear.x,
+            msg.linear.y,
+            msg.linear.z,
+            msg.angular.x,
+            msg.angular.y,
+            msg.angular.z,
+        )
+        if not all(math.isfinite(v) for v in values):
+            now = time.monotonic()
+            if now - self._bad_fb_warn_ts >= _WARN_PERIOD_S:
+                self._bad_fb_warn_ts = now
+                logger.warning("cmd_vel with non-finite values rejected")
+            return
+        lin = self.config.max_cmd_linear_mps
+        ang = self.config.max_cmd_angular_rps
+        bounded = Twist()
+        bounded.linear = Vector3(
+            max(-lin, min(lin, msg.linear.x)),
+            max(-lin, min(lin, msg.linear.y)),
+            0.0,
+        )
+        bounded.angular = Vector3(0.0, 0.0, max(-ang, min(ang, msg.angular.z)))
         with self._lifecycle_lock:
             if not self._armed:
                 self._drop_disarmed("cmd_vel")
                 return
-            self._latest_cmd_vel = msg
+            self._latest_cmd_vel = bounded
             self._latest_cmd_vel_ts = time.monotonic()
             self._cmd_vel_active = True
             self._telem_cmd_vel_count += 1
@@ -1024,7 +1061,6 @@ class R1LiteConnection(Module):
         self._odom_yaw += wz * dt
 
         from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-        from dimos.msgs.geometry_msgs.Vector3 import Vector3
 
         half = self._odom_yaw * 0.5
         self.odom.publish(

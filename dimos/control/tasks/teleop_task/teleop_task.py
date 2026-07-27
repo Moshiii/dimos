@@ -325,8 +325,16 @@ class TeleopIKTask(BaseControlTask):
         )
         scales = (1.0, 0.25) if windowed else (1.0,)
         margin = np.deg2rad(self._config.joint_limit_margin_deg)
-        q_low = self._ik.model.lowerPositionLimit + margin
-        q_high = self._ik.model.upperPositionLimit - margin
+        # Solvers with a caller-order mapping expose reordered limits;
+        # clamping caller-order vectors against model-order limits would
+        # break for any caller order that differs from chain order.
+        lower = getattr(self._ik, "lower_limits", None)
+        upper = getattr(self._ik, "upper_limits", None)
+        if lower is None or upper is None:
+            lower = self._ik.model.lowerPositionLimit
+            upper = self._ik.model.upperPositionLimit
+        q_low = lower + margin
+        q_high = upper - margin
         q_solution = None
         q_candidate = q_current
         scale = 1.0
@@ -359,7 +367,8 @@ class TeleopIKTask(BaseControlTask):
         if state.t_now - self._telem_last_emit >= 1.0:
             logger.info(
                 "TELEM ik %s: solver=%s computes_hz=%d rejects=%d hand_lag_cm=%.1f "
-                "rot_lag_deg=%.1f solve_ms_max=%.1f window_scale_min=%.2f",
+                "rot_lag_deg=%.1f solve_ms_max=%.1f window_scale_min=%.2f "
+                "limit_margin_deg=%.1f",
                 self._name,
                 self._config.solver,
                 self._telem_computes,
@@ -368,6 +377,7 @@ class TeleopIKTask(BaseControlTask):
                 np.rad2deg(self._telem_rot_lag_rad),
                 self._telem_solve_s * 1000.0,
                 self._telem_scale_min,
+                self._config.joint_limit_margin_deg,
             )
             self._telem_last_emit = state.t_now
             self._telem_computes = 0

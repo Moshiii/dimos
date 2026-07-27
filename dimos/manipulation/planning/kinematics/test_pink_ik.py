@@ -830,3 +830,56 @@ class TestPinkStepper:
         pose_fwd = s_fwd.forward_kinematics(q)
         pose_rev = s_rev.forward_kinematics(np.array(list(reversed(q.tolist()))))
         assert np.allclose(pose_fwd.translation, pose_rev.translation)
+
+    def test_duplicate_joint_names_fail_construction(self) -> None:
+        import pytest
+
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        with pytest.raises(ValueError):
+            PinkStepper(self.MODEL, 6, [self.NAMES[0], *self.NAMES[:5]])
+
+    def test_caller_order_solve_matches_across_orders(self) -> None:
+        import numpy as np
+        import pinocchio
+
+        s_fwd = self._stepper()
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        s_rev = PinkStepper(
+            self.MODEL,
+            6,
+            list(reversed(self.NAMES)),
+            iterations=3,
+            orientation_cost=1.0,
+            posture_cost=0.05,
+        )
+        q = np.array([0.3, 0.6, -0.05, 0.2, -0.3, 0.1])
+        start = s_fwd.forward_kinematics(q)
+        target = pinocchio.SE3(start.rotation, start.translation + np.array([0.0, 0.03, 0.0]))
+        q_fwd, _, err_fwd = s_fwd.solve(target, q)
+        q_rev, _, err_rev = s_rev.solve(target, np.array(list(reversed(q.tolist()))))
+        assert np.allclose(q_fwd, np.array(list(reversed(q_rev.tolist()))), atol=1e-9)
+        assert err_fwd == pytest.approx(err_rev)
+
+    def test_limit_properties_follow_caller_order(self) -> None:
+        import numpy as np
+
+        s_fwd = self._stepper()
+        from dimos.manipulation.planning.kinematics.pink_ik import PinkStepper
+
+        s_rev = PinkStepper(
+            self.MODEL,
+            6,
+            list(reversed(self.NAMES)),
+            iterations=3,
+            orientation_cost=1.0,
+            posture_cost=0.05,
+        )
+        assert np.all(s_fwd.lower_limits < s_fwd.upper_limits)
+        assert np.allclose(
+            s_rev.lower_limits, np.array(list(reversed(s_fwd.lower_limits.tolist())))
+        )
+        assert np.allclose(
+            s_rev.upper_limits, np.array(list(reversed(s_fwd.upper_limits.tolist())))
+        )

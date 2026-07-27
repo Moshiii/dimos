@@ -859,7 +859,9 @@ class PinkStepper:
         self._qp_solver = qp_solver
 
         # Caller order maps to Pinocchio q indices by joint name, never by
-        # chain order.
+        # chain order. The mapping must be a unique, complete permutation
+        # of the model's q indices: duplicates or omissions would silently
+        # misroute joints.
         self._idx_q: list[int] = []
         for name in urdf_joint_names:
             joint_id = _get_joint_id(self._model, name)
@@ -867,10 +869,10 @@ class PinkStepper:
             if int(getattr(joint, "nq", 1)) != 1:
                 raise ValueError(f"PinkStepper supports one-DoF joints; '{name}' does not comply")
             self._idx_q.append(int(joint.idx_q))
-        if len(self._idx_q) != int(self._model.nq):
+        if sorted(self._idx_q) != list(range(int(self._model.nq))):
             raise ValueError(
-                f"model has nq={int(self._model.nq)} but {len(self._idx_q)} "
-                "joint names were configured"
+                f"urdf_joint_names must map one-to-one onto the model's "
+                f"{int(self._model.nq)} joints; got q indices {self._idx_q}"
             )
         if not 0 < ee_joint_id < len(self._model.names):
             raise ValueError(f"ee_joint_id {ee_joint_id} outside model joints")
@@ -884,6 +886,10 @@ class PinkStepper:
             orientation_cost=orientation_cost,
         )
         self._posture_task = self._pink.tasks.PostureTask(cost=posture_cost)
+        # Persistent across calls; solve() refreshes it in place.
+        self._configuration = self._pink.Configuration(
+            self._model, self._data, self._pin.neutral(self._model)
+        )
 
     @property
     def nq(self) -> int:
@@ -896,6 +902,16 @@ class PinkStepper:
     @property
     def model(self) -> Any:
         return self._model
+
+    @property
+    def lower_limits(self) -> NDArray[np.float64]:
+        """Joint position lower limits in caller order."""
+        return np.array([self._model.lowerPositionLimit[i] for i in self._idx_q], dtype=np.float64)
+
+    @property
+    def upper_limits(self) -> NDArray[np.float64]:
+        """Joint position upper limits in caller order."""
+        return np.array([self._model.upperPositionLimit[i] for i in self._idx_q], dtype=np.float64)
 
     def _to_model_q(self, q: NDArray[np.float64]) -> NDArray[np.float64]:
         out = np.array(self._pin.neutral(self._model), dtype=np.float64)
@@ -925,7 +941,8 @@ class PinkStepper:
             self._model.lowerPositionLimit + eps_q,
             self._model.upperPositionLimit - eps_q,
         )
-        configuration = self._pink.Configuration(self._model, self._data, q_model)
+        configuration = self._configuration
+        configuration.update(q_model)
         self._frame_task.set_target(target_pose)
         self._posture_task.set_target(q_model)
         tasks = (self._frame_task, self._posture_task)

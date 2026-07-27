@@ -22,6 +22,7 @@ loop thread never starts; tests drive single ticks directly.
 from __future__ import annotations
 
 import ast
+import math
 from pathlib import Path
 import queue
 import sys
@@ -829,6 +830,47 @@ def test_chassis_streams_fresh_then_zeros_when_stale() -> None:
     accs = [m for t, m in c._ros.published if t == "acc"]  # type: ignore[union-attr]
     brakes = [m for t, m in c._ros.published if t == "brake"]  # type: ignore[union-attr]
     assert accs and brakes and brakes[-1].data is False
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_cmd_vel_non_finite_rejected_whole(bad: float) -> None:
+    c = _armed(_bare())
+    c._on_cmd_vel(Twist(linear=Vector3(bad, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0)))
+    assert c._latest_cmd_vel is None
+    c._on_cmd_vel(Twist(linear=Vector3(0.1, 0.0, 0.0), angular=Vector3(0.0, 0.0, bad)))
+    assert c._latest_cmd_vel is None
+    assert c._run_one_tick()
+    speeds = [m for t, m in c._ros.published if t == "speed"]  # type: ignore[union-attr]
+    assert all(m.twist.linear.x == 0.0 and m.twist.angular.z == 0.0 for m in speeds)
+
+
+def test_cmd_vel_clamped_to_configured_ceilings() -> None:
+    c = _armed(_bare())
+    c._on_cmd_vel(Twist(linear=Vector3(50.0, -50.0, 3.0), angular=Vector3(1.0, 1.0, -99.0)))
+    cached = c._latest_cmd_vel
+    assert cached is not None
+    assert cached.linear.x == pytest.approx(0.5)
+    assert cached.linear.y == pytest.approx(-0.5)
+    assert cached.linear.z == 0.0
+    assert cached.angular.x == 0.0
+    assert cached.angular.y == 0.0
+    assert cached.angular.z == pytest.approx(-1.0)
+    assert c._run_one_tick()
+    speeds = [m for t, m in c._ros.published if t == "speed"]  # type: ignore[union-attr]
+    assert speeds[-1].twist.linear.x == pytest.approx(0.5)
+    assert speeds[-1].twist.angular.z == pytest.approx(-1.0)
+
+
+@pytest.mark.parametrize("field,index", [("q", 3), ("q", 11), ("dq", 0), ("dq", 7)])
+def test_motor_command_non_finite_rejected_whole(field: str, index: int) -> None:
+    c = _armed(_bare())
+    for bad in (math.nan, math.inf):
+        msg = _motor_cmd()
+        getattr(msg, field)[index] = bad
+        c._on_motor_command(msg)
+        assert c._arm_cmd is None
+    assert c._run_one_tick()
+    assert _vendor_arm_msgs(c) == []
 
 
 def test_tracking_velocity_mapping() -> None:

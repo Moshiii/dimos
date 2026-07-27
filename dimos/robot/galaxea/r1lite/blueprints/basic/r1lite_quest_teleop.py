@@ -52,7 +52,8 @@ from dimos.robot.manipulators.a1z.config import (
 _TASK_NAMES = {"left": "teleop_left_arm", "right": "teleop_right_arm"}
 _TELEOP_PRIORITY = 20  # preempts the servo holder (10) on the arm joints while engaged
 
-# Hardware-validated tracking configuration. Near the folded home pose,
+# Tracking configuration carried from the prior hardware-validated
+# integration; v3 hardware validation pending. Near the folded home pose,
 # small cartesian targets need large joint motion, so a plain per-tick
 # delta gate wedges tracking; the chase window (recentered every tick),
 # bounded stepping, and the 45 degree hard reject work together instead.

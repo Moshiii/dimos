@@ -404,3 +404,258 @@ def test_replay_fixture_is_sanitized_and_loadable() -> None:
             engage_count += 1
         prev = primary
     assert engage_count == 1
+
+
+# Command bounding and validation (module layer)
+
+
+def test_unknown_joy_frame_id_rejected() -> None:
+    m = _module()
+    raw = Joy(frame_id="middle", axes=[0.0] * 4, buttons=[0] * 7).lcm_encode()
+    m._on_joy_bytes(raw)
+    assert m._controllers[Hand.LEFT] is None
+    assert m._controllers[Hand.RIGHT] is None
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+def test_non_finite_stick_contributes_zero(bad: float) -> None:
+    m = _module()
+    now = _mark_fresh(m, Hand.LEFT)
+    twist = m._chassis_twist(_controller(stick_y=bad, stick_x=bad), None, now)
+    assert (twist.linear.x, twist.linear.y) == (0.0, 0.0)
+
+
+def test_extreme_stick_clamps_to_configured_speed() -> None:
+    m = _module()
+    now = _mark_fresh(m, Hand.LEFT, Hand.RIGHT)
+    twist = m._chassis_twist(
+        _controller(stick_y=-100.0),
+        _controller(is_left=False, stick_x=100.0),
+        now,
+    )
+    assert twist.linear.x == pytest.approx(m.config.linear_speed)
+    assert twist.angular.z == pytest.approx(-m.config.angular_speed)
+
+
+# Fail-closed engagement (stream loss)
+
+
+def _feed_fresh(m: R1LiteQuestTeleopModule, hand: Hand, primary: bool) -> None:
+    now = time.monotonic()
+    m._controllers[hand] = _controller(is_left=(hand is Hand.LEFT), primary=primary)
+    m._joy_rx_ts[hand] = now
+    m._pose_rx_ts[hand] = now
+    m._current_poses[hand] = PoseStamped()
+
+
+def test_stale_joy_while_engaged_forces_release() -> None:
+    m = _module()
+    _feed_fresh(m, Hand.LEFT, primary=True)
+    with m._lock:
+        m._handle_engage()
+    assert m._is_engaged[Hand.LEFT]
+    m._joy_rx_ts[Hand.LEFT] -= 10.0
+    with m._lock:
+        m._handle_engage()
+    assert not m._is_engaged[Hand.LEFT]
+    assert m._controllers[Hand.LEFT] is None
+    assert m._require_release[Hand.LEFT]
+
+
+def test_stale_pose_stream_alone_forces_release() -> None:
+    m = _module()
+    _feed_fresh(m, Hand.LEFT, primary=True)
+    with m._lock:
+        m._handle_engage()
+    assert m._is_engaged[Hand.LEFT]
+    m._pose_rx_ts[Hand.LEFT] -= 10.0
+    with m._lock:
+        m._handle_engage()
+    assert not m._is_engaged[Hand.LEFT]
+
+
+def test_recovery_with_button_still_held_stays_released() -> None:
+    m = _module()
+    _feed_fresh(m, Hand.LEFT, primary=True)
+    with m._lock:
+        m._handle_engage()
+    m._joy_rx_ts[Hand.LEFT] -= 10.0
+    with m._lock:
+        m._handle_engage()
+    # Stream recovers with the primary button STILL held: must not re-engage.
+    _feed_fresh(m, Hand.LEFT, primary=True)
+    with m._lock:
+        m._handle_engage()
+    assert not m._is_engaged[Hand.LEFT]
+    # Observed release, then a fresh press: engagement works again.
+    _feed_fresh(m, Hand.LEFT, primary=False)
+    with m._lock:
+        m._handle_engage()
+    _feed_fresh(m, Hand.LEFT, primary=True)
+    with m._lock:
+        m._handle_engage()
+    assert m._is_engaged[Hand.LEFT]
+
+
+# Full vendor-chain pinning
+
+_EXPECTED_CHAIN = {
+    "left": [
+        ("left_arm_joint1", "0 0 0.08605", "0 0 1", -2.86234670748, 2.86234670748),
+        ("left_arm_joint2", "0 0.03075 0.04925", "0 1 0", 0.01745329252, 3.12414670748),
+        ("left_arm_joint3", "-0.3 0.00025004 0", "0 1 0", -3.29864670748, -0.01745329252),
+        ("left_arm_joint4", "0.1747 0.00049739 0.075485", "0 1 0", -1.55334670748, 1.55334670748),
+        ("left_arm_joint5", "0.08 -0.031498 0.0405", "0 0 1", -1.55334670748, 1.55334670748),
+        ("left_arm_joint6", "0.022503 0 -0.0405", "1 0 0", -2.86234670748, 2.86234670748),
+    ],
+    "right": [
+        ("right_arm_joint1", "0 0 0.08605", "0 0 1", -2.86234670748, 2.86234670748),
+        ("right_arm_joint2", "0 0.03075 0.04925", "0 1 0", 0.01745329252, 3.12414670748),
+        ("right_arm_joint3", "-0.3 0.00025004 0", "0 1 0", -3.29864670748, -0.01745329252),
+        ("right_arm_joint4", "0.1747 0.00049739 0.075485", "0 1 0", -1.55334670748, 1.55334670748),
+        ("right_arm_joint5", "0.08 -0.031498 0.0405", "0 0 1", -1.55334670748, 1.55334670748),
+        ("right_arm_joint6", "0.022503 0 -0.0405", "1 0 0", -2.86234670748, 2.86234670748),
+    ],
+}
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_every_joint_origin_axis_and_limit_is_pinned(side: str) -> None:
+    # The complete deterministic chain comparison: every origin, axis, and
+    # limit of both shipped models, pinned to the values verified against
+    # the vendor publication and the on-robot capture.
+    model = cfg.R1LITE_LEFT_ARM_MODEL if side == "left" else cfg.R1LITE_RIGHT_ARM_MODEL
+    root = ET.parse(model).getroot()
+    actual = []
+    for j in root.findall("joint"):
+        if j.get("type") != "revolute":
+            continue
+        lim = j.find("limit")
+        actual.append(
+            (
+                j.get("name"),
+                j.find("origin").get("xyz"),
+                j.find("axis").get("xyz"),
+                float(lim.get("lower")),
+                float(lim.get("upper")),
+            )
+        )
+    expected = _EXPECTED_CHAIN[side]
+    assert len(actual) == len(expected) == 6
+    for got, want in zip(actual, expected, strict=True):
+        assert got[0] == want[0]
+        assert got[1] == want[1]
+        assert got[2] == want[2]
+        assert got[3] == pytest.approx(want[3])
+        assert got[4] == pytest.approx(want[4])
+
+
+# Production replay: fixture frames through the module into production tasks
+
+
+class _FakeJoints:
+    def __init__(self, positions: dict[str, float]) -> None:
+        self._positions = positions
+
+    def get_position(self, name: str) -> float | None:
+        return self._positions.get(name)
+
+
+def test_replay_fixture_drives_production_pipeline() -> None:
+    from dimos_lcm.geometry_msgs import PoseStamped as LCMPoseStamped
+    from dimos_lcm.sensor_msgs import Joy as LCMJoy
+
+    from dimos.control.tasks.teleop_task.teleop_task import create_task
+    from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
+
+    left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
+    task = create_task(left_cfg, None)
+    task.start()
+
+    m = _module(
+        task_names={"left": "teleop_left_arm", "right": "teleop_right_arm"},
+        local_rotation=True,
+        position_deadband_m=0.02,
+        motion_gain=1.3,
+    )
+    fp_pose = LCMPoseStamped._get_packed_fingerprint()
+    fp_joy = LCMJoy._get_packed_fingerprint()
+
+    margin = np.deg2rad(left_cfg.params["joint_limit_margin_deg"]) - 1e-9
+    step_limit = np.deg2rad(left_cfg.params["max_step_deg_per_tick"]) + 1e-9
+    lower = task._ik.lower_limits
+    upper = task._ik.upper_limits
+    q_start = (lower + upper) / 2.0
+    positions = dict(zip(cfg.LEFT_ARM_JOINTS, q_start.tolist(), strict=True))
+    tool_start = task._tool_fk(q_start)
+
+    engaged_seen = False
+    commands = 0
+    t_now = 0.0
+    prev_q = q_start
+    frames = [json.loads(line) for line in _FIXTURE.read_text().splitlines()]
+    frames.append({"t": 0.0, "wall": 0.0, "data": base64.b64encode(b"garbagegarbage").decode()})
+    for frame in frames:
+        data = base64.b64decode(frame["data"])
+        fingerprint = data[:8]
+        if fingerprint == fp_joy:
+            m._on_joy_bytes(data)
+        elif fingerprint == fp_pose:
+            m._on_pose_bytes(data)
+        else:
+            continue  # unknown fingerprint: dropped, exactly like the server
+
+        t_now += 0.02
+        with m._lock:
+            m._handle_engage()
+            if m._should_publish(Hand.LEFT):
+                pose = m._get_output_pose(Hand.LEFT)
+                if pose is not None:
+                    m._publish_msg(Hand.LEFT, pose)
+            m._publish_button_state(m._controllers.get(Hand.LEFT), m._controllers.get(Hand.RIGHT))
+        task.on_teleop_buttons(m.teleop_buttons.msgs[-1], t_now)
+        for routed in m.left_controller_output.msgs:
+            assert routed.frame_id == "teleop_left_arm"
+            task.on_cartesian_command(routed, t_now)
+        m.left_controller_output.msgs.clear()
+
+        state = types.SimpleNamespace(t_now=t_now, joints=_FakeJoints(positions))
+        out = task.compute(state)
+        if out is None:
+            continue
+        commands += 1
+        engaged_seen = True
+        assert out.joint_names == cfg.LEFT_ARM_JOINTS
+        q_new = np.array(out.positions)
+        assert np.all(np.isfinite(q_new))
+        assert np.all(q_new >= lower + margin)
+        assert np.all(q_new <= upper - margin)
+        assert np.max(np.abs(q_new - prev_q)) <= step_limit
+        prev_q = q_new
+        positions = dict(zip(cfg.LEFT_ARM_JOINTS, out.positions, strict=True))
+
+    assert engaged_seen
+    assert commands > 10
+    # The fixture moves the hand; the production solver moved the tool.
+    tool_end = task._tool_fk(prev_q)
+    assert float(np.linalg.norm(tool_end.translation - tool_start.translation)) > 0.005
+    # After the release frames at the fixture tail, the task is inert.
+    state = types.SimpleNamespace(t_now=t_now + 0.02, joints=_FakeJoints(positions))
+    assert task.compute(state) is None
+
+
+def test_engaged_task_times_out_when_stream_stops() -> None:
+    from dimos.control.tasks.teleop_task.teleop_task import create_task
+    from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
+
+    left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
+    task = create_task(left_cfg, None)
+    task.start()
+    positions = {name: 0.1 for name in cfg.LEFT_ARM_JOINTS}
+    pose = PoseStamped(position=[0.01, 0.0, 0.0], frame_id="teleop_left_arm")
+    task.on_cartesian_command(pose, t_now=1.0)
+    state = types.SimpleNamespace(t_now=1.02, joints=_FakeJoints(positions))
+    assert task.compute(state) is not None
+    # No further commands: past the configured timeout the task goes inert.
+    late = types.SimpleNamespace(t_now=1.02 + 2.0, joints=_FakeJoints(positions))
+    assert task.compute(late) is None
