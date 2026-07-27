@@ -159,6 +159,6 @@ m20_simple_nav = autoconnect(
     n_workers=11,
     robot_model="m20",
     robot_ip="10.21.31.103",
-    robot_width=m20_width_clearance,
+    robot_width=(m20_width_clearance + m20_safe_radius_margin) * 2,
     robot_rotation_diameter=m20_rotation_diameter,
 )
