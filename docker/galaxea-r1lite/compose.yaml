@@ -1,0 +1,23 @@
+# Hardware-test compose for the R1 Lite development image. Development
+# use only; production deployment is a separate ticket.
+#
+# Before a hardware session, replace the digest below with the exact
+# pushed digest under test (docker inspect --format
+# '{{index .RepoDigests 0}}' <tag>) so the session evidence names an
+# immutable image. The placeholder digest fails fast on purpose.
+#
+# stop_grace_period covers the connection's SIGINT stop sequence: the
+# bounded chassis zero stream plus teardown completes well inside 20s;
+# the stage 5 protocol verifies the "chassis stop settled" line appears
+# before the container exits.
+services:
+  dimos:
+    image: ghcr.io/dimensionalos/dimos-r1lite@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    network_mode: host
+    ipc: host
+    pid: host
+    stop_grace_period: 20s
+    environment:
+      ROS_DOMAIN_ID: "2"
+    command: ["run", "r1lite-coordinator"]
+    restart: "no"
