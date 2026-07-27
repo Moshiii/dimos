@@ -507,9 +507,10 @@ class R1LiteConnection(Module):
         """Release connection-owned resources in reverse creation order.
 
         Returns True when everything released. A release reporting a
-        surviving thread halts the unwind with the remaining entries kept,
-        so resources the survivor can reach stay alive; the caller must
-        end in FAILED, never STOPPED.
+        surviving thread, or raising, halts the unwind with that entry and
+        the remaining entries kept, so resources it may still depend on
+        stay alive; the caller must end in FAILED, never STOPPED. True
+        means everything was released, without exception.
         """
         self._stop_event.set()
         self._sensor_stop.set()
@@ -517,9 +518,12 @@ class R1LiteConnection(Module):
             name, release = self._cleanup_stack[-1]
             try:
                 clean = release()
-            except Exception as exc:
-                logger.warning(f"cleanup of {name} raised: {exc}")
-                clean = None
+            except Exception:
+                logger.exception(
+                    f"cleanup of {name} raised; halting teardown with "
+                    f"{len(self._cleanup_stack)} entries retained"
+                )
+                return False
             if clean is False:
                 logger.error(
                     f"{name} did not release; halting teardown with "

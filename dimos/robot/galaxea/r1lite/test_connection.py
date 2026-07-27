@@ -30,6 +30,8 @@ import time
 import types
 from typing import Any
 
+import cv2
+import numpy as np
 import pytest
 
 import dimos.core.module as module_mod
@@ -913,6 +915,24 @@ def test_stuck_sensor_thread_halts_teardown_and_fails(monkeypatch: Any, which: s
         stuck.join(timeout=2.0)
 
 
+def test_raising_cleanup_halts_teardown_and_fails() -> None:
+    # A cleanup exception is incomplete cleanup, never success: the failing
+    # entry and everything beneath it stay retained and stop() ends FAILED.
+    c = _armed(_bare())
+    c.config.stop_zero_duration_s = 0.01
+    sentinel_ran: list[str] = []
+    c._cleanup_stack.append(("sentinel", lambda: sentinel_ran.append("ran")))
+
+    def boom() -> None:
+        raise RuntimeError("injected cleanup failure")
+
+    c._cleanup_stack.append(("boom", boom))
+    c.stop()
+    assert c._state is ConnectionState.FAILED
+    assert sentinel_ran == []
+    assert [name for name, _ in c._cleanup_stack] == ["sentinel", "boom"]
+
+
 def test_second_worker_start_failure_joins_started_first_worker(
     monkeypatch: Any,
 ) -> None:
@@ -996,9 +1016,6 @@ def test_imu_conversion_applies_vendor_stamp_and_frame(
 @pytest.mark.parametrize("stream", ["head_left_color", "head_right_color"])
 @pytest.mark.parametrize("stamp_sec", [4, 0])
 def test_camera_conversion_applies_vendor_stamp_and_frame(stream: str, stamp_sec: int) -> None:
-    import cv2
-    import numpy as np
-
     c = _bare()
     out = _FakeOut()
     setattr(c, stream, out)
