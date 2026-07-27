@@ -36,6 +36,7 @@ from .scheduler_operational import OperationalObservationError, collect_operatio
 from .scheduler_pi_binding import PiRuntimeBindings
 from .scheduler_pi_executor import PiSchedulerExecutor
 from .scheduler_runtime import SchedulerRuntime
+from .session_viewer import SessionViewerError, view_attempt
 
 
 class _StatusExecutor:
@@ -83,6 +84,14 @@ def _parser() -> argparse.ArgumentParser:
 
     validate = subparsers.add_parser("validate", help="validate an authoring config only")
     validate.add_argument("config", type=Path)
+
+    session = subparsers.add_parser("session", help="inspect retained private session evidence")
+    session_sub = session.add_subparsers(
+        dest="session_command", required=True, parser_class=_SafeArgumentParser
+    )
+    session_view = session_sub.add_parser("view", help="open the read-only local session viewer")
+    session_view.add_argument("attempt_directory", type=Path)
+    session_view.add_argument("--no-open", action="store_true", help=argparse.SUPPRESS)
 
     experiment = subparsers.add_parser("experiment", help="manage an experiment")
     experiment_sub = experiment.add_subparsers(
@@ -196,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
             load_config(args.config)
             print("configuration is valid")
             return 0
+        if args.command == "session" and args.session_command == "view":
+            return view_attempt(
+                args.attempt_directory,
+                open_browser=not args.no_open,
+            )
         if args.command == "experiment" and args.experiment_command == "create":
             command = args
             manifest, _ = create_experiment(
@@ -306,6 +320,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"pi-baseline: {message}", file=sys.stderr)
             return code
         return 130 if interrupted else 0
+    except SessionViewerError as error:
+        print(f"pi-baseline: session viewer unavailable ({error.code})", file=sys.stderr)
+        return 1
     except (
         OSError,
         KeyError,

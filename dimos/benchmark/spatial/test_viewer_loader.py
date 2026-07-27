@@ -130,6 +130,9 @@ def test_viewer_opens_every_predicate_and_variant_without_writes(tmp_path: Path)
             assert "/agent-visible/observed-map" in command_names
             _assert_predicate_overlay(predicate, command_names)
             assert not any(
+                name.startswith("/private-oracle/relief/") for name in command_names
+            )
+            assert not any(
                 name.startswith("/private-oracle/walls/blocked/") for name in command_names
             )
             if predicate in {
@@ -192,7 +195,7 @@ def test_viewer_uses_semantic_evidence_groups_colors_and_briefing(tmp_path: Path
     instance = loader.require_one(
         SpatialCorpusSelection(predicate=Predicate.SAME_ROOM, variant=MapVariant.CLEAN)
     )
-    view.render(instance)
+    view.render(instance, show_oracle_geometry=True)
 
     commands = {command.name: command for command in view.boundary.commands}
     question_section = commands["/inspector/question"]
@@ -338,6 +341,9 @@ def test_qa_selector_cascades_predicate_sample_and_variant_renders_evidence(tmp_
     assert boundary.qa_selector is not None
     assert boundary.qa_selector.sample_labels[0].startswith("Development 01 · ")
     assert boundary.on_qa_selection is not None
+    assert not any(
+        command.name.startswith("/private-oracle/relief/") for command in boundary.commands
+    )
 
     changed = boundary.qa_selector.select_predicate_label("Same Room")
     boundary.on_qa_selection(changed)
@@ -346,6 +352,9 @@ def test_qa_selector_cascades_predicate_sample_and_variant_renders_evidence(tmp_
     assert changed.instance.instance_id != initial.instance.instance_id
     assert "/agent-visible/observed-map" in {command.name for command in boundary.commands}
     assert "/agent-visible/query/markers" in {command.name for command in boundary.commands}
+    assert not any(
+        command.name.startswith("/private-oracle/relief/") for command in boundary.commands
+    )
 
     prior_map = next(
         command for command in boundary.commands if command.name == "/agent-visible/observed-map"

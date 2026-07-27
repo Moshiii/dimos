@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "source_package": "packages/pi-session-viewer",
+  "package_lock_sha256": "5d7efd6c12417caa530fabd696daf38a3873e22ee5d071db75b2377f01107a4e",
+  "ai_elements_source_tag": "ai-elements@1.9.0",
+  "files": {
+    "assets/highlighted-body-OFNGDK62-BDwgyG22.js": "07580b66be0448791e0f8913e066b64a9d9f1344237b6fd691f5b11a03e8fdf2",
+    "assets/index-WNCpuYrW.js": "07ebaed530ed52fc91c7c316830c16cf49c6d819e73f9e2e57cac2e52b7fdeb2",
+    "assets/mermaid-GHXKKRXX-CCel5xI7.js": "b92dc276a5db74e19aea9ba011280513acfc558fa41bdf9eabaa2c1d969f66de",
+    "assets/style-7XFzog4z.css": "bd518c5677ebe36116d2bddb5fad2e466b3f08accc342d839b93ad49405eaa74",
+    "index.html": "08c2afd1ad3c62fbd4240144d0c0ad5381e281fc2e09644320f5ce88d657361b"
+  }
+}

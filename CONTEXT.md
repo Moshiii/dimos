@@ -96,6 +96,10 @@ _Avoid_: deleting committed results, post-publication score retraction, evidence
 A disposable human-readable rendering generated from a retained Pi agent session by the pinned Pi inspection tooling. It may verify inspectability but is not canonical evidence and can be regenerated without changing the retained session.
 _Avoid_: canonical HTML transcript, retained benchmark result, custom conversation format
 
+**Pi session history viewer**:
+A private, read-only human review surface for one retained Pi agent session, limited to Pi-native conversation history and branches. It excludes benchmark sidecars and does not permit continuing or mutating the session.
+_Avoid_: benchmark dashboard, session editor, review-bundle viewer, experiment browser
+
 **Pi session context evidence**:
 Private benchmark evidence containing the exact system and initial instructions supplied to a Pi agent session when those instructions are not guaranteed to appear in Pi's native session format. It is linked to the native session and attempt by immutable identity and content digests without being injected into the conversation tree.
 _Avoid_: prompt digest without retained text, synthetic Pi message, public prompt artifact

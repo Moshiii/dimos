@@ -650,10 +650,10 @@ class SpatialCorpusViserView:
         self,
         instance: SpatialCorpusInstance,
         *,
-        show_oracle_geometry: bool = True,
+        show_oracle_geometry: bool = False,
         show_oracle_topology: bool = True,
     ) -> None:
-        """Draw a read-only plan view with public evidence before private context."""
+        """Draw a read-only plan view without GT wall relief by default."""
 
         self.boundary.clear()
         cloud = load_snapshot_map(instance.variant_root, instance.snapshot)
