@@ -85,11 +85,11 @@ test("forbidden image success and image errors do not receive acknowledgement", 
   const retryResult = await retryPending;
   assert.deepEqual(retryResult.content, [{
     type: "text",
-    text: "Image read failed. You have one final image-read attempt. Call read_generated_image once with the relative path of an existing valid PNG under /work. Do not call sandbox_exec or submit_answer.",
+    text: "Image read failed. You may use one repair sandbox_exec call to create or fix /work/map.png as a valid PNG no larger than 1024x1024. Then call read_generated_image exactly once with path map.png. Do not submit before the image succeeds.",
   }]);
 });
 
-test("encouraged second sandbox result appends only the static exhaustion cue", async () => {
+test("encouraged sandbox results provide creation and exhaustion cues", async () => {
   const frames: Array<Record<string, unknown>> = [];
   const broker = createBroker((frame) => frames.push(frame as Record<string, unknown>), 1);
   const sandbox = toolDefinitions(broker, "boolean", "visualization_encouraged").find((tool) => tool.name === "sandbox_exec");
@@ -101,7 +101,13 @@ test("encouraged second sandbox result appends only the static exhaustion cue", 
   };
   const first = await run("tool-1");
   const second = await run("tool-2");
-  assert.deepEqual(first.content, [{ type: "text", text: "normal result" }]);
+  assert.deepEqual(first.content, [
+    { type: "text", text: "normal result" },
+    {
+      type: "text",
+      text: "One pre-image sandbox call remains. Your next sandbox_exec call must use `from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2`, decode /input/maps/map.lcm with `PointCloud2.lcm_decode(open('/input/maps/map.lcm','rb').read()).points_f32()`, and create a useful top-down x/y rendering at /work/map.png, no larger than 1024x1024. Do not render raw bytes or metadata. Then call read_generated_image with path map.png.",
+    },
+  ]);
   assert.deepEqual(second.content, [
     { type: "text", text: "normal result" },
     { type: "text", text: "Pre-image sandbox budget is exhausted. Your next and only permitted tool is read_generated_image using the relative PNG path you created. Do not call sandbox_exec or submit_answer." },

@@ -7,9 +7,10 @@ export const TOOL_NAMES = ["sandbox_exec", "read_generated_image", "submit_answe
 export type ToolName = (typeof TOOL_NAMES)[number];
 export type AnswerType = "boolean" | "integer";
 export type PromptMode = "visualization_forbidden" | "visualization_encouraged";
+export const FIRST_SANDBOX_CUE = "One pre-image sandbox call remains. Your next sandbox_exec call must use `from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2`, decode /input/maps/map.lcm with `PointCloud2.lcm_decode(open('/input/maps/map.lcm','rb').read()).points_f32()`, and create a useful top-down x/y rendering at /work/map.png, no larger than 1024x1024. Do not render raw bytes or metadata. Then call read_generated_image with path map.png.";
 export const SECOND_SANDBOX_CUE = "Pre-image sandbox budget is exhausted. Your next and only permitted tool is read_generated_image using the relative PNG path you created. Do not call sandbox_exec or submit_answer.";
-export const IMAGE_RETRY_CUE = "Image read failed. You have one final image-read attempt. Call read_generated_image once with the relative path of an existing valid PNG under /work. Do not call sandbox_exec or submit_answer.";
-export const FINAL_IMAGE_CUE = "Use your final image-read attempt now with read_generated_image. Do not call sandbox_exec or submit_answer.";
+export const IMAGE_RETRY_CUE = "Image read failed. You may use one repair sandbox_exec call to create or fix /work/map.png as a valid PNG no larger than 1024x1024. Then call read_generated_image exactly once with path map.png. Do not submit before the image succeeds.";
+export const FINAL_IMAGE_CUE = "Repair sandbox budget is exhausted. Call read_generated_image now with path map.png. Do not call sandbox_exec or submit_answer.";
 type ToolSchemaArtifact = {
   schema_version: "1.0";
   tools: ToolDefinition[];
@@ -178,6 +179,8 @@ export function toolDefinitions(
         content.push({ type: "text" as const, text: FINAL_IMAGE_CUE });
       } else if (name === "sandbox_exec" && promptMode === "visualization_encouraged" && broker.sandboxAttempts() === 2) {
         content.push({ type: "text" as const, text: SECOND_SANDBOX_CUE });
+      } else if (name === "sandbox_exec" && promptMode === "visualization_encouraged" && broker.sandboxAttempts() === 1) {
+        content.push({ type: "text" as const, text: FIRST_SANDBOX_CUE });
       }
       return { content, details: {} };
     },

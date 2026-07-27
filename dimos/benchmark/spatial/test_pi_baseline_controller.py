@@ -122,6 +122,17 @@ def test_prompt_pair_has_only_visualization_delta() -> None:
     assert "relative path" in pair.visualization_encouraged
     assert "regular non-symlink PNG" in pair.visualization_encouraged
     assert "byte, width, height, and pixel limits" in pair.visualization_encouraged
+    assert (
+        "Your second sandbox_exec call must create the final useful PNG"
+        in pair.visualization_encouraged
+    )
+    assert "PointCloud2.lcm_decode" in pair.visualization_encouraged
+    assert (
+        "from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2"
+        in pair.visualization_encouraged
+    )
+    assert "/work/map.png" in pair.visualization_encouraged
+    assert "Do not render raw bytes or metadata" in pair.visualization_encouraged
     assert "Visualization is forbidden" in pair.visualization_forbidden
     left = make_parity_manifest(
         model={"m": 1},
