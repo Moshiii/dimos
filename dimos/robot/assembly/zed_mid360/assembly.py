@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Static tf for the stereo_mount rig (ZED + Mid-360), driven by its URDF.
+"""Static tf for the zed_mid360 rig (ZED + Mid-360), driven by its URDF.
 
-``stereo_mount.urdf`` is the single source of truth for the mount geometry —
+``zed_mid360.urdf`` is the single source of truth for the mount geometry —
 edit the joint origins there and both tf and any URDF consumer stay in sync.
-:class:`StereoMountStaticTf` parses the URDF's fixed-joint tree at start and
+:class:`ZedMid360StaticTf` parses the URDF's fixed-joint tree at start and
 republishes it onto tf on a fixed interval (see
 :class:`~dimos.protocol.tf.static_tf_publisher.StaticTfPublisher` for why a
 one-shot latched publish isn't enough).
@@ -32,7 +32,7 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.protocol.tf.static_tf_publisher import StaticTfPublisher
 
-STEREO_MOUNT_URDF = Path(__file__).parent / "stereo_mount.urdf"
+ZED_MID360_URDF = Path(__file__).parent / "zed_mid360.urdf"
 
 
 def _parse_triple(value: str | None) -> tuple[float, float, float]:
@@ -42,7 +42,7 @@ def _parse_triple(value: str | None) -> tuple[float, float, float]:
     return (x, y, z)
 
 
-def urdf_fixed_joint_transforms(urdf_path: Path | str = STEREO_MOUNT_URDF) -> list[Transform]:
+def urdf_fixed_joint_transforms(urdf_path: Path | str = ZED_MID360_URDF) -> list[Transform]:
     """One ``parent -> child`` Transform per fixed joint of a URDF.
 
     Only the joint tree is read (link geometry is ignored); URDF fixed-axis
@@ -73,8 +73,8 @@ def urdf_fixed_joint_transforms(urdf_path: Path | str = STEREO_MOUNT_URDF) -> li
     return transforms
 
 
-class StereoMountStaticTf(StaticTfPublisher):
-    """Publishes the stereo_mount URDF joint tree onto tf on a fixed interval."""
+class ZedMid360StaticTf(StaticTfPublisher):
+    """Publishes the zed_mid360 URDF joint tree onto tf on a fixed interval."""
 
     def transforms(self) -> list[Transform]:
-        return urdf_fixed_joint_transforms(STEREO_MOUNT_URDF)
+        return urdf_fixed_joint_transforms(ZED_MID360_URDF)

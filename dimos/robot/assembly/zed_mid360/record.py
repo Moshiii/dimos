@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Record the stereo_mount rig (ZED eyes + Point-LIO odom/lidar) into a memory2 db.
+"""Record the zed_mid360 rig (ZED eyes + Point-LIO odom/lidar) into a memory2 db.
 
-Extends :class:`~dimos.hardware.sensors.lidar.pointlio.recorder.PointlioRecorder`
-(``pointlio_odometry`` / ``pointlio_lidar`` with odometry poses baked in) with the
-SDK-free ZED module's ``color_image_left`` / ``color_image_right`` — names already
-match, so autoconnect wires them straight in. Point-LIO publishes the moving
-``world -> lidar_link`` edge onto tf and the rig's static urdf frames tie the
-cameras into that tree, so every stream lands world-anchored.
+In port names match the producers' Out names (PointLio's ``odometry`` /
+``lidar``, the SDK-free ZED module's ``color_image_left`` / ``color_image_right``),
+so autoconnect wires everything with no remappings. Point-LIO publishes the
+moving ``world -> lidar_link`` edge onto tf and the rig's static urdf frames tie
+the cameras into that tree, so every stream lands world-anchored.
 """
 
 from __future__ import annotations
@@ -31,19 +30,17 @@ from typing import Any
 
 from dimos.core.core import rpc
 from dimos.core.stream import In
-from dimos.hardware.sensors.lidar.pointlio.recorder import PointlioRecorder
-from dimos.memory2.module import pose_setter_for
+from dimos.memory2.module import Recorder
 from dimos.memory2.stream import Stream
 from dimos.memory2.type.observation import Observation
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
+from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Imu import Imu
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
-
-# How long pointlio_lidar may be silent before the loss banner starts repeating.
-LIDAR_LOSS_TIMEOUT = 5.0
 
 # The high-rate IMU port that gets the batched, tf-free recording path below.
 IMU_PORT = "zed_imu"
@@ -53,17 +50,16 @@ IMU_PORT = "zed_imu"
 IMU_FLUSH_INTERVAL = 0.05
 
 
-class StereoMountRecorder(PointlioRecorder):
-    # pointlio_odometry / pointlio_lidar are inherited from PointlioRecorder.
+class ZedMid360Recorder(Recorder):
     color_image_left: In[CompressedVideo]  # h264; decode with H264Decoder
     color_image_right: In[CompressedVideo]
     camera_info_left: In[CameraInfo]
     camera_info_right: In[CameraInfo]
     zed_imu: In[Imu]  # ZED-M onboard IMU, ~800 Hz
+    lidar: In[PointCloud2]
+    odometry: In[Odometry]
 
-    _watchdog_running: bool = False
-    _last_lidar_at: float | None = None
-    _started_at: float = 0.0
+    _flush_running: bool = False
 
     @rpc
     def start(self) -> None:
@@ -71,10 +67,7 @@ class StereoMountRecorder(PointlioRecorder):
         self._imu_lock = threading.Lock()
         self._imu_backend: Any = None
         super().start()
-        self._started_at = time.time()
-        self._last_lidar_at = None
-        self._watchdog_running = True
-        self.spawn(self._lidar_loss_watchdog())
+        self._flush_running = True
         if self._imu_backend is not None:
             self.spawn(self._imu_flush_loop())
 
@@ -128,55 +121,23 @@ class StereoMountRecorder(PointlioRecorder):
         return len(batch)
 
     async def _imu_flush_loop(self) -> None:
-        while self._watchdog_running:
+        while self._flush_running:
             await asyncio.sleep(IMU_FLUSH_INTERVAL)
             try:
                 self._flush_imu()
             except Exception:
                 logger.exception("ZED IMU batch flush failed")
 
-    @pose_setter_for("pointlio_lidar")
-    async def _lidar_pose(self, msg: Any) -> Any:
-        # Piggyback on the recording path itself: this runs once per stored
-        # lidar message, so it doubles as the loss-watchdog liveness signal.
-        self._last_lidar_at = time.time()
-        return await super()._lidar_pose(msg)
-
-    async def _lidar_loss_watchdog(self) -> None:
-        """Loudly and repeatedly complain while no lidar data is arriving.
-
-        Without pointlio_lidar there is no odometry, no ``world`` tf edge, and
-        every recorded stream is missing its world pose — a silent, ruined
-        recording. Make it impossible to miss.
-        """
-        while self._watchdog_running:
-            await asyncio.sleep(LIDAR_LOSS_TIMEOUT)
-            if not self._watchdog_running:
-                return
-            silent_for = time.time() - (self._last_lidar_at or self._started_at)
-            if silent_for <= LIDAR_LOSS_TIMEOUT:
-                continue
-            never = self._last_lidar_at is None
-            logger.error("█" * 70)
-            logger.error(
-                "██ LIDAR DATA %s — %.0fs without pointlio_lidar messages!",
-                "NEVER RECEIVED" if never else "LOST",
-                silent_for,
-            )
-            logger.error("██ No lidar -> no odometry -> no world poses in this recording.")
-            logger.error(
-                "██ Check the Mid-360 power + ethernet link (ethtool <nic>) and"
-                " DIMOS_POINTLIO_LIDAR_IP."
-            )
-            logger.error("█" * 70)
-
     @rpc
     def stop(self) -> None:
-        self._watchdog_running = False  # also ends _imu_flush_loop
+        self._flush_running = False  # ends _imu_flush_loop
         try:
             flushed = self._flush_imu()  # drain the last buffered IMU samples
             if flushed:
                 logger.info("ZED IMU: flushed final %d samples on stop", flushed)
         except Exception:
             logger.exception("ZED IMU final flush failed")
+        # Detach the backend so a straggling _imu_flush_loop iteration can't
+        # write after super().stop() closes the db.
+        self._imu_backend = None
         super().stop()

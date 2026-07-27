@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Record blueprint for the stereo_mount rig (SDK-free ZED + Mid-360 via Point-LIO).
+"""Record blueprint for the zed_mid360 rig (SDK-free ZED + Mid-360 via Point-LIO).
 
 Both ZED eyes (60 fps color, no ZED SDK) and Point-LIO odom+lidar are recorded into
 a memory2 db. Point-LIO publishes the moving ``world -> lidar_link`` edge onto tf
@@ -22,7 +22,7 @@ stream resolves against ``world``. The lidar IP comes from Point-LIO's own confi
 (``DIMOS_POINTLIO_LIDAR_IP``)::
 
     export DIMOS_POINTLIO_LIDAR_IP=192.168.1.107
-    dimos run stereo-mount-record
+    dimos run zed-mid360-record
 """
 
 from datetime import datetime
@@ -32,8 +32,8 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.hardware.sensors.camera.zed.sdkless_camera import ZedUvcCamera
 from dimos.hardware.sensors.camera.zed.sdkless_imu import ZedImu
 from dimos.hardware.sensors.lidar.pointlio.module import PointLio
-from dimos.robot.assembly.stereo_mount.assembly import StereoMountStaticTf
-from dimos.robot.assembly.stereo_mount.record import StereoMountRecorder
+from dimos.robot.assembly.zed_mid360.assembly import ZedMid360StaticTf
+from dimos.robot.assembly.zed_mid360.record import ZedMid360Recorder
 
 run_start = datetime.now().astimezone()
 
@@ -42,20 +42,22 @@ zed_mid360_record = autoconnect(
     # ZED-M onboard IMU at ~800 Hz (SDK-free HID; name matches the recorder In).
     ZedImu.blueprint(),
     # world -> lidar_link is the moving odometry edge; lidar_link is the mid360
-    # point-cloud origin in stereo_mount.urdf, tying odometry into the rig tree.
+    # point-cloud origin in zed_mid360.urdf, tying odometry into the rig tree.
     PointLio.blueprint(frame_id="world", sensor_frame_id="lidar_link"),
-    StereoMountRecorder.blueprint(
+    ZedMid360Recorder.blueprint(
         db_path=str(
             RECORDINGS_DIR
-            + "/zed_mid360__"
-            + run_start.strftime("%Y-%m-%d")
-            + "_"
-            + run_start.strftime("%I-%M%p").lower()
-            + "-"
-            + run_start.strftime("%Z")
-            + ".db"
+            / (
+                "zed_mid360__"
+                + run_start.strftime("%Y-%m-%d")
+                + "_"
+                + run_start.strftime("%I-%M%p").lower()
+                + "-"
+                + run_start.strftime("%Z")
+                + ".db"
+            )
         )
     ),
     # Continuously republishes the rig's urdf mount frames onto tf (no latched static tf).
-    StereoMountStaticTf.blueprint(),
+    ZedMid360StaticTf.blueprint(),
 ).global_config(n_workers=4)

@@ -34,6 +34,8 @@ it reads a few percent high; calibrate downstream if needed.
 from __future__ import annotations
 
 import ctypes
+import ctypes.util
+import sys
 import threading
 import time
 
@@ -64,8 +66,40 @@ _REP_START_B = bytes([0x23] + [0x00] * 63 + [0xFF])
 _START_GAP_S = 0.7  # SDK waits ~0.7 s between the two reports
 
 
+# macOS ships hidapi with the IOKit backend (libhidapi.dylib); Linux uses the
+# libusb backend (libhidapi-libusb.so.0). Try the platform-appropriate names,
+# then fall back to whatever ctypes can locate. Homebrew's /opt/homebrew/lib is
+# not on the default dlopen search path, so try those absolute paths too.
+_HIDAPI_NAMES = (
+    (
+        "libhidapi.dylib",
+        "libhidapi-iohidmanager.dylib",
+        "libhidapi-libusb.dylib",
+        "/opt/homebrew/lib/libhidapi.dylib",
+        "/usr/local/lib/libhidapi.dylib",
+    )
+    if sys.platform == "darwin"
+    else ("libhidapi-libusb.so.0", "libhidapi-hidraw.so.0")
+)
+
+
+def _open_hidapi_cdll() -> ctypes.CDLL:
+    for name in _HIDAPI_NAMES:
+        try:
+            return ctypes.CDLL(name)
+        except OSError:
+            continue
+    found = ctypes.util.find_library("hidapi")
+    if found:
+        return ctypes.CDLL(found)
+    raise RuntimeError(
+        "hidapi shared library not found. Install it (macOS: `brew install hidapi`, "
+        "Linux: `apt install libhidapi-libusb0`)."
+    )
+
+
 def _load_hidapi() -> ctypes.CDLL:
-    lib = ctypes.CDLL("libhidapi-libusb.so.0")
+    lib = _open_hidapi_cdll()
     lib.hid_open.restype = ctypes.c_void_p
     lib.hid_open.argtypes = [ctypes.c_ushort, ctypes.c_ushort, ctypes.c_wchar_p]
     lib.hid_write.restype = ctypes.c_int

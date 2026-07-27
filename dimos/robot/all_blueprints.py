@@ -91,7 +91,6 @@ all_blueprints = {
     "openarm-planner-coordinator": "dimos.robot.manipulators.openarm.blueprints.planner:openarm_planner_coordinator",
     "openyam-planner-coordinator": "dimos.robot.manipulators.openyam.blueprints.basic:openyam_planner_coordinator",
     "path-planner-eval": "dimos.navigation.nav_3d.evaluator.blueprints:path_planner_eval",
-    "stereo-mount-record": "dimos.robot.assembly.stereo_mount.blueprints.stereo_mount_record:stereo_mount_record",
     "teleop-hosted-go2-multicam": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_go2_multicam",
     "teleop-hosted-go2-transport": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_go2_transport",
     "teleop-hosted-xarm6": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_xarm6",
@@ -159,6 +158,7 @@ all_blueprints = {
     "xarm6-worldbelief": "dimos.robot.manipulators.xarm.blueprints.worldbelief:xarm6_worldbelief",
     "xarm7-planner-coordinator": "dimos.robot.manipulators.xarm.blueprints.basic:xarm7_planner_coordinator",
     "xarm7-planner-coordinator-agent": "dimos.robot.manipulators.xarm.blueprints.agentic:xarm7_planner_coordinator_agent",
+    "zed-mid360-record": "dimos.robot.assembly.zed_mid360.blueprints.zed_mid360_record:zed_mid360_record",
 }
 
 
@@ -277,8 +277,6 @@ all_modules = {
     "spatial-memory": "dimos.perception.spatial_perception.SpatialMemory",
     "speak-skill": "dimos.agents.skills.speak_skill.SpeakSkill",
     "static-tf-publisher": "dimos.protocol.tf.static_tf_publisher.StaticTfPublisher",
-    "stereo-mount-recorder": "dimos.robot.assembly.stereo_mount.record.StereoMountRecorder",
-    "stereo-mount-static-tf": "dimos.robot.assembly.stereo_mount.assembly.StereoMountStaticTf",
     "tare-planner": "dimos.navigation.cmu_nav.modules.tare_planner.tare_planner.TarePlanner",
     "teleop-recorder": "dimos.teleop.utils.recorder.TeleopRecorder",
     "temporal-memory": "dimos.perception.experimental.temporal_memory.temporal_memory.TemporalMemory",
@@ -299,5 +297,8 @@ all_modules = {
     "world-belief-recorder": "dimos.perception.worldbelief_recorder.WorldBeliefRecorder",
     "wrist-camera": "dimos.teleop.hosted.blueprints.cloudflare.WristCamera",
     "zed-camera": "dimos.hardware.sensors.camera.zed.camera.ZEDCamera",
-    "zed-uvc-camera": "dimos.hardware.sensors.camera.zed.uvc.ZedUvcCamera",
+    "zed-imu": "dimos.hardware.sensors.camera.zed.sdkless_imu.ZedImu",
+    "zed-mid360-recorder": "dimos.robot.assembly.zed_mid360.record.ZedMid360Recorder",
+    "zed-mid360-static-tf": "dimos.robot.assembly.zed_mid360.assembly.ZedMid360StaticTf",
+    "zed-uvc-camera": "dimos.hardware.sensors.camera.zed.sdkless_camera.ZedUvcCamera",
 }

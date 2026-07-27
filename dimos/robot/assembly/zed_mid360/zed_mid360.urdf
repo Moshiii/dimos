@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  stereo_mount: ZED-M stereo camera + Livox Mid-360 on one rigid mount.
+  zed_mid360: ZED-M stereo camera + Livox Mid-360 on one rigid mount.
 
   Frame convention: x forward, y left, z up (ROS). base_link is the mount plate.
   - The ZED faces mostly forward, pitched UP 10 deg  (rpy pitch = -0.17453293).
@@ -12,7 +12,7 @@
   Mid-360 body: 65 x 65 x 60 mm; point-cloud origin ~47 mm above the base, i.e.
   17 mm above the box center.
 -->
-<robot name="stereo_mount">
+<robot name="zed_mid360">
 
   <link name="base_link"/>
 

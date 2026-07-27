@@ -37,6 +37,9 @@ from __future__ import annotations
 import configparser
 from fractions import Fraction
 from pathlib import Path
+import re
+import subprocess
+import sys
 import threading
 import time
 
@@ -59,6 +62,59 @@ logger = setup_logger()
 _RESOLUTION_SUFFIX = {(2208, 1242): "2K", (1920, 1080): "FHD", (1280, 720): "HD", (672, 376): "VGA"}
 # Where the ZED SDK caches factory calibration confs (populated on first open).
 _ZED_SETTINGS_DIR = Path("/usr/local/zed/settings")
+_ZED_USB_VID = 0x2B03  # Stereolabs USB vendor id
+# Stereolabs serves each camera's factory calibration by serial number.
+_ZED_CALIB_URL = "https://calib.stereolabs.com/?SN={serial}"
+_IOREG_TIMEOUT_S = 5.0
+# ioreg prints each USB node's properties as one contiguous block, so the serial
+# lands within a couple dozen lines of the STEREOLABS vendor-name line.
+_SERIAL_SCAN_WINDOW = 25
+
+
+def _read_zed_serial_linux() -> str | None:
+    for device in Path("/sys/bus/usb/devices").glob("*"):
+        try:
+            vendor_id = int((device / "idVendor").read_text().strip(), 16)
+        except (OSError, ValueError):
+            continue
+        if vendor_id != _ZED_USB_VID:
+            continue
+        try:
+            serial = (device / "serial").read_text().strip()
+        except OSError:
+            continue
+        if serial and serial != "0":
+            return serial
+    return None
+
+
+def _read_zed_serial_macos() -> str | None:
+    try:
+        result = subprocess.run(
+            ["ioreg", "-p", "IOUSB", "-l", "-w", "0"],
+            capture_output=True,
+            text=True,
+            timeout=_IOREG_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = result.stdout.splitlines()
+    for i, line in enumerate(lines):
+        if "STEREOLABS" not in line.upper():
+            continue
+        window = lines[max(0, i - _SERIAL_SCAN_WINDOW) : i + _SERIAL_SCAN_WINDOW]
+        for near in window:
+            match = re.search(r'"USB Serial Number"\s*=\s*"([^"]+)"', near)
+            if match and match.group(1) != "0":
+                return match.group(1)
+    return None
+
+
+def read_zed_serial() -> str | None:
+    """Best-effort ZED serial number (for the calibration download URL), SDK-free."""
+    if sys.platform == "darwin":
+        return _read_zed_serial_macos()
+    return _read_zed_serial_linux()
 
 
 def _camera_info_from_conf(
@@ -88,7 +144,14 @@ def _camera_info_from_conf(
     )
 
 
-def find_zed_device() -> int:
+# A ZED delivers both eyes packed side-by-side, so its native frame is at least
+# twice as wide as tall; ordinary webcams are ~16:9 (1.78). Used to spot the ZED
+# on platforms without named video nodes (macOS).
+_STEREO_MIN_ASPECT = 2.5
+_MACOS_PROBE_INDICES = 8  # AVFoundation camera indices to probe when auto-detecting
+
+
+def _find_zed_device_linux() -> int:
     """The lowest /dev/videoN index whose v4l2 device name contains "ZED"."""
     candidates: list[int] = []
     for node in Path("/sys/class/video4linux").glob("video*"):
@@ -101,6 +164,37 @@ def find_zed_device() -> int:
     if not candidates:
         raise RuntimeError("No ZED UVC device found (no /dev/video* names contain 'ZED')")
     return min(candidates)
+
+
+def _find_zed_device_macos() -> int:
+    """The lowest AVFoundation camera index that reports a packed-stereo frame.
+
+    macOS has no named video nodes, so each camera is opened and its native
+    frame aspect ratio checked — only a ZED is wider than ``_STEREO_MIN_ASPECT``.
+    """
+    for index in range(_MACOS_PROBE_INDICES):
+        capture = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
+        try:
+            if not capture.isOpened():
+                continue
+            width = capture.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = capture.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            if height > 0 and width / height >= _STEREO_MIN_ASPECT:
+                return index
+        finally:
+            capture.release()
+    raise RuntimeError(
+        "No ZED UVC device found (no AVFoundation camera in the first "
+        f"{_MACOS_PROBE_INDICES} indices reports a packed-stereo frame). "
+        "Pass camera_index explicitly if auto-detection misses it."
+    )
+
+
+def find_zed_device() -> int:
+    """Auto-detect the ZED's camera index for the current platform."""
+    if sys.platform == "darwin":
+        return _find_zed_device_macos()
+    return _find_zed_device_linux()
 
 
 class ZedUvcCameraConfig(ModuleConfig):
@@ -179,13 +273,27 @@ class ZedUvcCamera(Module):
         confs = sorted(_ZED_SETTINGS_DIR.glob("SN*.conf"), key=lambda p: p.stat().st_mtime)
         return confs[-1] if confs else None
 
+    def _missing_conf_guide(self) -> str:
+        serial = read_zed_serial()
+        serial_token = serial or "<serial>"
+        url = _ZED_CALIB_URL.format(serial=serial_token)
+        looked_in = self.config.conf_path or _ZED_SETTINGS_DIR
+        lines = [
+            f"ZED UVC: no factory calibration .conf found (looked at {looked_in}) —"
+            " camera_info will NOT be published.",
+            "To enable camera_info, download this camera's factory calibration by serial:",
+            f"    curl -sSL '{url}' -o SN{serial_token}.conf",
+            f"then point the module at it (conf_path=..., or drop it in {_ZED_SETTINGS_DIR}/"
+            " for auto-detection).",
+        ]
+        if serial is None:
+            lines.append("(Could not auto-read the serial — it is printed on the camera body.)")
+        return "\n".join(lines)
+
     def _load_camera_info(self) -> None:
         conf = self._resolve_conf_path()
         if conf is None or not conf.exists():
-            logger.warning(
-                "ZED UVC: no factory .conf found (looked in %s) — camera_info will not be published",
-                self.config.conf_path or _ZED_SETTINGS_DIR,
-            )
+            logger.warning(self._missing_conf_guide())
             return
         w, h = self.config.width, self.config.height
         self._camera_info = (
