@@ -176,7 +176,6 @@ def main(
     """Dump a recording to .rrd (lidar clouds + camera frames) and open it in rerun."""
     from dimos.mapping.voxels import VoxelMapTransformer
     from dimos.memory2.cli.dataset import open_store, resolve_dataset, stream_payload_types
-    from dimos.memory2.tf import StreamTF
     from dimos.memory2.transform import throttle
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.nav_msgs.Odometry import Odometry
@@ -215,8 +214,6 @@ def main(
             vectors=[[0.3, 0, 0], [0, 0.3, 0], [0, 0, 0.3]],
             colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]],
         )
-        rr.log("world/fastlio/axes", axes, static=True)
-        rr.log("world/odom/axes", axes, static=True)
 
         print(store.summary())
 
@@ -224,7 +221,10 @@ def main(
             return store.stream(name, ptype).from_time(seek or None).to_time(duration)
 
         lidar = clipped("lidar", PointCloud2)
-        color_image = clipped("color_image", Image)
+        # The drone recorder stores color_image as CompressedVideo; older go2
+        # recordings as Image. Decode with whatever the stream says it is.
+        img_type = stream_payload_types(store).get("color_image", Image)
+        color_image = clipped("color_image", img_type)
         has_livox = "fastlio_lidar" in store.streams
         livox = clipped("fastlio_lidar", PointCloud2) if has_livox else None
 
@@ -276,6 +276,7 @@ def main(
 
         # fastlio pose axis + path from fastlio_odometry stream.
         if "fastlio_odometry" in store.streams:
+            rr.log("world/fastlio/axes", axes, static=True)
             odometry = clipped("fastlio_odometry", Odometry)
             with progress(odometry.count(), "fastlio_odometry") as bar:
                 for obs in odometry:
@@ -300,6 +301,7 @@ def main(
 
         # Go2 native odom pose axis + path.
         if "odom" in store.streams:
+            rr.log("world/odom/axes", axes, static=True)
             odom = clipped("odom", PoseStamped)
             with progress(odom.count(), "        odom") as bar:
                 for odom_obs in odom:
@@ -322,37 +324,52 @@ def main(
                 color=(0, 200, 100),  # green
             )
 
-        # Pass 2: camera pose + image per color_image. Prefer the recorded tf
-        # tree (root → image frame_id), which includes the optical-frame
-        # rotation; fall back to the pose embedded in the image obs.
-        tf_service = StreamTF.from_store(store)
+        # Pass 2: the recorded tf tree, as rerun named transform frames — one
+        # framed Transform3D per edge, straight from each TFMessage bundle
+        # (never individual transforms; the bundle is the unit of tf).
+        # Framed entities downstream (the camera) are then posed by the
+        # viewer's frame graph at every timestamp, no per-sample lookups.
+        tf_stream = clipped("tf", TFMessage)
+        n_tf = tf_stream.count()
         tf_roots: list[str] = []
-        if tf_service is not None:
+        if n_tf:
             parents: set[str] = set()
             children: set[str] = set()
             for tf_obs in store.stream("tf", TFMessage).limit(50):
                 parents.update(t.frame_id for t in tf_obs.data.transforms)
                 children.update(t.child_frame_id for t in tf_obs.data.transforms)
             tf_roots = sorted(parents - children)
+            if tf_roots:
+                # ``world`` is the tree root's space: gluing its path-implicit
+                # frame to the root keeps path-positioned entities (odom paths,
+                # clouds) and frame-positioned ones in one graph.
+                rr.log("world", rr.CoordinateFrame(frame="tf#/" + tf_roots[0]), static=True)
+            with progress(n_tf, "  tf") as bar:
+                for tf_obs in tf_stream:
+                    bar(tf_obs)
+                    rr.set_time(TIMELINE, timestamp=tf_obs.ts)
+                    for path, archetype in tf_obs.data.to_rerun():
+                        rr.log(path, archetype)
 
+        # Pass 3: camera. With a tf tree the camera entity simply joins its
+        # frame, once; recordings without tf fall back to the pose embedded in
+        # each image obs.
         cam_pipeline = (
             color_image.transform(throttle(1.0 / camera_hz)) if camera_hz > 0 else color_image
         )
         n_img = cam_pipeline.count()
+        attached = False
         with progress(n_img, "  color_image") as bar:
             for img_obs in cam_pipeline:
                 bar(img_obs)
                 rr.set_time(TIMELINE, timestamp=img_obs.ts)
-                cam_tf = None
                 frame = getattr(img_obs.data, "frame_id", "")
-                if tf_service is not None and frame:
-                    for root in tf_roots:
-                        cam_tf = tf_service.get(root, frame, img_obs.ts, 0.5)
-                        if cam_tf is not None:
-                            tf_roots = [root]  # tree found; stop probing others
-                            break
-                if cam_tf is not None:
-                    rr.log("world/camera", cam_tf.to_rerun(frameless=True))
+                if n_tf and frame:
+                    if not attached:
+                        rr.log(
+                            "world/camera", rr.CoordinateFrame(frame="tf#/" + frame), static=True
+                        )
+                        attached = True
                 elif img_obs.pose_tuple is not None:
                     x, y, z, qx, qy, qz, qw = img_obs.pose_tuple
                     rr.log(
