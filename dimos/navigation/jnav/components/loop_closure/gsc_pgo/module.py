@@ -39,8 +39,8 @@ logger = setup_logger()
 
 class PGOConfig(NativeModuleConfig):
     cwd: str | None = "rust"
-    executable: str = "target/release/gsc-pgo"
-    build_command: str | None = "nix develop path:. --command cargo build --release"
+    executable: str = "result/bin/gsc-pgo"
+    build_command: str | None = "nix build .#default --no-write-lock-file"
     stdin_config: bool = True
 
     # outputs: map → odom
