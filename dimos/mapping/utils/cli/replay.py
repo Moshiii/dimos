@@ -176,11 +176,13 @@ def main(
     """Dump a recording to .rrd (lidar clouds + camera frames) and open it in rerun."""
     from dimos.mapping.voxels import VoxelMapTransformer
     from dimos.memory2.cli.dataset import open_store, resolve_dataset, stream_payload_types
+    from dimos.memory2.tf import StreamTF
     from dimos.memory2.transform import throttle
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.nav_msgs.Odometry import Odometry
     from dimos.msgs.sensor_msgs.Image import Image
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
+    from dimos.msgs.tf2_msgs.TFMessage import TFMessage
     from dimos.robot.unitree.go2.connection import _camera_info_static
 
     src_path = resolve_dataset(dataset)
@@ -320,7 +322,19 @@ def main(
                 color=(0, 200, 100),  # green
             )
 
-        # Pass 2: camera pose + image per color_image.
+        # Pass 2: camera pose + image per color_image. Prefer the recorded tf
+        # tree (root → image frame_id), which includes the optical-frame
+        # rotation; fall back to the pose embedded in the image obs.
+        tf_service = StreamTF.from_store(store)
+        tf_roots: list[str] = []
+        if tf_service is not None:
+            parents: set[str] = set()
+            children: set[str] = set()
+            for tf_obs in store.stream("tf", TFMessage).limit(50):
+                parents.update(t.frame_id for t in tf_obs.data.transforms)
+                children.update(t.child_frame_id for t in tf_obs.data.transforms)
+            tf_roots = sorted(parents - children)
+
         cam_pipeline = (
             color_image.transform(throttle(1.0 / camera_hz)) if camera_hz > 0 else color_image
         )
@@ -329,7 +343,17 @@ def main(
             for img_obs in cam_pipeline:
                 bar(img_obs)
                 rr.set_time(TIMELINE, timestamp=img_obs.ts)
-                if img_obs.pose_tuple is not None:
+                cam_tf = None
+                frame = getattr(img_obs.data, "frame_id", "")
+                if tf_service is not None and frame:
+                    for root in tf_roots:
+                        cam_tf = tf_service.get(root, frame, img_obs.ts, 0.5)
+                        if cam_tf is not None:
+                            tf_roots = [root]  # tree found; stop probing others
+                            break
+                if cam_tf is not None:
+                    rr.log("world/camera", cam_tf.to_rerun(frameless=True))
+                elif img_obs.pose_tuple is not None:
                     x, y, z, qx, qy, qz, qw = img_obs.pose_tuple
                     rr.log(
                         "world/camera",

@@ -62,6 +62,7 @@ all_blueprints = {
     "desk-marker-tf": "dimos.perception.fiducial.blueprints.desk_marker_tf:desk_marker_tf",
     "drone-agentic": "dimos.robot.drone.blueprints.agentic.drone_agentic:drone_agentic",
     "drone-basic": "dimos.robot.drone.blueprints.basic.drone_basic:drone_basic",
+    "drone-city-replay": "dimos.robot.drone.blueprints.basic.drone_city_replay:drone_city_replay",
     "dual-xarm6-planner": "dimos.robot.manipulators.xarm.blueprints.basic:dual_xarm6_planner",
     "dual-xarm6-planner-coordinator": "dimos.robot.manipulators.xarm.blueprints.basic:dual_xarm6_planner_coordinator",
     "go2-zenoh-basic": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_basic",

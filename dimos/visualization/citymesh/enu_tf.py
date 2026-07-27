@@ -54,6 +54,7 @@ def snap_transform(
     position: Sequence[float],
     frame_id: str = "enu",
     parent: str = "world",
+    altitude_offset_m: float = 0.0,
 ) -> Transform | None:
     """The ``parent -> enu`` transform pinned by one (fix, pose) pair.
 
@@ -68,7 +69,7 @@ def snap_transform(
 
     lat0, lon0 = snap_origin(fix.latitude, fix.longitude)
     frame = EnuFrame.at(lat0, lon0, 0.0, datum="msl", undulation=0.0)
-    alt = frame.origin_msl if math.isnan(fix.altitude) else fix.altitude
+    alt = frame.origin_msl if math.isnan(fix.altitude) else fix.altitude + altitude_offset_m
     e, n, u = frame.geodetic_to_enu(fix.latitude, fix.longitude, alt, datum="msl")[0]
     x, y, z = (float(c) for c in position)
     return Transform(
@@ -83,6 +84,9 @@ class Config(ModuleConfig):
     frame: str = "enu"
     parent: str = "world"
     robot_frame: str = "base_link"
+    # Receivers that report height above takeoff instead of MSL (drone
+    # autopilots commonly do) need the takeoff elevation added back.
+    altitude_offset_m: float = 0.0
 
 
 class EnuSnapTF(Module):
@@ -113,7 +117,11 @@ class EnuSnapTF(Module):
             if pose is None:
                 return
             transform = snap_transform(
-                msg, pose.translation, frame_id=self.config.frame, parent=self.config.parent
+                msg,
+                pose.translation,
+                frame_id=self.config.frame,
+                parent=self.config.parent,
+                altitude_offset_m=self.config.altitude_offset_m,
             )
         except Exception:
             logger.exception("enu snap failed")

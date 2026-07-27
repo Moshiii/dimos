@@ -77,16 +77,19 @@ class GO2ZenohReplay(Module):
         replay = self._store.replay(loop=self.config.loop, speed=self.config.speed)
         available = replay.list_streams()
         self._subscriptions = []
-        outs: dict[str, Any] = {
-            "odometry": self.odometry,
-            "lidar": self.lidar,
-            "pointlio_map": self.pointlio_map,
-            "video": self.video,
-            "gps": self.gps,
+        # Aliases: stream naming differs across recorders (go2 vs drone), the
+        # message types don't. First present name wins.
+        outs: dict[tuple[str, ...], Any] = {
+            ("odometry", "odom"): self.odometry,
+            ("lidar",): self.lidar,
+            ("pointlio_map",): self.pointlio_map,
+            ("video", "color_image"): self.video,
+            ("gps", "gps_location"): self.gps,
         }
-        for name, out in outs.items():
-            if name not in available:
-                logger.warning("replay: stream missing from recording", stream=name)
+        for names, out in outs.items():
+            name = next((n for n in names if n in available), None)
+            if name is None:
+                logger.warning("replay: stream missing from recording", stream=names[0])
                 continue
             self._subscriptions.append(replay.stream(name).observable().subscribe(out.publish))
         if "tf" in available:
