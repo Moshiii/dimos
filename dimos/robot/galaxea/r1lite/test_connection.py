@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import queue
 import sys
 import threading
 import time
@@ -759,6 +760,7 @@ def _lifecycle_conn(monkeypatch: Any, harness: _RosHarness) -> R1LiteConnection:
         "sensor_add_node",
         "sensor_subscription",
         "thread:r1lite-imu_chassis",
+        "thread:r1lite-imu_torso",
         "thread:r1lite-sensor-spin",
         "input_subscribe",
         "thread:r1lite-publish",
@@ -871,6 +873,154 @@ def test_stop_with_stuck_publish_thread_ends_failed_not_stopped(monkeypatch: Any
     finally:
         release.set()
         stuck.join(timeout=2.0)
+
+
+def _stuck_thread(release: threading.Event, name: str) -> threading.Thread:
+    t = threading.Thread(target=release.wait, name=name)
+    t.start()
+    return t
+
+
+@pytest.mark.parametrize("which", ["spin", "worker"])
+def test_stuck_sensor_thread_halts_teardown_and_fails(monkeypatch: Any, which: str) -> None:
+    c = _armed(_bare())
+    c.config.stop_zero_duration_s = 0.01
+    monkeypatch.setattr(conn_mod, "DEFAULT_THREAD_JOIN_TIMEOUT", 0.05)
+    release = threading.Event()
+    sentinel_ran: list[str] = []
+    # The sentinel sits BELOW the sensor entry: a surviving sensor thread
+    # must halt the unwind before it.
+    c._cleanup_stack.append(("sentinel", lambda: sentinel_ran.append("ran")))
+    if which == "spin":
+        stuck = _stuck_thread(release, "r1lite-sensor-spin-stuck")
+        c._sensor_spin_thread = stuck
+        c._cleanup_stack.append(("sensor_spin", c._release_sensor_spin))
+    else:
+        stuck = _stuck_thread(release, "r1lite-worker-stuck")
+        c._sensor_workers.append(stuck)
+        c._cleanup_stack.append(("sensor_workers", c._release_sensor_workers))
+    try:
+        c.stop()
+        assert c._state is ConnectionState.FAILED
+        assert sentinel_ran == []
+        assert len(c._cleanup_stack) >= 1
+        if which == "spin":
+            assert c._sensor_spin_thread is stuck
+        else:
+            assert stuck in c._sensor_workers
+    finally:
+        release.set()
+        stuck.join(timeout=2.0)
+
+
+def test_second_worker_start_failure_joins_started_first_worker(
+    monkeypatch: Any,
+) -> None:
+    harness = _RosHarness("thread:r1lite-imu_torso")
+    c = _lifecycle_conn(monkeypatch, harness)
+    with pytest.raises(RuntimeError, match="injected"):
+        c.start()
+    assert c._state is ConnectionState.FAILED
+    assert c._cleanup_stack == []
+    # The first worker started, so it must have been joined and released.
+    assert c._sensor_workers == []
+    leaked = {t.name for t in threading.enumerate() if t.name.startswith("r1lite")}
+    assert leaked == set()
+
+
+@pytest.mark.parametrize("stream", ["wrist_left_depth", "wrist_right_depth"])
+@pytest.mark.parametrize("stamp_sec", [6, 0])
+def test_depth_conversion_applies_vendor_stamp_and_frame(
+    monkeypatch: Any, stream: str, stamp_sec: int
+) -> None:
+    c = _bare()
+    fake_conv = types.ModuleType("dimos.protocol.pubsub.impl.rospubsub_conversion")
+
+    class _Converted:
+        # Mimics the generic converter: wall time and its own frame.
+        ts = 999999.0
+        frame_id = "converter_invented"
+
+    fake_conv.ros_to_dimos = lambda _msg, _t: _Converted()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "dimos.protocol.pubsub.impl.rospubsub_conversion", fake_conv)
+    out = _FakeOut()
+    setattr(c, stream, out)
+    q: queue.Queue[Any] = queue.Queue()
+    msg = _fb([0.0], stamp_sec=stamp_sec)
+    msg.header.frame_id = "vendor_depth_frame"
+    q.put(msg)
+    q.put(None)
+    c._depth_decode_loop(stream, q)
+    assert len(out.msgs) == 1
+    published = out.msgs[0]
+    assert published.frame_id == "vendor_depth_frame"
+    if stamp_sec:
+        assert published.ts == float(stamp_sec)
+        assert c._stamp_fallbacks[stream] == 0
+    else:
+        assert published.ts > 1e9
+        assert c._stamp_fallbacks[stream] == 1
+
+
+@pytest.mark.parametrize("which", ["imu_chassis", "imu_torso"])
+@pytest.mark.parametrize("stamp_sec", [8, 0])
+def test_imu_conversion_applies_vendor_stamp_and_frame(
+    monkeypatch: Any, which: str, stamp_sec: int
+) -> None:
+    c = _bare()
+    fake_conv = types.ModuleType("dimos.protocol.pubsub.impl.rospubsub_conversion")
+
+    class _ConvertedImu:
+        ts = 999999.0
+        frame_id = "imu_link"
+
+    fake_conv.ros_to_dimos = lambda _msg, _t: _ConvertedImu()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "dimos.protocol.pubsub.impl.rospubsub_conversion", fake_conv)
+    q: queue.Queue[Any] = queue.Queue()
+    msg = _fb([0.0], stamp_sec=stamp_sec)
+    msg.header.frame_id = "vendor_imu_frame"
+    q.put(msg)
+    q.put(None)
+    c._imu_decode_loop(q, which)
+    stored = c._latest_imu_chassis if which == "imu_chassis" else c._latest_imu_torso
+    assert stored is not None
+    assert stored.frame_id == "vendor_imu_frame"
+    if stamp_sec:
+        assert stored.ts == float(stamp_sec)
+        assert c._stamp_fallbacks[which] == 0
+    else:
+        assert stored.ts > 1e9
+        assert c._stamp_fallbacks[which] == 1
+
+
+@pytest.mark.parametrize("stream", ["head_left_color", "head_right_color"])
+@pytest.mark.parametrize("stamp_sec", [4, 0])
+def test_camera_conversion_applies_vendor_stamp_and_frame(stream: str, stamp_sec: int) -> None:
+    import cv2
+    import numpy as np
+
+    c = _bare()
+    out = _FakeOut()
+    setattr(c, stream, out)
+    ok, jpeg = cv2.imencode(".jpg", np.zeros((4, 4, 3), dtype=np.uint8))
+    assert ok
+    q: queue.Queue[Any] = queue.Queue()
+    msg = _fb([0.0], stamp_sec=stamp_sec)
+    msg.header.frame_id = "vendor_cam_frame"
+    msg.data = jpeg.tobytes()
+    q.put(msg)
+    q.put(None)
+    c._compressed_decode_loop(stream, q)
+    assert len(out.msgs) == 1
+    published = out.msgs[0]
+    # Vendor frame only; never the stream name.
+    assert published.frame_id == "vendor_cam_frame"
+    if stamp_sec:
+        assert published.ts == float(stamp_sec)
+        assert c._stamp_fallbacks[stream] == 0
+    else:
+        assert published.ts > 1e9
+        assert c._stamp_fallbacks[stream] == 1
 
 
 def test_arming_required_set_reconciles_with_preflight_config() -> None:

@@ -37,6 +37,7 @@ import argparse
 from collections.abc import Callable
 import sys
 import time
+from typing import Any
 
 from dimos.robot.galaxea.r1lite import config as cfg
 
@@ -157,7 +158,7 @@ def _read_status_lcm() -> dict[str, str]:
     from dimos.msgs.std_msgs.String import String
 
     holder: dict[str, str] = {}
-    transport = LCMTransport("/r1lite/connection_status", String)
+    transport: Any = LCMTransport("/r1lite/connection_status", String)
 
     def _on_status(msg: String) -> None:
         for part in msg.data.split():
@@ -178,7 +179,7 @@ def _send_arm(nonce: str) -> None:
     from dimos.core.transport import LCMTransport
     from dimos.msgs.std_msgs.String import String
 
-    transport = LCMTransport(cfg.ARMING_TOPIC, String)
+    transport: Any = LCMTransport(cfg.ARMING_TOPIC, String)
     transport.publish(String(data=f"ARM RC5 {nonce}"))
     time.sleep(0.2)
     transport.stop()

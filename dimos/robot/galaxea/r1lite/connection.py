@@ -257,7 +257,10 @@ class R1LiteConnection(Module):
         self._armed = False
         self._arming_nonce = ""
         # Resources created by start(), released in reverse on failure/stop.
-        self._cleanup_stack: list[tuple[str, Callable[[], None]]] = []
+        # A release callable returns False when its resource refused to die
+        # (a thread outliving its join); teardown then halts so nothing a
+        # surviving thread can reach is destroyed.
+        self._cleanup_stack: list[tuple[str, Callable[[], bool | None]]] = []
 
         self._ros: RawROS | None = None
         self._cmd_left_topic: RawROSTopic | None = None
@@ -345,13 +348,19 @@ class R1LiteConnection(Module):
                 super().start()
                 self._start_resources()
             except Exception:
-                self._release_resources()
-                try:
-                    # FAILED means cleanup already ran, including the
-                    # Module-owned resources; Module teardown is idempotent.
-                    super().stop()
-                except Exception:
-                    logger.exception("module teardown after failed start raised")
+                fully_released = self._release_resources()
+                if fully_released:
+                    try:
+                        # FAILED means cleanup already ran, including the
+                        # Module-owned resources; teardown is idempotent.
+                        super().stop()
+                    except Exception:
+                        logger.exception("module teardown after failed start raised")
+                else:
+                    logger.error(
+                        "failed start left surviving threads; module resources "
+                        "they can reach are retained"
+                    )
                 with self._lifecycle_lock:
                     self._state = ConnectionState.FAILED
                 raise
@@ -475,7 +484,13 @@ class R1LiteConnection(Module):
                     self._state = ConnectionState.FAILED
                 return
 
-            self._release_resources()
+            if not self._release_resources():
+                logger.error(
+                    "teardown incomplete: surviving threads retain resources; connection is FAILED"
+                )
+                with self._lifecycle_lock:
+                    self._state = ConnectionState.FAILED
+                return
             with self._lifecycle_lock:
                 self._state = ConnectionState.STOPPED
             logger.info("R1LiteConnection stopped")
@@ -488,28 +503,44 @@ class R1LiteConnection(Module):
         self._latest_cmd_vel = None
         self._cmd_vel_active = False
 
-    def _release_resources(self) -> None:
-        """Release connection-owned resources in reverse creation order."""
+    def _release_resources(self) -> bool:
+        """Release connection-owned resources in reverse creation order.
+
+        Returns True when everything released. A release reporting a
+        surviving thread halts the unwind with the remaining entries kept,
+        so resources the survivor can reach stay alive; the caller must
+        end in FAILED, never STOPPED.
+        """
         self._stop_event.set()
         self._sensor_stop.set()
         while self._cleanup_stack:
-            name, release = self._cleanup_stack.pop()
+            name, release = self._cleanup_stack[-1]
             try:
-                release()
+                clean = release()
             except Exception as exc:
                 logger.warning(f"cleanup of {name} raised: {exc}")
+                clean = None
+            if clean is False:
+                logger.error(
+                    f"{name} did not release; halting teardown with "
+                    f"{len(self._cleanup_stack)} entries retained"
+                )
+                return False
+            self._cleanup_stack.pop()
+        return True
 
-    def _release_publish_thread(self) -> None:
+    def _release_publish_thread(self) -> bool:
         thread = self._publish_thread
         if thread is None:
-            return
+            return True
         if thread.is_alive():
             thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         if thread.is_alive():
             # Never discard a live thread reference.
             logger.error("publish thread still alive; keeping its reference")
-            return
+            return False
         self._publish_thread = None
+        return True
 
     def _release_control_ros(self) -> None:
         if self._ros is not None:
@@ -671,13 +702,17 @@ class R1LiteConnection(Module):
 
         logger.info("R1Lite sensor streams up (isolated DDS context)")
 
-    def _release_sensor_spin(self) -> None:
+    def _release_sensor_spin(self) -> bool:
         thread = self._sensor_spin_thread
         if thread is not None and thread.ident is not None:
             thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+            if thread.is_alive():
+                logger.error("sensor spin thread still alive; keeping its reference")
+                return False
         self._sensor_spin_thread = None
+        return True
 
-    def _release_sensor_workers(self) -> None:
+    def _release_sensor_workers(self) -> bool:
         all_queues: list[queue.Queue[Any]] = [
             *self._cam_queues.values(),
             *self._depth_queues.values(),
@@ -689,14 +724,25 @@ class R1LiteConnection(Module):
                 q.put_nowait(None)
             except queue.Full:
                 pass
+        survivors: list[Thread] = []
         for t in self._sensor_workers:
             # ident is None for a constructed-but-never-started thread;
             # joining one raises, and an interrupted start loop leaves them.
             if t.ident is not None:
                 t.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+                if t.is_alive():
+                    survivors.append(t)
+        if survivors:
+            logger.error(
+                "sensor workers still alive: %s; keeping references and queues",
+                [t.name for t in survivors],
+            )
+            self._sensor_workers = survivors
+            return False
         self._sensor_workers.clear()
         self._cam_queues.clear()
         self._depth_queues.clear()
+        return True
 
     def _release_sensor_executor(self) -> None:
         if self._sensor_executor is not None:
@@ -1337,7 +1383,7 @@ class R1LiteConnection(Module):
                 if bgr is None:
                     continue
                 ts = self._stamp_or_fallback(msg, stream_name)
-                frame = _header_frame(msg) or stream_name
+                frame = _header_frame(msg)
                 out.publish(Image(bgr, format=ImageFormat.BGR, frame_id=frame, ts=ts))
             except Exception:
                 logger.exception(f"R1Lite camera {stream_name} decode error")
@@ -1354,9 +1400,14 @@ class R1LiteConnection(Module):
             if msg is None:
                 break
             try:
+                # Vendor stamp and frame come from the ROS header BEFORE the
+                # generic conversion, which substitutes wall time and its own
+                # frame and would defeat the fallback accounting.
+                ts = self._stamp_or_fallback(msg, stream_name)
+                frame = _header_frame(msg)
                 converted = cast("Image", ros_to_dimos(msg, Image))
-                if converted.ts <= 0.0:
-                    converted.ts = self._stamp_or_fallback(msg, stream_name)
+                converted.ts = ts
+                converted.frame_id = frame
                 out.publish(converted)
             except Exception:
                 logger.exception(f"R1Lite {stream_name} decode error")
@@ -1373,9 +1424,14 @@ class R1LiteConnection(Module):
             if msg is None:
                 break
             try:
+                # The generic converter builds an Imu with default wall time
+                # and frame; the dimos Imu has no header field for it to
+                # fill, so the vendor header must be applied explicitly.
+                ts = self._stamp_or_fallback(msg, which)
+                frame = _header_frame(msg)
                 imu = cast("Imu", ros_to_dimos(msg, Imu))
-                if imu.ts <= 0.0:
-                    imu.ts = self._stamp_or_fallback(msg, which)
+                imu.ts = ts
+                imu.frame_id = frame
                 with self._lifecycle_lock:
                     setattr(self, target_attr, imu)
             except Exception:
