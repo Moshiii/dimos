@@ -39,6 +39,7 @@ from dimos.memory2.replay import resolve_db_path
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
 from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.NavSatFix import NavSatFix
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
@@ -53,6 +54,11 @@ class GO2ZenohReplayConfig(ModuleConfig):
     # downstream consumers just see the walk again.
     loop: bool = True
     speed: float = 1.0
+    # Recordings rarely carry a camera_info stream; when video replays, a
+    # pinhole is synthesized from these [fx, fy, cx, cy] intrinsics (None
+    # disables). Defaults match the drone camera at 1920x1080.
+    camera_intrinsics: tuple[float, float, float, float] | None = (1000.0, 1000.0, 960.0, 540.0)
+    camera_resolution: tuple[int, int] = (1920, 1080)
 
 
 class GO2ZenohReplay(Module):
@@ -66,6 +72,7 @@ class GO2ZenohReplay(Module):
     pointlio_map: Out[PointCloud2]
     video: Out[CompressedVideo]
     gps: Out[NavSatFix]
+    camera_info: Out[CameraInfo]
 
     _store: SqliteStore | None = None
     _subscriptions: list[Any]
@@ -88,14 +95,16 @@ class GO2ZenohReplay(Module):
             ("video", "color_image"): self.video,
             ("gps", "gps_location"): self.gps,
         }
+        self._video_count = 0
         for names, out in outs.items():
             name = next((n for n in names if n in available), None)
             if name is None:
                 logger.warning("replay: stream missing from recording", stream=names[0])
                 continue
-            self._subscriptions.append(
-                replay.stream(name).observable().subscribe(partial(self._publish_restamped, out))
+            handler = (
+                self._publish_video if out is self.video else partial(self._publish_restamped, out)
             )
+            self._subscriptions.append(replay.stream(name).observable().subscribe(handler))
         if "tf" in available:
             self._subscriptions.append(
                 replay.stream("tf").observable().subscribe(self._republish_tf)
@@ -111,6 +120,20 @@ class GO2ZenohReplay(Module):
         """
         msg.ts = time.time()
         out.publish(msg)
+
+    def _publish_video(self, msg: CompressedVideo) -> None:
+        """Video plus an occasional synthesized CameraInfo in the video's frame.
+
+        The pinhole is what hangs the frustum (and the projected image) on the
+        optical tf frame downstream; recordings don't carry one.
+        """
+        self._publish_restamped(self.video, msg)
+        if self.config.camera_intrinsics is not None and self._video_count % 30 == 0:
+            fx, fy, cx, cy = self.config.camera_intrinsics
+            width, height = self.config.camera_resolution
+            info = CameraInfo.from_intrinsics(fx, fy, cx, cy, width, height, frame_id=msg.frame_id)
+            self._publish_restamped(self.camera_info, info)
+        self._video_count += 1
 
     def _republish_tf(self, msg: TFMessage) -> None:
         self.tf.publish(*(t.now() for t in msg.transforms))

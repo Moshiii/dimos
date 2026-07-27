@@ -28,15 +28,33 @@ from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
+from dimos.core.stream import In
+from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.navigation.tracer import Tracer
 from dimos.robot.unitree.go2.zenoh.replay import GO2ZenohReplay
 from dimos.visualization.citymesh.enu_tf import EnuSnapTF
-from dimos.visualization.citymesh.module import CityMeshModule
 from dimos.visualization.vis_module import vis_module
 
 # The recorded autopilot reports height above takeoff, not MSL; the snap adds
 # the pad's elevation back (DEM ground at the recording site). Goes away once
 # the drone connection publishes MSL altitudes.
 TAKEOFF_MSL_M = 70.0
+
+
+class OdometryTracer(Tracer):
+    """Breadcrumb of where the robot has walked, on world/odometry_path."""
+
+    odometry: In[Odometry]
+
+
+def _camera_info_to_pinhole(msg: Any) -> Any:
+    """Pinhole onto the video entity, hung on the optical tf frame.
+
+    Same trick as the go2 city blueprint: the pinhole must land on the
+    video's own entity to project it, and parenting it to the tf frame
+    poses the frustum in the world view.
+    """
+    return msg.to_rerun(image_topic="world/video", optical_frame=msg.frame_id)
 
 
 def _rerun_blueprint() -> Any:
@@ -70,6 +88,7 @@ def _rerun_blueprint() -> Any:
 drone_city_replay = autoconnect(
     GO2ZenohReplay.blueprint(dataset=global_config.replay_db),
     CityMeshModule.blueprint(),
+    OdometryTracer.blueprint(),
     EnuSnapTF.blueprint(
         parent="drone/world",
         robot_frame="drone/base_link",
@@ -77,6 +96,9 @@ drone_city_replay = autoconnect(
     ),
     vis_module(
         viewer_backend=global_config.viewer,
-        rerun_config={"blueprint": _rerun_blueprint},
+        rerun_config={
+            "blueprint": _rerun_blueprint,
+            "visual_override": {"world/camera_info": _camera_info_to_pinhole},
+        },
     ),
 ).global_config(transport="zenoh", n_workers=5)
