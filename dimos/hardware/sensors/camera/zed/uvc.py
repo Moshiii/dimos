@@ -124,7 +124,13 @@ class ZedUvcCameraConfig(ModuleConfig):
 
 
 def _make_encoder(name: str, width: int, height: int, fps: float, bitrate: int, gop: int):  # type: ignore[no-untyped-def]
-    enc = av.CodecContext.create(name, "w")
+    try:
+        enc = av.CodecContext.create(name, "w")
+    except Exception as exc:  # unknown/unavailable encoder (e.g. nvenc on a non-GPU box)
+        if name == "libx264":
+            raise
+        logger.warning("ZED UVC: encoder %r unavailable (%s) — falling back to libx264", name, exc)
+        return _make_encoder("libx264", width, height, fps, bitrate, gop)
     enc.width = width
     enc.height = height
     enc.pix_fmt = "yuv420p"

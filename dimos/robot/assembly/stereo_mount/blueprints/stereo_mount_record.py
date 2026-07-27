@@ -51,7 +51,7 @@ _RECORDING_DIR = _default_recording_dir()
 
 
 stereo_mount_record = autoconnect(
-    ZedUvcCamera.blueprint(),
+    ZedUvcCamera.blueprint(encoder="h264_nvenc"),
     # ZED-M onboard IMU at ~800 Hz (SDK-free HID; name matches the recorder In).
     ZedImu.blueprint(),
     # world -> lidar_link is the moving odometry edge; lidar_link is the mid360
