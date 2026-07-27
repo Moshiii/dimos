@@ -42,6 +42,20 @@ def test_roundtrip_preserves_everything():
     np.testing.assert_array_equal(d.colors, m.colors)
 
 
+def test_rgb_colors_roundtrip_as_opaque_rgba():
+    """Terrain meshes carry (N, 3) RGB; the wire format is fixed at RGBA."""
+    m = EntityMesh(
+        path="x",
+        vertices=np.zeros((3, 3)),
+        triangles=np.array([[0, 1, 2]]),
+        colors=np.tile(np.array([[10, 20, 30]], dtype=np.uint8), (3, 1)),
+    )
+    d = EntityMesh.decode(m.encode())
+    assert d.colors is not None
+    assert d.colors.shape == (3, 4)
+    assert list(d.colors[0]) == [10, 20, 30, 255]
+
+
 def test_roundtrip_without_colors():
     m = EntityMesh(path="x", vertices=np.zeros((2, 3)), triangles=np.zeros((0, 3)))
     d = EntityMesh.decode(m.encode())

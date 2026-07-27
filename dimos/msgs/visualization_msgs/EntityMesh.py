@@ -39,6 +39,14 @@ Op = Literal["set", "clear"]
 _OPS: tuple[Op, Op] = ("set", "clear")
 
 
+def _rgba(colors: np.ndarray) -> np.ndarray:
+    """Vertex colors canonicalized to (N, 4), so the wire format is fixed."""
+    if colors.ndim == 2 and colors.shape[1] == 3:
+        alpha = np.full((len(colors), 1), 255, dtype=colors.dtype)
+        return np.hstack([colors, alpha])
+    return colors
+
+
 class EntityMesh(Timestamped):
     """Vertices + triangles (+ optional RGBA vertex colors) for one scene entity."""
 
@@ -63,7 +71,7 @@ class EntityMesh(Timestamped):
         self.triangles = (
             np.zeros((0, 3), np.uint32) if triangles is None else np.asarray(triangles, np.uint32)
         )
-        self.colors = None if colors is None else np.asarray(colors, np.uint8)
+        self.colors = None if colors is None else _rgba(np.asarray(colors, np.uint8))
         self.ts = ts if ts is not None else time.time()
 
     @classmethod
