@@ -36,6 +36,7 @@ import pytest
 
 from dimos.control.coordinator import ControlCoordinator
 import dimos.core.module as module_mod
+from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.kinematics.pinocchio_ik import PinocchioIK
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -266,6 +267,43 @@ def test_teleop_tasks_use_arm_slices_and_pink() -> None:
             assert task.params["max_target_rot_deg"] == 20.0
 
 
+def test_sim_planner_models_have_matching_trajectory_tasks() -> None:
+    tasks = {task.name: task for task in _coordinator_tasks(r1lite_quest_teleop_sim)}
+    planner_kwargs = next(
+        atom.kwargs
+        for atom in r1lite_quest_teleop_sim.blueprints
+        if atom.module is ManipulationModule
+    )
+
+    for robot in planner_kwargs["robots"]:
+        task_name = robot.coordinator_task_name
+        assert task_name is not None
+        task = tasks[task_name]
+        assert task.type == "trajectory"
+        assert task.joint_names == robot.get_coordinator_joint_names()
+
+
+def test_sim_planner_models_render_grippers_and_target_their_eef() -> None:
+    planner_kwargs = next(
+        atom.kwargs
+        for atom in r1lite_quest_teleop_sim.blueprints
+        if atom.module is ManipulationModule
+    )
+
+    for robot in planner_kwargs["robots"]:
+        assert robot.model_path == cfg.R1LITE_VISER_ARM_MODEL
+        assert robot.end_effector_link == "r1lite_gripper_tip"
+
+
+def test_viser_eef_is_five_centimeters_forward_of_gripper_eef() -> None:
+    root = ET.parse(cfg.R1LITE_VISER_ARM_MODEL).getroot()
+    joint = root.find("./joint[@name='r1lite_gripper_tip_joint']")
+
+    assert joint is not None
+    assert joint.find("parent").attrib["link"] == "gripper_eef_link"
+    assert joint.find("origin").attrib["xyz"] == "0.05 0 0"
+
+
 def test_module_rotation_pairing_and_no_default_recording() -> None:
     for blueprint in (r1lite_quest_teleop, r1lite_quest_teleop_sim):
         kwargs = next(
@@ -282,7 +320,7 @@ def test_hardware_blueprint_teleop_overrides() -> None:
     kwargs = next(
         atom.kwargs for atom in r1lite_quest_teleop.blueprints if atom.module is R1LiteConnection
     )
-    assert kwargs["tracking_speed"] == 1.25
+    assert kwargs["tracking_speed"] == 2.5
     assert kwargs["enable_cameras"] is False
 
 

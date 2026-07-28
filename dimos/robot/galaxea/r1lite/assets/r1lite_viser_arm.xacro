@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="r1lite_viser_arm">
+  <!--
+  Add an R1 Lite visualization TCP to the repository's gripper-equipped
+  A1Z stand-in without modifying the hydrated model in data/.
+  -->
+  <xacro:include filename="$(find A1Z_G1Z)/urdf/A1Z_G1Z.urdf" />
+
+  <link name="r1lite_gripper_tip" />
+  <joint name="r1lite_gripper_tip_joint" type="fixed">
+    <origin xyz="0.05 0 0" rpy="0 0 0" />
+    <parent link="gripper_eef_link" />
+    <child link="r1lite_gripper_tip" />
+  </joint>
+</robot>

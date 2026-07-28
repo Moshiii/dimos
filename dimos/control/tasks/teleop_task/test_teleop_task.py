@@ -313,7 +313,7 @@ def test_factory_applies_balanced_teleop_control_policy(
 
     task = create_task(configured, {})
 
-    assert task._config.control_ik.max_velocity == 1.0
+    assert task._config.control_ik.max_velocity == 2.0
     assert task._config.control_ik.position_cost == 1.0
     assert task._config.control_ik.orientation_cost == 1.0
     assert task._config.control_ik.posture_cost == 0.0

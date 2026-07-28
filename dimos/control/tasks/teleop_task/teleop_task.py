@@ -46,7 +46,7 @@ logger = setup_logger()
 class TeleopControlIKConfig(PinkControlIKConfig):
     """Pink control policy for engagement-relative arm teleoperation."""
 
-    max_velocity: FiniteFloat = Field(1.0, gt=0.0)
+    max_velocity: FiniteFloat = Field(2.0, gt=0.0)
     position_cost: FiniteFloat = Field(1.0, ge=0.0)
     orientation_cost: FiniteFloat = Field(1.0, ge=0.0)
     posture_cost: FiniteFloat = Field(0.0, ge=0.0)

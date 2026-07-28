@@ -45,7 +45,6 @@ from dimos.robot.galaxea.r1lite.quest_module import R1LiteQuestTeleopModule
 from dimos.robot.manipulators._modeling import base_pose, joint_names
 from dimos.robot.manipulators.a1z.config import (
     A1Z_COLLISION_EXCLUSIONS,
-    A1Z_FLANGE_MODEL_PATH,
     A1Z_PACKAGE_PATHS,
 )
 
@@ -150,7 +149,7 @@ r1lite_quest_teleop = autoconnect(
     # path during teleop.
     r1lite_control_base(
         extra_tasks=_teleop_tasks(),
-        connection_kwargs={"tracking_speed": 1.25, "enable_cameras": False},
+        connection_kwargs={"tracking_speed": 2.5, "enable_cameras": False},
     ),
 ).remappings(
     [
@@ -179,13 +178,14 @@ def _sim_hardware() -> list[HardwareComponent]:
 
 
 def _sim_arm_model(side: str, y_offset: float) -> RobotModelConfig:
-    # Viser needs meshes; the shipped arm models are geometry-stripped, so
-    # the viewer renders the A1Z model as a visual stand-in. IK does not
-    # use it.
+    # Viser needs meshes; the exact R1 Lite models are geometry-stripped, so
+    # the viewer renders the closely related A1Z arm and gripper as a visual
+    # stand-in, with the visualization TCP 5 cm past its stock EEF. The
+    # control tasks still use the exact R1 Lite kinematics and 0.17 m TCP.
     local_joints = joint_names(cfg.ARM_DOF, prefix="arm_joint")
     return RobotModelConfig(
         name=f"{side}_arm",
-        model_path=A1Z_FLANGE_MODEL_PATH,
+        model_path=cfg.R1LITE_VISER_ARM_MODEL,
         base_pose=base_pose(y=y_offset),
         joint_names=local_joints,
         base_link="base_link",
@@ -194,7 +194,7 @@ def _sim_arm_model(side: str, y_offset: float) -> RobotModelConfig:
                 name="manipulator",
                 joint_names=tuple(local_joints),
                 base_link="base_link",
-                tip_link="arm_link6",
+                tip_link="r1lite_gripper_tip",
             )
         ],
         package_paths=A1Z_PACKAGE_PATHS,
@@ -203,14 +203,27 @@ def _sim_arm_model(side: str, y_offset: float) -> RobotModelConfig:
         joint_name_mapping={
             f"r1lite/{side}_arm_joint{i}": f"arm_joint{i}" for i in range(1, cfg.ARM_DOF + 1)
         },
+        coordinator_task_name=f"traj_{side}_arm",
     )
+
+
+def _sim_trajectory_tasks() -> list[TaskConfig]:
+    return [
+        TaskConfig(
+            name=f"traj_{side}_arm",
+            type="trajectory",
+            joint_names=list(cfg.LEFT_ARM_JOINTS if side == "left" else cfg.RIGHT_ARM_JOINTS),
+            priority=10,
+        )
+        for side in ("left", "right")
+    ]
 
 
 r1lite_quest_teleop_sim = autoconnect(
     R1LiteQuestTeleopModule.blueprint(task_names=_TASK_NAMES, local_rotation=True),
     ControlCoordinator.blueprint(
         hardware=_sim_hardware(),
-        tasks=[*r1lite_standard_tasks(), *_teleop_tasks()],
+        tasks=[*r1lite_standard_tasks(), *_teleop_tasks(), *_sim_trajectory_tasks()],
     ),
     ManipulationModule.blueprint(
         robots=[_sim_arm_model("left", 0.25), _sim_arm_model("right", -0.25)],

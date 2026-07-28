@@ -25,6 +25,7 @@ _ASSETS = Path(__file__).parent / "assets"
 # provenance in each file's header comment.
 R1LITE_LEFT_ARM_MODEL = _ASSETS / "r1lite_left_arm.urdf"
 R1LITE_RIGHT_ARM_MODEL = _ASSETS / "r1lite_right_arm.urdf"
+R1LITE_VISER_ARM_MODEL = _ASSETS / "r1lite_viser_arm.xacro"
 
 ARM_DOF = 6
 TORSO_DOF = 4
