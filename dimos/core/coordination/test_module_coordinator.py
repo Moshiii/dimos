@@ -424,6 +424,52 @@ def test_disabled_module_ref_gets_noop_proxy() -> None:
         coordinator.stop()
 
 
+def test_remapping_a_subclassed_module_by_its_base_class() -> None:
+    """Deployments subclass a module to declare extra ports; a remapping written
+    against the base class must still reach that instance."""
+
+    class _SubSource(SourceModule):
+        extra: Out[Data1]
+
+    blueprint_set = autoconnect(
+        _SubSource.blueprint(instance_name="SourceModule"),
+        TargetModule.blueprint(),
+    ).remappings([(SourceModule, "color_image", "remapped_data")])
+
+    all_names = _all_name_types(blueprint_set)
+    assert ("remapped_data", Data1) in all_names
+    assert ("color_image", Data1) not in all_names
+
+
+def test_remapping_prefers_the_exact_class_over_a_deployed_subclass() -> None:
+    """Sibling modules inherit from each other (ObjectDBModule is a Detection3DModule),
+    and both get deployed — naming one must not become ambiguous."""
+
+    class _SubSource(SourceModule):
+        extra: Out[Data1]
+
+    blueprint_set = autoconnect(
+        SourceModule.blueprint(),
+        _SubSource.blueprint(),
+        TargetModule.blueprint(),
+    ).remappings([(SourceModule, "color_image", "remapped_data")])
+
+    assert blueprint_set.remapping_map[SourceModule.name, "color_image"] == "remapped_data"
+    assert (_SubSource.name, "color_image") not in blueprint_set.remapping_map
+
+
+def test_remapping_a_module_that_is_not_in_the_blueprint_raises() -> None:
+    """Silently doing nothing here costs a robot its command path."""
+    with pytest.raises(ValueError) as excinfo:
+        autoconnect(TargetModule.blueprint()).remappings(
+            [(SourceModule, "color_image", "remapped_data")]
+        )
+
+    message = str(excinfo.value)
+    assert "SourceModule" in message
+    assert TargetModule.name in message
+
+
 def test_module_ref_remap_ambiguous() -> None:
     coordinator = ModuleCoordinator.build(
         autoconnect(

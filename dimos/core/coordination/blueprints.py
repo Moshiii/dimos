@@ -273,13 +273,26 @@ class Blueprint:
     def _instance_key(self, module: type[ModuleBase] | str) -> str:
         if isinstance(module, str):
             return module
+        # Exact match wins; subclasses are only a fallback. Deployments subclass a
+        # module (e.g. ControlCoordinator) to declare extra ports, and a remapping
+        # named after the base class still means that instance — but sibling modules
+        # also inherit from each other (ObjectDBModule is a Detection3DModule), and
+        # there the class you named is the one you meant.
         names = [b.name for b in self.blueprints if b.module is module]
+        if not names:
+            names = [b.name for b in self.blueprints if issubclass(b.module, module)]
         if len(names) > 1:
             raise ValueError(
                 f"{module.__name__} has multiple instances in this blueprint "
                 f"({', '.join(sorted(names))}). Pass the instance name instead of the class."
             )
-        return names[0] if names else module.name
+        if not names:
+            raise ValueError(
+                f"Cannot remap {module.__name__}: it has no instance in this blueprint, so "
+                f"the remapping would silently do nothing. Instances present: "
+                f"{', '.join(sorted(b.name for b in self.blueprints)) or '(none)'}."
+            )
+        return names[0]
 
     def namespace(self, prefix: str, *, expose: Iterable[str] = ()) -> "Blueprint":
         """Isolate this blueprint under a name prefix so several copies can coexist.
