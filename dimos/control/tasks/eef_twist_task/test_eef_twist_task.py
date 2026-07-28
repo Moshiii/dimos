@@ -27,9 +27,11 @@ from dimos.control.tasks.cartesian_ik_task.pink_control_ik import (
     PinkControlIKConfig,
 )
 from dimos.control.tasks.eef_twist_task.eef_twist_task import EEFTwistTask, EEFTwistTaskConfig
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
+from dimos.msgs.std_msgs.Bool import Bool
 
 
 @dataclass
@@ -72,22 +74,36 @@ def fake_ik(mocker) -> FakeIK:
     return ik
 
 
+def _fake_robot_model() -> RobotModelConfig:
+    local_joints = ["joint1", "joint2", "joint3"]
+    return RobotModelConfig(
+        name="fake",
+        model_path="fake.urdf",
+        base_pose=PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]),
+        joint_names=local_joints,
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator",
+                joint_names=tuple(local_joints),
+                base_link="base",
+                tip_link="tool",
+            )
+        ],
+        joint_name_mapping={
+            f"arm/joint{index}": joint_name
+            for index, joint_name in enumerate(local_joints, start=1)
+        },
+        home_joints=[0.0, 0.0, 0.0],
+    )
+
+
 @pytest.fixture
 def task(fake_ik: FakeIK) -> EEFTwistTask:
     return EEFTwistTask(
         "eef",
         EEFTwistTaskConfig(
             joint_names=["arm/joint1", "arm/joint2", "arm/joint3"],
-            control_ik=PinkControlIKConfig(
-                robot_model=RobotModelConfig(
-                    name="fake",
-                    model_path="fake.urdf",
-                    base_pose=PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]),
-                    joint_names=["arm/joint1", "arm/joint2", "arm/joint3"],
-                    end_effector_link="tool",
-                    home_joints=[0.0, 0.0, 0.0],
-                )
-            ),
+            control_ik=PinkControlIKConfig(robot_model=_fake_robot_model()),
             timeout=0.3,
             max_joint_delta_deg=15.0,
             min_dt=0.02,
@@ -225,3 +241,53 @@ def test_timeout_and_zero_command_clear_then_next_nonzero_reseeds(
 
     assert task.on_ee_twist_command(_twist(0.0), t_now=2.02)
     assert not task.is_active()
+
+
+@pytest.fixture
+def gripper_task(fake_ik: FakeIK) -> EEFTwistTask:
+    return EEFTwistTask(
+        "eef",
+        EEFTwistTaskConfig(
+            joint_names=["arm/joint1", "arm/joint2", "arm/joint3"],
+            control_ik=PinkControlIKConfig(robot_model=_fake_robot_model()),
+            timeout=0.0,
+            max_joint_delta_deg=15.0,
+            gripper_joint="arm/gripper",
+            gripper_open_pos=0.85,
+            gripper_closed_pos=0.0,
+        ),
+    )
+
+
+def test_gripper_task_claims_and_outputs_gripper(gripper_task: EEFTwistTask) -> None:
+    gripper_task.start()
+
+    output = gripper_task.compute(_state(0.5, positions=[0.1, 0.2, 0.3]))
+
+    assert "arm/gripper" in gripper_task.claim().joints
+    assert output is not None
+    assert output.joint_names[-1] == "arm/gripper"
+    assert output.positions[-1] == 0.85
+
+
+def test_gripper_command_updates_target(gripper_task: EEFTwistTask) -> None:
+    assert gripper_task.on_gripper_command(Bool(data=True), 0.0)
+
+    output = gripper_task.compute(_state(0.5, positions=[0.1, 0.2, 0.3]))
+
+    assert output is not None
+    assert output.positions[-1] == 0.0
+
+
+def test_commands_during_estop_are_rejected(gripper_task: EEFTwistTask) -> None:
+    gripper_task.start()
+    gripper_task.set_estop(True)
+
+    assert not gripper_task.is_active()
+    assert not gripper_task.on_ee_twist_command(_twist(), t_now=1.0)
+    assert not gripper_task.on_gripper_command(Bool(data=True), 1.0)
+
+    gripper_task.set_estop(False)
+    output = gripper_task.compute(_state(2.0, positions=[0.1, 0.2, 0.3]))
+    assert output is not None
+    assert output.positions[-1] == 0.85

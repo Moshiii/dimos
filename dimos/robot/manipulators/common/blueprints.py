@@ -94,18 +94,22 @@ def eef_twist_task(
     max_dt: float = 0.05,
     control_ik: Mapping[str, object] | None = None,
     robot_model: RobotModelConfig,
+    params: Mapping[str, object] | None = None,
 ) -> TaskConfig:
     resolved_control_ik = _resolve_control_ik(hardware, robot_model, control_ik)
+    task_params: dict[str, object] = {
+        "control_ik": resolved_control_ik,
+        "min_dt": min_dt,
+        "max_dt": max_dt,
+    }
+    if params:
+        task_params.update(params)
     return TaskConfig(
         name=name,
         type="eef_twist",
         joint_names=hardware.joints,
         priority=priority,
-        params={
-            "control_ik": resolved_control_ik,
-            "min_dt": min_dt,
-            "max_dt": max_dt,
-        },
+        params=task_params,
     )
 
 
