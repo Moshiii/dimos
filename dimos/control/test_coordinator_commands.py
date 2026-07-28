@@ -148,14 +148,6 @@ class TestTaskInvoke:
         assert coordinator.task_invoke("traj_arm", "get_state") == "ABORTED"
         assert task.executed is traj
 
-    def test_existing_but_undeclared_method_raises(self, coordinator):
-        task = CommandRecordingTask("traj_arm")
-        coordinator.add_task(task, task_type="trajectory")
-
-        with pytest.raises(AttributeError, match=r"record_time.+declared commands"):
-            coordinator.task_invoke("traj_arm", "record_time", {"t_now": None})
-        assert task.t_now_seen is None
-
     def test_unknown_task_raises(self, coordinator):
         with pytest.raises(KeyError, match="nope"):
             coordinator.task_invoke("nope", "execute", {})

@@ -28,6 +28,7 @@ import pytest
 
 from dimos.control.coordinator import ControlCoordinator
 from dimos.control.tasks.trajectory_task.trajectory_task import (
+    JOINT_TRAJECTORY_TASK_NAME,
     TrajectoryCancellationResult,
     TrajectoryCancellationStatus,
     TrajectoryExecutionResult,
@@ -262,6 +263,11 @@ class TestManipulationModuleIntegration:
         robot_config = module._robots["test_arm"][1]
         assert module.execute() is True
         trajectory = module._control_coordinator.task_invoke.call_args.args[2]["trajectory"]
+        module._control_coordinator.task_invoke.assert_called_once_with(
+            JOINT_TRAJECTORY_TASK_NAME,
+            "execute",
+            {"trajectory": trajectory},
+        )
 
         assert trajectory.joint_names == list(robot_config.joint_name_mapping.keys())
 
@@ -283,9 +289,12 @@ class TestCoordinatorIntegration:
         assert result is True
         assert module._state == ManipulationState.COMPLETED
 
-        # Verify coordinator was called
-        module._control_coordinator.task_invoke.assert_called_once()
         trajectory = module._control_coordinator.task_invoke.call_args.args[2]["trajectory"]
+        module._control_coordinator.task_invoke.assert_called_once_with(
+            JOINT_TRAJECTORY_TASK_NAME,
+            "execute",
+            {"trajectory": trajectory},
+        )
 
         assert len(trajectory.points) > 1
         # Joint names should be translated

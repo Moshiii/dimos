@@ -166,10 +166,12 @@ def test_execute_maps_all_robots_into_one_trajectory() -> None:
     result = manager.execute(plan)
 
     assert result.outcome is ExecutionOutcome.ACCEPTED
-    coordinator.task_invoke.assert_called_once()
-    task_name, method, kwargs = coordinator.task_invoke.call_args.args
-    assert (task_name, method) == (JOINT_TRAJECTORY_TASK_NAME, "execute")
-    trajectory = kwargs["trajectory"]
+    trajectory = coordinator.task_invoke.call_args.args[2]["trajectory"]
+    coordinator.task_invoke.assert_called_once_with(
+        JOINT_TRAJECTORY_TASK_NAME,
+        "execute",
+        {"trajectory": trajectory},
+    )
     assert trajectory.joint_names == ["left_hw/j1", "right_hw/j1"]
     assert trajectory.points == plan.trajectory.points
     assert trajectory.timestamp == plan.trajectory.timestamp
@@ -187,6 +189,11 @@ def test_execute_preserves_single_robot_subset() -> None:
 
     assert result.accepted
     trajectory = coordinator.task_invoke.call_args.args[2]["trajectory"]
+    coordinator.task_invoke.assert_called_once_with(
+        JOINT_TRAJECTORY_TASK_NAME,
+        "execute",
+        {"trajectory": trajectory},
+    )
     assert trajectory.joint_names == ["j2"]
     assert trajectory.points[0].positions == [0.0]
 
@@ -267,6 +274,12 @@ def test_execute_rpc_failure_is_uncertain() -> None:
 
     assert result.outcome is ExecutionOutcome.UNCERTAIN
     assert "timed out" in result.message
+    trajectory = coordinator.task_invoke.call_args.args[2]["trajectory"]
+    coordinator.task_invoke.assert_called_once_with(
+        JOINT_TRAJECTORY_TASK_NAME,
+        "execute",
+        {"trajectory": trajectory},
+    )
 
 
 @pytest.mark.parametrize(
@@ -299,6 +312,10 @@ def test_cancel_preserves_coordinator_semantics(
     assert result is coordinator_result
     assert result.safe is safe
     assert result.cancelled is cancelled
+    coordinator.task_invoke.assert_called_once_with(
+        JOINT_TRAJECTORY_TASK_NAME,
+        "cancel",
+    )
 
 
 def test_cancel_rpc_failure_is_uncertain() -> None:
@@ -311,12 +328,18 @@ def test_cancel_rpc_failure_is_uncertain() -> None:
     assert not result.safe
     assert not result.cancelled
     assert "timed out" in result.message
+    coordinator.task_invoke.assert_called_once_with(
+        JOINT_TRAJECTORY_TASK_NAME,
+        "cancel",
+    )
 
 
 def test_cancel_waits_for_in_flight_execute_then_cancels() -> None:
     coordinator = _coordinator()
     execute_started = Event()
     release_execute = Event()
+    cancel_requested = Event()
+    cancel_invoked = Event()
 
     def task_invoke(
         _task_name: str, method: str, _kwargs: dict[str, object] | None = None
@@ -326,6 +349,7 @@ def test_cancel_waits_for_in_flight_execute_then_cancels() -> None:
             if not release_execute.wait(timeout=1.0):
                 raise TimeoutError("test did not release execute RPC")
             return TrajectoryExecutionResult(TrajectoryExecutionStatus.ACCEPTED)
+        cancel_invoked.set()
         return TrajectoryCancellationResult(TrajectoryCancellationStatus.ALREADY_STOPPED)
 
     coordinator.task_invoke.side_effect = task_invoke
@@ -334,27 +358,27 @@ def test_cancel_waits_for_in_flight_execute_then_cancels() -> None:
     cancel_results: list[TrajectoryCancellationResult] = []
 
     execute_thread = Thread(target=lambda: execute_results.append(manager.execute(_plan())))
-    cancel_thread = Thread(target=lambda: cancel_results.append(manager.cancel()))
+
+    def cancel() -> None:
+        cancel_requested.set()
+        cancel_results.append(manager.cancel())
+
+    cancel_thread = Thread(target=cancel)
     execute_thread.start()
-    execute_was_started = execute_started.wait(timeout=1.0)
-    cancel_was_started = False
-    cancel_called_before_release = False
     try:
-        if execute_was_started:
-            cancel_thread.start()
-            cancel_was_started = True
-            cancel_called_before_release = coordinator.task_invoke.call_count > 1
+        assert execute_started.wait(timeout=1.0)
+        cancel_thread.start()
+        assert cancel_requested.wait(timeout=1.0)
+        assert not cancel_invoked.wait(timeout=0.1)
     finally:
         release_execute.set()
         execute_thread.join(timeout=1.0)
-        if cancel_was_started:
+        if cancel_thread.ident is not None:
             cancel_thread.join(timeout=1.0)
 
-    assert execute_was_started
     assert not execute_thread.is_alive()
-    assert cancel_was_started
     assert not cancel_thread.is_alive()
-    assert not cancel_called_before_release
+    assert cancel_invoked.is_set()
     assert len(execute_results) == 1
     assert execute_results[0].outcome is ExecutionOutcome.ACCEPTED
     assert len(cancel_results) == 1

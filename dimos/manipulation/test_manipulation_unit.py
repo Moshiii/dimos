@@ -24,6 +24,7 @@ from pytest_mock import MockerFixture
 
 from dimos.control.coordinator import ControlCoordinator
 from dimos.control.tasks.trajectory_task.trajectory_task import (
+    JOINT_TRAJECTORY_TASK_NAME,
     TrajectoryCancellationResult,
     TrajectoryCancellationStatus,
     TrajectoryExecutionResult,
@@ -326,7 +327,10 @@ class TestStateMachine:
         assert module._state == ManipulationState.COMPLETED
 
         assert module.cancel() is True
-        assert module._control_coordinator.task_invoke.call_args_list[-1].args[1] == "cancel"
+        assert module._control_coordinator.task_invoke.call_args_list[-1].args == (
+            JOINT_TRAJECTORY_TASK_NAME,
+            "cancel",
+        )
         assert module._state == ManipulationState.IDLE
 
     def test_reset_not_during_execution(self, module_factory):
@@ -888,8 +892,12 @@ class TestPlanningGroupApis:
 
         assert module.execute_plan() is True
 
-        mock_coordinator.task_invoke.assert_called_once()
         payload = mock_coordinator.task_invoke.call_args.args[2]["trajectory"]
+        mock_coordinator.task_invoke.assert_called_once_with(
+            JOINT_TRAJECTORY_TASK_NAME,
+            "execute",
+            {"trajectory": payload},
+        )
         assert payload.joint_names == ["left_coord_j1", "k0"]
         assert [point.time_from_start for point in payload.points] == [0.0, 2.5]
         assert [point.positions for point in payload.points] == [[0.0, 1.0], [0.5, 1.5]]

@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 from dimos.control.coordinator import ControlCoordinator
 from dimos.control.tasks.trajectory_task.trajectory_task import (
+    JOINT_TRAJECTORY_TASK_NAME,
     TrajectoryCancellationResult,
     TrajectoryCancellationStatus,
     TrajectoryExecutionResult,
@@ -114,6 +115,10 @@ def test_execute_plan_can_dispatch_cached_plan_repeatedly(
     assert module.execute_plan()
     assert module.execute_plan()
     assert coordinator.task_invoke.call_count == 2
+    assert [call.args[:2] for call in coordinator.task_invoke.call_args_list] == [
+        (JOINT_TRAJECTORY_TASK_NAME, "execute"),
+        (JOINT_TRAJECTORY_TASK_NAME, "execute"),
+    ]
 
 
 def test_direct_plan_does_not_replace_cached_plan(module_factory) -> None:
@@ -127,6 +132,11 @@ def test_direct_plan_does_not_replace_cached_plan(module_factory) -> None:
 
     assert module._last_plan is cached
     dispatched = coordinator.task_invoke.call_args.args[2]["trajectory"]
+    coordinator.task_invoke.assert_called_once_with(
+        JOINT_TRAJECTORY_TASK_NAME,
+        "execute",
+        {"trajectory": dispatched},
+    )
     assert dispatched.points[-1].positions == [2.0]
 
 

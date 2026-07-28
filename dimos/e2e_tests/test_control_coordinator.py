@@ -35,6 +35,20 @@ from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
 from dimos.msgs.trajectory_msgs.TrajectoryStatus import TrajectoryState
 
 
+def _wait_for_trajectory_state(
+    client: RPCClient,
+    expected: TrajectoryState,
+    *,
+    timeout: float = 5.0,
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if client.task_invoke(JOINT_TRAJECTORY_TASK_NAME, "get_state") == expected:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 @pytest.mark.skipif_in_ci
 class TestControlCoordinatorE2E:
     """End-to-end tests for ControlCoordinator."""
@@ -115,19 +129,7 @@ class TestControlCoordinatorE2E:
             )
             assert result.status is TrajectoryExecutionStatus.ACCEPTED
 
-            # Poll for completion
-            timeout = 5.0
-            start_time = time.time()
-            completed = False
-
-            while time.time() - start_time < timeout:
-                state = client.task_invoke(JOINT_TRAJECTORY_TASK_NAME, "get_state")
-                if state is not None and state == TrajectoryState.COMPLETED:
-                    completed = True
-                    break
-                time.sleep(0.1)
-
-            assert completed, "Trajectory did not complete within timeout"
+            assert _wait_for_trajectory_state(client, TrajectoryState.COMPLETED)
         finally:
             client.stop_rpc_client()
 
@@ -194,8 +196,10 @@ class TestControlCoordinatorE2E:
             )
             assert result.status is TrajectoryExecutionStatus.ACCEPTED
 
-            # Wait a bit then cancel
-            time.sleep(0.5)
+            assert (
+                client.task_invoke(JOINT_TRAJECTORY_TASK_NAME, "get_state")
+                == TrajectoryState.EXECUTING
+            )
             cancel_result = client.task_invoke(JOINT_TRAJECTORY_TASK_NAME, "cancel")
             assert cancel_result.status is TrajectoryCancellationStatus.CANCELLED
 
@@ -224,25 +228,11 @@ class TestControlCoordinatorE2E:
             tasks = client.list_tasks()
             assert tasks == [JOINT_TRAJECTORY_TASK_NAME]
 
-            # Create trajectories for both arms
-            left_trajectory = JointTrajectory(
-                joint_names=[f"left_arm/joint{i + 1}" for i in range(7)],
-                points=[
-                    TrajectoryPoint(time_from_start=0.0, positions=[0.0] * 7),
-                    TrajectoryPoint(time_from_start=0.5, positions=[0.2] * 7),
-                ],
-            )
-
-            right_trajectory = JointTrajectory(
-                joint_names=[f"right_arm/joint{i + 1}" for i in range(6)],
-                points=[
-                    TrajectoryPoint(time_from_start=0.0, positions=[0.0] * 6),
-                    TrajectoryPoint(time_from_start=0.5, positions=[0.3] * 6),
-                ],
-            )
-
             combined = JointTrajectory(
-                joint_names=[*left_trajectory.joint_names, *right_trajectory.joint_names],
+                joint_names=[
+                    *[f"left_arm/joint{i + 1}" for i in range(7)],
+                    *[f"right_arm/joint{i + 1}" for i in range(6)],
+                ],
                 points=[
                     TrajectoryPoint(
                         time_from_start=0.0,
@@ -262,11 +252,6 @@ class TestControlCoordinatorE2E:
                 {"trajectory": combined},
             )
             assert result.status is TrajectoryExecutionStatus.ACCEPTED
-
-            # Wait for completion
-            time.sleep(1.0)
-
-            state = client.task_invoke(JOINT_TRAJECTORY_TASK_NAME, "get_state")
-            assert state == TrajectoryState.COMPLETED
+            assert _wait_for_trajectory_state(client, TrajectoryState.COMPLETED)
         finally:
             client.stop_rpc_client()
