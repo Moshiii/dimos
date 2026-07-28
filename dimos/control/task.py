@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from weakref import ReferenceType, ref
 
 import attrs
@@ -45,12 +45,16 @@ if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
     from dimos.teleop.quest.quest_types import Buttons
 
-_K = TypeVar("_K")
-_V = TypeVar("_V")
 
-
-def _immutable_mapping(value: Mapping[_K, _V]) -> Mapping[_K, _V]:
+def _immutable_joint_mapping(
+    value: Mapping[JointName, float],
+) -> Mapping[JointName, float]:
     """Detach a mapping from its caller and expose a read-only copy."""
+    return MappingProxyType(dict(value))
+
+
+def _immutable_imu_mapping(value: Mapping[str, IMUState]) -> Mapping[str, IMUState]:
+    """Detach an IMU mapping from its caller and expose a read-only copy."""
     return MappingProxyType(dict(value))
 
 
@@ -94,15 +98,15 @@ class JointStateSnapshot:
 
     joint_positions: Mapping[JointName, float] = attrs.field(
         factory=dict,
-        converter=_immutable_mapping,
+        converter=_immutable_joint_mapping,
     )
     joint_velocities: Mapping[JointName, float] = attrs.field(
         factory=dict,
-        converter=_immutable_mapping,
+        converter=_immutable_joint_mapping,
     )
     joint_efforts: Mapping[JointName, float] = attrs.field(
         factory=dict,
-        converter=_immutable_mapping,
+        converter=_immutable_joint_mapping,
     )
     timestamp: float = 0.0
 
@@ -139,7 +143,7 @@ class CoordinatorState:
     joints: JointStateSnapshot
     imu: Mapping[str, IMUState] = attrs.field(
         factory=dict,
-        converter=_immutable_mapping,
+        converter=_immutable_imu_mapping,
     )
     t_now: float = 0.0  # Coordinator time (perf_counter) - USE THIS, NOT time.time()!
     dt: float = 0.0  # Time since last tick
