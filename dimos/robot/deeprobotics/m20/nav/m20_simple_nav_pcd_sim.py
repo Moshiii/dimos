@@ -28,7 +28,7 @@ from dimos.robot.deeprobotics.m20.tf import M20TF
 
 
 class PCDMapConfig(ModuleConfig):
-    pcd_path: str = "/home/zengxianwei/Desktop/work_resource/project_resource/code_folder/cat_m20_WD/dimos-test/m20_global_map.pcd"
+    pcd_path: str = str(Path(__file__).resolve().parents[1] / "m20_global_map.pcd")
     publish_hz: float = 2.0
 
 

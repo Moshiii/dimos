@@ -79,6 +79,7 @@ all_blueprints = {
     "learning-collect-quest-piper": "dimos.learning.collection.blueprint:learning_collect_quest_piper",
     "learning-collect-quest-xarm7": "dimos.learning.collection.blueprint:learning_collect_quest_xarm7",
     "m20": "dimos.robot.deeprobotics.m20.blueprints.basic:m20",
+    "m20-3dnav-pcd-sim": "dimos.robot.deeprobotics.m20.3dnav.m20_mls_3Dnav_pcd_sim:m20_mls_3Dnav_pcd_sim",
     "m20-api": "dimos.robot.deeprobotics.m20.blueprints.basic:m20_api",
     "m20-nav": "dimos.robot.deeprobotics.m20.blueprints.basic:m20_nav",
     "m20-nav-3d": "dimos.robot.deeprobotics.m20.blueprints.basic:m20_nav_3d",
