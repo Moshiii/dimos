@@ -67,6 +67,7 @@ SELF_HOSTED_BLUEPRINTS = frozenset(
         "xarm-perception-agent",
         "xarm-perception-sim",
         "xarm-perception-sim-agent",
+        "xarm6-worldbelief-sim",
         "xarm7-planner-coordinator",
         "xarm7-planner-coordinator-agent",
     }

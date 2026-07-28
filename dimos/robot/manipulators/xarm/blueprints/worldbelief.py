@@ -23,7 +23,7 @@ import rerun.blueprint as rrb
 
 from dimos.agents.mcp.mcp_server import McpServer
 from dimos.constants import STATE_DIR
-from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -69,6 +69,49 @@ def _rerun_blueprint() -> rrb.Blueprint:
     )
 
 
+def worldbelief_stack(state_subdir: str) -> Blueprint:
+    """Camera-source-agnostic half of an xArm WorldBelief blueprint.
+
+    The rerun bridge, recorder, and belief module are identical for the
+    RealSense and MuJoCo wrist cameras -- both publish the same color/depth/
+    camera-info topics -- so only the state directory varies. ``state_subdir``
+    keeps hardware and sim recordings from overwriting each other.
+    """
+    db_path = STATE_DIR / "worldbelief" / state_subdir / "recordings" / "xarm6_worldbelief.db"
+    return autoconnect(
+        RerunBridgeModule.blueprint(
+            blueprint=_rerun_blueprint,
+            topic_to_entity=_topic_to_entity,
+            visual_override={
+                "world/color_camera": partial(
+                    _camera_info_to_rerun, image_topic="world/color_camera/color_image"
+                ),
+                "world/depth_camera": partial(
+                    _camera_info_to_rerun, image_topic="world/depth_camera/depth_image"
+                ),
+            },
+            max_hz={
+                "world/color_camera/color_image": 10.0,
+                "world/depth_camera/depth_image": 5.0,
+                "world/detections_3d": 10.0,
+                "world/pointcloud": 5.0,
+            },
+        ),
+        WorldBeliefRecorder.blueprint(db_path=db_path),
+        WorldBeliefModule.blueprint(
+            db_path=db_path,
+            history_path=STATE_DIR / "worldbelief" / state_subdir / "worldbelief_history.db",
+            scan_prompts=[],
+            depth_tolerance_s=0.1,
+            stationary_hz=4.0,
+            yoloe_model_name="yoloe-11l-seg.pt",
+            dino_model_name="facebook/dinov2-base",
+            clip_model_name="openai/clip-vit-base-patch32",
+        ),
+        McpServer.blueprint(),
+    )
+
+
 _hw = xarm6_hardware("arm")
 _hw.auto_enable = True
 
@@ -91,38 +134,7 @@ xarm6_worldbelief = autoconnect(
         base_frame_id="link6",
         base_transform=XARM6_WORLDBELIEF_CAMERA_TRANSFORM,
     ),
-    RerunBridgeModule.blueprint(
-        blueprint=_rerun_blueprint,
-        topic_to_entity=_topic_to_entity,
-        visual_override={
-            "world/color_camera": partial(
-                _camera_info_to_rerun, image_topic="world/color_camera/color_image"
-            ),
-            "world/depth_camera": partial(
-                _camera_info_to_rerun, image_topic="world/depth_camera/depth_image"
-            ),
-        },
-        max_hz={
-            "world/color_camera/color_image": 10.0,
-            "world/depth_camera/depth_image": 5.0,
-            "world/detections_3d": 10.0,
-            "world/pointcloud": 5.0,
-        },
-    ),
-    WorldBeliefRecorder.blueprint(
-        db_path=STATE_DIR / "worldbelief" / "xarm6" / "recordings" / "xarm6_worldbelief.db",
-    ),
-    WorldBeliefModule.blueprint(
-        db_path=STATE_DIR / "worldbelief" / "xarm6" / "recordings" / "xarm6_worldbelief.db",
-        history_path=STATE_DIR / "worldbelief" / "xarm6" / "worldbelief_history.db",
-        scan_prompts=[],
-        depth_tolerance_s=0.1,
-        stationary_hz=4.0,
-        yoloe_model_name="yoloe-11l-seg.pt",
-        dino_model_name="facebook/dinov2-base",
-        clip_model_name="openai/clip-vit-base-patch32",
-    ),
-    McpServer.blueprint(),
+    worldbelief_stack("xarm6"),
     coordinator(
         hardware=[_hw],
         tasks=[trajectory_task(_hw)],
