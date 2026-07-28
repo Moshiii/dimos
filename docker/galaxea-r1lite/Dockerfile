@@ -78,12 +78,25 @@ ENV PYTHONUNBUFFERED=1 \
     ROS_DOMAIN_ID=2
 
 # Metadata consistency gate. Exactly two failures are known and accepted:
-# ipywidgets is dropped from the locked closure by the project's
-# override-dependencies (open3d declares it but the r1lite path never
+# the open3d wheel declares ipywidgets while the locked closure does not
+# include it (a lock-vs-wheel metadata mismatch; the r1lite path never
 # imports it), and colcon-core comes from the base image's apt with a
 # setuptools<80 bound while the locked closure pins a newer setuptools.
-# Anything else failing pip check fails the build.
-RUN python3 -m pip check > /tmp/pipcheck.txt; \
+# Fail closed on everything else: any other line, any stderr output, and
+# any exit status besides the documented 0 (clean) or 1 (conflicts
+# found, which must then all be in the accepted list).
+RUN python3 -m pip check > /tmp/pipcheck.txt 2>/tmp/pipcheck_err.txt; \
+    status=$?; \
+    if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then \
+        echo "pip check itself failed with status $status:"; \
+        cat /tmp/pipcheck.txt /tmp/pipcheck_err.txt; exit 1; \
+    fi; \
+    if [ -s /tmp/pipcheck_err.txt ]; then \
+        echo "pip check wrote to stderr:"; cat /tmp/pipcheck_err.txt; exit 1; \
+    fi; \
+    if [ "$status" -eq 1 ] && [ ! -s /tmp/pipcheck.txt ]; then \
+        echo "pip check reported conflicts but produced no output"; exit 1; \
+    fi; \
     grep -vE '^(open3d [0-9.]+ requires ipywidgets, which is not installed\.|colcon-core [0-9.]+ has requirement setuptools(<80,)?>=30\.3\.0, but you have setuptools [0-9.]+\.)$' /tmp/pipcheck.txt > /tmp/pipcheck_unexpected.txt || true; \
     if [ -s /tmp/pipcheck_unexpected.txt ]; then \
         echo "pip check found undocumented inconsistencies:"; \

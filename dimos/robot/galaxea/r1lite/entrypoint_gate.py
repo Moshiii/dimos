@@ -24,7 +24,7 @@ through untouched.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import sys
 import time
 
@@ -94,6 +94,30 @@ def _count_messages(node: object, topics: Sequence[str], window_s: float) -> dic
     return counts
 
 
+def poll_rounds(
+    count: Callable[[list[str], float], dict[str, int]],
+    topics: Sequence[str],
+    wait_window_s: float,
+    poll_window_s: float,
+    now: Callable[[], float] = time.monotonic,
+) -> list[str]:
+    """Poll until every topic delivered a message or the deadline passes.
+
+    A topic satisfied in an earlier round is not required again, and the
+    final poll window is bounded by the remaining deadline so the total
+    wait cannot overshoot it by a window.
+    """
+    deadline = now() + wait_window_s
+    missing = list(topics)
+    while missing:
+        remaining = deadline - now()
+        if remaining <= 0:
+            break
+        counts = count(missing, min(poll_window_s, remaining))
+        missing = [t for t in missing if counts.get(t, 0) < 1]
+    return missing
+
+
 def main(argv: Sequence[str]) -> int:
     blueprint = command_capable_blueprint(argv)
     if blueprint is None:
@@ -107,11 +131,12 @@ def main(argv: Sequence[str]) -> int:
     rclpy.init()
     node = rclpy.create_node("dimos_r1lite_entrypoint_gate")
     try:
-        deadline = time.monotonic() + WAIT_WINDOW_S
-        missing = list(REQUIRED_TOPICS)
-        while missing and time.monotonic() < deadline:
-            counts = _count_messages(node, missing, POLL_WINDOW_S)
-            missing = missing_streams({**dict.fromkeys(REQUIRED_TOPICS, 1), **counts})
+        missing = poll_rounds(
+            lambda topics, window: _count_messages(node, topics, window),
+            REQUIRED_TOPICS,
+            WAIT_WINDOW_S,
+            POLL_WINDOW_S,
+        )
     finally:
         node.destroy_node()
         rclpy.shutdown()

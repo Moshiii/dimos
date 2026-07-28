@@ -149,7 +149,7 @@ jobs:
       dockerfile: dev
 
   build-complete:
-    needs: [check-changes, ros, python, ros-python, dev, ros-dev]
+    needs: [check-changes, ros, python, ros-python, dev, ros-dev, r1lite]
     runs-on: [self-hosted, Linux]
     if: always()
     steps:
