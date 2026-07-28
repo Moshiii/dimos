@@ -579,6 +579,21 @@ class R1LiteConnection(Module):
         self._acc_topic = RawROSTopic(cfg.CMD_CHASSIS_ACC_LIMIT, TwistStamped, qos=cmd_qos)
         self._brake_topic = RawROSTopic(cfg.CMD_BRAKE_MODE, Bool, qos=cmd_qos)
 
+        # Claim the actuator topics now rather than on the first publish.
+        # Ownership must be observable while disarmed: that is what the
+        # preflight sole-writer check verifies before anyone arms, and a
+        # publisher that exists but never publishes is inert.
+        for command_topic in (
+            self._cmd_left_topic,
+            self._cmd_right_topic,
+            self._cmd_gripper_left_topic,
+            self._cmd_gripper_right_topic,
+            self._speed_topic,
+            self._acc_topic,
+            self._brake_topic,
+        ):
+            self._ros.ensure_publisher(command_topic)
+
         subscriptions: list[tuple[str, Any, Callable[[Any, Any], None]]] = [
             (cfg.FB_ARM_LEFT, RosJointState, lambda m, _t: self._on_arm_feedback("left", m)),
             (cfg.FB_ARM_RIGHT, RosJointState, lambda m, _t: self._on_arm_feedback("right", m)),

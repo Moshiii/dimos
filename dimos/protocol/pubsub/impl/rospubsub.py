@@ -191,6 +191,15 @@ class RawROS(PubSub[RawROSTopic, Any]):
                 )
             return self._publishers[topic.topic]
 
+    def ensure_publisher(self, topic: RawROSTopic) -> None:
+        """Create the publisher now instead of on the first publish.
+
+        A caller that must own a topic from startup (so ownership is
+        observable before it sends anything) creates it here. The
+        publisher is inert until something is published.
+        """
+        self._get_or_create_publisher(topic)
+
     def publish(self, topic: RawROSTopic, message: Any) -> None:
         """Publish a message to a ROS topic.
 
