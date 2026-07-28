@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.control.tasks.cartesian_ik_task.pink_control_ik import PinkControlIKConfig
+from dimos.control.tasks.teleop_task.teleop_task import (
+    TeleopControlIKConfig,
+    TeleopIKTaskParams,
+)
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
 from dimos.manipulation.visualization.config import (
@@ -27,7 +31,8 @@ from dimos.manipulation.visualization.viser.config import ViserVisualizationConf
 from dimos.robot.get_all_blueprints import get_blueprint_by_name
 from dimos.robot.manipulators.a1z.blueprints.teleop import keyboard_teleop_a1z
 from dimos.robot.manipulators.a750.blueprints.teleop import keyboard_teleop_a750
-from dimos.robot.manipulators.common.blueprints import eef_twist_task, planner
+from dimos.robot.manipulators.common.blueprints import eef_twist_task, planner, teleop_ik_task
+from dimos.robot.manipulators.common.mixed import coordinator_teleop_dual
 from dimos.robot.manipulators.common.topics import EEF_TWIST_TASK_NAME
 from dimos.robot.manipulators.openarm.blueprints.teleop import (
     keyboard_teleop_openarm,
@@ -50,10 +55,13 @@ from dimos.robot.manipulators.xarm.blueprints.basic import (
     xarm7_planner_coordinator,
 )
 from dimos.robot.manipulators.xarm.blueprints.teleop import (
+    coordinator_teleop_xarm6,
+    coordinator_teleop_xarm7,
     keyboard_teleop_xarm6,
     keyboard_teleop_xarm7,
 )
 from dimos.robot.manipulators.xarm.config import (
+    make_xarm6_model_config,
     make_xarm7_model_config,
     make_xarm7_sim_module_kwargs,
     make_xarm7_sim_robot_config,
@@ -61,7 +69,7 @@ from dimos.robot.manipulators.xarm.config import (
 )
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModuleConfig
 from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
-from dimos.teleop.quest.blueprints import teleop_quest_piper
+from dimos.teleop.quest.blueprints import teleop_quest_piper, teleop_quest_xarm6
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 
 
@@ -78,7 +86,7 @@ def _manipulation_config(blueprint: Blueprint) -> ManipulationModuleConfig:
 
 
 def _coordinator_tasks(blueprint: Blueprint) -> list[TaskConfig]:
-    return _module_kwargs(blueprint, ControlCoordinator)["tasks"]
+    return cast("list[TaskConfig]", _module_kwargs(blueprint, ControlCoordinator)["tasks"])
 
 
 def _declared_lfs_filename(path: object) -> object:
@@ -108,6 +116,31 @@ def test_quest_piper_composes_planner_with_trajectory_coordinator() -> None:
         atom for atom in teleop_quest_piper.blueprints if atom.module is ManipulationModule
     ]
     assert quest_planners == [coordinator_planner]
+
+
+def test_xarm_teleop_blueprints_declare_viser_manipulation() -> None:
+    for blueprint in (coordinator_teleop_xarm6, coordinator_teleop_xarm7):
+        kwargs = _manipulation_kwargs(blueprint)
+        robot = kwargs["robots"][0]
+        tasks = _coordinator_tasks(blueprint)
+
+        assert kwargs["visualization"] == {"backend": "viser"}
+        assert any(
+            task.name == robot.coordinator_task_name and task.type == "trajectory" for task in tasks
+        )
+
+
+def test_quest_xarm6_composes_planner_with_fake_hardware_without_ip() -> None:
+    coordinator_planner = next(
+        atom for atom in coordinator_teleop_xarm6.blueprints if atom.module is ManipulationModule
+    )
+    quest_planners = [
+        atom for atom in teleop_quest_xarm6.blueprints if atom.module is ManipulationModule
+    ]
+    coordinator_kwargs = _module_kwargs(coordinator_teleop_xarm6, ControlCoordinator)
+
+    assert quest_planners == [coordinator_planner]
+    assert coordinator_kwargs["hardware"][0].adapter_type == "mock"
 
 
 def test_piper_teleop_declares_teleop_task() -> None:
@@ -203,6 +236,90 @@ def test_eef_twist_task_helper_passes_authoritative_robot_model() -> None:
     assert task.joint_names == hardware.joints
     assert "model_path" not in task.params
     assert task.params["control_ik"]["robot_model"] is robot_model
+    control_ik = PinkControlIKConfig.model_validate(task.params["control_ik"])
+    assert control_ik.max_velocity == 10.0
+    assert control_ik.orientation_cost == 1.0
+    assert control_ik.posture_cost == 1e-3
+    assert control_ik.damping_cost == 0.0
+
+
+def test_teleop_task_helper_passes_authoritative_robot_model() -> None:
+    hardware = make_xarm_hardware("arm", 6, adapter_type="mock")
+    robot_model = make_xarm6_model_config(add_gripper=False)
+
+    task = teleop_ik_task(
+        hardware,
+        hand="right",
+        name="teleop_xarm",
+        robot_model=robot_model,
+    )
+
+    assert task.type == "teleop_ik"
+    assert task.joint_names == hardware.joints
+    assert task.params["control_ik"]["robot_model"] is robot_model
+    assert task.params["hand"] == "right"
+    assert "model_path" not in task.params
+    assert "ee_joint_id" not in task.params
+
+
+@pytest.mark.parametrize(
+    ("blueprint", "expected_frames"),
+    [
+        pytest.param(
+            coordinator_teleop_piper,
+            {"teleop_piper": "gripper_base"},
+            id="piper",
+        ),
+        pytest.param(
+            coordinator_teleop_xarm6,
+            {"teleop_xarm": "link6"},
+            id="xarm6",
+        ),
+        pytest.param(
+            coordinator_teleop_xarm7,
+            {"teleop_xarm": "link7"},
+            id="xarm7",
+        ),
+        pytest.param(
+            coordinator_teleop_dual,
+            {"teleop_xarm": "link6", "teleop_piper": "gripper_base"},
+            id="mixed",
+        ),
+    ],
+)
+def test_shipped_teleop_tasks_use_pink_with_named_models(
+    blueprint: Blueprint,
+    expected_frames: dict[str, str],
+) -> None:
+    tasks = [task for task in _coordinator_tasks(blueprint) if task.type == "teleop_ik"]
+
+    assert {task.name for task in tasks} == expected_frames.keys()
+    for task in tasks:
+        assert "model_path" not in task.params
+        assert "ee_joint_id" not in task.params
+        control_ik = task.params["control_ik"]
+        reconstructed = TeleopControlIKConfig.model_validate(control_ik)
+        assert reconstructed.robot_model.get_coordinator_joint_names() == task.joint_names
+        assert reconstructed.robot_model.end_effector_link == expected_frames[task.name]
+        assert reconstructed.max_velocity == 1.0
+        assert reconstructed.position_cost == 1.0
+        assert reconstructed.orientation_cost == 1.0
+        assert reconstructed.posture_cost == 0.0
+        assert reconstructed.damping_cost == 1e-3
+        assert TeleopIKTaskParams.model_validate(task.params).max_joint_delta_deg == 5.0
+        declared_filename = _declared_lfs_filename(reconstructed.robot_model.model_path)
+        assert isinstance(declared_filename, str)
+        assert not declared_filename.endswith((".xml", ".mjcf"))
+
+
+def test_xarm_teleop_priority_preserves_eef_twist_fallback() -> None:
+    for blueprint in (coordinator_teleop_xarm6, coordinator_teleop_xarm7):
+        tasks = _coordinator_tasks(blueprint)
+        teleop = next(task for task in tasks if task.type == "teleop_ik")
+        eef_twist = next(task for task in tasks if task.type == "eef_twist")
+
+        assert teleop.priority > eef_twist.priority
+        assert teleop.joint_names == eef_twist.joint_names
 
 
 @pytest.mark.parametrize(
@@ -261,11 +378,12 @@ def test_piper_pink_tasks_use_xacro_and_gripper_base() -> None:
         keyboard_teleop_piper,
         coordinator_cartesian_ik_mock,
         coordinator_cartesian_ik_piper,
+        coordinator_teleop_piper,
     ):
         task = next(
             task
             for task in _coordinator_tasks(blueprint)
-            if task.type in ("eef_twist", "cartesian_ik")
+            if task.type in ("eef_twist", "cartesian_ik", "teleop_ik")
         )
         control_ik = task.params["control_ik"]
 

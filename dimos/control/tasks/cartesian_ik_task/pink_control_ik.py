@@ -29,21 +29,16 @@ from pydantic import Field, FiniteFloat, field_validator
 
 pink: ModuleType | None = None
 _configuration_limit: Callable[[object], object] | None = None
-_velocity_limit: Callable[[object], object] | None = None
 
 try:
     import pink as _pink_module
-    from pink.limits import (
-        ConfigurationLimit as _ConfigurationLimit,
-        VelocityLimit as _VelocityLimit,
-    )
+    from pink.limits import ConfigurationLimit as _ConfigurationLimit
 except ModuleNotFoundError as exc:
     if exc.name != "pink":
         raise
 else:
     pink = cast("ModuleType", _pink_module)
     _configuration_limit = cast("Callable[[object], object]", _ConfigurationLimit)
-    _velocity_limit = cast("Callable[[object], object]", _VelocityLimit)
 
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.utils.mesh_utils import prepare_urdf_for_drake
@@ -63,10 +58,10 @@ def _require_pink() -> ModuleType:
     return pink
 
 
-def _require_pink_limits() -> tuple[Callable[[object], object], Callable[[object], object]]:
-    if _configuration_limit is None or _velocity_limit is None:
+def _require_pink_configuration_limit() -> Callable[[object], object]:
+    if _configuration_limit is None:
         raise ModuleNotFoundError(_PINK_INSTALL_ERROR, name="pink") from None
-    return _configuration_limit, _velocity_limit
+    return _configuration_limit
 
 
 class PinkControlIKConfig(BaseConfig):
@@ -80,6 +75,7 @@ class PinkControlIKConfig(BaseConfig):
     position_cost: FiniteFloat = Field(1.0, ge=0.0)
     orientation_cost: FiniteFloat = Field(1.0, ge=0.0)
     posture_cost: FiniteFloat = Field(1e-3, ge=0.0)
+    damping_cost: FiniteFloat = Field(0.0, ge=0.0)
     reference_q: list[float] | None = None
     qpsolver_options: dict[str, FiniteFloat] = Field(default_factory=dict)
 
@@ -109,7 +105,7 @@ class PinkControlIK:
         config: PinkControlIKConfig,
     ) -> None:
         pink_module = _require_pink()
-        _require_pink_limits()
+        _require_pink_configuration_limit()
         self._config = config
         robot = config.robot_model
         self._joint_names = robot.get_coordinator_joint_names()
@@ -168,14 +164,34 @@ class PinkControlIK:
             if config.posture_cost > 0.0
             else None
         )
+        self._damping_task = (
+            pink_module.tasks.DampingTask(cost=config.damping_cost)  # type: ignore[attr-defined]
+            if config.damping_cost > 0.0
+            else None
+        )
         self._tasks: list[object] = [self._frame_task]
         if self._posture_task is not None:
             self._tasks.append(self._posture_task)
+        if self._damping_task is not None:
+            self._tasks.append(self._damping_task)
 
     @property
     def nq(self) -> int:
         """Number of controlled coordinates, matching the task contract."""
         return len(self._joint_names)
+
+    @property
+    def position_limits(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Position bounds in coordinator joint order."""
+        lower = np.full(self.nq, -np.inf, dtype=np.float64)
+        upper = np.full(self.nq, np.inf, dtype=np.float64)
+        for output_index, (q_index, width) in enumerate(
+            zip(self._q_indices, self._q_widths, strict=True)
+        ):
+            if width == 1:
+                lower[output_index] = self._model.lowerPositionLimit[q_index]
+                upper[output_index] = self._model.upperPositionLimit[q_index]
+        return lower, upper
 
     def forward_kinematics(self, q: NDArray[np.float64]) -> pinocchio.SE3:
         full_q = self._full_q(q)
@@ -217,6 +233,7 @@ class PinkControlIK:
             velocity = np.asarray(velocity, dtype=np.float64).reshape(-1)
             if velocity.size != self._model.nv or not np.all(np.isfinite(velocity)):
                 raise IKControlRuntimeError("Pink produced an invalid velocity")
+            velocity = self._scale_velocity(velocity)
             configuration.integrate_inplace(velocity, dt)
             candidate = self._project_controlled_positions(configuration.q, measured)
             if candidate.size != measured.size or not np.all(np.isfinite(candidate)):
@@ -259,6 +276,13 @@ class PinkControlIK:
 
     def _controlled_velocity(self, velocity: NDArray[np.float64]) -> NDArray[np.float64]:
         return np.array([velocity[index] for index in self._v_indices], dtype=np.float64)
+
+    def _scale_velocity(self, velocity: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Uniformly scale a Pink solution to preserve its joint-space direction."""
+        max_ratio = float(np.max(np.abs(velocity) / self._velocity_limits))
+        if max_ratio <= 1.0:
+            return velocity
+        return velocity / max_ratio
 
     def _clamp_position_limits(self, candidate: NDArray[np.float64]) -> NDArray[np.float64]:
         bounded = candidate.copy()
@@ -364,7 +388,7 @@ class PinkControlIK:
         return frame_id
 
     def _apply_limits(self, robot: RobotModelConfig) -> None:
-        configuration_limit, velocity_limit = _require_pink_limits()
+        configuration_limit = _require_pink_configuration_limit()
         if robot.joint_limits_lower is not None or robot.joint_limits_upper is not None:
             if robot.joint_limits_lower is None or robot.joint_limits_upper is None:
                 raise ValueError("both configured joint limit bounds are required")
@@ -396,7 +420,20 @@ class PinkControlIK:
             for index, limit in zip(self._v_indices, robot.velocity_limits, strict=True):
                 self._model.velocityLimit[index] = limit
         for index in self._v_indices:
-            self._model.velocityLimit[index] = min(
-                self._model.velocityLimit[index], self._config.max_velocity
+            model_limit = self._model.velocityLimit[index]
+            self._model.velocityLimit[index] = (
+                min(model_limit, self._config.max_velocity)
+                if np.isfinite(model_limit) and model_limit > 0.0
+                else self._config.max_velocity
             )
-        self._limits = [configuration_limit(self._model), velocity_limit(self._model)]
+        self._velocity_limits = np.asarray(self._model.velocityLimit, dtype=np.float64).copy()
+        if (
+            self._velocity_limits.size != self._model.nv
+            or not np.all(np.isfinite(self._velocity_limits))
+            or np.any(self._velocity_limits <= 0.0)
+        ):
+            raise ValueError("effective Pink velocity limits are invalid")
+        # Keep position bounds in the QP, but apply velocity limits by uniformly
+        # scaling the solution. Tiny per-tick velocity boxes can make ProxQP
+        # misclassify feasible differential IK problems as primal-infeasible.
+        self._limits = [configuration_limit(self._model)]

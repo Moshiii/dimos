@@ -68,9 +68,6 @@ _ARM_IK_LIMITS = {
     "max_target_offset_m": 0.08,
     "max_target_rot_deg": 20.0,
     "joint_limit_margin_deg": 2.0,
-    "solver": "pink",
-    "orientation_weight": 1.0,
-    "posture_weight": 0.05,
     "tool_offset_m": (0.17, 0.0, 0.0),
     "rotation_frame": "local",
     "rotation_deadband_deg": 4.0,
@@ -80,9 +77,30 @@ _ARM_IK_LIMITS = {
 }
 
 
+def _teleop_control_model(side: str) -> RobotModelConfig:
+    coordinator_joints = cfg.LEFT_ARM_JOINTS if side == "left" else cfg.RIGHT_ARM_JOINTS
+    model_joints = cfg.LEFT_ARM_URDF_JOINTS if side == "left" else cfg.RIGHT_ARM_URDF_JOINTS
+    model_path = cfg.R1LITE_LEFT_ARM_MODEL if side == "left" else cfg.R1LITE_RIGHT_ARM_MODEL
+    return RobotModelConfig(
+        name=f"r1lite_{side}_teleop",
+        model_path=model_path,
+        joint_names=list(model_joints),
+        base_link=f"{side}_arm_base_link",
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator",
+                joint_names=tuple(model_joints),
+                base_link=f"{side}_arm_base_link",
+                tip_link=f"{side}_arm_link6",
+            )
+        ],
+        joint_name_mapping=dict(zip(coordinator_joints, model_joints, strict=True)),
+    )
+
+
 def _teleop_tasks() -> list[TaskConfig]:
-    # Inline TaskConfig: joint_names must be the 6-joint arm slice and the
-    # IK solution maps onto them positionally.
+    left_model = _teleop_control_model("left")
+    right_model = _teleop_control_model("right")
     return [
         TaskConfig(
             name=_TASK_NAMES["left"],
@@ -90,10 +108,12 @@ def _teleop_tasks() -> list[TaskConfig]:
             joint_names=list(cfg.LEFT_ARM_JOINTS),
             priority=_TELEOP_PRIORITY,
             params={
-                "model_path": cfg.R1LITE_LEFT_ARM_MODEL,
-                "ee_joint_id": cfg.ARM_DOF,
+                "control_ik": {
+                    "robot_model": left_model,
+                    "orientation_cost": 1.0,
+                    "posture_cost": 0.05,
+                },
                 "hand": "left",
-                "urdf_joint_names": list(cfg.LEFT_ARM_URDF_JOINTS),
                 **_ARM_IK_LIMITS,
             },
         ),
@@ -103,10 +123,12 @@ def _teleop_tasks() -> list[TaskConfig]:
             joint_names=list(cfg.RIGHT_ARM_JOINTS),
             priority=_TELEOP_PRIORITY,
             params={
-                "model_path": cfg.R1LITE_RIGHT_ARM_MODEL,
-                "ee_joint_id": cfg.ARM_DOF,
+                "control_ik": {
+                    "robot_model": right_model,
+                    "orientation_cost": 1.0,
+                    "posture_cost": 0.05,
+                },
                 "hand": "right",
-                "urdf_joint_names": list(cfg.RIGHT_ARM_URDF_JOINTS),
                 **_ARM_IK_LIMITS,
             },
         ),

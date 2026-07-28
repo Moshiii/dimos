@@ -251,12 +251,14 @@ def test_teleop_tasks_use_arm_slices_and_pink() -> None:
             (left, cfg.LEFT_ARM_URDF_JOINTS),
             (right, cfg.RIGHT_ARM_URDF_JOINTS),
         ):
-            assert task.params["solver"] == "pink"
-            assert task.params["urdf_joint_names"] == urdf_names
+            control_ik = task.params["control_ik"]
+            robot_model = control_ik["robot_model"]
+            assert robot_model.joint_names == urdf_names
+            assert robot_model.get_coordinator_joint_names() == task.joint_names
             assert task.params["rotation_frame"] == "local"
             assert task.params["rotation_deadband_deg"] == 4.0
-            assert task.params["orientation_weight"] == 1.0
-            assert task.params["posture_weight"] == 0.05
+            assert control_ik["orientation_cost"] == 1.0
+            assert control_ik["posture_cost"] == 0.05
             assert task.params["tool_offset_m"] == (0.17, 0.0, 0.0)
             assert task.params["max_joint_delta_deg"] == 45.0
             assert task.params["max_step_deg_per_tick"] == 1.5
@@ -619,8 +621,7 @@ def test_replay_fixture_drives_production_pipeline() -> None:
 
     margin = np.deg2rad(left_cfg.params["joint_limit_margin_deg"]) - 1e-9
     step_limit = np.deg2rad(left_cfg.params["max_step_deg_per_tick"]) + 1e-9
-    lower = task._ik.lower_limits
-    upper = task._ik.upper_limits
+    lower, upper = task._ik.position_limits
     q_start = (lower + upper) / 2.0
     positions = dict(zip(cfg.LEFT_ARM_JOINTS, q_start.tolist(), strict=True))
     tool_start = task._tool_fk(q_start)
@@ -655,7 +656,7 @@ def test_replay_fixture_drives_production_pipeline() -> None:
             task.on_cartesian_command(routed, t_now)
         m.left_controller_output.msgs.clear()
 
-        state = types.SimpleNamespace(t_now=t_now, joints=_FakeJoints(positions))
+        state = types.SimpleNamespace(t_now=t_now, dt=0.02, joints=_FakeJoints(positions))
         out = task.compute(state)
         if out is None:
             continue
@@ -676,7 +677,7 @@ def test_replay_fixture_drives_production_pipeline() -> None:
     tool_end = task._tool_fk(prev_q)
     assert float(np.linalg.norm(tool_end.translation - tool_start.translation)) > 0.005
     # After the release frames at the fixture tail, the task is inert.
-    state = types.SimpleNamespace(t_now=t_now + 0.02, joints=_FakeJoints(positions))
+    state = types.SimpleNamespace(t_now=t_now + 0.02, dt=0.02, joints=_FakeJoints(positions))
     assert task.compute(state) is None
 
 
@@ -690,10 +691,10 @@ def test_engaged_task_times_out_when_stream_stops() -> None:
     positions = {name: 0.1 for name in cfg.LEFT_ARM_JOINTS}
     pose = PoseStamped(position=[0.01, 0.0, 0.0], frame_id="teleop_left_arm")
     task.on_cartesian_command(pose, t_now=1.0)
-    state = types.SimpleNamespace(t_now=1.02, joints=_FakeJoints(positions))
+    state = types.SimpleNamespace(t_now=1.02, dt=0.02, joints=_FakeJoints(positions))
     assert task.compute(state) is not None
     # No further commands: past the configured timeout the task goes inert.
-    late = types.SimpleNamespace(t_now=1.02 + 2.0, joints=_FakeJoints(positions))
+    late = types.SimpleNamespace(t_now=1.02 + 2.0, dt=0.02, joints=_FakeJoints(positions))
     assert task.compute(late) is None
 
 
@@ -827,8 +828,7 @@ def test_stale_stream_release_reaches_production_task() -> None:
         task_names={"left": "teleop_left_arm", "right": "teleop_right_arm"},
         local_rotation=True,
     )
-    lower = task._ik.lower_limits
-    upper = task._ik.upper_limits
+    lower, upper = task._ik.position_limits
     q_start = (lower + upper) / 2.0
     positions = dict(zip(cfg.LEFT_ARM_JOINTS, q_start.tolist(), strict=True))
 
@@ -844,7 +844,7 @@ def test_stale_stream_release_reaches_production_task() -> None:
         for routed in m.left_controller_output.msgs:
             task.on_cartesian_command(routed, t_now)
         m.left_controller_output.msgs.clear()
-        state = types.SimpleNamespace(t_now=t_now, joints=_FakeJoints(positions))
+        state = types.SimpleNamespace(t_now=t_now, dt=0.02, joints=_FakeJoints(positions))
         return task.compute(state)
 
     # An active production command is established through the real path.
