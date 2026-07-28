@@ -192,8 +192,8 @@ class Path(Timestamped):
     def to_rerun(
         self,
         color: tuple[int, int, int] = (0, 255, 128),
-        z_offset: float = 0.5,
-        radii: float = 0.05,
+        z_offset: float = 0.0,
+        radii: float = 0.025,
         in_frame: bool = True,
     ) -> Archetype | InFrame:
         """Convert to rerun LineStrips3D format.
