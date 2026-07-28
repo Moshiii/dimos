@@ -56,12 +56,16 @@ class _Msg:
 class _FakeRos:
     def __init__(self, stamp_available: bool = True) -> None:
         self.published: list[tuple[Any, Any]] = []
+        self.claimed: list[Any] = []
         self._stamp_available = stamp_available
 
     def now_stamp(self) -> Any:
         if not self._stamp_available:
             return None
         return _Msg(sec=0, nanosec=0)
+
+    def ensure_publisher(self, topic: Any) -> None:
+        self.claimed.append(topic)
 
     def publish(self, topic: Any, message: Any) -> None:
         self.published.append((topic, message))
@@ -662,6 +666,9 @@ def _install_fake_ros_stack(monkeypatch: Any, harness: _RosHarness) -> None:
             h.events.append(f"subscribed:{topic.name}")
             return lambda: h.events.append(f"unsubscribed:{topic.name}")
 
+        def ensure_publisher(self, topic: Any) -> None:
+            h.events.append(f"claimed:{topic.name}")
+
         def stop(self) -> None:
             h.events.append("ros_stopped")
 
@@ -824,6 +831,30 @@ def test_partial_start_releases_every_created_resource(monkeypatch: Any, fail_at
     assert not {n for n in leaked if n.startswith("r1lite")}
     c.stop()
     assert c._state is ConnectionState.STOPPED
+
+
+def test_start_claims_every_actuator_topic_while_disarmed(monkeypatch: Any) -> None:
+    # Ownership must be observable before anyone arms: the preflight
+    # sole-writer check runs against a DISARMED connection, and ROS
+    # publishers are otherwise only created on the first publish.
+    harness = _RosHarness(fail_at=None)
+    c = _lifecycle_conn(monkeypatch, harness)
+    c.config.stop_zero_duration_s = 0.01
+    c.start()
+    assert c._state is ConnectionState.READY_DISARMED
+    claimed = {e.split(":", 1)[1] for e in harness.events if e.startswith("claimed:")}
+    assert claimed == {
+        cfg.CMD_ARM_LEFT,
+        cfg.CMD_ARM_RIGHT,
+        cfg.CMD_GRIPPER_LEFT,
+        cfg.CMD_GRIPPER_RIGHT,
+        cfg.CMD_CHASSIS_SPEED,
+        cfg.CMD_CHASSIS_ACC_LIMIT,
+        cfg.CMD_BRAKE_MODE,
+    }
+    # Claiming is not publishing: nothing reached the vendor while disarmed.
+    assert [e for e in harness.events if e.startswith("published:")] == []
+    c.stop()
 
 
 def test_full_start_then_stop_releases_everything(monkeypatch: Any) -> None:
