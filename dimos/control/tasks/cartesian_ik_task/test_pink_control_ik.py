@@ -25,6 +25,7 @@ from dimos.control.tasks.cartesian_ik_task.pink_control_ik import (
     PinkControlIK,
     PinkControlIKConfig,
 )
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
@@ -86,7 +87,14 @@ def _robot(
         model_path=path,
         base_pose=PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]),
         joint_names=joint_names,
-        end_effector_link=frame,
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator",
+                joint_names=tuple(joint_names),
+                base_link="base",
+                tip_link=frame,
+            )
+        ],
         home_joints=[0.4] * joint_count,
         joint_limits_lower=[-2.0] * joint_count,
         joint_limits_upper=[2.0] * joint_count,
@@ -110,6 +118,8 @@ def test_pink_settings_use_finite_declarative_validation(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="finite"):
         PinkControlIKConfig(robot_model=robot, max_velocity=np.inf)
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        PinkControlIKConfig(robot_model=robot, damping_cost=-1e-3)
     with pytest.raises(ValueError, match="finite"):
         PinkControlIKConfig(robot_model=robot, qpsolver_options={"eps": np.nan})
     with pytest.raises(ValueError, match="ordered"):
@@ -283,6 +293,36 @@ def test_pink_posture_task_can_be_disabled(tmp_path: Path, monkeypatch: pytest.M
     assert calls and len(calls[0]) == 1
 
 
+def test_pink_damping_task_replaces_posture_for_low_motion_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _write_urdf(tmp_path)
+    backend = PinkControlIK(
+        PinkControlIKConfig(
+            robot_model=_robot(model_path),
+            posture_cost=0.0,
+            damping_cost=1e-3,
+        )
+    )
+    calls: list[list[object]] = []
+
+    def solve(
+        configuration: object, tasks: list[object], dt: float, **kwargs: object
+    ) -> np.ndarray:
+        calls.append(tasks)
+        return np.zeros(backend._model.nv)
+
+    monkeypatch.setattr(
+        "dimos.control.tasks.cartesian_ik_task.pink_control_ik.pink.solve_ik", solve
+    )
+    measured = np.array([0.3, 0.1])
+    backend.solve(backend.forward_kinematics(measured), measured, 0.01)
+
+    assert backend._posture_task is None
+    assert backend._damping_task is not None
+    assert calls == [[backend._frame_task, backend._damping_task]]
+
+
 def test_pink_rejects_uncontrolled_end_effector_chain_without_reference(
     tmp_path: Path,
 ) -> None:
@@ -317,19 +357,50 @@ def test_continuous_joint_scalar_limits_fail_with_actionable_diagnostic(tmp_path
 def test_pink_applies_position_velocity_limits_and_finite_output(tmp_path: Path) -> None:
     model_path = _write_urdf(tmp_path)
     robot = _robot(model_path).model_copy(
-        update={"joint_limits_lower": [-0.5, -0.25], "joint_limits_upper": [0.5, 0.25]}
+        update={
+            "joint_limits_lower": [-0.5, -0.25],
+            "joint_limits_upper": [0.5, 0.25],
+            "velocity_limits": [0.1, 1.0],
+        }
     )
     backend = PinkControlIK(
         PinkControlIKConfig(robot_model=robot, max_velocity=0.2),
     )
 
     assert np.array_equal(backend._model.lowerPositionLimit[:2], np.array([-0.5, -0.25]))
-    assert np.all(backend._model.velocityLimit[backend._v_indices] <= 0.2)
+    assert np.array_equal(backend._model.velocityLimit[backend._v_indices], np.array([0.1, 0.2]))
     result = backend.solve(
         backend.forward_kinematics(np.array([0.1, 0.1])), np.array([0.1, 0.1]), 0.01
     )
     assert result.positions.shape == (2,)
     assert np.all(np.isfinite(result.positions))
+
+
+def test_pink_uniformly_scales_solver_velocity_before_integration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _write_urdf(tmp_path)
+    robot = _robot(model_path).model_copy(update={"velocity_limits": [0.1, 1.0]})
+    backend = PinkControlIK(PinkControlIKConfig(robot_model=robot, max_velocity=0.2))
+    measured = np.array([0.3, 0.1])
+    calls: list[dict[str, object]] = []
+
+    def solve(
+        configuration: object, tasks: list[object], dt: float, **kwargs: object
+    ) -> np.ndarray:
+        calls.append(kwargs)
+        return np.array([1.0, 0.5])
+
+    monkeypatch.setattr(
+        "dimos.control.tasks.cartesian_ik_task.pink_control_ik.pink.solve_ik", solve
+    )
+
+    result = backend.solve(backend.forward_kinematics(measured), measured, 0.01)
+
+    assert np.allclose(result.velocity, [0.1, 0.05])
+    assert np.allclose(result.positions, [0.301, 0.1005])
+    assert calls[0]["limits"] == backend._limits
+    assert len(backend._limits) == 1
 
 
 def test_pink_clamps_tiny_position_limit_overshoot(

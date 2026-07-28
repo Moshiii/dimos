@@ -18,6 +18,10 @@ import pytest
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.control.tasks.cartesian_ik_task.pink_control_ik import PinkControlIKConfig
+from dimos.control.tasks.teleop_task.teleop_task import (
+    TeleopControlIKConfig,
+    TeleopIKTaskParams,
+)
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
 from dimos.manipulation.visualization.config import (
@@ -65,7 +69,7 @@ from dimos.robot.manipulators.xarm.config import (
 )
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModuleConfig
 from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
-from dimos.teleop.quest.blueprints import teleop_quest_piper
+from dimos.teleop.quest.blueprints import teleop_quest_piper, teleop_quest_xarm6
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 
 
@@ -112,6 +116,31 @@ def test_quest_piper_composes_planner_with_trajectory_coordinator() -> None:
         atom for atom in teleop_quest_piper.blueprints if atom.module is ManipulationModule
     ]
     assert quest_planners == [coordinator_planner]
+
+
+def test_xarm_teleop_blueprints_declare_viser_manipulation() -> None:
+    for blueprint in (coordinator_teleop_xarm6, coordinator_teleop_xarm7):
+        kwargs = _manipulation_kwargs(blueprint)
+        robot = kwargs["robots"][0]
+        tasks = _coordinator_tasks(blueprint)
+
+        assert kwargs["visualization"] == {"backend": "viser"}
+        assert any(
+            task.name == robot.coordinator_task_name and task.type == "trajectory" for task in tasks
+        )
+
+
+def test_quest_xarm6_composes_planner_with_fake_hardware_without_ip() -> None:
+    coordinator_planner = next(
+        atom for atom in coordinator_teleop_xarm6.blueprints if atom.module is ManipulationModule
+    )
+    quest_planners = [
+        atom for atom in teleop_quest_xarm6.blueprints if atom.module is ManipulationModule
+    ]
+    coordinator_kwargs = _module_kwargs(coordinator_teleop_xarm6, ControlCoordinator)
+
+    assert quest_planners == [coordinator_planner]
+    assert coordinator_kwargs["hardware"][0].adapter_type == "mock"
 
 
 def test_piper_teleop_declares_teleop_task() -> None:
@@ -207,6 +236,11 @@ def test_eef_twist_task_helper_passes_authoritative_robot_model() -> None:
     assert task.joint_names == hardware.joints
     assert "model_path" not in task.params
     assert task.params["control_ik"]["robot_model"] is robot_model
+    control_ik = PinkControlIKConfig.model_validate(task.params["control_ik"])
+    assert control_ik.max_velocity == 10.0
+    assert control_ik.orientation_cost == 1.0
+    assert control_ik.posture_cost == 1e-3
+    assert control_ik.damping_cost == 0.0
 
 
 def test_teleop_task_helper_passes_authoritative_robot_model() -> None:
@@ -264,9 +298,15 @@ def test_shipped_teleop_tasks_use_pink_with_named_models(
         assert "model_path" not in task.params
         assert "ee_joint_id" not in task.params
         control_ik = task.params["control_ik"]
-        reconstructed = PinkControlIKConfig.model_validate(control_ik)
+        reconstructed = TeleopControlIKConfig.model_validate(control_ik)
         assert reconstructed.robot_model.get_coordinator_joint_names() == task.joint_names
         assert reconstructed.robot_model.end_effector_link == expected_frames[task.name]
+        assert reconstructed.max_velocity == 1.0
+        assert reconstructed.position_cost == 1.0
+        assert reconstructed.orientation_cost == 1.0
+        assert reconstructed.posture_cost == 0.0
+        assert reconstructed.damping_cost == 1e-3
+        assert TeleopIKTaskParams.model_validate(task.params).max_joint_delta_deg == 5.0
         declared_filename = _declared_lfs_filename(reconstructed.robot_model.model_path)
         assert isinstance(declared_filename, str)
         assert not declared_filename.endswith((".xml", ".mjcf"))
