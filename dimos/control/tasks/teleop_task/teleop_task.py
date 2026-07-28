@@ -112,6 +112,19 @@ class TeleopIKTask(CartesianIKTask):
         self._estopped = False
         self._rot_deadband_ref: NDArray[np.float64] | None = None
         self._gripper_target = config.gripper_open_pos
+        # Telemetry (TELEM ik line, 1 Hz while tracking). seed_oob counts
+        # ticks where the MEASURED joints sit outside the model limits:
+        # the vendor URDF limits are about 1 degree tighter than the real
+        # arm, and a measured seed below a bound fails the Pink solve, so
+        # this counter measures how much of a session that costs before
+        # any remedy is chosen.
+        self._telem_last_emit = 0.0
+        self._telem_attempts = 0
+        self._telem_computes = 0
+        self._telem_rejects = 0
+        self._telem_seed_oob = 0
+        self._telem_seed_oob_worst = 0.0
+        self._telem_step_sat = 0
 
     def claim(self) -> ResourceClaim:
         """Claim arm joints and the optional gripper joint."""
@@ -192,7 +205,26 @@ class TeleopIKTask(CartesianIKTask):
 
     def compute(self, state: CoordinatorState) -> JointCommandOutput | None:
         """Run the inherited Pink solve and append the optional gripper target."""
+        tracking = bool(getattr(self, "is_tracking", lambda: False)())
+        if tracking:
+            self._telem_attempts += 1
+            q_seed = self._get_current_joints(state)
+            limits = getattr(self._ik, "position_limits", None)
+            if q_seed is not None and limits is not None:
+                lower, upper = limits
+                below = np.clip(lower - q_seed, 0.0, None)
+                above = np.clip(q_seed - upper, 0.0, None)
+                worst = float(np.max(np.maximum(below, above)))
+                if worst > 0.0:
+                    self._telem_seed_oob += 1
+                    self._telem_seed_oob_worst = max(self._telem_seed_oob_worst, worst)
         output = super().compute(state)
+        if tracking:
+            if output is None:
+                self._telem_rejects += 1
+            else:
+                self._telem_computes += 1
+            self._emit_telemetry(state)
         if output is None:
             return output
         q_current = self._get_current_joints(state)
@@ -206,7 +238,10 @@ class TeleopIKTask(CartesianIKTask):
             positions = np.clip(positions, lower + margin, upper - margin)
         if self._config.max_step_deg_per_tick is not None:
             step = np.deg2rad(self._config.max_step_deg_per_tick)
-            positions = q_current + np.clip(positions - q_current, -step, step)
+            stepped = np.clip(positions - q_current, -step, step)
+            if np.max(np.abs(positions - q_current)) > step:
+                self._telem_step_sat += 1
+            positions = q_current + stepped
         if self._config.gripper_joint is None:
             return JointCommandOutput(
                 joint_names=output.joint_names,
@@ -222,6 +257,31 @@ class TeleopIKTask(CartesianIKTask):
             positions=[*positions.tolist(), gripper_target],
             mode=output.mode,
         )
+
+    def _emit_telemetry(self, state: CoordinatorState) -> None:
+        """One TELEM ik line per second while tracking, then reset counters."""
+        now = float(getattr(state, "t_now", 0.0))
+        if now - self._telem_last_emit < 1.0:
+            return
+        logger.info(
+            "TELEM ik %s: computes_hz=%d rejects=%d attempts=%d seed_oob=%d "
+            "seed_oob_worst_deg=%.2f step_sat=%d limit_margin_deg=%.1f",
+            self._name,
+            self._telem_computes,
+            self._telem_rejects,
+            self._telem_attempts,
+            self._telem_seed_oob,
+            np.rad2deg(self._telem_seed_oob_worst),
+            self._telem_step_sat,
+            self._config.joint_limit_margin_deg,
+        )
+        self._telem_last_emit = now
+        self._telem_attempts = 0
+        self._telem_computes = 0
+        self._telem_rejects = 0
+        self._telem_seed_oob = 0
+        self._telem_seed_oob_worst = 0.0
+        self._telem_step_sat = 0
 
     def _apply_rotation_deadband(self, target_rotation: NDArray[np.float64]) -> NDArray[np.float64]:
         """Apply a soft angular deadband against the previous target."""
