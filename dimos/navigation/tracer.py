@@ -15,25 +15,33 @@
 from __future__ import annotations
 
 import math
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, get_args, get_origin, get_type_hints
 
 from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.memory2.transform import Transformer
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.utils.logging_config import setup_logger
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from dimos.memory2.type.observation import Observation
+
 logger = setup_logger()
 
 TRACEABLE = (Odometry, PoseStamped, PointStamped)
 
+Traceable = Odometry | PoseStamped | PointStamped
 
-def _to_pose_stamped(msg: Odometry | PoseStamped | PointStamped) -> PoseStamped:
+
+def _to_pose_stamped(msg: Traceable) -> PoseStamped:
     if isinstance(msg, PoseStamped):
         return msg
     if isinstance(msg, PointStamped):
@@ -42,6 +50,41 @@ def _to_pose_stamped(msg: Odometry | PoseStamped | PointStamped) -> PoseStamped:
     return PoseStamped(
         ts=msg.ts, frame_id=msg.frame_id, position=pose.position, orientation=pose.orientation
     )
+
+
+class Trace:
+    """Accumulates positions into a breadcrumb ``Path``."""
+
+    def __init__(self, resolution: float = 0.25) -> None:
+        self._resolution = resolution
+        self._path: Path | None = None
+
+    def push(self, msg: Traceable) -> Path | None:
+        """Add a position; returns the grown ``Path``, or None if it moved < resolution."""
+        pose = _to_pose_stamped(msg)
+        if self._path is None:
+            self._path = Path(ts=pose.ts, frame_id=pose.frame_id or "world", poses=[pose])
+        else:
+            last = self._path.poses[-1]
+            if math.dist((last.x, last.y, last.z), (pose.x, pose.y, pose.z)) < self._resolution:
+                return None
+            self._path = self._path.push(pose)
+            self._path.ts = pose.ts
+        return self._path
+
+
+class TraceTransformer(Transformer[Traceable, Path]):
+    """memory2 counterpart of :class:`Tracer`: position observations -> growing Path."""
+
+    def __init__(self, resolution: float = 0.25) -> None:
+        self._resolution = resolution
+
+    def __call__(self, upstream: Iterator[Observation[Traceable]]) -> Iterator[Observation[Path]]:
+        trace = Trace(self._resolution)
+        for obs in upstream:
+            path = trace.push(obs.data)
+            if path is not None:
+                yield obs.derive(data=path)
 
 
 class TracerConfig(ModuleConfig):
@@ -103,22 +146,11 @@ class Tracer(Module):
             )
 
     def _trace(self, port: In[Any], out: Out[Path]) -> None:
-        path: Path | None = None
+        trace = Trace(self.config.resolution)
 
-        def on_msg(msg: Odometry | PoseStamped | PointStamped) -> None:
-            nonlocal path
-            pose = _to_pose_stamped(msg)
-            if path is None:
-                path = Path(ts=pose.ts, frame_id=pose.frame_id or "world", poses=[pose])
-            else:
-                last = path.poses[-1]
-                if (
-                    math.dist((last.x, last.y, last.z), (pose.x, pose.y, pose.z))
-                    < self.config.resolution
-                ):
-                    return
-                path = path.push(pose)
-                path.ts = pose.ts
-            out.publish(path)
+        def on_msg(msg: Traceable) -> None:
+            path = trace.push(msg)
+            if path is not None:
+                out.publish(path)
 
         self.register_disposable(Disposable(port.subscribe(on_msg)))

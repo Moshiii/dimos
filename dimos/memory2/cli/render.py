@@ -155,6 +155,20 @@ def render_store(
                     rr.log(path, data)
                 report(obs)
 
+    # Breadcrumb paths for position streams (odom, pose, clicked points).
+    from dimos.navigation.tracer import TRACEABLE, TraceTransformer
+
+    for name, stream in renderable:
+        if not isinstance(stream.first().data, TRACEABLE):
+            continue
+        with progress(stream.count(), label=f"{name}_path") as report:
+            for obs in stream.transform(TraceTransformer()):
+                if seconds is not None and obs.ts - t0 > seconds:
+                    break
+                rr.set_time("time", duration=obs.ts - t0)
+                rr.log(f"{entity(name)}_path", obs.data.to_rerun(z_offset=0.0))
+                report(obs)
+
     rr.rerun_shutdown()  # flush + close the .rrd before opening it
     print(f"wrote {out}")
     if not no_gui:
