@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
 import importlib
 from pathlib import Path
@@ -44,6 +45,8 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.transform_utils import pose_to_matrix
+
+_ARGUMENT_OMITTED = object()
 
 
 class FakeJointConfiguration:
@@ -298,7 +301,7 @@ class FakeOink:
         )
         self.v_indices = self.q_indices
         self.num_variables = len(self.v_indices)
-        self.solve_calls: list[tuple[list[FakeFrameTask], list[Any], float]] = []
+        self.solve_calls: list[tuple[list[FakeFrameTask], list[Any], object]] = []
         self.scene_positions: list[np.ndarray] = []
         self.instances.append(self)
 
@@ -308,7 +311,7 @@ class FakeOink:
         tasks: list[FakeFrameTask],
         constraints: list[Any],
         delta_q: np.ndarray,
-        regularization: float = 1e-12,
+        regularization: float | object = _ARGUMENT_OMITTED,
     ) -> None:
         self.solve_calls.append((tasks, constraints, regularization))
         self.scene_positions.append(scene.current_positions.copy())
@@ -367,8 +370,21 @@ def _install_fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_roboplan(monkeypatch)
+def fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    with monkeypatch.context() as fake_modules:
+        _install_fake_roboplan(fake_modules)
+        yield
+
+    package = sys.modules.get("dimos.manipulation.planning.world")
+    for module_name in (
+        "dimos.manipulation.planning.world.roboplan_oink",
+        "dimos.manipulation.planning.world.roboplan_world",
+    ):
+        sys.modules.pop(module_name, None)
+        if package is not None:
+            module_attribute = module_name.rsplit(".", maxsplit=1)[-1]
+            if hasattr(package, module_attribute):
+                delattr(package, module_attribute)
 
 
 @pytest.fixture
@@ -1049,7 +1065,7 @@ def test_oink_single_target_uses_defaults_and_restores_scene(
     assert tasks == FakeFrameTask.instances
     assert len(constraints) == 1
     assert isinstance(constraints[0], FakePositionLimit)
-    assert regularization == pytest.approx(1e-12)
+    assert regularization is _ARGUMENT_OMITTED
     assert FakeFrameTask.instances[0].target.base_frame == ""
     assert FakeFrameTask.instances[0].target.tip_frame == "tcp"
     np.testing.assert_allclose(world._scene.current_positions, expected_scene_q)

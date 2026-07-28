@@ -148,7 +148,7 @@ def test_create_kinematics_uses_roboplan_world_as_native_backend(
     )
 
 
-def test_create_kinematics_rejects_native_backend_without_roboplan_world(
+def test_create_kinematics_rejects_native_backend_with_wrong_world_backend(
     mocker: MockerFixture,
 ) -> None:
     with pytest.raises(
@@ -158,6 +158,17 @@ def test_create_kinematics_rejects_native_backend_without_roboplan_world(
             config=RoboPlanKinematicsConfig(),
             world=mocker.MagicMock(),
             world_backend="drake",
+        )
+
+
+def test_create_kinematics_rejects_native_backend_without_kinematics_world(
+    mocker: MockerFixture,
+) -> None:
+    with pytest.raises(ValueError, match="RoboPlan world implementing KinematicsSpec"):
+        create_kinematics(
+            config=RoboPlanKinematicsConfig(),
+            world=mocker.MagicMock(),
+            world_backend="roboplan",
         )
 
 
