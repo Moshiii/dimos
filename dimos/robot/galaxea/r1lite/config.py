@@ -88,6 +88,8 @@ ARMING_MATRIX: dict[str, tuple[int, int]] = {
 # Nominal feedback rates in Hz, measured during bring-up. The arming check
 # requires at least half nominal. None means never measured: arming fails
 # closed on that topic until a hardware session pins the value.
+# chassis_speed runs at a quarter of the other feedback rates; measured on
+# the robot with the vendor stack up and the chassis stationary.
 FEEDBACK_NOMINAL_HZ: dict[str, float | None] = {
     FB_ARM_LEFT: 200.0,
     FB_ARM_RIGHT: 200.0,
@@ -95,7 +97,7 @@ FEEDBACK_NOMINAL_HZ: dict[str, float | None] = {
     FB_GRIPPER_LEFT: 200.0,
     FB_GRIPPER_RIGHT: 200.0,
     FB_CHASSIS: 200.0,
-    FB_CHASSIS_SPEED: None,
+    FB_CHASSIS_SPEED: 50.0,
 }
 
 # Preflight-only vendor-health topics. FB_CHASSIS (wheel joint states) is

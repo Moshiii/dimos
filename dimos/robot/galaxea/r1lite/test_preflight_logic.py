@@ -82,17 +82,38 @@ def test_low_rate_fails_every_phase() -> None:
     assert check_rates(rates, "arm")
 
 
-def test_unpinned_topic_must_be_present_in_phase1_and_phase2() -> None:
-    rates = _healthy_rates()
-    rates[cfg.FB_CHASSIS_SPEED] = 0.0
+def test_every_nominal_is_pinned() -> None:
+    # All rates measured on hardware; a None here means arming is fail-closed
+    # on that topic and a hardware session still owes the measurement.
+    unpinned = [t for t, n in cfg.FEEDBACK_NOMINAL_HZ.items() if n is None]
+    assert unpinned == []
+
+
+def _one_unpinned(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Make one topic unpinned so the fail-closed branch stays covered."""
+    topic = cfg.FB_CHASSIS_SPEED
+    patched = dict(cfg.FEEDBACK_NOMINAL_HZ)
+    patched[topic] = None
+    monkeypatch.setattr(cfg, "FEEDBACK_NOMINAL_HZ", patched)
+    return topic
+
+
+def test_unpinned_topic_must_be_present_in_phase1_and_phase2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    topic = _one_unpinned(monkeypatch)
+    rates = {t: (n if n is not None else 50.0) for t, n in cfg.FEEDBACK_NOMINAL_HZ.items()}
+    rates[topic] = 0.0
     for phase in ("phase1", "phase2"):
         errors = check_rates(rates, phase)
-        assert any(cfg.FB_CHASSIS_SPEED in e for e in errors)
+        assert any(topic in e for e in errors)
 
 
-def test_unpinned_topic_always_fails_arm_phase() -> None:
-    errors = check_rates(_healthy_rates(), "arm")
-    assert any(cfg.FB_CHASSIS_SPEED in e and "pin" in e for e in errors)
+def test_unpinned_topic_always_fails_arm_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    topic = _one_unpinned(monkeypatch)
+    rates = {t: (n if n is not None else 50.0) for t, n in cfg.FEEDBACK_NOMINAL_HZ.items()}
+    errors = check_rates(rates, "arm")
+    assert any(topic in e and "pin" in e for e in errors)
 
 
 # check_matrix
