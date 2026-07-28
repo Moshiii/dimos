@@ -13,9 +13,8 @@
 # limitations under the License.
 
 from threading import RLock
-from typing import Any
+from typing import Any, Callable
 
-import lcm
 import numpy as np
 from numpy.typing import NDArray
 
@@ -24,8 +23,6 @@ from dimos.mapping.occupancy.path_mask import make_path_mask
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-
-CORRIDOR_MASK_TOPIC = "/corridor_mask#sensor_msgs.PointCloud2"
 
 
 def obstacle_lookahead_distance_m(
@@ -52,7 +49,7 @@ class PathClearance:
     _lock: RLock
     _path: Path
     _pose_index: int
-    _lcm: Any = None
+    _publish_corridor: Callable[[PointCloud2], None] | None = None
 
     def __init__(
         self,
@@ -62,6 +59,7 @@ class PathClearance:
         min_lookup_distance_m: float = 3.0,
         lookup_time_horizon_s: float = 0.0,
         max_lookup_distance_m: float = 3.0,
+        publish_corridor: Callable[[PointCloud2], None] | None = None,
     ) -> None:
         self._global_config = global_config
         self._path = path
@@ -71,7 +69,7 @@ class PathClearance:
         self._lookup_time_horizon_s = lookup_time_horizon_s
         self._max_lookup_distance_m = max_lookup_distance_m
         self._path_lookup_distance = min_lookup_distance_m
-        self._lcm = lcm.LCM()
+        self._publish_corridor = publish_corridor
 
     def update_costmap(self, costmap: OccupancyGrid) -> None:
         with self._lock:
@@ -137,8 +135,8 @@ class PathClearance:
         except ValueError:
             return True
 
-        # Publish corridor mask as sparse point cloud via LCM.
-        if mask is not None and self._lcm is not None:
+        # Publish corridor mask via module out-port (transport-agnostic).
+        if mask is not None and self._publish_corridor is not None:
             ys, xs = np.where(mask)
             if len(xs) > 0:
                 pts = np.column_stack([
@@ -146,8 +144,9 @@ class PathClearance:
                     ys * costmap.resolution + costmap.origin.position.y,
                     np.full(len(xs), 0.55),
                 ]).astype(np.float32)
-                msg = PointCloud2.from_numpy(pts, frame_id=costmap.frame_id, timestamp=0.0)
-                self._lcm.publish(CORRIDOR_MASK_TOPIC, msg.lcm_encode())
+                self._publish_corridor(
+                    PointCloud2.from_numpy(pts, frame_id=costmap.frame_id, timestamp=0.0)
+                )
 
         return bool(np.any(costmap.grid[mask] == CostValues.OCCUPIED))
 

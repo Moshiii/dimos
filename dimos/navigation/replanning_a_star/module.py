@@ -26,6 +26,7 @@ from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.base import NavigationInterface, NavigationState
@@ -85,6 +86,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
     path: Out[Path]
     raw_path: Out[Path]
     navigation_costmap: Out[OccupancyGrid]
+    corridor_mask: Out[PointCloud2]
 
     _planner: GlobalPlanner
 
@@ -145,7 +147,14 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
         self.register_disposable(
             Disposable(self.global_costmap.subscribe(self._planner.handle_global_costmap))
         )
-        # Bridge the local planner's corridor mask Subject to the module's LCM Out.
+        # Bridge the local planner's corridor mask Subject to the module's Out.
+        self.register_disposable(
+            Disposable(
+                self._planner._local_planner.corridor_mask.subscribe(
+                    self.corridor_mask.publish
+                )
+            )
+        )
         self.register_disposable(
             Disposable(self.goal_request.subscribe(self._planner.handle_goal_request))
         )

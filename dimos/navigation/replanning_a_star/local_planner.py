@@ -27,6 +27,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.base import NavigationState
 from dimos.navigation.replanning_a_star.controllers import Controller, PController
 from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
@@ -47,6 +48,7 @@ class LocalPlanner(Resource):
     cmd_vel: Subject[Twist]
     stopped_navigating: Subject[StopMessage]
     navigation_costmap: Subject[OccupancyGrid]
+    corridor_mask: Subject[PointCloud2]
 
     _thread: Thread | None = None
     _path: Path | None = None
@@ -84,6 +86,7 @@ class LocalPlanner(Resource):
         self.cmd_vel = Subject()
         self.stopped_navigating = Subject()
         self.navigation_costmap = Subject()
+        self.corridor_mask = Subject()
 
         self._pose_index = 0
         self._lock = RLock()
@@ -131,6 +134,7 @@ class LocalPlanner(Resource):
                 min_lookup_distance_m=self._obstacle_lookahead_min_distance_m,
                 lookup_time_horizon_s=self._obstacle_lookahead_time_s,
                 max_lookup_distance_m=self._obstacle_lookahead_max_distance_m,
+                publish_corridor=self.corridor_mask.on_next,
             )
             self._path_distancer = PathDistancer(self._path)
             self._pose_index = 0
