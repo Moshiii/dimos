@@ -139,7 +139,6 @@ r1lite_quest_teleop = autoconnect(
     # stalls surface as arm twitch and chassis dead-man dropouts.
     R1LiteQuestTeleopModule.blueprint(
         task_names=_TASK_NAMES,
-        video_enabled=False,
         motion_gain=1.3,
         local_rotation=True,
         position_deadband_m=0.02,
