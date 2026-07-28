@@ -134,6 +134,7 @@ class TeleopIKTask(CartesianIKTask):
         self._engage_lag_max = 0.0
         self._engage_rejects = 0
         self._engage_computes = 0
+        self._engage_last_t = 0.0
 
     def claim(self) -> ResourceClaim:
         """Claim arm joints and the optional gripper joint."""
@@ -260,20 +261,13 @@ class TeleopIKTask(CartesianIKTask):
                     self._engage_lag_max = max(self._engage_lag_max, self._telem_lag_m)
                 self._emit_telemetry(state)
         now_t = float(getattr(state, "t_now", 0.0))
-        if tracking and not self._was_tracking:
-            self._engage_t0 = now_t
-            self._engage_lag_max = 0.0
-            self._engage_rejects = 0
-            self._engage_computes = 0
-        elif self._was_tracking and not tracking:
-            logger.info(
-                "TELEM engage %s: duration_s=%.1f computes=%d rejects=%d lag_max_cm=%.1f",
-                self._name,
-                now_t - self._engage_t0,
-                self._engage_computes,
-                self._engage_rejects,
-                self._engage_lag_max * 100.0,
-            )
+        if tracking:
+            if not self._was_tracking:
+                self._engage_t0 = now_t
+                self._engage_lag_max = 0.0
+                self._engage_rejects = 0
+                self._engage_computes = 0
+            self._engage_last_t = now_t
         self._was_tracking = tracking
         if output is None:
             return output
@@ -389,12 +383,29 @@ class TeleopIKTask(CartesianIKTask):
             pose = pose * self._tool_offset
         return pose
 
+
+    def _finish_engage(self, reason: str) -> None:
+        """Log the per-engagement summary; safe to call when not engaged."""
+        if not self._was_tracking:
+            return
+        self._was_tracking = False
+        logger.info(
+            "TELEM engage %s: reason=%s duration_s=%.1f computes=%d rejects=%d lag_max_cm=%.1f",
+            self._name,
+            reason,
+            max(0.0, self._engage_last_t - self._engage_t0),
+            self._engage_computes,
+            self._engage_rejects,
+            self._engage_lag_max * 100.0,
+        )
+
     def on_buttons(self, msg: Buttons) -> bool:
         """Use the configured primary button as press-and-hold engagement."""
         is_left = self._config.hand == "left"
         primary = msg.left_primary if is_left else msg.right_primary
         trigger = msg.left_trigger_analog if is_left else msg.right_trigger_analog
 
+        released = False
         with self._lock:
             if self._estopped:
                 return False
@@ -406,8 +417,11 @@ class TeleopIKTask(CartesianIKTask):
                 self._target_pose = None
                 self._initial_ee_pose = None
                 self._rot_deadband_ref = None
+                released = True
             self._prev_primary = primary
 
+        if released:
+            self._finish_engage("release")
         if self._config.gripper_joint is not None:
             self.on_gripper_trigger(trigger)
         return True
@@ -443,12 +457,14 @@ class TeleopIKTask(CartesianIKTask):
 
     def _on_timeout(self) -> None:
         """Discard the baseline while the parent holds the task lock."""
+        self._finish_engage("timeout")
         self._initial_ee_pose = None
         self._prev_primary = False
         self._rot_deadband_ref = None
 
     def stop(self) -> None:
         """Stop output and discard engagement-relative state."""
+        self._finish_engage("stop")
         super().stop()
         with self._lock:
             self._active = False
