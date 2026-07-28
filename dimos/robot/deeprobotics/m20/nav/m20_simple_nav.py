@@ -82,7 +82,7 @@ M20_SIMPLE_NAV_PLANNER_CONFIG, M20_SIMPLE_NAV_OBSTACLE_AVOIDANCE_CONFIG = (
 
 _m20_slam_ray_tracer = RayTracingVoxelMap.blueprint(
     executable="target/release/voxel_ray_tracing",
-    build_command="cargo build --release --bin voxel_ray_tracing",
+    build_command=None,
     voxel_size=voxel_size,
     max_range=8.0,
     shadow_depth=0.1,
@@ -91,7 +91,7 @@ _m20_slam_ray_tracer = RayTracingVoxelMap.blueprint(
     emit_every=2,
     ray_subsample=1,
     global_emit_every=1,
-    auto_build=True,
+    auto_build=False,
     support_min=0,
     # M20's onboard SLAM publishes this cloud already registered in map frame.
     registered_clouds=True,
