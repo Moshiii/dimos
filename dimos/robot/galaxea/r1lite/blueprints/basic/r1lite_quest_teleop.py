@@ -30,6 +30,8 @@ scripts/r1lite_test/fake_quest_stream.py.
 
 from __future__ import annotations
 
+import os
+
 from dimos.control.components import HardwareComponent, HardwareType, make_twist_base_joints
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
@@ -139,6 +141,15 @@ r1lite_quest_teleop = autoconnect(
     # stalls surface as arm twitch and chassis dead-man dropouts.
     R1LiteQuestTeleopModule.blueprint(
         task_names=_TASK_NAMES,
+        # Session recording stays opt-in: QUEST_RECORD=1 writes every raw
+        # headset frame to a timestamped file under the host-visible logs
+        # directory for offline replay; any other value is used verbatim
+        # as the path.
+        record_path=(
+            "/app/logs/quest_record_%Y%m%d_%H%M%S.jsonl"
+            if os.environ.get("QUEST_RECORD", "") == "1"
+            else os.environ.get("QUEST_RECORD", "")
+        ),
         motion_gain=1.3,
         local_rotation=True,
         position_deadband_m=0.02,

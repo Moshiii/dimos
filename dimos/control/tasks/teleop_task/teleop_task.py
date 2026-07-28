@@ -125,6 +125,15 @@ class TeleopIKTask(CartesianIKTask):
         self._telem_seed_oob = 0
         self._telem_seed_oob_worst = 0.0
         self._telem_step_sat = 0
+        self._telem_ask = None
+        self._telem_lag_m = 0.0
+        self._telem_rot_lag_rad = 0.0
+        self._telem_solve_ms_max = 0.0
+        self._was_tracking = False
+        self._engage_t0 = 0.0
+        self._engage_lag_max = 0.0
+        self._engage_rejects = 0
+        self._engage_computes = 0
 
     def claim(self) -> ResourceClaim:
         """Claim arm joints and the optional gripper joint."""
@@ -198,6 +207,9 @@ class TeleopIKTask(CartesianIKTask):
         values = np.concatenate((target.translation, target.rotation.reshape(-1)))
         if not np.all(np.isfinite(values)):
             return None
+        # Telemetry: the raw ask (pre-window) is what the operator feels
+        # the arm lagging behind.
+        self._telem_ask = target.copy()
         target = self._windowed_target(q_current, target)
         if self._tool_offset_inv is not None:
             target = target * self._tool_offset_inv
@@ -218,13 +230,51 @@ class TeleopIKTask(CartesianIKTask):
                 if worst > 0.0:
                     self._telem_seed_oob += 1
                     self._telem_seed_oob_worst = max(self._telem_seed_oob_worst, worst)
+        import time as _time
+
+        t0 = _time.perf_counter()
         output = super().compute(state)
         if tracking:
+            self._telem_solve_ms_max = max(
+                self._telem_solve_ms_max, (_time.perf_counter() - t0) * 1000.0
+            )
             if output is None:
                 self._telem_rejects += 1
+                self._engage_rejects += 1
             else:
                 self._telem_computes += 1
-            self._emit_telemetry(state)
+                self._engage_computes += 1
+            now_emit = float(getattr(state, "t_now", 0.0))
+            if self._telem_last_emit == 0.0:
+                self._telem_last_emit = now_emit
+            elif now_emit - self._telem_last_emit >= 1.0:
+                q_now = self._get_current_joints(state)
+                ask = self._telem_ask
+                if q_now is not None and ask is not None:
+                    current = self._tool_fk(q_now)
+                    self._telem_lag_m = float(
+                        np.linalg.norm(ask.translation - current.translation)
+                    )
+                    rot_vec = pinocchio.log3(current.rotation.T @ ask.rotation)
+                    self._telem_rot_lag_rad = float(np.linalg.norm(rot_vec))
+                    self._engage_lag_max = max(self._engage_lag_max, self._telem_lag_m)
+                self._emit_telemetry(state)
+        now_t = float(getattr(state, "t_now", 0.0))
+        if tracking and not self._was_tracking:
+            self._engage_t0 = now_t
+            self._engage_lag_max = 0.0
+            self._engage_rejects = 0
+            self._engage_computes = 0
+        elif self._was_tracking and not tracking:
+            logger.info(
+                "TELEM engage %s: duration_s=%.1f computes=%d rejects=%d lag_max_cm=%.1f",
+                self._name,
+                now_t - self._engage_t0,
+                self._engage_computes,
+                self._engage_rejects,
+                self._engage_lag_max * 100.0,
+            )
+        self._was_tracking = tracking
         if output is None:
             return output
         q_current = self._get_current_joints(state)
@@ -261,15 +311,17 @@ class TeleopIKTask(CartesianIKTask):
     def _emit_telemetry(self, state: CoordinatorState) -> None:
         """One TELEM ik line per second while tracking, then reset counters."""
         now = float(getattr(state, "t_now", 0.0))
-        if now - self._telem_last_emit < 1.0:
-            return
         logger.info(
-            "TELEM ik %s: computes_hz=%d rejects=%d attempts=%d seed_oob=%d "
-            "seed_oob_worst_deg=%.2f step_sat=%d limit_margin_deg=%.1f",
+            "TELEM ik %s: computes_hz=%d rejects=%d attempts=%d hand_lag_cm=%.1f "
+            "rot_lag_deg=%.1f solve_ms_max=%.1f seed_oob=%d seed_oob_worst_deg=%.2f "
+            "step_sat=%d limit_margin_deg=%.1f",
             self._name,
             self._telem_computes,
             self._telem_rejects,
             self._telem_attempts,
+            self._telem_lag_m * 100.0,
+            np.rad2deg(self._telem_rot_lag_rad),
+            self._telem_solve_ms_max,
             self._telem_seed_oob,
             np.rad2deg(self._telem_seed_oob_worst),
             self._telem_step_sat,
@@ -282,6 +334,7 @@ class TeleopIKTask(CartesianIKTask):
         self._telem_seed_oob = 0
         self._telem_seed_oob_worst = 0.0
         self._telem_step_sat = 0
+        self._telem_solve_ms_max = 0.0
 
     def _apply_rotation_deadband(self, target_rotation: NDArray[np.float64]) -> NDArray[np.float64]:
         """Apply a soft angular deadband against the previous target."""

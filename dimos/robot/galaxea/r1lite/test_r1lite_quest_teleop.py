@@ -311,7 +311,7 @@ def test_module_rotation_pairing_and_no_default_recording() -> None:
         )
         assert kwargs["local_rotation"] is True
         # Recording is opt-in per session, never a blueprint default.
-        assert "record_path" not in kwargs
+        assert kwargs.get("record_path", "") == ""  # recording stays opt-in
 
 
 def test_hardware_blueprint_teleop_overrides() -> None:

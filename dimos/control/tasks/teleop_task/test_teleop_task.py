@@ -239,7 +239,9 @@ def test_release_timeout_stop_and_clear_force_fresh_baselines(
     assert task.on_cartesian_command(_delta(), 5.0)
     assert task.compute(_state(5.01, (0.3, 0.4))) is not None
     task.clear()
-    assert len(fake_ik.fk_calls) == 4
+    # 4 baseline captures + 3 telemetry lag samples (1 Hz emit while
+    # tracking also runs one FK against the current ask).
+    assert len(fake_ik.fk_calls) == 7
 
 
 def test_estop_rejects_commands_and_never_replays_them(
@@ -257,7 +259,8 @@ def test_estop_rejects_commands_and_never_replays_them(
     assert gripper_task.compute(_state(2.01)) is None
     assert gripper_task.on_cartesian_command(_delta(), 3.0)
     assert gripper_task.compute(_state(3.01, (0.2, 0.3))) is not None
-    assert len(fake_ik.fk_calls) == 2
+    # 2 baseline captures + 1 telemetry lag sample.
+    assert len(fake_ik.fk_calls) == 3
 
 
 def test_gripper_claim_interpolation_and_hold_output(
