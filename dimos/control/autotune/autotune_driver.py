@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
+import pickle
 import queue
 import threading
 import time
@@ -242,6 +243,10 @@ class AutotuneDriver(Module):
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "tuned_config.json").write_text(json.dumps(outputs.artifact, indent=2))
         (out_dir / "characterization_report.json").write_text(json.dumps(outputs.report, indent=2))
-        logger.info(f"[autotune] wrote {out_dir}")
+        # Raw (t, y, amplitude) segments, kept so the fit can be re-run offline
+        # (e.g. with different fitter bounds) without re-driving the robot.
+        with (out_dir / "segments.pkl").open("wb") as f:
+            pickle.dump(segments_by_channel, f)
+        logger.info(f"[autotune] wrote {out_dir} (+ segments.pkl)")
         for ch, tuning in outputs.tunings.items():
             logger.info(f"[autotune] {ch}: {tuning}")
