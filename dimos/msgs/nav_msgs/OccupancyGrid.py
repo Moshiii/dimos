@@ -30,8 +30,8 @@ from PIL import Image
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Vector3 import Vector3, VectorLike
-from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
+from dimos.visualization.rerun.in_frame import InFrame, framed
 
 
 @lru_cache(maxsize=16)

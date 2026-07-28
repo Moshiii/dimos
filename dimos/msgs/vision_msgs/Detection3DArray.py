@@ -15,8 +15,8 @@ from typing import Any
 
 from dimos_lcm.vision_msgs.Detection3DArray import Detection3DArray as LCMDetection3DArray
 
-from dimos.msgs.in_frame import framed
 from dimos.types.timestamped import to_timestamp
+from dimos.visualization.rerun.in_frame import framed
 
 
 class Detection3DArray(LCMDetection3DArray):  # type: ignore[misc]

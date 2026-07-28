@@ -401,7 +401,7 @@ class CameraInfo(Timestamped):
         """
         import rerun as rr
 
-        from dimos.msgs.in_frame import framed
+        from dimos.visualization.rerun.in_frame import framed
 
         # Extract intrinsics from K matrix
         # K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]

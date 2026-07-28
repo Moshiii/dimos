@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING
 from dimos_lcm.foxglove_msgs import CompressedVideo as LCMCompressedVideo
 import numpy as np
 
-from dimos.msgs.in_frame import framed
 from dimos.types.timestamped import Timestamped
+from dimos.visualization.rerun.in_frame import framed
 
 if TYPE_CHECKING:
     from dimos.visualization.rerun.bridge import RerunData

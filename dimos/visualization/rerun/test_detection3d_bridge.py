@@ -21,11 +21,11 @@ import rerun as rr
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.in_frame import InFrame
 from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.vision_msgs.Detection3D import Detection3D
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.visualization.rerun.bridge import RerunBridgeModule
+from dimos.visualization.rerun.in_frame import InFrame
 
 
 @dataclass

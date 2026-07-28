@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, BinaryIO
 
 from dimos_lcm.nav_msgs import Path as LCMPath
 
-from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
+from dimos.visualization.rerun.in_frame import InFrame, framed
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype

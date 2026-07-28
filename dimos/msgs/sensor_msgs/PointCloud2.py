@@ -30,8 +30,8 @@ import open3d.core as o3c  # type: ignore[import-untyped]
 
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
+from dimos.visualization.rerun.in_frame import InFrame, framed
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype

@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING, BinaryIO
 
 from dimos_lcm.sensor_msgs import PointCloud2 as LCMPointCloud2
 
-from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
+from dimos.visualization.rerun.in_frame import InFrame, framed
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype

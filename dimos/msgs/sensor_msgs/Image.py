@@ -29,9 +29,9 @@ import reactivex as rx
 from reactivex import operators as ops
 import rerun as rr
 
-from dimos.msgs.in_frame import framed
 from dimos.types.timestamped import Timestamped, TimestampedBufferCollection, to_human_readable
 from dimos.utils.reactive import quality_barrier
+from dimos.visualization.rerun.in_frame import framed
 
 if TYPE_CHECKING:
     from collections.abc import Callable

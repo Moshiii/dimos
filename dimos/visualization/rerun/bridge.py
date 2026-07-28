@@ -44,7 +44,6 @@ from toolz import pipe  # type: ignore[import-untyped]
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
-from dimos.msgs.in_frame import InFrame
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.zenohpubsub import Zenoh
 from dimos.protocol.pubsub.patterns import Glob, pattern_matches
@@ -59,6 +58,7 @@ from dimos.visualization.rerun.constants import (
     RERUN_WEB_VIEWER_PORT,
     RerunOpenOption,
 )
+from dimos.visualization.rerun.in_frame import InFrame
 from dimos.visualization.rerun.init import rerun_init
 
 # TODO OUT visual annotations

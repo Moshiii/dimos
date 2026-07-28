@@ -27,8 +27,8 @@ from dimos_lcm.nav_msgs import Path as LCMPath
 from dimos_lcm.std_msgs import Header as LCMHeader, Time as LCMTime
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
+from dimos.visualization.rerun.in_frame import InFrame, framed
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

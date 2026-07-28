@@ -122,6 +122,6 @@ class Imu(Timestamped):
         """Orientation axes for rerun."""
         import rerun as rr
 
-        from dimos.msgs.in_frame import framed
+        from dimos.visualization.rerun.in_frame import framed
 
         return framed(rr.TransformAxes3D(axis_length=axis_length), self.frame_id)

@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 from dimos_lcm.geometry_msgs import PointStamped as LCMPointStamped
 
 from dimos.msgs.geometry_msgs.Point import Point
-from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
+from dimos.visualization.rerun.in_frame import InFrame, framed
 
 
 class PointStamped(Point, Timestamped):
