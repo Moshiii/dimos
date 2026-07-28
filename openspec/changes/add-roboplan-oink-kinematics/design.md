@@ -87,6 +87,11 @@ adapter class. The world already owns every backend-specific resource that OInK
 needs, and returning the same object avoids exposing those internals or
 duplicating the scene.
 
+Keep request validation, joint-index mapping, retries, and convergence in a
+private `roboplan_oink` module. This is an implementation seam rather than a
+second `KinematicsSpec`: `RoboPlanWorld` remains responsible for identity,
+locking, context capture, and scene restoration.
+
 The entire request holds `RoboPlanWorld._lock`. Before applying a seed, it
 snapshots the shared scene configuration; a `finally` block restores the
 snapshot on success, failure, or exception. This serializes planning and other

@@ -270,12 +270,12 @@ class FakeFrameTask:
         oink: FakeOink,
         scene: FakeScene,
         target: FakeCartesianConfiguration,
-        options: FakeFrameTaskOptions,
+        options: FakeFrameTaskOptions | None = None,
     ) -> None:
         self.oink = oink
         self.scene = scene
         self.target = target
-        self.options = options
+        self.options = options or FakeFrameTaskOptions()
         self.instances.append(self)
 
 
@@ -293,10 +293,12 @@ class FakeOink:
     def __init__(self, scene: FakeScene, group_name: str) -> None:
         self.scene = scene
         self.group_name = group_name
-        self.v_indices = tuple(
+        self.q_indices = tuple(
             scene.native_joint_names.index(name) for name in scene.groups[group_name]
         )
-        self.solve_calls: list[tuple[list[FakeFrameTask], list[Any], list[Any], float]] = []
+        self.v_indices = self.q_indices
+        self.num_variables = len(self.v_indices)
+        self.solve_calls: list[tuple[list[FakeFrameTask], list[Any], float]] = []
         self.scene_positions: list[np.ndarray] = []
         self.instances.append(self)
 
@@ -305,11 +307,10 @@ class FakeOink:
         scene: FakeScene,
         tasks: list[FakeFrameTask],
         constraints: list[Any],
-        barriers: list[Any],
         delta_q: np.ndarray,
-        regularization: float,
+        regularization: float = 1e-12,
     ) -> None:
-        self.solve_calls.append((tasks, constraints, barriers, regularization))
+        self.solve_calls.append((tasks, constraints, regularization))
         self.scene_positions.append(scene.current_positions.copy())
         if self.solve_error is not None:
             raise self.solve_error
@@ -485,6 +486,11 @@ def _target(x: float, frame_id: str = "world") -> PoseStamped:
 
 
 def _import_roboplan_world(fake_roboplan: None) -> ModuleType:
+    oink_module_name = "dimos.manipulation.planning.world.roboplan_oink"
+    if oink_module_name in sys.modules:
+        importlib.reload(sys.modules[oink_module_name])
+    else:
+        importlib.import_module(oink_module_name)
     module_name = "dimos.manipulation.planning.world.roboplan_world"
     if module_name in sys.modules:
         return importlib.reload(sys.modules[module_name])
@@ -493,9 +499,10 @@ def _import_roboplan_world(fake_roboplan: None) -> ModuleType:
 
 def test_roboplan_bindings_are_imported_at_module_load(fake_roboplan: None) -> None:
     module = _import_roboplan_world(fake_roboplan)
+    oink_module = sys.modules["dimos.manipulation.planning.world.roboplan_oink"]
 
     assert module.roboplan_core.Scene is FakeScene
-    assert module.roboplan_optimal_ik.Oink is FakeOink
+    assert oink_module.roboplan_optimal_ik.Oink is FakeOink
     assert module.roboplan_rrt.RRT is FakeRRT
 
 
@@ -1038,11 +1045,10 @@ def test_oink_single_target_uses_defaults_and_restores_scene(
     oink = FakeOink.instances[0]
     assert oink.group_name == "manipulator"
     assert len(oink.solve_calls) == 1
-    tasks, constraints, barriers, regularization = oink.solve_calls[0]
+    tasks, constraints, regularization = oink.solve_calls[0]
     assert tasks == FakeFrameTask.instances
     assert len(constraints) == 1
     assert isinstance(constraints[0], FakePositionLimit)
-    assert barriers == []
     assert regularization == pytest.approx(1e-12)
     assert FakeFrameTask.instances[0].target.base_frame == ""
     assert FakeFrameTask.instances[0].target.tip_frame == "tcp"
@@ -1064,8 +1070,9 @@ def test_oink_reports_worst_multi_target_error_and_caps_each_attempt(
     )
     world, _ = _make_world(fake_roboplan, config)
     FakeOink.step = 0.0
-    module = _import_roboplan_world(fake_roboplan)
-    monkeypatch.setattr(module, "_MAX_OINK_ITERATIONS_PER_ATTEMPT", 3)
+    _import_roboplan_world(fake_roboplan)
+    oink_module = sys.modules["dimos.manipulation.planning.world.roboplan_oink"]
+    monkeypatch.setattr(oink_module, "_MAX_ITERATIONS_PER_ATTEMPT", 3)
     shoulder = world._planning_groups.get("arm/shoulder")
     wrist = world._planning_groups.get("arm/wrist")
 
@@ -1129,11 +1136,12 @@ def test_oink_restarts_only_pose_joints_and_reuses_one_instance(
         robot_id,
         JointState(name=["joint1", "joint2"], position=[0.1, 0.4]),
     )
-    module = _import_roboplan_world(fake_roboplan)
-    monkeypatch.setattr(module, "_MAX_OINK_ITERATIONS_PER_ATTEMPT", 1)
+    _import_roboplan_world(fake_roboplan)
+    oink_module = sys.modules["dimos.manipulation.planning.world.roboplan_oink"]
+    monkeypatch.setattr(oink_module, "_MAX_ITERATIONS_PER_ATTEMPT", 1)
     FakeOink.step = 0.0
     random_uniform = mocker.patch(
-        "dimos.manipulation.planning.world.roboplan_world.np.random.uniform",
+        "dimos.manipulation.planning.world.roboplan_oink.np.random.uniform",
         return_value=np.asarray([0.7]),
     )
 
@@ -1214,11 +1222,12 @@ def test_oink_no_solution_reports_closest_attempt(
 ) -> None:
     world, _ = _make_world(fake_roboplan, robot_config)
     expected_scene_q = world._full_scene_q(world.get_live_context())
-    module = _import_roboplan_world(fake_roboplan)
-    monkeypatch.setattr(module, "_MAX_OINK_ITERATIONS_PER_ATTEMPT", 1)
+    _import_roboplan_world(fake_roboplan)
+    oink_module = sys.modules["dimos.manipulation.planning.world.roboplan_oink"]
+    monkeypatch.setattr(oink_module, "_MAX_ITERATIONS_PER_ATTEMPT", 1)
     FakeOink.step = 0.0
     mocker.patch(
-        "dimos.manipulation.planning.world.roboplan_world.np.random.uniform",
+        "dimos.manipulation.planning.world.roboplan_oink.np.random.uniform",
         return_value=np.asarray([0.4, 0.4]),
     )
     group = world._planning_groups.get("arm/manipulator")

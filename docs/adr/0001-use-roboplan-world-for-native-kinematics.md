@@ -8,6 +8,10 @@ forward those internals without owning meaningful state or behavior. Each IK
 request constructs and releases its own OInK session, so the kinematics role
 retains no request-specific solver state between calls.
 
+The world keeps the public `KinematicsSpec` boundary and the scene-ownership
+policy. It delegates the numerical request mechanics to a private sibling
+module, not another adapter or public backend object.
+
 The request holds the world's scene lock for its entire solve. It snapshots the
 shared scene configuration before applying the seed and restores that
 configuration in a `finally` block. Planning and other scene users therefore

@@ -35,8 +35,9 @@ pytest.importorskip("roboplan.optimal_ik")
 def test_pinned_roboplan_solves_reachable_target_without_mutating_scene(
     tmp_path: Path,
 ) -> None:
-    from dimos.manipulation.planning.world import roboplan_world
+    from dimos.manipulation.planning.world import roboplan_oink, roboplan_world
 
+    importlib.reload(roboplan_oink)
     RoboPlanWorld = importlib.reload(roboplan_world).RoboPlanWorld
     model_path = tmp_path / "one_joint.urdf"
     model_path.write_text(

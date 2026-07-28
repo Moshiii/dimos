@@ -167,7 +167,8 @@ planning/
 ├── world/
 │   ├── drake_world.py       # DrakeWorld implementation
 │   ├── roboplan_model.py    # RoboPlan model and planning-group mappings
-│   └── roboplan_world.py    # RoboPlan world, planner, and OInK implementation
+│   ├── roboplan_world.py    # RoboPlan world, planner, and locked IK delegation
+│   └── roboplan_oink.py     # Private request-local OInK solver
 ├── kinematics/
 │   ├── jacobian_ik.py       # Backend-agnostic Jacobian IK
 │   ├── drake_optimization_ik.py  # Drake nonlinear IK
