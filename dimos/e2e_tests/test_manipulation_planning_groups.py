@@ -28,13 +28,15 @@ from typing import Any, cast
 import pytest
 
 from dimos.control.coordinator import ControlCoordinator
+from dimos.control.tasks.trajectory_task.trajectory_task import (
+    JOINT_TRAJECTORY_TASK_NAME,
+)
 from dimos.core.rpc_client import RPCClient
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.robot.manipulators.common.topics import DEFAULT_TRAJECTORY_TASK_NAME
 
 pytestmark = [pytest.mark.self_hosted_large]
 
@@ -167,7 +169,7 @@ def test_single_arm_plans_and_executes_through_control_coordinator(
         left_id = _planning_group_id(left_info)
 
         tasks = coordinator_client.list_tasks()
-        assert tasks == [DEFAULT_TRAJECTORY_TASK_NAME]
+        assert tasks == [JOINT_TRAJECTORY_TASK_NAME]
 
         _prepare_for_planning(client, ("left_arm",))
 
@@ -198,7 +200,7 @@ def test_dual_arm_plans_and_dispatches_both_arms_through_control_coordinator(
         right_id = _planning_group_id(right_info)
 
         tasks = coordinator_client.list_tasks()
-        assert tasks == [DEFAULT_TRAJECTORY_TASK_NAME]
+        assert tasks == [JOINT_TRAJECTORY_TASK_NAME]
 
         _prepare_for_planning(client, ("left_arm", "right_arm"))
 

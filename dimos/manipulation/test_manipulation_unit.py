@@ -60,8 +60,15 @@ def _control_coordinator(
     cancel_status: TrajectoryCancellationStatus = (TrajectoryCancellationStatus.ALREADY_STOPPED),
 ) -> MagicMock:
     coordinator = MagicMock(spec=ControlCoordinator)
-    coordinator.execute_trajectory.return_value = TrajectoryExecutionResult(execute_status)
-    coordinator.cancel_trajectory.return_value = TrajectoryCancellationResult(cancel_status)
+
+    def task_invoke(_task_name: str, method: str, _kwargs: object = None) -> object:
+        if method == "execute":
+            return TrajectoryExecutionResult(execute_status)
+        if method == "cancel":
+            return TrajectoryCancellationResult(cancel_status)
+        raise AssertionError(f"unexpected task command {method}")
+
+    coordinator.task_invoke.side_effect = task_invoke
     return coordinator
 
 
@@ -319,7 +326,7 @@ class TestStateMachine:
         assert module._state == ManipulationState.COMPLETED
 
         assert module.cancel() is True
-        module._control_coordinator.cancel_trajectory.assert_called_once_with()
+        assert module._control_coordinator.task_invoke.call_args_list[-1].args[1] == "cancel"
         assert module._state == ManipulationState.IDLE
 
     def test_reset_not_during_execution(self, module_factory):
@@ -881,8 +888,8 @@ class TestPlanningGroupApis:
 
         assert module.execute_plan() is True
 
-        mock_coordinator.execute_trajectory.assert_called_once()
-        payload = mock_coordinator.execute_trajectory.call_args.args[0]
+        mock_coordinator.task_invoke.assert_called_once()
+        payload = mock_coordinator.task_invoke.call_args.args[2]["trajectory"]
         assert payload.joint_names == ["left_coord_j1", "k0"]
         assert [point.time_from_start for point in payload.points] == [0.0, 2.5]
         assert [point.positions for point in payload.points] == [[0.0, 1.0], [0.5, 1.5]]

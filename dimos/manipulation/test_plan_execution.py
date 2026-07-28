@@ -92,8 +92,15 @@ def _coordinator(
     cancel_status: TrajectoryCancellationStatus = (TrajectoryCancellationStatus.ALREADY_STOPPED),
 ) -> MagicMock:
     coordinator = MagicMock(spec=ControlCoordinator)
-    coordinator.execute_trajectory.return_value = TrajectoryExecutionResult(execute_status)
-    coordinator.cancel_trajectory.return_value = TrajectoryCancellationResult(cancel_status)
+
+    def task_invoke(_task_name: str, method: str, _kwargs: object = None) -> object:
+        if method == "execute":
+            return TrajectoryExecutionResult(execute_status)
+        if method == "cancel":
+            return TrajectoryCancellationResult(cancel_status)
+        raise AssertionError(f"unexpected task command {method}")
+
+    coordinator.task_invoke.side_effect = task_invoke
     return coordinator
 
 
@@ -106,7 +113,7 @@ def test_execute_plan_can_dispatch_cached_plan_repeatedly(
 
     assert module.execute_plan()
     assert module.execute_plan()
-    assert coordinator.execute_trajectory.call_count == 2
+    assert coordinator.task_invoke.call_count == 2
 
 
 def test_direct_plan_does_not_replace_cached_plan(module_factory) -> None:
@@ -119,7 +126,7 @@ def test_direct_plan_does_not_replace_cached_plan(module_factory) -> None:
     assert module.execute_plan(plan=direct)
 
     assert module._last_plan is cached
-    dispatched = coordinator.execute_trajectory.call_args.args[0]
+    dispatched = coordinator.task_invoke.call_args.args[2]["trajectory"]
     assert dispatched.points[-1].positions == [2.0]
 
 
@@ -139,7 +146,7 @@ def test_known_coordinator_rejection_restores_previous_state(
 
 def test_uncertain_execute_projects_to_fault(module_factory) -> None:
     coordinator = _coordinator()
-    coordinator.execute_trajectory.side_effect = TimeoutError("timed out")
+    coordinator.task_invoke.side_effect = TimeoutError("timed out")
     module = _module_with_coordinator(coordinator, module_factory)
     module._last_plan = _plan()
 
@@ -151,7 +158,7 @@ def test_uncertain_execute_projects_to_fault(module_factory) -> None:
 
 def test_uncertain_cancel_projects_to_fault(module_factory) -> None:
     coordinator = _coordinator()
-    coordinator.cancel_trajectory.side_effect = TimeoutError("timed out")
+    coordinator.task_invoke.side_effect = TimeoutError("timed out")
     module = _module_with_coordinator(coordinator, module_factory)
     module._state = ManipulationState.EXECUTING
 

@@ -27,7 +27,9 @@ Use the t_now passed in CoordinatorState.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from dimos.control.components import JointName
@@ -65,7 +67,7 @@ class ResourceClaim:
         return bool(self.joints & other.joints)
 
 
-@dataclass
+@dataclass(frozen=True)
 class JointStateSnapshot:
     """Aggregated joint states from all hardware.
 
@@ -79,10 +81,16 @@ class JointStateSnapshot:
         timestamp: Unix timestamp when state was read
     """
 
-    joint_positions: dict[JointName, float] = field(default_factory=dict)
-    joint_velocities: dict[JointName, float] = field(default_factory=dict)
-    joint_efforts: dict[JointName, float] = field(default_factory=dict)
+    joint_positions: Mapping[JointName, float] = field(default_factory=dict)
+    joint_velocities: Mapping[JointName, float] = field(default_factory=dict)
+    joint_efforts: Mapping[JointName, float] = field(default_factory=dict)
     timestamp: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Detach caller-owned mappings and expose read-only views."""
+        object.__setattr__(self, "joint_positions", MappingProxyType(dict(self.joint_positions)))
+        object.__setattr__(self, "joint_velocities", MappingProxyType(dict(self.joint_velocities)))
+        object.__setattr__(self, "joint_efforts", MappingProxyType(dict(self.joint_efforts)))
 
     def get_position(self, joint_name: JointName) -> float | None:
         """Get position for a specific joint."""
@@ -97,7 +105,7 @@ class JointStateSnapshot:
         return self.joint_efforts.get(joint_name)
 
 
-@dataclass
+@dataclass(frozen=True)
 class CoordinatorState:
     """Complete state snapshot for tasks to read.
 
@@ -115,9 +123,24 @@ class CoordinatorState:
     """
 
     joints: JointStateSnapshot
-    imu: dict[str, IMUState] = field(default_factory=dict)
+    imu: Mapping[str, IMUState] = field(default_factory=dict)
     t_now: float = 0.0  # Coordinator time (perf_counter) - USE THIS, NOT time.time()!
     dt: float = 0.0  # Time since last tick
+
+    def __post_init__(self) -> None:
+        """Detach the caller-owned IMU mapping and expose a read-only view."""
+        object.__setattr__(self, "imu", MappingProxyType(dict(self.imu)))
+
+
+@dataclass(frozen=True)
+class ControlTaskContext:
+    """Coordinator-owned services available to a registered base task.
+
+    The context itself carries no runtime state. Its callbacks always resolve
+    against the coordinator that owns the task registration.
+    """
+
+    get_state: Callable[[], CoordinatorState | None]
 
 
 @dataclass
@@ -328,11 +351,39 @@ class BaseControlTask(ControlTask):
     """
 
     _name: str
+    _context: ControlTaskContext | None = None
 
     @property
     def name(self) -> str:
         """Unique task identifier, backed by ``self._name``."""
         return self._name
+
+    @property
+    def context(self) -> ControlTaskContext:
+        """Return the owning coordinator's context.
+
+        A task can be configured before registration, but coordinator services
+        are intentionally unavailable until the task is registered.
+        """
+        if self._context is None:
+            raise RuntimeError(f"Control task {self.name!r} is not bound to a coordinator")
+        return self._context
+
+    def _bind_context(self, context: ControlTaskContext) -> None:
+        """Bind this task to one coordinator; rebinding to the owner is idempotent."""
+        if self._context is not None and self._context is not context:
+            raise RuntimeError(
+                f"Control task {self.name!r} is already bound to another coordinator"
+            )
+        self._context = context
+
+    def _unbind_context(self, context: ControlTaskContext) -> None:
+        """Detach this task, rejecting cleanup attempts from a non-owner."""
+        if self._context is not context:
+            raise RuntimeError(
+                f"Control task {self.name!r} cannot detach from a different coordinator"
+            )
+        self._context = None
 
     def on_buttons(self, msg: Buttons) -> bool:
         """No-op default."""

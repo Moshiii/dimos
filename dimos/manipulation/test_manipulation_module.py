@@ -124,12 +124,15 @@ def joint_state_zeros():
 def module(xarm7_config):
     """Create a started ManipulationModule with ports disabled."""
     coordinator = MagicMock(spec=ControlCoordinator)
-    coordinator.execute_trajectory.return_value = TrajectoryExecutionResult(
-        TrajectoryExecutionStatus.ACCEPTED
-    )
-    coordinator.cancel_trajectory.return_value = TrajectoryCancellationResult(
-        TrajectoryCancellationStatus.ALREADY_STOPPED
-    )
+
+    def task_invoke(_task_name: str, method: str, _kwargs: object = None) -> object:
+        if method == "execute":
+            return TrajectoryExecutionResult(TrajectoryExecutionStatus.ACCEPTED)
+        if method == "cancel":
+            return TrajectoryCancellationResult(TrajectoryCancellationStatus.ALREADY_STOPPED)
+        raise AssertionError(f"unexpected task command {method}")
+
+    coordinator.task_invoke.side_effect = task_invoke
     mod = ManipulationModule(
         robots=[xarm7_config],
         planning_timeout=10.0,
@@ -258,7 +261,7 @@ class TestManipulationModuleIntegration:
         assert module._last_plan is not None
         robot_config = module._robots["test_arm"][1]
         assert module.execute() is True
-        trajectory = module._control_coordinator.execute_trajectory.call_args.args[0]
+        trajectory = module._control_coordinator.task_invoke.call_args.args[2]["trajectory"]
 
         assert trajectory.joint_names == list(robot_config.joint_name_mapping.keys())
 
@@ -281,8 +284,8 @@ class TestCoordinatorIntegration:
         assert module._state == ManipulationState.COMPLETED
 
         # Verify coordinator was called
-        module._control_coordinator.execute_trajectory.assert_called_once()
-        trajectory = module._control_coordinator.execute_trajectory.call_args.args[0]
+        module._control_coordinator.task_invoke.assert_called_once()
+        trajectory = module._control_coordinator.task_invoke.call_args.args[2]["trajectory"]
 
         assert len(trajectory.points) > 1
         # Joint names should be translated
@@ -295,7 +298,8 @@ class TestCoordinatorIntegration:
 
         module.plan_to_joints(JointState(position=[0.05] * 7))
 
-        module._control_coordinator.execute_trajectory.return_value = TrajectoryExecutionResult(
+        module._control_coordinator.task_invoke.side_effect = None
+        module._control_coordinator.task_invoke.return_value = TrajectoryExecutionResult(
             TrajectoryExecutionStatus.INVALID_TRAJECTORY
         )
 

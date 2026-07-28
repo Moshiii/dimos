@@ -21,6 +21,7 @@ import pytest
 
 from dimos.control.coordinator import ControlCoordinator
 from dimos.control.tasks.trajectory_task.trajectory_task import (
+    JOINT_TRAJECTORY_TASK_NAME,
     TrajectoryCancellationResult,
     TrajectoryCancellationStatus,
     TrajectoryExecutionResult,
@@ -86,12 +87,16 @@ def _plan(
 
 def _coordinator() -> MagicMock:
     coordinator = MagicMock(spec=ControlCoordinator)
-    coordinator.execute_trajectory.return_value = TrajectoryExecutionResult(
-        TrajectoryExecutionStatus.ACCEPTED
-    )
-    coordinator.cancel_trajectory.return_value = TrajectoryCancellationResult(
-        TrajectoryCancellationStatus.ALREADY_STOPPED
-    )
+
+    def task_invoke(task_name: str, method: str, kwargs: dict[str, object] | None = None) -> object:
+        assert task_name == JOINT_TRAJECTORY_TASK_NAME
+        if method == "execute":
+            return TrajectoryExecutionResult(TrajectoryExecutionStatus.ACCEPTED)
+        if method == "cancel":
+            return TrajectoryCancellationResult(TrajectoryCancellationStatus.ALREADY_STOPPED)
+        raise AssertionError(f"unexpected command {method}")
+
+    coordinator.task_invoke.side_effect = task_invoke
     return coordinator
 
 
@@ -161,8 +166,10 @@ def test_execute_maps_all_robots_into_one_trajectory() -> None:
     result = manager.execute(plan)
 
     assert result.outcome is ExecutionOutcome.ACCEPTED
-    coordinator.execute_trajectory.assert_called_once()
-    trajectory = coordinator.execute_trajectory.call_args.args[0]
+    coordinator.task_invoke.assert_called_once()
+    task_name, method, kwargs = coordinator.task_invoke.call_args.args
+    assert (task_name, method) == (JOINT_TRAJECTORY_TASK_NAME, "execute")
+    trajectory = kwargs["trajectory"]
     assert trajectory.joint_names == ["left_hw/j1", "right_hw/j1"]
     assert trajectory.points == plan.trajectory.points
     assert trajectory.timestamp == plan.trajectory.timestamp
@@ -179,7 +186,7 @@ def test_execute_preserves_single_robot_subset() -> None:
     result = manager.execute(_plan(("left/j2",)))
 
     assert result.accepted
-    trajectory = coordinator.execute_trajectory.call_args.args[0]
+    trajectory = coordinator.task_invoke.call_args.args[2]["trajectory"]
     assert trajectory.joint_names == ["j2"]
     assert trajectory.points[0].positions == [0.0]
 
@@ -204,7 +211,7 @@ def test_execute_rejects_unmappable_plan_before_rpc(
 
     assert result.outcome is ExecutionOutcome.REJECTED
     assert message in result.message
-    coordinator.execute_trajectory.assert_not_called()
+    coordinator.task_invoke.assert_not_called()
 
 
 def test_execute_rejects_cross_robot_mapping_collision() -> None:
@@ -227,13 +234,12 @@ def test_execute_rejects_cross_robot_mapping_collision() -> None:
 
     assert result.outcome is ExecutionOutcome.REJECTED
     assert "duplicate coordinator joints" in result.message
-    coordinator.execute_trajectory.assert_not_called()
+    coordinator.task_invoke.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "status",
     [
-        TrajectoryExecutionStatus.NO_TRAJECTORY_TASK,
         TrajectoryExecutionStatus.INVALID_TRAJECTORY,
         TrajectoryExecutionStatus.START_STATE_UNAVAILABLE,
         TrajectoryExecutionStatus.START_STATE_MISMATCH,
@@ -242,7 +248,8 @@ def test_execute_rejects_cross_robot_mapping_collision() -> None:
 def test_execute_preserves_coordinator_rejection(status: TrajectoryExecutionStatus) -> None:
     coordinator = _coordinator()
     coordinator_result = TrajectoryExecutionResult(status, "specific rejection")
-    coordinator.execute_trajectory.return_value = coordinator_result
+    coordinator.task_invoke.side_effect = None
+    coordinator.task_invoke.return_value = coordinator_result
     manager = _manager(coordinator=coordinator)
 
     result = manager.execute(_plan())
@@ -254,7 +261,7 @@ def test_execute_preserves_coordinator_rejection(status: TrajectoryExecutionStat
 
 def test_execute_rpc_failure_is_uncertain() -> None:
     coordinator = _coordinator()
-    coordinator.execute_trajectory.side_effect = TimeoutError("timed out")
+    coordinator.task_invoke.side_effect = TimeoutError("timed out")
 
     result = _manager(coordinator=coordinator).execute(_plan())
 
@@ -275,11 +282,6 @@ def test_execute_rpc_failure_is_uncertain() -> None:
             True,
             False,
         ),
-        (
-            TrajectoryCancellationStatus.NO_TRAJECTORY_TASK,
-            True,
-            False,
-        ),
     ],
 )
 def test_cancel_preserves_coordinator_semantics(
@@ -289,7 +291,8 @@ def test_cancel_preserves_coordinator_semantics(
 ) -> None:
     coordinator = _coordinator()
     coordinator_result = TrajectoryCancellationResult(status, "cancel result")
-    coordinator.cancel_trajectory.return_value = coordinator_result
+    coordinator.task_invoke.side_effect = None
+    coordinator.task_invoke.return_value = coordinator_result
 
     result = _manager(coordinator=coordinator).cancel()
 
@@ -300,7 +303,7 @@ def test_cancel_preserves_coordinator_semantics(
 
 def test_cancel_rpc_failure_is_uncertain() -> None:
     coordinator = _coordinator()
-    coordinator.cancel_trajectory.side_effect = TimeoutError("timed out")
+    coordinator.task_invoke.side_effect = TimeoutError("timed out")
 
     result = _manager(coordinator=coordinator).cancel()
 
@@ -315,13 +318,17 @@ def test_cancel_waits_for_in_flight_execute_then_cancels() -> None:
     execute_started = Event()
     release_execute = Event()
 
-    def execute_trajectory(_trajectory: JointTrajectory) -> TrajectoryExecutionResult:
-        execute_started.set()
-        if not release_execute.wait(timeout=1.0):
-            raise TimeoutError("test did not release execute RPC")
-        return TrajectoryExecutionResult(TrajectoryExecutionStatus.ACCEPTED)
+    def task_invoke(
+        _task_name: str, method: str, _kwargs: dict[str, object] | None = None
+    ) -> object:
+        if method == "execute":
+            execute_started.set()
+            if not release_execute.wait(timeout=1.0):
+                raise TimeoutError("test did not release execute RPC")
+            return TrajectoryExecutionResult(TrajectoryExecutionStatus.ACCEPTED)
+        return TrajectoryCancellationResult(TrajectoryCancellationStatus.ALREADY_STOPPED)
 
-    coordinator.execute_trajectory.side_effect = execute_trajectory
+    coordinator.task_invoke.side_effect = task_invoke
     manager = _manager(coordinator=coordinator)
     execute_results: list[ExecutionDispatchResult] = []
     cancel_results: list[TrajectoryCancellationResult] = []
@@ -336,7 +343,7 @@ def test_cancel_waits_for_in_flight_execute_then_cancels() -> None:
         if execute_was_started:
             cancel_thread.start()
             cancel_was_started = True
-            cancel_called_before_release = coordinator.cancel_trajectory.called
+            cancel_called_before_release = coordinator.task_invoke.call_count > 1
     finally:
         release_execute.set()
         execute_thread.join(timeout=1.0)
@@ -352,4 +359,7 @@ def test_cancel_waits_for_in_flight_execute_then_cancels() -> None:
     assert execute_results[0].outcome is ExecutionOutcome.ACCEPTED
     assert len(cancel_results) == 1
     assert cancel_results[0].status is TrajectoryCancellationStatus.ALREADY_STOPPED
-    coordinator.cancel_trajectory.assert_called_once_with()
+    assert coordinator.task_invoke.call_args_list[-1].args == (
+        JOINT_TRAJECTORY_TASK_NAME,
+        "cancel",
+    )
