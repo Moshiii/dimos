@@ -52,6 +52,7 @@ from dimos.control.task import (
     ControlTask,
     ControlTaskContext,
     CoordinatorState,
+    _TaskRegistration,
 )
 from dimos.control.tick_loop import TickLoop
 from dimos.core.core import rpc
@@ -192,6 +193,7 @@ class ControlCoordinator(Module):
 
         # Registered tasks
         self._tasks: dict[TaskName, ControlTask] = {}
+        self._task_registrations: dict[TaskName, _TaskRegistration] = {}
         self._task_lock = threading.Lock()
 
         # The tick loop atomically replaces the latest complete observation.
@@ -499,9 +501,11 @@ class ControlCoordinator(Module):
             if task.name in self._tasks:
                 logger.warning(f"Task {task.name} already registered")
                 return False
-            bound_task = task if isinstance(task, BaseControlTask) else None
-            if bound_task is not None:
-                bound_task._bind_context(self._task_context)
+            registration = (
+                _TaskRegistration.acquire(task, self._task_context)
+                if isinstance(task, BaseControlTask)
+                else None
+            )
             if task_type is not None:
                 try:
                     self._register_routes(task, task_type, stream_bind)
@@ -510,12 +514,13 @@ class ControlCoordinator(Module):
                     for entries in self._routes.values():
                         entries[:] = [entry for entry in entries if entry[0] is not task]
                     self._task_commands.pop(task.name, None)
-                    if bound_task is not None:
-                        bound_task._unbind_context(self._task_context)
+                    registration = None
                     raise
             else:
                 self._task_commands[task.name] = frozenset()
             self._tasks[task.name] = task
+            if registration is not None:
+                self._task_registrations[task.name] = registration
             logger.info(f"Added task {task.name}")
         self._sync_stream_subscriptions()
         return True
@@ -530,8 +535,7 @@ class ControlCoordinator(Module):
             for entries in self._routes.values():
                 entries[:] = [entry for entry in entries if entry[0] is not task]
             self._task_commands.pop(task_name, None)
-            if isinstance(task, BaseControlTask):
-                task._unbind_context(self._task_context)
+            self._task_registrations.pop(task_name, None)
             logger.info(f"Removed task {task_name}")
         self._sync_stream_subscriptions()
         return True

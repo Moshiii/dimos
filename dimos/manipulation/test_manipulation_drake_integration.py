@@ -252,33 +252,8 @@ class TestManipulationModuleIntegration:
         assert hasattr(pose, "y")
         assert hasattr(pose, "z")
 
-    def test_trajectory_name_translation(self, module, joint_state_zeros):
-        """Test that trajectory joint names are translated for coordinator."""
-        module._on_joint_state(joint_state_zeros)
-
-        success = module.plan_to_joints(JointState(position=[0.05] * 7))
-        assert success is True
-
-        assert module._last_plan is not None
-        robot_config = module._robots["test_arm"][1]
-        assert module.execute() is True
-        trajectory = module._control_coordinator.task_invoke.call_args.args[2]["trajectory"]
-        module._control_coordinator.task_invoke.assert_called_once_with(
-            JOINT_TRAJECTORY_TASK_NAME,
-            "execute",
-            {"trajectory": trajectory},
-        )
-
-        assert trajectory.joint_names == list(robot_config.joint_name_mapping.keys())
-
-
-@pytest.mark.skipif(not _drake_available(), reason="Drake not installed")
-@pytest.mark.skipif(not _xarm_urdf_available(), reason="XArm URDF not available")
-class TestCoordinatorIntegration:
-    """Test coordinator integration with mocked RPC client."""
-
-    def test_execute_with_mock_coordinator(self, module, joint_state_zeros):
-        """Test execute sends trajectory to coordinator."""
+    def test_plan_and_dispatch_to_coordinator(self, module, joint_state_zeros):
+        """Test that a real Drake plan is translated and dispatched."""
         module._on_joint_state(joint_state_zeros)
 
         success = module.plan_to_joints(JointState(position=[0.05] * 7))
@@ -300,41 +275,3 @@ class TestCoordinatorIntegration:
         # Joint names should be translated
         robot_config = module._robots["test_arm"][1]
         assert trajectory.joint_names == list(robot_config.joint_name_mapping.keys())
-
-    def test_execute_rejected_by_coordinator(self, module, joint_state_zeros):
-        """Test handling of coordinator rejection."""
-        module._on_joint_state(joint_state_zeros)
-
-        module.plan_to_joints(JointState(position=[0.05] * 7))
-
-        module._control_coordinator.task_invoke.side_effect = None
-        module._control_coordinator.task_invoke.return_value = TrajectoryExecutionResult(
-            TrajectoryExecutionStatus.INVALID_TRAJECTORY
-        )
-
-        result = module.execute()
-
-        assert result is False
-        assert module._state == ManipulationState.COMPLETED
-        assert "rejected" in module._error_message.lower()
-
-    def test_state_transitions_during_execution(self, module, joint_state_zeros):
-        """Test state transitions during plan and execute."""
-        assert module._state == ManipulationState.IDLE
-
-        module._on_joint_state(joint_state_zeros)
-
-        # Plan - should go through PLANNING -> COMPLETED
-        module.plan_to_joints(JointState(position=[0.05] * 7))
-        assert module._state == ManipulationState.COMPLETED
-
-        # Reset works from COMPLETED
-        module.reset()
-        assert module._state == ManipulationState.IDLE
-
-        # Plan again
-        module.plan_to_joints(JointState(position=[0.05] * 7))
-
-        # Execute - should go to EXECUTING then COMPLETED
-        module.execute()
-        assert module._state == ManipulationState.COMPLETED

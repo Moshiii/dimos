@@ -1032,6 +1032,76 @@ class TestExecute:
         assert module.execute() is False
         assert module._state == ManipulationState.IDLE
 
+    def test_execute_plan_can_dispatch_cached_plan_repeatedly(self, module_factory):
+        coordinator = _control_coordinator()
+        module = module_factory(coordinator)
+        _install_generated_plan(module, _one_joint_config(), MagicMock(), [0.0], [1.0])
+
+        assert module.execute_plan()
+        assert module.execute_plan()
+        assert [call.args[:2] for call in coordinator.task_invoke.call_args_list] == [
+            (JOINT_TRAJECTORY_TASK_NAME, "execute"),
+            (JOINT_TRAJECTORY_TASK_NAME, "execute"),
+        ]
+
+    def test_direct_plan_does_not_replace_cached_plan(self, module_factory):
+        coordinator = _control_coordinator()
+        module = module_factory(coordinator)
+        config = _one_joint_config()
+        _install_generated_plan(module, config, MagicMock(), [0.0], [1.0])
+        cached = module._last_plan
+        assert cached is not None
+        direct = GeneratedPlan(
+            group_ids=(f"{config.name}/manipulator",),
+            trajectory=_generated_plan_trajectory([f"{config.name}/j0"], [0.0], [2.0]),
+            path=[
+                JointState(name=[f"{config.name}/j0"], position=[0.0]),
+                JointState(name=[f"{config.name}/j0"], position=[2.0]),
+            ],
+            status=PlanningStatus.SUCCESS,
+        )
+
+        assert module.execute_plan(plan=direct)
+
+        assert module._last_plan is cached
+        dispatched = coordinator.task_invoke.call_args.args[2]["trajectory"]
+        assert dispatched.points[-1].positions == [2.0]
+
+    def test_known_coordinator_rejection_restores_previous_state(self, module_factory):
+        coordinator = _control_coordinator(
+            execute_status=TrajectoryExecutionStatus.START_STATE_MISMATCH
+        )
+        module = module_factory(coordinator)
+        _install_generated_plan(module, _one_joint_config(), MagicMock(), [0.0], [1.0])
+        module._state = ManipulationState.COMPLETED
+
+        assert not module.execute_plan()
+
+        assert module._state is ManipulationState.COMPLETED
+        assert module._last_plan is not None
+
+    def test_uncertain_execute_projects_to_fault(self, module_factory):
+        coordinator = _control_coordinator()
+        coordinator.task_invoke.side_effect = TimeoutError("timed out")
+        module = module_factory(coordinator)
+        _install_generated_plan(module, _one_joint_config(), MagicMock(), [0.0], [1.0])
+
+        assert not module.execute_plan()
+
+        assert module._state is ManipulationState.FAULT
+        assert "timed out" in module.get_error()
+
+    def test_uncertain_cancel_projects_to_fault(self, module_factory):
+        coordinator = _control_coordinator()
+        coordinator.task_invoke.side_effect = TimeoutError("timed out")
+        module = module_factory(coordinator)
+        module._state = ManipulationState.EXECUTING
+
+        assert not module.cancel()
+
+        assert module._state is ManipulationState.FAULT
+        assert "timed out" in module.get_error()
+
 
 class TestRobotModelConfigMapping:
     """Test RobotModelConfig joint name mapping helpers."""

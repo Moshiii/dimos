@@ -38,7 +38,6 @@ from dimos.control.routing import Routing
 from dimos.control.task import (
     BaseControlTask,
     ControlMode,
-    ControlTaskContext,
     CoordinatorState,
     JointCommandOutput,
     JointStateSnapshot,
@@ -88,8 +87,9 @@ def connected_hardware(mock_adapter):
 
 
 @pytest.fixture
-def trajectory_state() -> list[CoordinatorState | None]:
-    return [
+def trajectory_coordinator(make_coordinator) -> ControlCoordinator:
+    coordinator = make_coordinator()
+    coordinator._set_latest_state(
         CoordinatorState(
             joints=JointStateSnapshot(
                 joint_positions={
@@ -99,18 +99,19 @@ def trajectory_state() -> list[CoordinatorState | None]:
                 }
             )
         )
-    ]
+    )
+    return coordinator
 
 
 @pytest.fixture
-def trajectory_task(trajectory_state):
+def trajectory_task(trajectory_coordinator):
     """Create a JointTrajectoryTask for testing."""
     config = JointTrajectoryTaskConfig(
         joint_names=["arm/joint1", "arm/joint2", "arm/joint3"],
         priority=10,
     )
     task = JointTrajectoryTask(config)
-    task._bind_context(ControlTaskContext(get_state=lambda: trajectory_state[0]))
+    assert trajectory_coordinator.add_task(task, task_type="trajectory")
     return task
 
 
@@ -145,13 +146,14 @@ def trajectory_start_positions(trajectory: JointTrajectory) -> dict[str, float]:
 
 
 def _set_trajectory_positions(
-    state_source: list[CoordinatorState | None],
+    coordinator: ControlCoordinator,
     positions: dict[str, float] | None,
 ) -> None:
-    state_source[0] = (
-        None
-        if positions is None
-        else CoordinatorState(joints=JointStateSnapshot(joint_positions=positions))
+    if positions is None:
+        coordinator._clear_latest_state()
+        return
+    coordinator._set_latest_state(
+        CoordinatorState(joints=JointStateSnapshot(joint_positions=positions))
     )
 
 
@@ -480,8 +482,8 @@ class TestControlCoordinatorTrajectoryExecution:
         assert coordinator.add_task(second, task_type="trajectory") is False
 
         assert coordinator.list_tasks() == [JOINT_TRAJECTORY_TASK_NAME]
-        with pytest.raises(RuntimeError, match="not bound"):
-            _ = second.context
+        with pytest.raises(RuntimeError, match="not registered"):
+            second.context  # noqa: B018
 
     def test_trajectory_factory_rejects_noncanonical_task_name(self):
         config = TaskConfig(
@@ -542,10 +544,10 @@ class TestJointTrajectoryTask:
         )
 
     def test_execute_rejects_missing_start_position(
-        self, trajectory_task, trajectory_state, simple_trajectory
+        self, trajectory_task, trajectory_coordinator, simple_trajectory
     ):
         _set_trajectory_positions(
-            trajectory_state,
+            trajectory_coordinator,
             {"arm/joint1": 0.0, "arm/joint2": 0.0},
         )
         result = trajectory_task.execute(simple_trajectory)
@@ -555,9 +557,9 @@ class TestJointTrajectoryTask:
         assert trajectory_task.get_state() == TrajectoryState.IDLE
 
     def test_execute_before_first_tick_reports_state_unavailable(
-        self, trajectory_task, trajectory_state, simple_trajectory
+        self, trajectory_task, trajectory_coordinator, simple_trajectory
     ):
-        _set_trajectory_positions(trajectory_state, None)
+        _set_trajectory_positions(trajectory_coordinator, None)
 
         result = trajectory_task.execute(simple_trajectory)
 
@@ -565,11 +567,11 @@ class TestJointTrajectoryTask:
         assert trajectory_task.get_state() == TrajectoryState.IDLE
 
     def test_execute_rejects_start_position_outside_tolerance(
-        self, trajectory_task, trajectory_state, simple_trajectory
+        self, trajectory_task, trajectory_coordinator, simple_trajectory
     ):
         current_positions = trajectory_start_positions(simple_trajectory)
         current_positions["arm/joint2"] = 0.051
-        _set_trajectory_positions(trajectory_state, current_positions)
+        _set_trajectory_positions(trajectory_coordinator, current_positions)
 
         result = trajectory_task.execute(simple_trajectory)
 
@@ -578,11 +580,11 @@ class TestJointTrajectoryTask:
         assert trajectory_task.get_state() == TrajectoryState.IDLE
 
     def test_execute_accepts_start_position_at_tolerance(
-        self, trajectory_task, trajectory_state, simple_trajectory
+        self, trajectory_task, trajectory_coordinator, simple_trajectory
     ):
         current_positions = trajectory_start_positions(simple_trajectory)
         current_positions["arm/joint2"] = 0.05
-        _set_trajectory_positions(trajectory_state, current_positions)
+        _set_trajectory_positions(trajectory_coordinator, current_positions)
 
         result = trajectory_task.execute(simple_trajectory)
 
@@ -682,7 +684,7 @@ class TestJointTrajectoryTask:
         )
 
     def test_replacement_reset_and_cancel_clear_active_subset(
-        self, trajectory_task, trajectory_state
+        self, trajectory_task, trajectory_coordinator
     ):
         first = JointTrajectory(
             joint_names=["arm/joint1"],
@@ -699,7 +701,10 @@ class TestJointTrajectoryTask:
             ],
         )
         assert trajectory_task.execute(first).status is TrajectoryExecutionStatus.ACCEPTED
-        _set_trajectory_positions(trajectory_state, trajectory_start_positions(second))
+        _set_trajectory_positions(
+            trajectory_coordinator,
+            trajectory_start_positions(second),
+        )
         assert trajectory_task.execute(second).status is TrajectoryExecutionStatus.ACCEPTED
         trajectory_task.compute(CoordinatorState(joints=MagicMock(), t_now=1.0, dt=0.01))
         output = trajectory_task.compute(CoordinatorState(joints=MagicMock(), t_now=1.5, dt=0.01))
@@ -980,7 +985,7 @@ class TestTickLoop:
 
 
 class TestIntegration:
-    def test_full_trajectory_execution(self, mock_adapter):
+    def test_full_trajectory_execution(self, make_coordinator, mock_adapter):
         component = HardwareComponent(
             hardware_id="arm",
             hardware_type=HardwareType.MANIPULATOR,
@@ -994,14 +999,15 @@ class TestIntegration:
             priority=10,
         )
         traj_task = JointTrajectoryTask(config)
-        state_source: list[CoordinatorState | None] = [
+        coordinator = make_coordinator()
+        coordinator._set_latest_state(
             CoordinatorState(
                 joints=JointStateSnapshot(
                     joint_positions={f"arm/joint{i + 1}": 0.0 for i in range(6)}
                 )
             )
-        ]
-        traj_task._bind_context(ControlTaskContext(get_state=lambda: state_source[0]))
+        )
+        assert coordinator.add_task(traj_task, task_type="trajectory")
         tasks = {JOINT_TRAJECTORY_TASK_NAME: traj_task}
 
         joint_to_hardware = {f"arm/joint{i + 1}": "arm" for i in range(6)}
@@ -1013,6 +1019,7 @@ class TestIntegration:
             tasks=tasks,
             task_lock=threading.Lock(),
             joint_to_hardware=joint_to_hardware,
+            observation_callback=coordinator._set_latest_state,
         )
 
         trajectory = JointTrajectory(

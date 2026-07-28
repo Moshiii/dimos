@@ -63,9 +63,11 @@ class MyController(BaseControlTask):
         )
 ```
 
-`BaseControlTask` instances receive a frozen, stateless `ControlTaskContext`
-while registered. A command handler can call `self.context.get_state()` to read
-the coordinator's latest complete tick observation. It returns `None` before
+Registering a `BaseControlTask` grants it a frozen, stateless
+`ControlTaskContext` for the lifetime of that registration. A command handler
+can transparently call `self.context.get_state()` to read the coordinator's
+latest complete tick observation. Removing the task revokes access; stopping
+and restarting the coordinator preserves it. The read returns `None` before
 the first tick and after stop or runtime reset; it does not perform a hardware
 read or a freshness check. `CoordinatorState`, `JointStateSnapshot`, and their
 mappings are read-only.

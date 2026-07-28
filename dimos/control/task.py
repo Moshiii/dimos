@@ -28,9 +28,12 @@ Use the t_now passed in CoordinatorState.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
+from weakref import ReferenceType, ref
+
+import attrs
 
 from dimos.control.components import JointName
 from dimos.hardware.manipulators.spec import ControlMode as ControlMode
@@ -41,6 +44,14 @@ if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
     from dimos.teleop.quest.quest_types import Buttons
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+
+def _immutable_mapping(value: Mapping[_K, _V]) -> Mapping[_K, _V]:
+    """Detach a mapping from its caller and expose a read-only copy."""
+    return MappingProxyType(dict(value))
 
 
 @dataclass(frozen=True)
@@ -67,7 +78,7 @@ class ResourceClaim:
         return bool(self.joints & other.joints)
 
 
-@dataclass(frozen=True)
+@attrs.frozen(slots=False)
 class JointStateSnapshot:
     """Aggregated joint states from all hardware.
 
@@ -81,16 +92,19 @@ class JointStateSnapshot:
         timestamp: Unix timestamp when state was read
     """
 
-    joint_positions: Mapping[JointName, float] = field(default_factory=dict)
-    joint_velocities: Mapping[JointName, float] = field(default_factory=dict)
-    joint_efforts: Mapping[JointName, float] = field(default_factory=dict)
+    joint_positions: Mapping[JointName, float] = attrs.field(
+        factory=dict,
+        converter=_immutable_mapping,
+    )
+    joint_velocities: Mapping[JointName, float] = attrs.field(
+        factory=dict,
+        converter=_immutable_mapping,
+    )
+    joint_efforts: Mapping[JointName, float] = attrs.field(
+        factory=dict,
+        converter=_immutable_mapping,
+    )
     timestamp: float = 0.0
-
-    def __post_init__(self) -> None:
-        """Detach caller-owned mappings and expose read-only views."""
-        object.__setattr__(self, "joint_positions", MappingProxyType(dict(self.joint_positions)))
-        object.__setattr__(self, "joint_velocities", MappingProxyType(dict(self.joint_velocities)))
-        object.__setattr__(self, "joint_efforts", MappingProxyType(dict(self.joint_efforts)))
 
     def get_position(self, joint_name: JointName) -> float | None:
         """Get position for a specific joint."""
@@ -105,7 +119,7 @@ class JointStateSnapshot:
         return self.joint_efforts.get(joint_name)
 
 
-@dataclass(frozen=True)
+@attrs.frozen(slots=False)
 class CoordinatorState:
     """Complete state snapshot for tasks to read.
 
@@ -123,16 +137,15 @@ class CoordinatorState:
     """
 
     joints: JointStateSnapshot
-    imu: Mapping[str, IMUState] = field(default_factory=dict)
+    imu: Mapping[str, IMUState] = attrs.field(
+        factory=dict,
+        converter=_immutable_mapping,
+    )
     t_now: float = 0.0  # Coordinator time (perf_counter) - USE THIS, NOT time.time()!
     dt: float = 0.0  # Time since last tick
 
-    def __post_init__(self) -> None:
-        """Detach the caller-owned IMU mapping and expose a read-only view."""
-        object.__setattr__(self, "imu", MappingProxyType(dict(self.imu)))
 
-
-@dataclass(frozen=True)
+@attrs.frozen(slots=False)
 class ControlTaskContext:
     """Coordinator-owned services available to a registered base task.
 
@@ -141,6 +154,29 @@ class ControlTaskContext:
     """
 
     get_state: Callable[[], CoordinatorState | None]
+
+
+@attrs.frozen(slots=True, weakref_slot=True)
+class _TaskRegistration:
+    """Registration-owned lease for one task's coordinator context access."""
+
+    context: ControlTaskContext
+
+    @classmethod
+    def acquire(
+        cls,
+        task: BaseControlTask,
+        context: ControlTaskContext,
+    ) -> _TaskRegistration:
+        """Create the task's exclusive registration lease."""
+        existing = task._registration() if task._registration is not None else None
+        if existing is not None:
+            raise RuntimeError(
+                f"Control task {task.name!r} is already registered with another coordinator"
+            )
+        registration = cls(context=context)
+        task._registration = ref(registration)
+        return registration
 
 
 @dataclass
@@ -351,7 +387,7 @@ class BaseControlTask(ControlTask):
     """
 
     _name: str
-    _context: ControlTaskContext | None = None
+    _registration: ReferenceType[_TaskRegistration] | None = None
 
     @property
     def name(self) -> str:
@@ -360,30 +396,15 @@ class BaseControlTask(ControlTask):
 
     @property
     def context(self) -> ControlTaskContext:
-        """Return the owning coordinator's context.
+        """Return the registered coordinator's context.
 
         A task can be configured before registration, but coordinator services
         are intentionally unavailable until the task is registered.
         """
-        if self._context is None:
-            raise RuntimeError(f"Control task {self.name!r} is not bound to a coordinator")
-        return self._context
-
-    def _bind_context(self, context: ControlTaskContext) -> None:
-        """Bind this task to one coordinator; rebinding to the owner is idempotent."""
-        if self._context is not None and self._context is not context:
-            raise RuntimeError(
-                f"Control task {self.name!r} is already bound to another coordinator"
-            )
-        self._context = context
-
-    def _unbind_context(self, context: ControlTaskContext) -> None:
-        """Detach this task, rejecting cleanup attempts from a non-owner."""
-        if self._context is not context:
-            raise RuntimeError(
-                f"Control task {self.name!r} cannot detach from a different coordinator"
-            )
-        self._context = None
+        registration = self._registration() if self._registration is not None else None
+        if registration is None:
+            raise RuntimeError(f"Control task {self.name!r} is not registered with a coordinator")
+        return registration.context
 
     def on_buttons(self, msg: Buttons) -> bool:
         """No-op default."""

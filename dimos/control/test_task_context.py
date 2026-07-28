@@ -15,10 +15,12 @@
 """Focused contracts for immutable control observations and task context."""
 
 from collections.abc import Callable, Iterator
-from dataclasses import FrozenInstanceError
+import gc
 import threading
 from typing import Any
+from weakref import ref
 
+from attrs.exceptions import FrozenInstanceError
 import pytest
 
 from dimos.control._control_test_helpers import RecordingTask
@@ -92,44 +94,6 @@ def test_context_is_frozen_and_returns_callback_value_by_identity() -> None:
     assert context.get_state() is state
     with pytest.raises(FrozenInstanceError):
         context.get_state = lambda: None  # type: ignore[method-assign]
-
-
-def test_base_task_context_binding_lifecycle() -> None:
-    task = RecordingTask("task")
-    first = ControlTaskContext(get_state=lambda: _state(1.0))
-    second = ControlTaskContext(get_state=lambda: _state(2.0))
-
-    with pytest.raises(RuntimeError, match="not bound"):
-        _ = task.context
-
-    task._bind_context(first)
-    assert task.context is first
-
-    task._bind_context(first)
-    assert task.context is first
-
-    with pytest.raises(RuntimeError, match="another coordinator"):
-        task._bind_context(second)
-    assert task.context is first
-
-    task._unbind_context(first)
-    with pytest.raises(RuntimeError, match="not bound"):
-        _ = task.context
-
-    task._bind_context(second)
-    assert task.context is second
-
-
-def test_detach_requires_owning_context() -> None:
-    task = RecordingTask("task")
-    owner = ControlTaskContext(get_state=lambda: None)
-    stranger = ControlTaskContext(get_state=lambda: None)
-    task._bind_context(owner)
-
-    with pytest.raises(RuntimeError, match="different coordinator"):
-        task._unbind_context(stranger)
-
-    assert task.context is owner
 
 
 class ObservationTask(RecordingTask):
@@ -271,7 +235,7 @@ class StructuralTask:
         return False
 
 
-def test_registration_binds_base_task_context(make_coordinator) -> None:
+def test_registration_grants_base_task_context(make_coordinator) -> None:
     coordinator = make_coordinator()
     base = RecordingTask("base")
 
@@ -299,7 +263,7 @@ def test_registration_rejects_task_bound_to_another_coordinator(make_coordinator
     assert second.list_tasks() == []
 
 
-def test_failed_routing_registration_rolls_back_context_binding(make_coordinator) -> None:
+def test_failed_routing_registration_releases_context_access(make_coordinator) -> None:
     coordinator = make_coordinator()
     failing = RecordingTask("failing")
 
@@ -310,11 +274,11 @@ def test_failed_routing_registration_rolls_back_context_binding(make_coordinator
             stream_bind={"joint_command": "missing_port"},
         )
     assert coordinator.list_tasks() == []
-    with pytest.raises(RuntimeError, match="not bound"):
-        _ = failing.context
+    with pytest.raises(RuntimeError, match="not registered"):
+        failing.context  # noqa: B018
 
 
-def test_removal_detaches_and_allows_registration_with_another_coordinator(
+def test_removal_revokes_context_and_allows_registration_with_another_coordinator(
     make_coordinator,
 ) -> None:
     first = make_coordinator()
@@ -323,10 +287,26 @@ def test_removal_detaches_and_allows_registration_with_another_coordinator(
     first.add_task(task)
 
     assert first.remove_task(task.name)
-    with pytest.raises(RuntimeError, match="not bound"):
-        _ = task.context
+    with pytest.raises(RuntimeError, match="not registered"):
+        task.context  # noqa: B018
     assert second.add_task(task)
     assert task.context is second._task_context
+
+
+def test_coordinator_deletion_revokes_context_access() -> None:
+    coordinator = ControlCoordinator(publish_joint_state=False)
+    task = RecordingTask("task")
+    coordinator.add_task(task)
+    coordinator_ref = ref(coordinator)
+
+    coordinator.stop()
+    assert task.context is coordinator._task_context
+    del coordinator
+    gc.collect()
+
+    assert coordinator_ref() is None
+    with pytest.raises(RuntimeError, match="not registered"):
+        task.context  # noqa: B018
 
 
 def test_stop_clears_state_without_detaching_tasks(make_coordinator) -> None:
