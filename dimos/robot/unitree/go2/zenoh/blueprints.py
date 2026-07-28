@@ -51,8 +51,8 @@ from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNat
 from dimos.navigation.nav_3d.mls_planner.odom_body_frame import OdomBodyFrame
 from dimos.navigation.nav_3d.mls_planner.viz import planner_visual_override
 from dimos.navigation.tracer import Tracer
+from dimos.robot.drone.replay import DroneReplay
 from dimos.robot.unitree.go2.zenoh.recorder import GO2ZenohRecorder
-from dimos.robot.unitree.go2.zenoh.replay import GO2ZenohReplay
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.citymesh.module import CityMeshModule
 from dimos.visualization.vis_module import vis_module
@@ -195,7 +195,7 @@ def _zenoh_source() -> Any:
     the same moment ``global_config.viewer`` is read below.
     """
     if global_config.replay:
-        return GO2ZenohReplay.blueprint(dataset=global_config.replay_db)
+        return DroneReplay.blueprint(dataset=global_config.replay_db)
     return GO2Zenoh.blueprint(mid360_mount_rpy_deg=MID360_MOUNT_RPY_DEG)
 
 

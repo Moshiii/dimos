@@ -82,8 +82,8 @@ def snap_transform(
 
 class Config(ModuleConfig):
     frame: str = "enu"
-    parent: str = "world"
-    robot_frame: str = "base_link"
+    parent: str = "drone/world"
+    robot_frame: str = "drone/base_link"
     # Receivers that report height above takeoff instead of MSL (drone
     # autopilots commonly do) need the takeoff elevation added back.
     altitude_offset_m: float = 0.0

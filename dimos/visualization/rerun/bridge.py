@@ -199,6 +199,8 @@ class Config(ModuleConfig):
         default_factory=dict
     )
     static: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
+    # static, but keyed by tf frame instead of entity path — the attach is done for you
+    models: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
     max_hz: dict[str, float] = field(default_factory=dict)
 
     entity_prefix: str = "world"
@@ -467,8 +469,27 @@ class RerunBridgeModule(Module):
 
         logger.info("\n".join(lines))
 
+    def _model_statics(self) -> dict[str, Callable[[Any], Any]]:
+        """``models`` desugared into ``static`` entries: parts under the frame's attach point."""
+
+        def entry(frame_id: str, shape: Callable[[Any], Any]) -> Callable[[Any], RerunMulti]:
+            root = f"{self.config.entity_prefix}/models/{frame_id}"
+
+            def factory(rr: Any) -> RerunMulti:
+                # Attach on the root, geometry on children — a shape can't then collide
+                # with the transform that places it.
+                attach = rr.Transform3D(parent_frame=f"tf#/{frame_id}")
+                return [(root, attach), *((f"{root}/{sub}", a) for sub, a in shape(rr))]
+
+            return factory
+
+        return {
+            f"{self.config.entity_prefix}/models/{frame_id}": entry(frame_id, shape)
+            for frame_id, shape in self.config.models.items()
+        }
+
     def _log_static(self) -> None:
-        for entity_path, factory in self.config.static.items():
+        for entity_path, factory in {**self.config.static, **self._model_statics()}.items():
             data = factory(rr)
             if is_rerun_multi(data):
                 logger.info(

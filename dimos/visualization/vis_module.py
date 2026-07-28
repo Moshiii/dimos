@@ -45,6 +45,9 @@ def vis_module(
                 "static": {
                     "world/tf/base_link": lambda rr: [rr.Boxes3D(...)],
                 },
+                "models": {  # a shape drawn in a tf frame, wherever that frame goes
+                    "base_link": shapes.quadcopter(arm_m=0.25),
+                },
             },
         )
     """

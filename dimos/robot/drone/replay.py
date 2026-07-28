@@ -13,16 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GO2Zenoh's streams replayed from a memory2 recording — no robot needed.
+"""A robot's streams replayed from a memory2 recording — no robot needed.
 
-Drop-in source for the go2-zenoh blueprints: the same Outs GO2Zenoh has,
-fed from a :class:`GO2ZenohRecorder` db at recorded cadence (the replay's
-shared wall-clock anchor keeps lidar/odometry/gps mutually in time). The
-recorded ``tf`` stream is folded back onto the live tf topic, so the mount
-frames and the odometry edge come along.
+Drop-in source for the drone and go2-zenoh blueprints: the Outs a live
+connection has, fed from a recording at recorded cadence (the replay's
+shared wall-clock anchor keeps lidar/odometry/gps mutually in time). Stream
+names differ between recorders (drone vs go2), the message types don't, so
+one set of aliases covers both. The recorded ``tf`` stream is folded back
+onto the live tf topic, so the mount frames and the odometry edge come
+along.
 
-Selected by ``--replay`` (with ``--replay-db <name-or-path>``) on any
-go2-zenoh blueprint.
+Selected by ``--replay`` (with ``--replay-db <name-or-path>``).
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 
-class GO2ZenohReplayConfig(ModuleConfig):
+class DroneReplayConfig(ModuleConfig):
     dataset: str | Path = "recording_go2_zenoh.db"
     # Demos usually want the recording to keep going; the anchor restarts,
     # downstream consumers just see the walk again.
@@ -61,11 +62,11 @@ class GO2ZenohReplayConfig(ModuleConfig):
     camera_resolution: tuple[int, int] = (1920, 1080)
 
 
-class GO2ZenohReplay(Module):
-    """Publishes a GO2ZenohRecorder recording as the live topics."""
+class DroneReplay(Module):
+    """Publishes a recording as the live topics."""
 
     dedicated_worker = True
-    config: GO2ZenohReplayConfig
+    config: DroneReplayConfig
 
     odometry: Out[Odometry]
     lidar: Out[PointCloud2]

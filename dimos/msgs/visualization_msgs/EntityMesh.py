@@ -59,6 +59,9 @@ class EntityMesh(Timestamped):
         vertices: np.ndarray | None = None,
         triangles: np.ndarray | None = None,
         colors: np.ndarray | None = None,
+        edges: list[np.ndarray] | None = None,
+        edge_color: tuple[int, int, int] = (212, 228, 255),
+        edge_radius: float = 0.12,
         op: Op = "set",
         ts: float | None = None,
     ) -> None:
@@ -72,6 +75,9 @@ class EntityMesh(Timestamped):
             np.zeros((0, 3), np.uint32) if triangles is None else np.asarray(triangles, np.uint32)
         )
         self.colors = None if colors is None else _rgba(np.asarray(colors, np.uint8))
+        self.edges = [np.asarray(e, np.float32) for e in edges] if edges else []
+        self.edge_color = tuple(int(c) for c in edge_color)
+        self.edge_radius = float(edge_radius)
         self.ts = ts if ts is not None else time.time()
 
     @classmethod
@@ -106,6 +112,13 @@ class EntityMesh(Timestamped):
         buf.write(np.ascontiguousarray(self.triangles, "<u4").tobytes())
         if self.colors is not None:
             buf.write(np.ascontiguousarray(self.colors, "u1").tobytes())
+        # Wireframe edges (appended late; absent in old recordings)
+        buf.write(struct.pack(">I", len(self.edges)))
+        if self.edges:
+            buf.write(struct.pack(">3Bf", *self.edge_color, self.edge_radius))
+            for strip in self.edges:
+                buf.write(struct.pack(">I", len(strip)))
+                buf.write(np.ascontiguousarray(strip, "<f4").tobytes())
         return buf.getvalue()
 
     @classmethod
@@ -120,12 +133,25 @@ class EntityMesh(Timestamped):
             if has_colors
             else None
         )
+        edges: list[np.ndarray] = []
+        edge_color = (212, 228, 255)
+        edge_radius = 0.12
+        head = buf.read(4)
+        if len(head) == 4 and (n_edges := struct.unpack(">I", head)[0]):
+            r, g, b, edge_radius = struct.unpack(">3Bf", buf.read(7))
+            edge_color = (r, g, b)
+            for _ in range(n_edges):
+                (k,) = struct.unpack(">I", buf.read(4))
+                edges.append(np.frombuffer(buf.read(k * 12), "<f4").reshape(k, 3))
         return cls(
             path=path,
             frame_id=frame_id,
             vertices=vertices,
             triangles=triangles,
             colors=colors,
+            edges=edges,
+            edge_color=edge_color,
+            edge_radius=edge_radius,
             op=_OPS[op],
             ts=ts,
         )
@@ -171,6 +197,13 @@ class EntityMesh(Timestamped):
                 ),
             )
         ]
+        if self.edges:
+            out.append(
+                (
+                    f"{self.path}/edges",
+                    rr.LineStrips3D(self.edges, colors=[self.edge_color], radii=[self.edge_radius]),
+                )
+            )
         if self.frame_id:
             out.append((self.path, rr.Transform3D(parent_frame=f"tf#/{self.frame_id}")))
         return out

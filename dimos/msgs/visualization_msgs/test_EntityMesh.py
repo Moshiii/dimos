@@ -71,6 +71,29 @@ def test_clear_roundtrip():
     assert len(d.vertices) == 0
 
 
+def test_edges_roundtrip_and_render_as_sibling_wireframe():
+    m = _mesh()
+    m.edges = [np.arange(6, dtype=np.float32).reshape(2, 3)]
+    m.edge_color = (10, 20, 30)
+    m.edge_radius = 0.5
+    d = EntityMesh.decode(m.encode())
+    assert d.edge_color == (10, 20, 30)
+    assert d.edge_radius == 0.5
+    np.testing.assert_array_equal(d.edges[0], m.edges[0])
+
+    paths = [p for p, _ in d.to_rerun()]
+    assert f"{m.path}/edges" in paths
+
+
+def test_decode_tolerates_edgeless_old_wire_format():
+    """Recordings predate the edges block; decode must not require it."""
+    m = _mesh()
+    old_bytes = m.encode()[:-4]  # strip the (empty) edges block
+    d = EntityMesh.decode(old_bytes)
+    assert d.edges == []
+    np.testing.assert_array_equal(d.vertices, m.vertices)
+
+
 def test_to_rerun_set_carries_mesh_and_frame_attachment():
     out = _mesh().to_rerun()
     paths = [p for p, _ in out]

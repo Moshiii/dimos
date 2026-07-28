@@ -41,6 +41,7 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos.visualization.citymesh.dem import Terrain
     from dimos.visualization.citymesh.extrude import Mesh
+    from dimos.visualization.citymesh.themes import Theme
     from dimos.visualization.citymesh.tiles import Source, TileData, TileKey, TileStreamer
 
 logger = setup_logger()
@@ -56,15 +57,25 @@ class MeshPublisher:
 
     wants_carpet = False
 
-    def __init__(self, publish: Callable[[EntityMesh], None], root: str, frame_id: str) -> None:
+    def __init__(
+        self,
+        publish: Callable[[EntityMesh], None],
+        root: str,
+        frame_id: str,
+        theme: Theme | None = None,
+    ) -> None:
         self.publish = publish
         self.root = root
         self.frame_id = frame_id
+        self.theme = theme
 
     def _entity(self, key: TileKey) -> str:
         return f"{self.root}/tiles/{key}"
 
     def _mesh(self, path: str, mesh: Mesh, ts: float | None) -> None:
+        style = {}
+        if self.theme is not None:
+            style = {"edge_color": self.theme.edge_color, "edge_radius": self.theme.edge_radius_m}
         self.publish(
             EntityMesh(
                 path=path,
@@ -72,6 +83,8 @@ class MeshPublisher:
                 vertices=mesh.vertices,
                 triangles=mesh.triangles,
                 colors=mesh.colors,
+                edges=mesh.edges,
+                **style,  # type: ignore[arg-type]
                 ts=ts,
             )
         )
@@ -146,7 +159,9 @@ class CityStream:
         self.frame = EnuFrame.at(lat0, lon0, 0.0, datum="msl", undulation=0.0)
         self.streamer = TileStreamer(
             self.frame,
-            MeshPublisher(self.publish, root=self.root, frame_id=self.frame_id),
+            MeshPublisher(
+                self.publish, root=self.root, frame_id=self.frame_id, theme=load_theme(self.theme)
+            ),
             theme=load_theme(self.theme),
             source=self.source,
             load_radius_m=self.load_radius_m,

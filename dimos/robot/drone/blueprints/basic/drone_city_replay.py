@@ -32,23 +32,41 @@ from dimos.core.stream import In
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.navigation.tracer import Tracer
-from dimos.perception.fiducial.marker_detection_stream_module import VideoMarkerDetectionModule
-from dimos.perception.fiducial.marker_tf_module import MarkerTfModule
-from dimos.robot.unitree.go2.zenoh.replay import GO2ZenohReplay
+from dimos.robot.drone.replay import DroneReplay
 from dimos.visualization.citymesh.enu_tf import EnuSnapTF
 from dimos.visualization.citymesh.module import CityMeshModule
+from dimos.visualization.ground_frustum import GroundFrustumModule, ground_frustum_override
+from dimos.visualization.rerun import shapes
 from dimos.visualization.vis_module import vis_module
 
 # The recorded autopilot reports height above takeoff, not MSL; the snap adds
 # the pad's elevation back (DEM ground at the recording site). Goes away once
 # the drone connection publishes MSL altitudes.
-TAKEOFF_MSL_M = 70.0
+TAKEOFF_MSL_M = 90.0
 
 # One set of intrinsics for everything camera: the replay's synthesized
-# camera_info topic (pinhole in the viewer) and the AprilTag pose solver.
-# Matches drone-basic's DroneCameraModule config at 1920x1080.
+# camera_info topic, the frustum the viewer hangs the video on, and the
+# AprilTag pose solver. fx/fy as fitted in drone-basic against two Mini 4 Pro
+# flights — the 1000.0 that was here is a placeholder and 31 % low, which
+# widens the frustum's cone and oversizes the frame it drops on the city.
+DRONE_INTRINSICS = (1457.1, 1457.1, 960.0, 540.0)
+DRONE_RESOLUTION = (1920, 1080)
 DRONE_CAMERA_INFO = CameraInfo.from_intrinsics(
-    1000.0, 1000.0, 960.0, 540.0, 1920, 1080, frame_id="drone/camera_optical"
+    *DRONE_INTRINSICS, *DRONE_RESOLUTION, frame_id="drone/camera_optical"
+)
+
+# The frustum alone draws tighter than the calibration says: eyeballed against
+# the city, the fitted cone still overspills the ground the frame covers. A
+# longer focal length narrows it — 0.7 here is "30 % less wide", so the divide.
+# Kept off DRONE_CAMERA_INFO on purpose: that one is measurement, this is taste.
+FRUSTUM_WIDTH_SCALE = 0.7
+FRUSTUM_CAMERA_INFO = CameraInfo.from_intrinsics(
+    DRONE_INTRINSICS[0] / FRUSTUM_WIDTH_SCALE,
+    DRONE_INTRINSICS[1] / FRUSTUM_WIDTH_SCALE,
+    DRONE_INTRINSICS[2],
+    DRONE_INTRINSICS[3],
+    *DRONE_RESOLUTION,
+    frame_id="drone/camera_optical",
 )
 
 # Printed tag edge length; adjust to the tags actually on the wall.
@@ -68,6 +86,11 @@ def _camera_info_to_pinhole(msg: Any) -> Any:
     parent would conflict.
     """
     return msg.to_rerun(image_topic="world/video")
+
+
+def _fat_path(msg: Any) -> Any:
+    """Breadcrumb thick enough to read from city altitude."""
+    return msg.to_rerun(radii=0.1, color=[255, 90, 60])
 
 
 def _rerun_blueprint() -> Any:
@@ -99,7 +122,11 @@ def _rerun_blueprint() -> Any:
 
 
 drone_city_replay = autoconnect(
-    GO2ZenohReplay.blueprint(dataset=global_config.replay_db),
+    DroneReplay.blueprint(
+        dataset=global_config.replay_db,
+        camera_intrinsics=DRONE_INTRINSICS,
+        camera_resolution=DRONE_RESOLUTION,
+    ),
     CityMeshModule.blueprint(),
     OdometryTracer.blueprint(),
     EnuSnapTF.blueprint(
@@ -107,26 +134,36 @@ drone_city_replay = autoconnect(
         robot_frame="drone/base_link",
         altitude_offset_m=TAKEOFF_MSL_M,
     ),
+    # The gimbal flies nadir, so the frame it sees belongs on the city, not on
+    # a metre-long stub at the drone. This tracks how far out the plane sits;
+    # the matching override below hangs the video's image plane there. Pinned
+    # to the landing point itself — drop ``ground_point`` for the horizontal
+    # ground_z plane instead, or lift it to (0, 0, 3) to keep the frame off the
+    # mesh it otherwise fights for pixels.
+    GroundFrustumModule.blueprint(
+        world_frame="drone/world",
+        camera_frame="drone/camera_optical",
+        ground_point=(0.0, 0.0, 0.0),
+    ),
     # AprilTags, straight from the H.264 stream: the H264InputMixin decodes
     # into the recognizer's own image input. DICT_APRILTAG_36h11 markers land
     # on tf under drone/world, posed via the recorded tree (world -> optical).
-    VideoMarkerDetectionModule.blueprint(
-        marker_length_m=APRILTAG_EDGE_M,
-        camera_info=DRONE_CAMERA_INFO,
-        world_frame="drone/world",
-        decode_hz=5.0,
-    ),
-    MarkerTfModule.blueprint(world_frame="drone/world"),
+    # VideoMarkerDetectionModule.blueprint(
+    #     marker_length_m=APRILTAG_EDGE_M,
+    #     camera_info=DRONE_CAMERA_INFO,
+    #     world_frame="drone/world",
+    #     decode_hz=5.0,
+    # ),
+    # MarkerTfModule.blueprint(world_frame="drone/world"),
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config={
             "blueprint": _rerun_blueprint,
             "visual_override": {
-                "world/camera_info": _camera_info_to_pinhole,
-                # The mixin's decoded frames ride the color_image topic (for
-                # any pixel consumer); the viewer already plays world/video.
-                "world/color_image": None,
+                "world/odometry_path": _fat_path,
+                **ground_frustum_override(FRUSTUM_CAMERA_INFO, image_topic="world/video"),
             },
+            "models": {"drone/base_link": shapes.quadcopter()},
         },
     ),
-).global_config(transport="zenoh", n_workers=6)
+).global_config(transport="zenoh", n_workers=7)
