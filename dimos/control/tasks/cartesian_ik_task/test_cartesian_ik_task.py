@@ -34,6 +34,7 @@ from dimos.control.tasks.cartesian_ik_task.pink_control_ik import (
 )
 from dimos.control.tasks.eef_twist_task.eef_twist_task import create_task as _eef_create_task
 from dimos.control.tasks.registry import control_task_registry
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
@@ -44,9 +45,20 @@ def _robot(path: Path) -> RobotModelConfig:
         model_path=path,
         base_pose=PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]),
         joint_names=["joint1"],
-        end_effector_link="tool",
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator",
+                joint_names=("joint1",),
+                base_link="base",
+                tip_link="tool",
+            )
+        ],
         home_joints=[0.0],
     )
+
+
+def _pink_config(path: Path) -> PinkControlIKConfig:
+    return PinkControlIKConfig.model_validate({"robot_model": _robot(path)})
 
 
 def _state(t_now: float, dt: float = 0.01) -> CoordinatorState:
@@ -80,7 +92,7 @@ def test_cartesian_pipeline_passes_se3_target_and_bounded_dt(
         "cartesian",
         CartesianIKTaskConfig(
             joint_names=["joint1"],
-            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
+            control_ik=_pink_config(tmp_path / "unused.urdf"),
             min_dt=0.01,
             max_dt=0.05,
         ),
@@ -109,7 +121,7 @@ def test_cartesian_pipeline_rejects_invalid_quaternion_with_hold(
         "cartesian",
         CartesianIKTaskConfig(
             joint_names=["joint1"],
-            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
+            control_ik=_pink_config(tmp_path / "unused.urdf"),
         ),
     )
     assert task.on_cartesian_command(PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 0]), 1.0)
@@ -141,6 +153,7 @@ class BlockPink:
 sys.meta_path.insert(0, BlockPink())
 import dimos.control.tasks.cartesian_ik_task.cartesian_ik_task
 import dimos.control.tasks.eef_twist_task.eef_twist_task
+import dimos.control.tasks.teleop_task.teleop_task
 """
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
 
@@ -154,13 +167,19 @@ def test_pink_factories_fail_actionably_when_pink_is_absent(
     params = {"control_ik": {"robot_model": robot}}
     monkeypatch.setattr(pink_control_ik, "pink", None)
 
-    for task_type in ("cartesian_ik", "eef_twist"):
-        config = TaskConfig(name=task_type, type=task_type, joint_names=["joint1"], params=params)
+    for task_type in ("cartesian_ik", "eef_twist", "teleop_ik"):
+        task_params = {**params, **({"hand": "right"} if task_type == "teleop_ik" else {})}
+        config = TaskConfig(
+            name=task_type,
+            type=task_type,
+            joint_names=["joint1"],
+            params=task_params,
+        )
         with pytest.raises(ModuleNotFoundError, match="uv sync --extra manipulation"):
-            if task_type == "cartesian_ik":
-                control_task_registry.create("cartesian_ik", config, hardware={})
-            else:
+            if task_type == "eef_twist":
                 _eef_create_task(config, {})
+            else:
+                control_task_registry.create(task_type, config, hardware={})
 
 
 def test_cartesian_runtime_error_is_a_measured_state_hold(
@@ -180,7 +199,7 @@ def test_cartesian_runtime_error_is_a_measured_state_hold(
         "cartesian",
         CartesianIKTaskConfig(
             joint_names=["joint1"],
-            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
+            control_ik=_pink_config(tmp_path / "unused.urdf"),
         ),
     )
     assert task.on_cartesian_command(PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]), 1.0)
