@@ -24,6 +24,21 @@ all, and never drops. This module replays that SDK handshake (captured off the
 wire with usbmon) so we get the SDK's gap-free 800 Hz stream with no SDK, no
 CUDA, and no ping thread.
 
+On Linux (hidraw) the full 800 Hz arrives regardless of topology. On Apple
+Silicon Macs, plugged straight into a root port, only ~533 Hz arrives: the XHCI
+under-services full-speed interrupt endpoints, silently losing ~1/3 of reports
+below hidapi (the device still samples at 800 Hz — its MCU ticks stay a clean
+1.25 ms apart). Neither hidapi, direct IOHIDManager reads, nor forcing the
+IOKit ``ReportInterval`` property recovers the loss; it happens in the kernel.
+This is a known M-series quirk, not specific to the ZED: full-speed
+``bInterval=1`` devices cap at ~500 Hz on Apple Silicon but reach 1000 Hz on
+Intel Macs and Windows (https://github.com/hathach/tinyusb/issues/1705).
+
+Workaround: plug the ZED through a USB hub. The hub's transaction translator
+(see e.g. https://blog.adafruit.com/2025/11/03/a-usb-2-hub-with-per-port-power-and-mtt/)
+schedules full-speed polls on a strict 1 ms frame cadence, restoring the full
+rate — measured 795 Hz, gap-free, behind a USB 3.0 hub.
+
 Wire format and scale constants come from ``zed-open-capture``'s ``RawData``
 struct (packed, little-endian, no report-id prefix on the ZED-M): the IMU is
 ±8 g / ±1000 deg/s over int16, timestamped in 39.0625 µs MCU ticks. Factory
