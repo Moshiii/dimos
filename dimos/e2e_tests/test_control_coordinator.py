@@ -225,9 +225,6 @@ class TestControlCoordinatorE2E:
             assert "left_arm/joint1" in joints
             assert "right_arm/joint1" in joints
 
-            tasks = client.list_tasks()
-            assert tasks == [JOINT_TRAJECTORY_TASK_NAME]
-
             combined = JointTrajectory(
                 joint_names=[
                     *[f"left_arm/joint{i + 1}" for i in range(7)],

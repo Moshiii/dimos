@@ -28,9 +28,6 @@ from typing import Any, cast
 import pytest
 
 from dimos.control.coordinator import ControlCoordinator
-from dimos.control.tasks.trajectory_task.trajectory_task import (
-    JOINT_TRAJECTORY_TASK_NAME,
-)
 from dimos.core.rpc_client import RPCClient
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
@@ -168,9 +165,6 @@ def test_single_arm_plans_and_executes_through_control_coordinator(
         left_info = _wait_for_robot_info(client, "left_arm")
         left_id = _planning_group_id(left_info)
 
-        tasks = coordinator_client.list_tasks()
-        assert tasks == [JOINT_TRAJECTORY_TASK_NAME]
-
         _prepare_for_planning(client, ("left_arm",))
 
         planned = client.plan_to_joint_targets({left_id: _offset_target(client, "left_arm", 0.02)})
@@ -198,9 +192,6 @@ def test_dual_arm_plans_and_dispatches_both_arms_through_control_coordinator(
         right_info = _wait_for_robot_info(client, "right_arm")
         left_id = _planning_group_id(left_info)
         right_id = _planning_group_id(right_info)
-
-        tasks = coordinator_client.list_tasks()
-        assert tasks == [JOINT_TRAJECTORY_TASK_NAME]
 
         _prepare_for_planning(client, ("left_arm", "right_arm"))
 

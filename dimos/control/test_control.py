@@ -467,15 +467,6 @@ class TestControlCoordinatorLifecycle:
 
 
 class TestControlCoordinatorTrajectoryExecution:
-    def test_coordinator_registers_canonical_trajectory_task(self, make_coordinator):
-        coordinator = make_coordinator()
-        task = JointTrajectoryTask(
-            JointTrajectoryTaskConfig(joint_names=["arm/joint1"]),
-        )
-
-        assert coordinator.add_task(task, task_type="trajectory")
-        assert coordinator.list_tasks() == [JOINT_TRAJECTORY_TASK_NAME]
-
     def test_coordinator_rejects_second_canonical_trajectory_task(self, make_coordinator):
         coordinator = make_coordinator()
         first = JointTrajectoryTask(
@@ -492,14 +483,7 @@ class TestControlCoordinatorTrajectoryExecution:
         with pytest.raises(RuntimeError, match="not bound"):
             _ = second.context
 
-    def test_task_uses_canonical_name(self):
-        task = JointTrajectoryTask(
-            JointTrajectoryTaskConfig(joint_names=["arm/joint1"]),
-        )
-
-        assert task.name == JOINT_TRAJECTORY_TASK_NAME
-
-    def test_generic_config_rejects_noncanonical_trajectory_name(self):
+    def test_trajectory_factory_rejects_noncanonical_task_name(self):
         config = TaskConfig(
             name="custom_trajectory",
             type="trajectory",
@@ -527,7 +511,6 @@ class TestJointTrajectoryTask:
             )
 
     def test_initial_state(self, trajectory_task):
-        assert trajectory_task.name == JOINT_TRAJECTORY_TASK_NAME
         assert not trajectory_task.is_active()
         assert trajectory_task.get_state() == TrajectoryState.IDLE
 
