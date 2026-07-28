@@ -190,7 +190,7 @@ def _log_reconstruction(
     if global_map is not None:
         rr.log(
             "world/raw_map/pointcloud",
-            global_map.to_rerun(voxel_size=voxel / 2, bottom_cutoff=bottom_cutoff),
+            global_map.to_rerun(voxel_size=voxel / 2, bottom_cutoff=bottom_cutoff, in_frame=False),
             static=True,
         )
     if path:
@@ -202,13 +202,15 @@ def _log_reconstruction(
     if pgo_map is not None:
         rr.log(
             "world/pgo_map/pointcloud",
-            pgo_map.to_rerun(voxel_size=voxel / 2, bottom_cutoff=bottom_cutoff),
+            pgo_map.to_rerun(voxel_size=voxel / 2, bottom_cutoff=bottom_cutoff, in_frame=False),
             static=True,
         )
     if full_pgo_map is not None:
         rr.log(
             "world/full_pgo_map/pointcloud",
-            full_pgo_map.to_rerun(voxel_size=voxel / 2, bottom_cutoff=bottom_cutoff),
+            full_pgo_map.to_rerun(
+                voxel_size=voxel / 2, bottom_cutoff=bottom_cutoff, in_frame=False
+            ),
             static=True,
         )
     if pgo_path:

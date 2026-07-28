@@ -73,9 +73,15 @@ def render_store(
             return name
         return base if name == base.rsplit("/", 1)[-1] else f"{base}/{name}"
 
+    from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
+    from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+    from dimos.msgs.sensor_msgs.Image import Image
+    from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+
     # Discover renderable streams (payload has a working to_rerun) + shared anchor.
     renderable = []
     t0: float | None = None
+    image_entity: dict[str, str] = {}  # frame_id -> entity of an image/video stream
     for name in store.list_streams():
         stream = store.streams[name]
         try:
@@ -91,15 +97,45 @@ def render_store(
         except Exception as e:
             print(f"  skip {name}: to_rerun() failed ({e})")
             continue
+        if isinstance(data, (Image, CompressedVideo)) and data.frame_id:
+            image_entity[data.frame_id] = entity(name)
         renderable.append((name, stream))
         t0 = first.ts if t0 is None else min(t0, first.ts)
+
+    # A Pinhole only projects its own entity and children, so log a CameraInfo
+    # stream onto the image/video entity sharing its frame_id.
+    redirect = {
+        name: image_entity[stream.first().data.frame_id]
+        for name, stream in renderable
+        if isinstance(stream.first().data, CameraInfo)
+        and stream.first().data.frame_id in image_entity
+    }
 
     if t0 is None:
         print("nothing renderable in this store")
         return out
 
+    # Fuse the recorded tf tree into the scene: frames only resolve if connected
+    # to the render root's frame (tf#/), so hang each tf root frame (a parent
+    # that is never a child) off it with a static identity edge.
+    parents: set[str] = set()
+    tf_children: set[str] = set()
+    for _, stream in renderable:
+        if isinstance(stream.first().data, TFMessage):
+            for obs in stream:
+                for t in obs.data:
+                    parents.add(t.frame_id)
+                    tf_children.add(t.child_frame_id)
+
     rerun_init("dimos mem rerun")
     rr.save(out)
+
+    for tf_root in sorted(parents - tf_children):
+        rr.log(
+            f"tf_root/{tf_root}",
+            rr.Transform3D(parent_frame="tf#/", child_frame=f"tf#/{tf_root}"),
+            static=True,
+        )
 
     for name, stream in renderable:
         with progress(stream.count(), label=name) as report:
@@ -111,7 +147,7 @@ def render_store(
                     continue
                 rr.set_time("time", duration=obs.ts - t0)
                 data = obs.data.to_rerun()
-                path = entity(name)
+                path = redirect.get(name) or entity(name)
                 if isinstance(data, list):  # RerunMulti: [(subpath, archetype), ...]
                     for sub, arch in data:
                         rr.log(f"{path}/{sub}", arch)

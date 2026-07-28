@@ -23,14 +23,14 @@ URI grammar::
     <proto>:<topic>[#<msg_type>]
 
 - ``<proto>``: registry key, e.g. ``lcm``, ``jpeg_lcm``, ``plcm``, ``pshm``,
-  ``shm``, ``jpeg_shm``.
+  ``shm``, ``jpeg_shm``, ``zenoh``, ``pzenoh``.
 - ``<topic>``: channel/key, passed verbatim to the transport constructor.
 - ``<msg_type>``: optional ``module.ClassName`` resolved via
   ``dimos.msgs.helpers.resolve_msg_type`` (e.g. ``sensor_msgs.Image``).
 
-Typed protos (``lcm``, ``jpeg_lcm``) require a message type — either from the
-``#``-suffix or the ``msg_type`` kwarg. Pickled / self-describing protos
-(``plcm``, ``pshm``, ``shm``, ``jpeg_shm``) don't.
+Typed protos (``lcm``, ``jpeg_lcm``, ``zenoh``) require a message type — either
+from the ``#``-suffix or the ``msg_type`` kwarg. Pickled / self-describing
+protos (``plcm``, ``pshm``, ``shm``, ``jpeg_shm``, ``pzenoh``) don't.
 """
 
 from __future__ import annotations
@@ -89,6 +89,21 @@ def _make_jpeg_shm(topic: str, msg_type: type | None) -> Any:
     return JpegShmTransport(topic)
 
 
+def _make_zenoh(topic: str, msg_type: type | None) -> Any:
+    if msg_type is None:
+        raise ValueError("proto 'zenoh' requires a message type (URI '#suffix' or msg_type kwarg)")
+    from dimos.core.transport import ZenohTransport
+
+    return ZenohTransport(topic, msg_type)
+
+
+def _make_pzenoh(topic: str, msg_type: type | None) -> Any:
+    # pickled zenoh: receivers unpickle Python objects, no type registration needed.
+    from dimos.core.transport import pZenohTransport
+
+    return pZenohTransport(topic)
+
+
 _REGISTRY: dict[str, Callable[[str, type | None], Any]] = {
     "lcm": _make_lcm,
     "jpeg_lcm": _make_jpeg_lcm,
@@ -96,6 +111,8 @@ _REGISTRY: dict[str, Callable[[str, type | None], Any]] = {
     "pshm": _make_pshm,
     "shm": _make_shm,
     "jpeg_shm": _make_jpeg_shm,
+    "zenoh": _make_zenoh,
+    "pzenoh": _make_pzenoh,
 }
 
 

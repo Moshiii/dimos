@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from dimos_lcm.foxglove_msgs import CompressedVideo as LCMCompressedVideo
 import numpy as np
 
+from dimos.msgs.in_frame import framed
 from dimos.types.timestamped import Timestamped
 
 if TYPE_CHECKING:
@@ -98,7 +99,7 @@ class CompressedVideo(Timestamped):
         codec = codecs.get(self.format.lower())
         if codec is None:
             raise ValueError(f"no rerun VideoCodec for format {self.format!r}")
-        return rr.VideoStream(codec, sample=self.data.tobytes())
+        return framed(rr.VideoStream(codec, sample=self.data.tobytes()), self.frame_id)
 
     def __repr__(self) -> str:
         return (

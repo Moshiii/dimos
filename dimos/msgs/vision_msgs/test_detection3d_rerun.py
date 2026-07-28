@@ -19,6 +19,7 @@ import rerun as rr
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.in_frame import InFrame
 from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.vision_msgs.Detection3D import Detection3D
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
@@ -66,9 +67,12 @@ def test_detection3darray_to_rerun_preserves_wire_pose_size_and_identity() -> No
         detections_length=1,
     )
 
-    boxes = msg.to_rerun()
+    framed = msg.to_rerun()
 
     assert msg.frame_id == "world"
+    assert isinstance(framed, InFrame)
+    assert framed.frame_id == "world"
+    boxes = framed.archetypes[0]
     assert isinstance(boxes, rr.Boxes3D)
     assert boxes.centers.as_arrow_array().to_pylist() == [[1.0, 2.0, 3.0]]
     assert boxes.half_sizes.as_arrow_array().to_pylist()[0] == pytest.approx([0.1, 0.2, 0.0])
@@ -85,8 +89,10 @@ def test_detection3darray_to_rerun_empty_array_is_safe() -> None:
         detections_length=0,
     )
 
-    boxes = msg.to_rerun()
+    framed = msg.to_rerun()
 
+    assert isinstance(framed, InFrame)
+    boxes = framed.archetypes[0]
     assert isinstance(boxes, rr.Boxes3D)
     assert boxes.centers.as_arrow_array().to_pylist() == []
     assert boxes.labels.as_arrow_array().to_pylist() == []

@@ -73,7 +73,9 @@ def _log_clouds(
             rr.set_time(TIMELINE, timestamp=obs.ts)
             rr.log(
                 entity,
-                obs.data.to_rerun(voxel_size=voxel, mode=point_mode, bottom_cutoff=bottom_cutoff),
+                obs.data.to_rerun(
+                    voxel_size=voxel, mode=point_mode, bottom_cutoff=bottom_cutoff, in_frame=False
+                ),
             )
 
 
@@ -204,7 +206,7 @@ def main(
 
         # Static pinhole on the camera entity; per-frame Transform3D goes on the
         # same entity. Image is the child so it projects through the pinhole.
-        pinhole = cam_info.to_rerun()
+        pinhole = cam_info.to_rerun(in_frame=False)
         assert not isinstance(pinhole, list)
         rr.log("world/camera", pinhole, static=True)
 
@@ -269,7 +271,10 @@ def main(
                     rr.log(
                         f"world/{name}_map",
                         final.data.to_rerun(
-                            voxel_size=voxel / 4, mode=point_mode, bottom_cutoff=bottom_cutoff
+                            voxel_size=voxel / 4,
+                            mode=point_mode,
+                            bottom_cutoff=bottom_cutoff,
+                            in_frame=False,
                         ),
                         static=True,
                     )
@@ -378,7 +383,7 @@ def main(
                             translation=[x, y, z], quaternion=rr.Quaternion(xyzw=[qx, qy, qz, qw])
                         ),
                     )
-                rr.log("world/camera/image", img_obs.data.to_rerun())
+                rr.log("world/camera/image", img_obs.data.to_rerun(in_frame=False))
 
     print(f"wrote {out}")
     # dimos-viewer, not stock rerun: the tf tree rides the fork's named

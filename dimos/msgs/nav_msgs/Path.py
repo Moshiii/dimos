@@ -27,6 +27,7 @@ from dimos_lcm.nav_msgs import Path as LCMPath
 from dimos_lcm.std_msgs import Header as LCMHeader, Time as LCMTime
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
 
 if TYPE_CHECKING:
@@ -193,7 +194,8 @@ class Path(Timestamped):
         color: tuple[int, int, int] = (0, 255, 128),
         z_offset: float = 0.5,
         radii: float = 0.05,
-    ) -> Archetype:
+        in_frame: bool = True,
+    ) -> Archetype | InFrame:
         """Convert to rerun LineStrips3D format.
 
         Args:
@@ -211,4 +213,6 @@ class Path(Timestamped):
 
         # Lift path above floor so it's visible over costmap
         points = [[p.x, p.y, p.z + z_offset] for p in self.poses]
-        return rr.LineStrips3D([points], colors=[color], radii=radii)
+        return framed(
+            rr.LineStrips3D([points], colors=[color], radii=radii), self.frame_id, in_frame
+        )

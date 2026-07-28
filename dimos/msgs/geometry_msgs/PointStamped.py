@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from dimos_lcm.geometry_msgs import PointStamped as LCMPointStamped
 
 from dimos.msgs.geometry_msgs.Point import Point
+from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
 
 
@@ -76,11 +77,11 @@ class PointStamped(Point, Timestamped):
 
     # -- Conversion methods --
 
-    def to_rerun(self) -> Archetype:
+    def to_rerun(self) -> Archetype | InFrame:
         """Convert to rerun Points3D archetype for visualization."""
         import rerun as rr
 
-        return rr.Points3D(positions=[[self.x, self.y, self.z]])
+        return framed(rr.Points3D(positions=[[self.x, self.y, self.z]]), self.frame_id)
 
     def to_pose_stamped(self) -> PoseStamped:
         """Convert to PoseStamped with identity quaternion orientation."""

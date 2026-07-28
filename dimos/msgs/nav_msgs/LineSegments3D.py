@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, BinaryIO
 
 from dimos_lcm.nav_msgs import Path as LCMPath
 
+from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
 
 if TYPE_CHECKING:
@@ -86,7 +87,7 @@ class LineSegments3D(Timestamped):
         z_offset: float = 1.7,
         color: tuple[int, int, int, int] = (0, 255, 150, 255),
         radii: float = 0.04,
-    ) -> Archetype:
+    ) -> Archetype | InFrame:
         """Render as ``rr.LineStrips3D`` — color-coded by traversability.
 
         Green = traversable (reachable from robot), red = non-traversable.
@@ -113,11 +114,12 @@ class LineSegments3D(Timestamped):
             else:
                 colors.append((255, 50, 50, 150))  # red = non-traversable
 
-        return rr.LineStrips3D(
+        segments = rr.LineStrips3D(
             strips,
             colors=colors,
             radii=[radii] * len(strips),
         )
+        return framed(segments, self.frame_id)
 
     def __len__(self) -> int:
         return len(self._segments)

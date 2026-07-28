@@ -62,13 +62,12 @@ class OdometryTracer(Tracer):
 
 
 def _camera_info_to_pinhole(msg: Any) -> Any:
-    """Pinhole onto the video entity, hung on the optical tf frame.
+    """Pinhole onto the video entity, which it must share to project it.
 
-    Same trick as the go2 city blueprint: the pinhole must land on the
-    video's own entity to project it, and parenting it to the tf frame
-    poses the frustum in the world view.
+    No ``optical_frame``: the video self-binds to its tf frame, a second
+    parent would conflict.
     """
-    return msg.to_rerun(image_topic="world/video", optical_frame=msg.frame_id)
+    return msg.to_rerun(image_topic="world/video")
 
 
 def _rerun_blueprint() -> Any:

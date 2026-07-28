@@ -29,6 +29,7 @@ import reactivex as rx
 from reactivex import operators as ops
 import rerun as rr
 
+from dimos.msgs.in_frame import framed
 from dimos.types.timestamped import Timestamped, TimestampedBufferCollection, to_human_readable
 from dimos.utils.reactive import quality_barrier
 
@@ -307,15 +308,20 @@ class Image(Timestamped):
             )
         raise ValueError(f"Unsupported format: {self.format}")
 
-    def to_rerun(self) -> Any:
-        """Convert to a Rerun archetype: JPEG-encoded for color images, raw for depth."""
+    def to_rerun(self, in_frame: bool = True) -> Any:
+        """Convert to a Rerun archetype: JPEG-encoded for color images, raw for depth.
+
+        ``in_frame=False`` skips the tf-frame binding, for consumers that
+        position the entity by path hierarchy instead.
+        """
         match self.format:
             case ImageFormat.DEPTH | ImageFormat.DEPTH16:
-                return rr.DepthImage(self.data)
+                archetype: Any = rr.DepthImage(self.data)
             case ImageFormat.GRAY16:
-                return rr.Image(self.data, color_model="L")
+                archetype = rr.Image(self.data, color_model="L")
             case _:
-                return rr.EncodedImage(contents=self.to_jpeg_bytes(), media_type="image/jpeg")
+                archetype = rr.EncodedImage(contents=self.to_jpeg_bytes(), media_type="image/jpeg")
+        return framed(archetype, self.frame_id, in_frame)
 
     def resize(self, width: int, height: int, interpolation: int = cv2.INTER_LINEAR) -> Image:
         return Image(

@@ -71,7 +71,7 @@ def main(
 
     # Static pinhole on the camera entity; per-frame Transform3D goes on the
     # same entity. Image is the child so it projects through the pinhole.
-    pinhole = cam_info.to_rerun()
+    pinhole = cam_info.to_rerun(in_frame=False)
     assert not isinstance(pinhole, list)
     rr.log("world/camera", pinhole, static=True)
 
@@ -105,7 +105,7 @@ def main(
                         translation=[x, y, z], quaternion=rr.Quaternion(xyzw=[qx, qy, qz, qw])
                     ),
                 )
-            rr.log("world/camera/image", img_obs.data.to_rerun())
+            rr.log("world/camera/image", img_obs.data.to_rerun(in_frame=False))
             # Clear any prior detection box at this ts; pass 3 will overwrite
             # this with the actual detection iff one fires for this frame.
             rr.log(

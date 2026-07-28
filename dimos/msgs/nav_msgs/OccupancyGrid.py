@@ -30,6 +30,7 @@ from PIL import Image
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Vector3 import Vector3, VectorLike
+from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
 
 
@@ -486,7 +487,8 @@ class OccupancyGrid(Timestamped):
         cost_range: tuple[int, int] | None = None,
         background: str | None = None,
         color_lookup_table: np.ndarray | None = None,
-    ) -> Archetype:
+        in_frame: bool = True,
+    ) -> Archetype | InFrame:
         """Convert to 3D textured mesh overlay on floor plane.
 
         Uses a single quad with the occupancy grid as a texture.
@@ -553,9 +555,10 @@ class OccupancyGrid(Timestamped):
             dtype=np.float32,
         )
 
-        return rr.Mesh3D(
+        mesh = rr.Mesh3D(
             vertex_positions=vertices,
             triangle_indices=indices,
             vertex_texcoords=texcoords,
             albedo_texture=rgba,
         )
+        return framed(mesh, self.frame_id, in_frame)

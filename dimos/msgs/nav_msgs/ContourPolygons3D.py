@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, BinaryIO
 
 from dimos_lcm.sensor_msgs import PointCloud2 as LCMPointCloud2
 
+from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
 
 if TYPE_CHECKING:
@@ -100,7 +101,7 @@ class ContourPolygons3D(Timestamped):
         z_offset: float = 0.0,
         color: tuple[int, int, int, int] = (220, 30, 30, 255),
         radii: float = 0.08,
-    ) -> Archetype:
+    ) -> Archetype | InFrame:
         """Render polygon outlines as ``rr.LineStrips3D`` closed loops.
 
         ``z_offset`` is the *absolute* render height — the source point's z
@@ -131,11 +132,12 @@ class ContourPolygons3D(Timestamped):
         if not strips:
             return rr.LineStrips3D([])
 
-        return rr.LineStrips3D(
+        polygons = rr.LineStrips3D(
             strips,
             colors=[color] * len(strips),
             radii=[radii] * len(strips),
         )
+        return framed(polygons, self.frame_id)
 
     def __str__(self) -> str:
         n = len(self._parse_xyzi())

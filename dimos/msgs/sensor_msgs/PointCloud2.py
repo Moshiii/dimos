@@ -30,6 +30,7 @@ import open3d.core as o3c  # type: ignore[import-untyped]
 
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
 
 if TYPE_CHECKING:
@@ -692,8 +693,9 @@ class PointCloud2(Timestamped):
         mode: str = "spheres",
         fill_mode: str = "solid",
         bottom_cutoff: float | None = None,
+        in_frame: bool = True,
         **kwargs: object,
-    ) -> Archetype:
+    ) -> Archetype | InFrame:
         """Convert to Rerun archetype for visualization.
 
         Args:
@@ -729,13 +731,14 @@ class PointCloud2(Timestamped):
             z = points[:, 2]
             class_ids = ((z - z.min()) / (z.max() - z.min() + 1e-8) * 255).astype(np.uint8)
 
+        archetype: Archetype
         if mode == "points":
-            return rr.Points3D(
+            archetype = rr.Points3D(
                 positions=points, colors=point_colors, class_ids=class_ids, radii=voxel_size / 2
             )
         elif mode == "boxes":
             half = voxel_size / 2
-            return rr.Boxes3D(
+            archetype = rr.Boxes3D(
                 centers=points,
                 half_sizes=[half, half, half],
                 colors=point_colors,
@@ -743,12 +746,13 @@ class PointCloud2(Timestamped):
                 fill_mode=fill_mode,  # type: ignore[arg-type]
             )
         else:
-            return rr.Points3D(
+            archetype = rr.Points3D(
                 positions=points,
                 radii=voxel_size / 2,
                 colors=point_colors,
                 class_ids=class_ids,
             )
+        return framed(archetype, self.frame_id, in_frame)
 
     def filter_by_height(
         self,

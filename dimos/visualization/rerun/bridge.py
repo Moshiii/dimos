@@ -44,6 +44,7 @@ from toolz import pipe  # type: ignore[import-untyped]
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
+from dimos.msgs.in_frame import InFrame
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.zenohpubsub import Zenoh
 from dimos.protocol.pubsub.patterns import Glob, pattern_matches
@@ -78,35 +79,21 @@ from dimos.visualization.rerun.init import rerun_init
 #
 # as well as pubsubs={} to specify which protocols to listen to.
 
-# TODO better TF processing
-#
-# this is rerun bridge specific, rerun has a specific (better) way of handling TFs
-# using entity path conventions, each of these nodes in a path are TF frames:
-#
-# /world/robot1/base_link/camera/optical
-#
-# While here since we are just listening on TFMessage messages which optionally contain
-# just a subset of full TF tree we don't know the full tree structure to build full entity
-# path for a transform being published
-#
-# This is easy to reconstruct but a service/tf.py already does this so should be integrated here
-#
-# we have decoupled entity paths and actual transforms (like ROS TF frames)
+# TF handling: named transform frames
 # https://rerun.io/docs/concepts/logging-and-ingestion/transforms
 #
-# tf#/world
-# tf#/base_link
-# tf#/camera
-#
-# In order to solve this, bridge needs to own it's own tf service
-# and render it's tf tree into correct rerun entity paths
+# Entity paths stay topic-shaped (world/color_image); spatial relationships live
+# in rerun's named-frame graph, which rerun recommends for ROS-style tf data.
+# TFMessage logs the frame edges (Transform3D parent_frame/child_frame), and each
+# message's to_rerun() binds its entity to its frame_id via InFrame
+# — fragments compose in the viewer, no tf-tree reconstruction needed here.
 
 logger = setup_logger()
 
 BlueprintFactory: TypeAlias = Callable[[], "Blueprint"]
 
 RerunMulti: TypeAlias = "list[tuple[str, Archetype]]"
-RerunData: TypeAlias = "Archetype | RerunMulti"
+RerunData: TypeAlias = "Archetype | InFrame | RerunMulti"
 
 
 def is_rerun_multi(data: Any) -> TypeGuard[RerunMulti]:
@@ -256,7 +243,6 @@ class RerunBridgeModule(Module):
         super().__init__(**kwargs)
         self._last_log = {}
         self._override_cache: dict[str, Callable[[Any], RerunData | None]] = {}
-        self._frame_attached: dict[str, str] = {}
 
     @property
     def host(self) -> str:
@@ -291,7 +277,7 @@ class RerunBridgeModule(Module):
             return suppressed
 
         def final_convert(msg: Any) -> RerunData | None:
-            if isinstance(msg, Archetype):
+            if isinstance(msg, (Archetype, InFrame)):
                 return msg
             if is_rerun_multi(msg):
                 return msg
@@ -339,19 +325,14 @@ class RerunBridgeModule(Module):
         if not rerun_data:
             return
 
-        # TFMessage for example returns list of (entity_path, archetype) tuples
+        # TFMessage for example returns list of (entity_path, archetype) tuples.
+        # TF-frame binding is the message's own job: a to_rerun() returning
+        # InFrame carries its frame attach along, no bridge logic needed.
         if is_rerun_multi(rerun_data):
             for path, archetype in rerun_data:
                 rr.log(path, archetype)
         else:
             rr.log(entity_path, cast("Archetype", rerun_data))
-            # if source msg carries a frame_id, attach the entity to that TF frame
-            # should skip if archetype is a Transform3D
-            if not isinstance(rerun_data, rr.Transform3D):
-                frame_id = getattr(msg, "frame_id", None)
-                if frame_id and self._frame_attached.get(entity_path) != frame_id:
-                    rr.log(entity_path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))
-                    self._frame_attached[entity_path] = frame_id
 
     @rpc
     def start(self) -> None:
@@ -360,7 +341,6 @@ class RerunBridgeModule(Module):
         logger.info("Rerun bridge starting")
 
         self._last_log = {}
-        self._frame_attached = {}
         self._min_intervals: dict[str, float] = {
             entity: 1.0 / hz for entity, hz in self.config.max_hz.items() if hz > 0
         }
@@ -584,7 +564,6 @@ class RerunBridgeModule(Module):
     @rpc
     def stop(self) -> None:
         self._override_cache.clear()
-        self._frame_attached.clear()
         super().stop()
 
 

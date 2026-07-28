@@ -164,7 +164,7 @@ def leg_odom(store: Go2McapStore, seconds: float | None) -> None:
 
     def log_path(obs: Observation[Path]) -> None:
         rr.set_time("time", timestamp=obs.ts)
-        rr.log("world/leg_odom_path", obs.data.to_rerun())
+        rr.log("world/leg_odom_path", obs.data.to_rerun(in_frame=False))
 
     src = store.streams.sportmodestate.to_time(seconds)
     with progress(src.count(), "leg_odom") as bar:
@@ -184,7 +184,7 @@ def imu_odom(store: Go2McapStore, seconds: float | None) -> None:
 
     def log_path(obs: Observation[Path]) -> None:
         rr.set_time("time", timestamp=obs.ts)
-        rr.log("world/imu_odom_path", obs.data.to_rerun(color=(220, 90, 90)))
+        rr.log("world/imu_odom_path", obs.data.to_rerun(color=(220, 90, 90), in_frame=False))
 
     gravity = gravity_bias(store)  # calibrate gravity+bias on the stationary start
     src = store.streams.imu.to_time(seconds)
@@ -205,7 +205,7 @@ def lidar(store: Go2McapStore, seconds: float | None) -> None:
 
     def log_lidar(obs: Observation[PointCloud2]) -> None:
         rr.set_time("time", timestamp=obs.ts)
-        rr.log("world/leg_odom/lidar", obs.data.to_rerun())
+        rr.log("world/leg_odom/lidar", obs.data.to_rerun(in_frame=False))
 
     src = store.streams.lidar.to_time(seconds)
     rr.log("world/leg_odom/lidar", LIDAR_TO_BASE.to_rerun(frameless=True), static=True)
@@ -252,7 +252,7 @@ def world_lidar(store: Go2McapStore, seconds: float | None) -> None:
 
     def log_voxels(obs: Observation[PointCloud2]) -> None:
         rr.set_time("time", timestamp=obs.ts)
-        rr.log("world/world_lidar", obs.data.to_rerun())
+        rr.log("world/world_lidar", obs.data.to_rerun(in_frame=False))
 
     src = store.streams.lidar.to_time(seconds)
     with progress(src.count(), "world_lidar") as bar:
@@ -276,7 +276,7 @@ def camera(store: Go2McapStore, seconds: float | None, hz: float) -> None:
         if obs.data is None:  # truncated/corrupt frame
             return
         rr.set_time("time", timestamp=obs.ts)
-        rr.log("world/camera", obs.data.to_rerun())
+        rr.log("world/camera", obs.data.to_rerun(in_frame=False))
 
     src = store.streams.color_image.to_time(seconds)
     with progress(src.count(), "camera") as bar:

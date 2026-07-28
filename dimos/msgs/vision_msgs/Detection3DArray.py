@@ -15,6 +15,7 @@ from typing import Any
 
 from dimos_lcm.vision_msgs.Detection3DArray import Detection3DArray as LCMDetection3DArray
 
+from dimos.msgs.in_frame import framed
 from dimos.types.timestamped import to_timestamp
 
 
@@ -59,12 +60,13 @@ class Detection3DArray(LCMDetection3DArray):  # type: ignore[misc]
             )
             labels.append(_label_for_detection(detection))
 
-        return rr.Boxes3D(
+        boxes = rr.Boxes3D(
             centers=centers,
             half_sizes=half_sizes,
             quaternions=quaternions,
             labels=labels,
         )
+        return framed(boxes, self.frame_id)
 
 
 def _label_for_detection(detection: Any) -> str:

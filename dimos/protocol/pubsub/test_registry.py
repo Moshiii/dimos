@@ -21,8 +21,10 @@ from dimos.core.transport import (
     JpegShmTransport,
     LCMTransport,
     SHMTransport,
+    ZenohTransport,
     pLCMTransport,
     pSHMTransport,
+    pZenohTransport,
 )
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.protocol.pubsub.registry import (
@@ -35,7 +37,16 @@ from dimos.protocol.pubsub.registry import (
 
 def test_supported_protos_includes_known_set() -> None:
     """Registry exposes the canonical proto names."""
-    assert set(supported_protos()) >= {"lcm", "jpeg_lcm", "plcm", "pshm", "shm", "jpeg_shm"}
+    assert set(supported_protos()) >= {
+        "lcm",
+        "jpeg_lcm",
+        "plcm",
+        "pshm",
+        "shm",
+        "jpeg_shm",
+        "zenoh",
+        "pzenoh",
+    }
 
 
 @pytest.mark.parametrize(
@@ -53,6 +64,8 @@ def test_supported_protos_includes_known_set() -> None:
             "jpeg_lcm:/color_image#sensor_msgs.Image",
             ("jpeg_lcm", "/color_image", "sensor_msgs.Image"),
         ),
+        ("zenoh:/color_image", ("zenoh", "/color_image", None)),
+        ("pzenoh:/color_image", ("pzenoh", "/color_image", None)),
     ],
 )
 def test_parse_pubsub_uri_happy_paths(uri: str, expected: tuple[str, str, str | None]) -> None:
@@ -120,9 +133,24 @@ def test_make_pubsub_transport_jpeg_shm_uses_JpegShmTransport() -> None:
     assert isinstance(t, JpegShmTransport)
 
 
+def test_make_pubsub_transport_zenoh_uses_ZenohTransport() -> None:
+    t = make_pubsub_transport("zenoh:/color_image", msg_type=Image)
+    assert isinstance(t, ZenohTransport)
+
+
+def test_make_pubsub_transport_pzenoh_uses_pZenohTransport() -> None:
+    t = make_pubsub_transport("pzenoh:/anything")
+    assert isinstance(t, pZenohTransport)
+
+
 def test_make_pubsub_transport_typed_proto_without_msg_type_raises() -> None:
     with pytest.raises(ValueError, match="requires a message type"):
         make_pubsub_transport("lcm:/color_image")
+
+
+def test_make_pubsub_transport_zenoh_without_msg_type_raises() -> None:
+    with pytest.raises(ValueError, match="requires a message type"):
+        make_pubsub_transport("zenoh:/color_image")
 
 
 def test_make_pubsub_transport_uri_suffix_resolves_msg_type() -> None:

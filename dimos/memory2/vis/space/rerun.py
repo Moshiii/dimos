@@ -127,11 +127,11 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
     # Log elements
     if grids:
         for i, el in enumerate(grids):
-            rr.log(f"scene/map/{i}", el.to_rerun(), static=True)
+            rr.log(f"scene/map/{i}", el.to_rerun(in_frame=False), static=True)
 
     if pointclouds:
         for i, el in enumerate(pointclouds):
-            rr.log(f"scene/pointcloud/{i}", el.to_rerun(), static=True)
+            rr.log(f"scene/pointcloud/{i}", el.to_rerun(in_frame=False), static=True)
 
     if points:
         rr.log(
@@ -221,7 +221,7 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
         path = f"scene/cameras/{i}"
         rr.log(path, el.pose.to_rerun(), static=True)
         if el.camera_info:
-            pinhole = el.camera_info.to_rerun()
+            pinhole = el.camera_info.to_rerun(in_frame=False)
             assert not isinstance(pinhole, list)
             rr.log(path, pinhole, static=True)
         elif el.image:
@@ -233,7 +233,7 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
                 static=True,
             )
         if el.image:
-            rr.log(f"{path}/image", el.image.to_rerun(), static=True)
+            rr.log(f"{path}/image", el.image.to_rerun(in_frame=False), static=True)
 
     for i, obs in enumerate(observations):
         path = f"scene/observations/{i}"
@@ -258,10 +258,10 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
                 ),
                 static=True,
             )
-            rr.log(f"{path}/image", img.to_rerun(), static=True)
+            rr.log(f"{path}/image", img.to_rerun(in_frame=False), static=True)
         elif isinstance(data, PointCloud2):
             rr.log(path, ps.to_rerun(), static=True)
-            rr.log(f"{path}/pointcloud", data.to_rerun(), static=True)
+            rr.log(f"{path}/pointcloud", data.to_rerun(in_frame=False), static=True)
         elif isinstance(data, (int, float)):
             rr.log(
                 path,
@@ -316,7 +316,7 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
     for i, obs in enumerate(panels):
         img = _as_image(obs.data)
         if img is not None:
-            rr.log(f"scene/panels/{i}", img.to_rerun(), static=True)
+            rr.log(f"scene/panels/{i}", img.to_rerun(in_frame=False), static=True)
 
 
 def _as_image(data: Any) -> Any | None:

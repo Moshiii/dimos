@@ -385,16 +385,23 @@ class CameraInfo(Timestamped):
         # module doesn't implement this correctly
         image_topic: str | None = None,
         optical_frame: str | None = None,
+        in_frame: bool = True,
     ) -> RerunData:
         """Convert to Rerun Pinhole archetype for camera frustum visualization.
 
         Args:
             image_plane_distance: Distance to draw the image plane in the frustum
+            in_frame: Bind the pinhole entity to this message's tf frame
+                (``frame_id``). Set False for consumers that position the
+                entity by path hierarchy instead. Only applies without
+                ``image_topic``.
 
         Returns:
             rr.Pinhole archetype for logging to Rerun
         """
         import rerun as rr
+
+        from dimos.msgs.in_frame import framed
 
         # Extract intrinsics from K matrix
         # K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
@@ -412,7 +419,7 @@ class CameraInfo(Timestamped):
         # If no image topic is specified, We don't know which Image this CameraInfo refers to
         # return just the pinhole
         if not image_topic:
-            return rr.Pinhole(**pinhole_kwargs)
+            return framed(rr.Pinhole(**pinhole_kwargs), self.frame_id, in_frame)
 
         if optical_frame:
             # Re-parent the camera entity to the optical tf frame. Logging a

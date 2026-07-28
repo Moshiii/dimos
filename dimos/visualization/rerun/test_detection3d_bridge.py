@@ -21,6 +21,7 @@ import rerun as rr
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.in_frame import InFrame
 from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.vision_msgs.Detection3D import Detection3D
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
@@ -69,11 +70,12 @@ def test_detection3darray_bridge_attaches_topic_entity_to_message_frame() -> Non
     finally:
         bridge.stop()
 
-    assert mock_log.call_count == 2
-    assert mock_log.call_args_list[0].args[0] == "world/marker_detection/detections"
-    assert isinstance(mock_log.call_args_list[0].args[1], rr.Boxes3D)
-    assert mock_log.call_args_list[1].args[0] == "world/marker_detection/detections"
+    assert mock_log.call_count == 1
+    assert mock_log.call_args.args[0] == "world/marker_detection/detections"
 
-    transform = mock_log.call_args_list[1].args[1]
-    assert isinstance(transform, rr.Transform3D)
-    assert transform.parent_frame.as_arrow_array().to_pylist() == ["tf#/world"]
+    in_frame = mock_log.call_args.args[1]
+    assert isinstance(in_frame, InFrame)
+    assert in_frame.frame_id == "world"
+    assert isinstance(in_frame.archetypes[0], rr.Boxes3D)
+    descriptors = {str(b.component_descriptor()) for b in in_frame.as_component_batches()}
+    assert any("Transform3D:parent_frame" in d for d in descriptors)

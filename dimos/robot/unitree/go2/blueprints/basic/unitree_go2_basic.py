@@ -23,10 +23,8 @@ from dimos.visualization.vis_module import vis_module
 
 
 def _convert_camera_info(camera_info: Any) -> Any:
-    return camera_info.to_rerun(
-        image_topic="/world/color_image",
-        optical_frame="camera_optical",
-    )
+    # No optical_frame: the image self-binds to its tf frame.
+    return camera_info.to_rerun(image_topic="/world/color_image")
 
 
 def _convert_global_map(grid: Any) -> Any:

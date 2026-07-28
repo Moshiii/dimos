@@ -79,5 +79,15 @@ drone_basic = autoconnect(
         video_port=video_port,
         outdoor=False,
     ),
-    DroneCameraModule.blueprint(camera_intrinsics=[1000.0, 1000.0, 960.0, 540.0]),
+    # fx, fy fitted from two Mini 4 Pro flights against recorded altitude (1465.9 and 1448.3 px
+    # at 1920 wide, agreeing to 1.2 %). The 1000.0 that was here is a placeholder and 31 % low,
+    # which puts a tag at 3 m more than two metres closer than it is.
+    #
+    # cx, cy stay at the image centre: the principal point is still unmeasured. Do NOT substitute
+    # the nadir pixel (970.7, 615.2) measured on 2026-07-28 — that is the principal point and the
+    # gimbal's pointing error summed, and it belongs to a controller, not to an intrinsics matrix.
+    #
+    # Same numbers in ROS CameraInfo form, loadable by CameraInfo.from_yaml:
+    #   mini4pro/calib/mini4pro_gimbal_1080.yaml
+    DroneCameraModule.blueprint(camera_intrinsics=[1457.1, 1457.1, 960.0, 540.0]),
 )

@@ -40,6 +40,7 @@ from dimos_lcm.geometry_msgs import (
 from dimos_lcm.nav_msgs import Path as LCMPath
 from dimos_lcm.std_msgs import Header as LCMHeader, Time as LCMTime
 
+from dimos.msgs.in_frame import InFrame, framed
 from dimos.types.timestamped import Timestamped
 
 if TYPE_CHECKING:
@@ -140,7 +141,7 @@ class GraphNodes3D(Timestamped):
         self,
         z_offset: float = 1.7,
         radii: float = 0.12,
-    ) -> Archetype:
+    ) -> Archetype | InFrame:
         """Render as ``rr.Points3D`` with type-based coloring."""
         import rerun as rr
 
@@ -151,7 +152,7 @@ class GraphNodes3D(Timestamped):
         colors = [TYPE_COLORS.get(n.node_type, DEFAULT_COLOR) for n in self.nodes]
         node_radii = [radii * 2.0 if n.node_type in (1, 2) else radii for n in self.nodes]
 
-        return rr.Points3D(positions, colors=colors, radii=node_radii)
+        return framed(rr.Points3D(positions, colors=colors, radii=node_radii), self.frame_id)
 
     def __len__(self) -> int:
         return len(self.nodes)
