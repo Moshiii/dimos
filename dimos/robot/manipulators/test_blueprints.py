@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.control.tasks.cartesian_ik_task.pink_control_ik import PinkControlIKConfig
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
 from dimos.manipulation.visualization.config import (
@@ -37,9 +37,12 @@ from dimos.robot.manipulators.openyam.blueprints.teleop import (
     keyboard_teleop_openyam,
 )
 from dimos.robot.manipulators.piper.blueprints.teleop import (
+    coordinator_cartesian_ik_mock,
+    coordinator_cartesian_ik_piper,
     coordinator_teleop_piper,
     keyboard_teleop_piper,
 )
+from dimos.robot.manipulators.piper.config import PIPER_MODEL_PATH
 from dimos.robot.manipulators.xarm.blueprints.basic import (
     dual_xarm6_planner,
     dual_xarm6_planner_coordinator,
@@ -76,6 +79,10 @@ def _manipulation_config(blueprint: Blueprint) -> ManipulationModuleConfig:
 
 def _coordinator_tasks(blueprint: Blueprint) -> list[TaskConfig]:
     return _module_kwargs(blueprint, ControlCoordinator)["tasks"]
+
+
+def _declared_lfs_filename(path: object) -> object:
+    return object.__getattribute__(path, "_lfs_filename")
 
 
 def test_quest_piper_teleop_routes_to_declarative_teleop_task() -> None:
@@ -185,15 +192,17 @@ def test_xarm_perception_sim_uses_aligned_camera_frame() -> None:
     assert sim_config.reset_joint_positions == sim_robot.home_joints
 
 
-def test_eef_twist_task_helper_uses_hardware_joints_and_default_name() -> None:
-    hardware = make_xarm_hardware("arm", 6, adapter_type="mock")
+def test_eef_twist_task_helper_passes_authoritative_robot_model() -> None:
+    hardware = make_xarm_hardware("arm", 7, adapter_type="mock")
+    robot_model = make_xarm7_model_config(add_gripper=False)
 
-    task = eef_twist_task(hardware, model_path=Path("fake.urdf"), ee_joint_id=6)
+    task = eef_twist_task(hardware, robot_model=robot_model)
 
     assert task.name == EEF_TWIST_TASK_NAME
     assert task.type == "eef_twist"
     assert task.joint_names == hardware.joints
-    assert task.params == {"model_path": Path("fake.urdf"), "ee_joint_id": 6}
+    assert "model_path" not in task.params
+    assert task.params["control_ik"]["robot_model"] is robot_model
 
 
 @pytest.mark.parametrize(
@@ -219,3 +228,51 @@ def test_manipulator_keyboard_blueprint_uses_eef_twist_and_light_keyboard_kwargs
     assert keyboard_kwargs == {}
     assert [task.name for task in eef_twist_tasks] == [EEF_TWIST_TASK_NAME]
     assert all(task.type != "cartesian_ik" for task in coordinator_tasks)
+
+
+@pytest.mark.parametrize(
+    "blueprint",
+    [
+        pytest.param(keyboard_teleop_xarm6, id="xarm6"),
+        pytest.param(keyboard_teleop_xarm7, id="xarm7"),
+        pytest.param(keyboard_teleop_piper, id="piper"),
+        pytest.param(keyboard_teleop_openarm_mock, id="openarm-mock"),
+        pytest.param(keyboard_teleop_openarm, id="openarm"),
+        pytest.param(keyboard_teleop_openyam, id="openyam"),
+        pytest.param(keyboard_teleop_a750, id="a750"),
+        pytest.param(keyboard_teleop_a1z, id="a1z"),
+    ],
+)
+def test_shipped_eef_twist_blueprints_use_pink_with_named_models(
+    blueprint: Blueprint,
+) -> None:
+    task = next(task for task in _coordinator_tasks(blueprint) if task.type == "eef_twist")
+    control_ik = task.params["control_ik"]
+
+    assert control_ik["robot_model"].end_effector_link
+    assert "ee_joint_id" not in task.params
+    declared_filename = _declared_lfs_filename(control_ik["robot_model"].model_path)
+    assert isinstance(declared_filename, str)
+    assert not declared_filename.endswith((".xml", ".mjcf"))
+
+
+def test_piper_pink_tasks_use_xacro_and_gripper_base() -> None:
+    for blueprint in (
+        keyboard_teleop_piper,
+        coordinator_cartesian_ik_mock,
+        coordinator_cartesian_ik_piper,
+    ):
+        task = next(
+            task
+            for task in _coordinator_tasks(blueprint)
+            if task.type in ("eef_twist", "cartesian_ik")
+        )
+        control_ik = task.params["control_ik"]
+
+        assert _declared_lfs_filename(control_ik["robot_model"].model_path) == (
+            _declared_lfs_filename(PIPER_MODEL_PATH)
+        )
+        assert control_ik["robot_model"].end_effector_link == "gripper_base"
+        assert "ee_joint_id" not in task.params
+        reconstructed = PinkControlIKConfig.model_validate(control_ik)
+        assert reconstructed.robot_model is control_ik["robot_model"]
