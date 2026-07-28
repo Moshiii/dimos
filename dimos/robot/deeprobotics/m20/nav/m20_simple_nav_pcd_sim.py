@@ -61,25 +61,93 @@ class PCDMap(Module):
 
 
 def _load_pcd(path: str) -> np.ndarray:
-    """Minimal ASCII .pcd loader returning (N,3) float32 array."""
+    """Load a .pcd file (ASCII or binary), returning (N,3) float32 array.
+
+    Parses the FIELDS / SIZE / TYPE / COUNT / DATA header lines to locate the
+    x, y, z fields regardless of their position or surrounding extra fields.
+    """
+    import numpy as np
+
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"PCD map not found: {p}")
-    lines = p.read_text().splitlines()
-    data_start = 0
-    count = 0
-    for i, line in enumerate(lines):
-        if line.startswith("POINTS"):
-            count = int(line.split()[1])
-        if line == "DATA ascii":
-            data_start = i + 1
-            break
-    pts = []
-    for line in lines[data_start : data_start + count]:
+
+    raw = p.read_bytes()
+    data_marker = raw.find(b"DATA ")
+    if data_marker < 0:
+        raise ValueError("PCD missing DATA line")
+    header_end = raw.index(b"\n", data_marker) + 1
+    header_text = raw[:header_end].decode("utf-8", errors="replace")
+
+    fields: list[str] = []
+    size: list[int] = []
+    type_: list[str] = []
+    count_: list[int] = []
+    num_points = 0
+    binary = False
+
+    for line in header_text.splitlines():
         parts = line.split()
-        if len(parts) >= 3:
-            pts.append([float(parts[0]), float(parts[1]), float(parts[2])])
-    return np.array(pts, dtype=np.float32)
+        if not parts:
+            continue
+        key = parts[0]
+        if key == "FIELDS":
+            fields = parts[1:]
+        elif key == "SIZE":
+            size = [int(v) for v in parts[1:]]
+        elif key == "TYPE":
+            type_ = parts[1:]
+        elif key == "COUNT":
+            count_ = [int(v) for v in parts[1:]]
+        elif key == "POINTS":
+            num_points = int(parts[1])
+        elif key == "DATA":
+            binary = (parts[1] == "binary")
+
+    if "x" not in fields or "y" not in fields or "z" not in fields:
+        raise ValueError(f"PCD must contain x, y, z fields. Found: {fields}")
+
+    ix = fields.index("x")
+    iy = fields.index("y")
+    iz = fields.index("z")
+
+    strides = [count_[j] * size[j] for j in range(len(fields))]
+    point_bytes = sum(strides)
+    offset_x = sum(strides[:ix])
+    offset_y = sum(strides[:iy])
+    offset_z = sum(strides[:iz])
+
+    out = np.empty((num_points, 3), dtype=np.float32)
+
+    if binary:
+        data = raw[header_end:]
+        dtype_map = {"F": "f4", "U": "u1", "I": "i4"}
+        x_dt = np.dtype(dtype_map.get(type_[ix], "f4"))
+        y_dt = np.dtype(dtype_map.get(type_[iy], "f4"))
+        z_dt = np.dtype(dtype_map.get(type_[iz], "f4"))
+        for k in range(num_points):
+            base = k * point_bytes
+            if type_[ix] == "U" and count_[ix] == 1:
+                out[k, 0] = float(data[base + offset_x])
+            else:
+                out[k, 0] = np.frombuffer(data, x_dt, 1, base + offset_x)[0]
+            out[k, 1] = np.frombuffer(data, y_dt, 1, base + offset_y)[0]
+            if type_[iz] == "U":
+                out[k, 2] = float(data[base + offset_z])
+            else:
+                out[k, 2] = np.frombuffer(data, z_dt, 1, base + offset_z)[0]
+        return out
+
+    text = raw[header_end:].decode("utf-8", errors="replace")
+    for i, line in enumerate(text.splitlines()):
+        if i >= num_points:
+            break
+        parts = line.split()
+        if len(parts) >= max(ix, iy, iz) + 1:
+            out[i, 0] = float(parts[ix])
+            out[i, 1] = float(parts[iy])
+            out[i, 2] = float(parts[iz])
+    return out
 
 
 voxel_size = 0.05
