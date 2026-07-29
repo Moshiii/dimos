@@ -40,7 +40,14 @@ Only two DimOS handles are preloaded:
   skills or `app.get_module("<instance>")` for module RPCs.
 - `memory` is a read-only-in-practice second `SqliteStore` attached to the
   explicitly configured recorder WAL database. It sees observations committed
-  after the session attached as well as earlier history.
+  after the session attached as well as earlier history from the current
+  blueprint run. The simulation demo overwrites this database when a new run
+  starts.
+
+The demo recorder intentionally captures only representative direct simulator
+outputs that are enabled by default: `coordinator_joint_state` and
+`color_image`. It is an integration fixture for the Memory2 path, not a
+general-purpose manipulation or perception recorder.
 
 For example, an agent can submit:
 
@@ -48,11 +55,10 @@ For example, an agent can submit:
 latest_joint_state = memory.streams.coordinator_joint_state.last()
 print(latest_joint_state.ts, latest_joint_state.data.position)
 
-objects = memory.streams.objects.last().data
-if objects:
-    app.skills.pick(object_name=objects[0].name)
-else:
-    app.skills.scan_objects()
+latest_image = memory.streams.color_image.last()
+print(latest_image.ts, latest_image.data.shape)
+
+app.skills.get_robot_state()
 ```
 
 Use snapshot queries such as `.last()`, `.after(timestamp).limit(n).to_list()`,

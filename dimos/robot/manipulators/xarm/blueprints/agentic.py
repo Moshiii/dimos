@@ -21,7 +21,10 @@ from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 from dimos.constants import STATE_DIR
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.perception.manipulation_policy_recorder import ManipulationPolicyRecorder
+from dimos.core.stream import In
+from dimos.memory2.module import OnExisting, Recorder
+from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.agent_prompts import (
     BASE_MANIPULATION_AGENT_SYSTEM_PROMPT,
@@ -37,6 +40,14 @@ _XARM_SIM_POLICY_RECORDING_PATH = (
     STATE_DIR / "code_policy" / "xarm_perception_sim" / "recordings" / "observations.db"
 )
 
+
+class _CodePolicyDemoRecorder(Recorder):
+    """Record representative simulator observations for the code-policy demo."""
+
+    coordinator_joint_state: In[JointState]
+    color_image: In[Image]
+
+
 xarm7_planner_coordinator_agent = autoconnect(
     xarm7_planner_coordinator,
     McpServer.blueprint(),
@@ -51,8 +62,10 @@ xarm_perception_agent = autoconnect(
 
 xarm_perception_sim_agent = autoconnect(
     xarm_perception_sim,
-    ManipulationPolicyRecorder.blueprint(
+    _CodePolicyDemoRecorder.blueprint(
         db_path=_XARM_SIM_POLICY_RECORDING_PATH,
+        on_existing=OnExisting.OVERWRITE,
+        record_tf=False,
     ),
     CodePolicyModule.blueprint(
         recording_path=str(_XARM_SIM_POLICY_RECORDING_PATH),

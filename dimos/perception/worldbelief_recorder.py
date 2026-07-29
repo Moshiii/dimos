@@ -56,7 +56,6 @@ def _timestamped_recording_path(base: str | Path) -> Path:
 class WorldBeliefRecorderConfig(RecorderConfig):
     db_path: str | Path = _RECORDING_BASE_PATH
     default_frame_id: str = "world"
-    timestamp_db_path: bool = True
 
 
 class WorldBeliefRecorder(Recorder):
@@ -71,7 +70,7 @@ class WorldBeliefRecorder(Recorder):
 
     @rpc
     def start(self) -> None:
-        if not self.config.g.replay and self.config.timestamp_db_path:
+        if not self.config.g.replay:
             db_path = _timestamped_recording_path(self.config.db_path)
             db_path.parent.mkdir(parents=True, exist_ok=True)
             self.config.db_path = db_path
