@@ -112,7 +112,12 @@ def is_rerun_multi(data: Any) -> TypeGuard[RerunMulti]:
 class RerunConvertible(Protocol):
     """Protocol for messages that can be converted to Rerun data."""
 
-    def to_rerun(self) -> RerunData: ...
+    def to_rerun(self, **kwargs: Any) -> RerunData: ...
+
+
+# A visual override is either a converter fn, a dict of to_rerun() kwargs, or
+# None to suppress the topic.
+VisualOverride: TypeAlias = "Callable[[Any], Archetype] | dict[str, Any] | None"
 
 
 def _hex_to_rgba(hex_color: str) -> int:
@@ -195,9 +200,9 @@ class Config(ModuleConfig):
 
     pubsubs: list[SubscribeAllCapable[Any, Any]] = field(default_factory=lambda: [LCM()])
 
-    visual_override: dict[Glob | str, Callable[[Any], Archetype] | None] = field(
-        default_factory=dict
-    )
+    # per-entity rendering: a converter fn, a dict of the message's own
+    # to_rerun() kwargs ({"dash": 0.5}), or None to drop the topic
+    visual_override: dict[Glob | str, VisualOverride] = field(default_factory=dict)
     static: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
     # static, but keyed by tf frame instead of entity path — the attach is done for you
     models: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
@@ -278,18 +283,25 @@ class RerunBridgeModule(Module):
             self._override_cache[entity_path] = suppressed
             return suppressed
 
+        # dict overrides are to_rerun() kwargs, merged in config order
+        kwargs: dict[str, Any] = {}
+        for fn in matches:
+            if isinstance(fn, dict):
+                kwargs.update(fn)
+        converters = [fn for fn in matches if not isinstance(fn, dict)]
+
         def final_convert(msg: Any) -> RerunData | None:
             if isinstance(msg, (Archetype, InFrame)):
                 return msg
             if is_rerun_multi(msg):
                 return msg
             if isinstance(msg, RerunConvertible):
-                return msg.to_rerun()
+                return msg.to_rerun(**kwargs)
             return None
 
         # compose all converters
         def composed(msg: Any) -> RerunData | None:
-            return cast("RerunData | None", pipe(msg, *matches, final_convert))
+            return cast("RerunData | None", pipe(msg, *converters, final_convert))
 
         self._override_cache[entity_path] = composed
         return composed

@@ -15,7 +15,7 @@
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.nav_msgs.Path import Path
+from dimos.msgs.nav_msgs.Path import Path, dashify
 
 
 def create_test_pose(x: float, y: float, z: float, frame_id: str = "map") -> PoseStamped:
@@ -285,3 +285,34 @@ def test_str_representation() -> None:
     path.push_mut(create_test_pose(1, 1, 0))
     path.push_mut(create_test_pose(2, 2, 0))
     assert str(path) == "Path(frame_id='map', poses=2)"
+
+
+def test_dashify_splits_straight_line() -> None:
+    """A 10m straight line at dash=1 gives 5 one-meter strips with 1m gaps."""
+    strips = dashify([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], 1.0)
+    assert len(strips) == 5
+    assert strips[0] == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    assert strips[1] == [[2.0, 0.0, 0.0], [3.0, 0.0, 0.0]]
+    assert strips[-1] == [[8.0, 0.0, 0.0], [9.0, 0.0, 0.0]]
+
+
+def test_dashify_carries_across_vertices() -> None:
+    """Dash length is arc length, so a dash spans a corner instead of restarting."""
+    strips = dashify([[0.0, 0.0, 0.0], [0.6, 0.0, 0.0], [0.6, 0.6, 0.0]], 1.0)
+    # first dash runs 0.6m along x then 0.4m along y, through the corner vertex
+    assert strips[0] == [[0.0, 0.0, 0.0], [0.6, 0.0, 0.0], [0.6, 0.4, 0.0]]
+
+
+def test_dashify_keeps_trailing_partial_dash() -> None:
+    """A path ending mid-dash still draws the stub."""
+    strips = dashify([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]], 1.0)
+    assert len(strips) == 2
+    assert strips[-1] == [[2.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
+
+
+def test_to_rerun_dashed_vs_solid() -> None:
+    """dash= splits the path into many strips; the default stays one."""
+    path = Path(frame_id="map", poses=[create_test_pose(x, 0, 0) for x in range(11)])
+
+    assert len(path.to_rerun(in_frame=False).strips) == 1  # type: ignore[union-attr]
+    assert len(path.to_rerun(in_frame=False, dash=1.0).strips) == 5  # type: ignore[union-attr]

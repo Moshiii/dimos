@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import itertools
+import math
 import time
 from typing import TYPE_CHECKING, BinaryIO
 
@@ -39,6 +41,33 @@ if TYPE_CHECKING:
 def sec_nsec(ts):  # type: ignore[no-untyped-def]
     s = int(ts)
     return [s, int((ts - s) * 1_000_000_000)]
+
+
+Point3 = list[float]
+
+
+def dashify(points: list[Point3], dash: float) -> list[list[Point3]]:
+    """Chop a polyline into ``dash``-long strips separated by ``dash``-long gaps."""
+    strips: list[list[Point3]] = []
+    strip: list[Point3] = [points[0]]
+    left, drawing = dash, True
+    for a, b in itertools.pairwise(points):
+        seg = math.dist(a, b)
+        walked = 0.0
+        while seg - walked > left:
+            walked += left
+            t = walked / seg
+            cut = [a[i] + (b[i] - a[i]) * t for i in range(3)]
+            if cut != strip[-1]:  # boundary landing exactly on a vertex
+                strip.append(cut)
+            if drawing:
+                strips.append(strip)
+            strip, left, drawing = [cut], dash, not drawing
+        left -= seg - walked
+        strip.append(b)
+    if drawing and len(strip) > 1:
+        strips.append(strip)
+    return strips
 
 
 class Path(Timestamped):
@@ -195,6 +224,7 @@ class Path(Timestamped):
         z_offset: float = 0.0,
         radii: float = 0.025,
         in_frame: bool = True,
+        dash: float | None = None,
     ) -> Archetype | InFrame:
         """Convert to rerun LineStrips3D format.
 
@@ -202,6 +232,7 @@ class Path(Timestamped):
             color: RGB color tuple for the path line
             z_offset: Height above floor to render path (default 0.2m to avoid costmap occlusion)
             radii: Thickness of the path line (default 0.05m = 5cm)
+            dash: Dash/gap length in meters; None (default) draws a solid line
 
         Returns:
             rr.LineStrips3D archetype for logging to rerun
@@ -213,6 +244,5 @@ class Path(Timestamped):
 
         # Lift path above floor so it's visible over costmap
         points = [[p.x, p.y, p.z + z_offset] for p in self.poses]
-        return framed(
-            rr.LineStrips3D([points], colors=[color], radii=radii), self.frame_id, in_frame
-        )
+        strips = dashify(points, dash) if dash else [points]
+        return framed(rr.LineStrips3D(strips, colors=[color], radii=radii), self.frame_id, in_frame)

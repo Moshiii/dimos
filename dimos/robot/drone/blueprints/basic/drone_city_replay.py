@@ -88,11 +88,6 @@ def _camera_info_to_pinhole(msg: Any) -> Any:
     return msg.to_rerun(image_topic="world/video")
 
 
-def _fat_path(msg: Any) -> Any:
-    """Breadcrumb thick enough to read from city altitude."""
-    return msg.to_rerun(radii=0.1, color=[255, 90, 60])
-
-
 def _rerun_blueprint() -> Any:
     """Camera + 3D world with a City tab, as the go2 city blueprint has."""
     import rerun as rr
@@ -160,7 +155,7 @@ drone_city_replay = autoconnect(
         rerun_config={
             "blueprint": _rerun_blueprint,
             "visual_override": {
-                "world/odometry_path": _fat_path,
+                "world/odometry_path": {"radii": 0.25, "color": [255, 90, 60], "dash": 2.0},
                 **ground_frustum_override(FRUSTUM_CAMERA_INFO, image_topic="world/video"),
             },
             "models": {"drone/base_link": shapes.quadcopter()},

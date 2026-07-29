@@ -41,6 +41,8 @@ def vis_module(
             rerun_config={
                 "visual_override": {
                     "world/camera_info": lambda ci: ci.to_rerun(...),
+                    # a dict is splatted into the message's own to_rerun()
+                    "world/odometry_path": {"dash": 0.5, "color": (255, 0, 0)},
                 },
                 "static": {
                     "world/tf/base_link": lambda rr: [rr.Boxes3D(...)],

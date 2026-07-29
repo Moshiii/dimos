@@ -178,7 +178,7 @@ class CityStream:
             self.streamer = None
 
 
-class Config(ModuleConfig):
+class CityMeshConfig(ModuleConfig):
     theme: str = "blueprint"
     source: str = "osm"
     root: str = "world/city"
@@ -193,7 +193,7 @@ class Config(ModuleConfig):
 class CityMeshModule(Module):
     """Streams extruded OSM/DEM city tiles around incoming GPS fixes."""
 
-    config: Config
+    config: CityMeshConfig
     gps: In[NavSatFix]
     city: Out[EntityMesh]
 
