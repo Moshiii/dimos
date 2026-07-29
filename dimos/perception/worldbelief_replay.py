@@ -31,7 +31,6 @@ from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
 
