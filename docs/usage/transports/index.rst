@@ -13,7 +13,7 @@ Transports connect **module streams** across **process boundaries** and/or **net
 
 Each edge in the graph is a **transported stream** (potentially different protocols). Each node is a **module**:
 
-|go2_nav|
+| go2_nav |
 
 .. _doc-usage-transports-index--what-the-transport-layer-guarantees-and-what-it-doesnt:
 
@@ -42,8 +42,8 @@ Choosing a backend
 For most users, the important choice is between ``lcm``, ``zenoh``, and shared memory overrides:
 
 - ``lcm``: current legacy default on most platforms. Fast and simple, but UDP multicast is best-effort.
-- ``zenoh``: network transport with reliable delivery semantics and the same typed message model through ``LCMEncoderMixin``.
-- shared memory (``pSHMTransport``, etc.): best for large local streams on a single machine.
+- ``zenoh``: network transport with reliable delivery semantics and the same typed message model through :class:`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>`.
+- shared memory (:class:`pSHMTransport <dimos.core.transport.pSHMTransport>`, etc.): best for large local streams on a single machine.
 
 At the CLI level, you can select the stream transport globally with:
 
@@ -100,7 +100,7 @@ Quick view on performance of our pubsub backends:
 
    python -m pytest -sv -k "not bytes" dimos/protocol/pubsub/benchmark/tool_benchmark.py
 
-|Benchmark results|
+| Benchmark results |
 
 .. _doc-usage-transports-index--abstraction-layers:
 
@@ -139,7 +139,7 @@ Abstraction layers
 
    </details>
 
-|output|
+| output |
 
 We'll go through these layers top-down.
 
@@ -152,7 +152,7 @@ See :doc:`Blueprints </usage/blueprints>` for the blueprint API.
 
 From `unitree/go2/blueprints/smart/unitree_go2.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py>`__.
 
-Example: rebind a few streams from the default ``LCMTransport`` to ``ROSTransport`` (defined at `transport.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/core/transport.py#L226>`__) so you can visualize in **rviz2**.
+Example: rebind a few streams from the default :class:`LCMTransport <dimos.core.transport.LCMTransport>` to :class:`ROSTransport <dimos.core.transport.ROSTransport>` (defined at `transport.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/core/transport.py#L226>`__) so you can visualize in **rviz2**.
 
 .. code-block:: python
 
@@ -180,7 +180,7 @@ Using transports with modules
 
 Each **stream** on a module can use a different transport. Set ``.transport`` on the stream **before starting** modules.
 
-The runnable example below uses a tiny synthetic image publisher instead of ``CameraModule`` so it works without a webcam and in CI; the wiring is the same as with a real camera.
+The runnable example below uses a tiny synthetic image publisher instead of :class:`CameraModule <dimos.hardware.sensors.camera.module.CameraModule>` so it works without a webcam and in CI; the wiring is the same as with a real camera.
 
 .. code-block:: python
 
@@ -280,7 +280,7 @@ Inspecting traffic (CLI)
    dimos spy --transport zenoh   # filter to one transport (repeatable flag)
    dimos lcmspy                  # deprecated alias for: dimos spy --transport lcm
 
-|dimos spy|
+| dimos spy |
 
 ``dimos topic echo /topic`` listens on typed channels like ``/topic#pkg.Msg`` and decodes automatically:
 
@@ -294,7 +294,7 @@ Inspecting traffic (CLI)
 Implementing a transport
 ------------------------
 
-At the stream layer, a transport is implemented by subclassing ``Transport`` (see `core/stream.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/core/stream.py#L83>`__) and implementing:
+At the stream layer, a transport is implemented by subclassing :class:`Transport <dimos.core.stream.Transport>` (see `core/stream.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/core/stream.py#L83>`__) and implementing:
 
 - ``broadcast(...)``
 - ``subscribe(...)``
@@ -320,7 +320,7 @@ Many of our message types provide ``lcm_encode`` / ``lcm_decode`` for compact, l
 PubSub transports
 -----------------
 
-Even though transport can be anything (TCP connection, unix socket) for now all our transport backends implement the ``PubSub`` interface.
+Even though transport can be anything (TCP connection, unix socket) for now all our transport backends implement the :class:`PubSub <dimos.protocol.pubsub.spec.PubSub>` interface.
 
 - ``publish(topic, message)``
 - ``subscribe(topic, callback) -> unsubscribe``
@@ -387,7 +387,7 @@ robust and faster than more common protocols such as ROS and DDS.
 Zenoh
 ~~~~~
 
-Zenoh provides network pubsub without relying on UDP multicast for the user-facing stream transport. In DimOS it carries the same typed messages by encoding them with ``LCMEncoderMixin``, so existing ``dimos.msgs.*`` types still work.
+Zenoh provides network pubsub without relying on UDP multicast for the user-facing stream transport. In DimOS it carries the same typed messages by encoding them with :class:`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>`, so existing ``dimos.msgs.*`` types still work.
 
 Use Zenoh when:
 
@@ -395,9 +395,9 @@ Use Zenoh when:
 - you are replaying large or high-rate data and want a more reliable network path
 - you want to keep the DimOS typed stream model while changing the transport backend
 
-At the stream level, the transport wrappers are ``ZenohTransport`` and ``pZenohTransport``. Install, defaults, and CLI versus environment overrides are in the :ref:`Zenoh quickstart <doc-usage-transports-index--zenoh-quickstart>` above.
+At the stream level, the transport wrappers are :class:`ZenohTransport <dimos.core.transport.ZenohTransport>` and :class:`pZenohTransport <dimos.core.transport.pZenohTransport>`. Install, defaults, and CLI versus environment overrides are in the :ref:`Zenoh quickstart <doc-usage-transports-index--zenoh-quickstart>` above.
 
-Performance note: zenoh's session-to-session path (modules in different processes, the common case) benchmarks faster than LCM for small messages and for >=2MiB ones. Delivery *within* one shared session (co-located modules in one worker) is its slow path for 256KiB-1MiB messages (a few GiB/s); pin shared memory transports for heavy co-located streams. The benchmark has both cases (``Zenoh`` = shared session, ``ZenohPeers`` = separate sessions).
+Performance note: zenoh's session-to-session path (modules in different processes, the common case) benchmarks faster than LCM for small messages and for >=2MiB ones. Delivery *within* one shared session (co-located modules in one worker) is its slow path for 256KiB-1MiB messages (a few GiB/s); pin shared memory transports for heavy co-located streams. The benchmark has both cases (:class:`Zenoh <dimos.protocol.pubsub.impl.zenohpubsub.Zenoh>` = shared session, ``ZenohPeers`` = separate sessions).
 
 The Rerun bridge also follows the global transport. When ``transport=zenoh``, the bridge listens on Zenoh and on LCM for TF data.
 
@@ -419,8 +419,8 @@ Zenoh publisher QoS lives on the Zenoh ``Topic`` object (see `zenohpubsub.py <ht
 
 When the factory builds transports from the global switch, it applies defaults (``default_zenoh_qos`` in `transport_factory.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/core/transport_factory.py#L65>`__):
 
-- RPC topics and the agent channels (``human_input``, ``agent``, ``agent_idle``): reliable, block under congestion (never drop).
-- ``Image``/``PointCloud2`` streams: best-effort, drop under congestion (latest wins).
+- RPC topics and the agent channels (:attr:`human_input <dimos.agents.mcp.mcp_client.McpClient.human_input>`, :attr:`agent <dimos.agents.mcp.mcp_client.McpClient.agent>`, :attr:`agent_idle <dimos.agents.mcp.mcp_client.McpClient.agent_idle>`): reliable, block under congestion (never drop).
+- :class:`Image <dimos.msgs.sensor_msgs.Image.Image>`/:class:`PointCloud2 <dimos.msgs.sensor_msgs.PointCloud2.PointCloud2>` streams: best-effort, drop under congestion (latest wins).
 - Everything else: zenoh defaults (reliable, drop under congestion).
 
 The publisher for a key is declared with the first publish's QoS. LCM has no per-topic settings, so QoS only applies when ``transport=zenoh``.
@@ -492,10 +492,10 @@ For network communication, DDS uses the Data Distribution Service (DDS) protocol
 
 .. _doc-usage-transports-index--a-minimal-transport-memory:
 
-A minimal transport: ``Memory``
--------------------------------
+A minimal transport: :class:`Memory <dimos.protocol.pubsub.impl.memory.Memory>`
+-------------------------------------------------------------------------------
 
-The simplest toy backend is ``Memory`` (single process). Start from there when implementing a new pubsub backend.
+The simplest toy backend is :class:`Memory <dimos.protocol.pubsub.impl.memory.Memory>` (single process). Start from there when implementing a new pubsub backend.
 
 .. code-block:: python
 
@@ -530,24 +530,24 @@ Encode/decode mixins
 
 Transports often need to serialize messages before sending and deserialize after receiving.
 
-``PubSubEncoderMixin`` at `pubsub/encoders.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/protocol/pubsub/encoders.py#L39>`__ provides a clean way to add encoding/decoding to any pubsub implementation.
+:class:`PubSubEncoderMixin <dimos.protocol.pubsub.encoders.PubSubEncoderMixin>` at `pubsub/encoders.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/protocol/pubsub/encoders.py#L39>`__ provides a clean way to add encoding/decoding to any pubsub implementation.
 
 .. _doc-usage-transports-index--available-mixins:
 
 Available mixins
 ~~~~~~~~~~~~~~~~
 
-+-------------------------+-----------------+------------------------------------+
-| Mixin                   | Encoding        | Use case                           |
-+=========================+=================+====================================+
-| ``PickleEncoderMixin``  | Python pickle   | Any Python object, Python-only     |
-+-------------------------+-----------------+------------------------------------+
-| ``LCMEncoderMixin``     | LCM binary      | Cross-language (C/C++/Python/Go/…) |
-+-------------------------+-----------------+------------------------------------+
-| ``JpegEncoderMixin``    | JPEG compressed | Image data, reduces bandwidth      |
-+-------------------------+-----------------+------------------------------------+
++----------------------------------------------------------------------------------+-----------------+------------------------------------+
+| Mixin                                                                            | Encoding        | Use case                           |
++==================================================================================+=================+====================================+
+| :class:`PickleEncoderMixin <dimos.protocol.pubsub.encoders.PickleEncoderMixin>`  | Python pickle   | Any Python object, Python-only     |
++----------------------------------------------------------------------------------+-----------------+------------------------------------+
+| :class:`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>`        | LCM binary      | Cross-language (C/C++/Python/Go/…) |
++----------------------------------------------------------------------------------+-----------------+------------------------------------+
+| :class:`JpegEncoderMixin <dimos.protocol.pubsub.impl.jpeg_lcm.JpegEncoderMixin>` | JPEG compressed | Image data, reduces bandwidth      |
++----------------------------------------------------------------------------------+-----------------+------------------------------------+
 
-``LCMEncoderMixin`` is especially useful: you can use LCM message definitions with *any* transport (not just UDP multicast). See :doc:`LCM </usage/lcm>` for details.
+:class:`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>` is especially useful: you can use LCM message definitions with *any* transport (not just UDP multicast). See :doc:`LCM </usage/lcm>` for details.
 
 .. _doc-usage-transports-index--creating-a-custom-mixin:
 
@@ -616,23 +616,23 @@ Add your backend to benchmarks to compare in context:
 Available transports
 --------------------
 
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
-| Transport        | Use case                            | Cross-process | Network | Notes                                 |
-+==================+=====================================+===============+=========+=======================================+
-| ``Memory``       | Testing only, single process        | No            | No      | Minimal reference impl                |
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
-| ``SharedMemory`` | Multi-process on same machine       | Yes           | No      | Highest throughput (IPC)              |
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
-| ``LCM``          | Robot LAN broadcast (UDP multicast) | Yes           | Yes     | Best-effort; can drop packets on LAN  |
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
-| ``Zenoh``        | Reliable network stream transport   | Yes           | Yes     | Recommended on macOS for heavy replay |
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
-| ``Redis``        | Network pubsub via Redis server     | Yes           | Yes     | Central broker; adds hop              |
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
-| ``ROS``          | ROS 2 topic communication           | Yes           | Yes     | Integrates with RViz/ROS tools        |
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
-| ``DDS``          | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP                                   |
-+------------------+-------------------------------------+---------------+---------+---------------------------------------+
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
+| Transport                                                     | Use case                            | Cross-process | Network | Notes                                 |
++===============================================================+=====================================+===============+=========+=======================================+
+| :class:`Memory <dimos.protocol.pubsub.impl.memory.Memory>`    | Testing only, single process        | No            | No      | Minimal reference impl                |
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
+| ``SharedMemory``                                              | Multi-process on same machine       | Yes           | No      | Highest throughput (IPC)              |
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
+| ``LCM``                                                       | Robot LAN broadcast (UDP multicast) | Yes           | Yes     | Best-effort; can drop packets on LAN  |
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
+| :class:`Zenoh <dimos.protocol.pubsub.impl.zenohpubsub.Zenoh>` | Reliable network stream transport   | Yes           | Yes     | Recommended on macOS for heavy replay |
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
+| :class:`Redis <dimos.protocol.pubsub.impl.redispubsub.Redis>` | Network pubsub via Redis server     | Yes           | Yes     | Central broker; adds hop              |
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
+| ``ROS``                                                       | ROS 2 topic communication           | Yes           | Yes     | Integrates with RViz/ROS tools        |
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
+| :class:`DDS <dimos.protocol.pubsub.impl.ddspubsub.DDS>`       | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP                                   |
++---------------------------------------------------------------+-------------------------------------+---------------+---------+---------------------------------------+
 
 .. |go2_nav| image:: ../assets/go2_nav.svg
 

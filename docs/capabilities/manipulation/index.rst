@@ -69,7 +69,7 @@ Pink IK is the default solver. Tune it with nested module config overrides:
      -o manipulationmodule.kinematics.max_iterations=100 \
      -o manipulationmodule.kinematics.dt=0.02
 
-For blueprints that instantiate ``PickAndPlaceModule``, use the corresponding module prefix:
+For blueprints that instantiate :class:`PickAndPlaceModule <dimos.manipulation.pick_and_place_module.PickAndPlaceModule>`, use the corresponding module prefix:
 
 .. code-block:: bash
 
@@ -144,7 +144,7 @@ Safety behavior for unsupported RoboPlan features:
 
 - Planning-critical unsupported inputs fail loudly before planning. Examples include unsupported obstacle geometry, unavailable robot loading APIs, or unavailable collision query APIs. RoboPlan worlds generate a minimal SRDF from the DimOS robot config, including configured collision-exclusion pairs.
 - Unverified non-critical query methods raise explicit ``NotImplementedError``. In particular, signed minimum-distance semantics are not implemented for RoboPlan until a safe equivalent is verified.
-- Embedded Meshcat visualization requires a world implementing ``VisualizationSpec``; use Viser or ``none`` with the RoboPlan backend.
+- Embedded Meshcat visualization requires a world implementing :class:`VisualizationSpec <dimos.manipulation.planning.spec.protocols.VisualizationSpec>`; use Viser or ``none`` with the RoboPlan backend.
 
 .. _doc-capabilities-manipulation-index--planning-visualization:
 
@@ -193,11 +193,11 @@ Viser support is included in the ``manipulation`` extra:
 
    uv sync --extra manipulation --inexact
 
-The Viser panel talks to the concrete ``ManipulationOperator`` bound into its ``VisualizationSession``. GUI callbacks enqueue operations through that operator for target evaluation, planning, preview, execution, cancellation, reset, and clear-plan actions. The panel owns only target drafts, selection state, and callback generations; it does not touch ``WorldSpec``, IK, planner objects, ``ManipulationModule``, ``WorldMonitor``, or live Drake contexts directly.
+The Viser panel talks to the concrete :class:`ManipulationOperator <dimos.manipulation.visualization.operator.ManipulationOperator>` bound into its :class:`VisualizationSession <dimos.manipulation.planning.spec.models.VisualizationSession>`. GUI callbacks enqueue operations through that operator for target evaluation, planning, preview, execution, cancellation, reset, and clear-plan actions. The panel owns only target drafts, selection state, and callback generations; it does not touch :class:`WorldSpec <dimos.manipulation.planning.spec.protocols.WorldSpec>`, IK, planner objects, :class:`ManipulationModule <dimos.manipulation.manipulation_module.ManipulationModule>`, :class:`WorldMonitor <dimos.manipulation.planning.monitor.world_monitor.WorldMonitor>`, or live Drake contexts directly.
 
-External manipulation visualizers are initialized from a backend-neutral ``VisualizationSession`` after the planning world has added its robots. The session contains static ``PlanningSceneInfo`` metadata: world robot IDs, ``RobotModelConfig`` values, and resolved planning groups. Runtime joint state is then pushed through ``VisualizationStateFrame`` updates so renderers do not poll world/module state or own freshness policy. Embedded Meshcat visualization does not need extra setup because it observes the Drake world directly.
+External manipulation visualizers are initialized from a backend-neutral :class:`VisualizationSession <dimos.manipulation.planning.spec.models.VisualizationSession>` after the planning world has added its robots. The session contains static :class:`PlanningSceneInfo <dimos.manipulation.planning.spec.models.PlanningSceneInfo>` metadata: world robot IDs, :class:`RobotModelConfig <dimos.manipulation.planning.spec.config.RobotModelConfig>` values, and resolved planning groups. Runtime joint state is then pushed through :class:`VisualizationStateFrame <dimos.manipulation.planning.spec.models.VisualizationStateFrame>` updates so renderers do not poll world/module state or own freshness policy. Embedded Meshcat visualization does not need extra setup because it observes the Drake world directly.
 
-Previews use the stored synchronized ``JointTrajectory`` from the generated plan. Viser projects the globally named trajectory into robot-local preview ghosts and plays the stored timestamped points directly; optional preview duration only scales the stored delays. Execute freshness is enforced by the manipulation module/operator immediately before dispatch, not by Viser-side telemetry snapshots.
+Previews use the stored synchronized :class:`JointTrajectory <dimos.msgs.trajectory_msgs.JointTrajectory.JointTrajectory>` from the generated plan. Viser projects the globally named trajectory into robot-local preview ghosts and plays the stored timestamped points directly; optional preview duration only scales the stored delays. Execute freshness is enforced by the manipulation module/operator immediately before dispatch, not by Viser-side telemetry snapshots.
 
 .. _perception--agent:
 
@@ -232,7 +232,7 @@ Architecture
 - **ControlCoordinator** — 100Hz control loop with mock or real hardware adapters
 - **ManipulationModule** — world backend, optional visualization, RRT motion planning, obstacle management
 
-Internally, planning code depends on ``WorldSpec`` for world, collision, and kinematics behavior. Meshcat preview and publishing are exposed separately through ``VisualizationSpec``, so non-visual planning paths do not require a visualization backend.
+Internally, planning code depends on :class:`WorldSpec <dimos.manipulation.planning.spec.protocols.WorldSpec>` for world, collision, and kinematics behavior. Meshcat preview and publishing are exposed separately through :class:`VisualizationSpec <dimos.manipulation.planning.spec.protocols.VisualizationSpec>`, so non-visual planning paths do not require a visualization backend.
 
 .. _doc-capabilities-manipulation-index--blueprints:
 

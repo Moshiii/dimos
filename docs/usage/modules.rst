@@ -229,7 +229,7 @@ The callback runs on whatever thread emits the message, so guard mutable state w
 Triggering side effects via Specs
 ---------------------------------
 
-A common pattern is "subscribe to a stream, react by calling another module". Declare the other module's protocol as a ``Spec`` field (single-underscore, private). The coordinator binds the proxy at deploy time, so handlers can call it directly with no extra wiring:
+A common pattern is "subscribe to a stream, react by calling another module". Declare the other module's protocol as a :class:`Spec <dimos.spec.utils.Spec>` field (single-underscore, private). The coordinator binds the proxy at deploy time, so handlers can call it directly with no extra wiring:
 
 .. code-block:: python
 
@@ -262,7 +262,7 @@ A common pattern is "subscribe to a stream, react by calling another module". De
            if msg.data > 100:
                self._notifier.notify(f"value={msg.data}")
 
-The Spec must match the target module's ``@rpc`` signatures (sync/async are interchangeable — see :ref:`Async modules <doc-usage-modules--async-modules-lock-free-state>`).
+The Spec must match the target module's :func:`@rpc <dimos.core.core.rpc>` signatures (sync/async are interchangeable — see :ref:`Async modules <doc-usage-modules--async-modules-lock-free-state>`).
 
 To deploy ``Watchdog``, add ``Watchdog.blueprint()`` to an existing blueprint's ``autoconnect(...)`` chain. The coordinator matches ``Out[T]`` to ``In[T]`` by name across the union of modules, and resolves ``_notifier: NotifierSpec`` to whichever module in the blueprint implements ``notify``. No manual wiring required.
 
@@ -289,7 +289,7 @@ The ``m.stop()`` in teardown matters. The test session-wide thread-leak detector
 Restarting a module
 -------------------
 
-While iterating on a module it's often convenient to edit its source file and pick up the changes without tearing down the whole coordinator. The ``restart_module`` call stops a single deployed module, reloads its source via ``importlib.reload``, then redeploys it onto a fresh worker process while keeping its stream transports and reconnecting any other modules that held a reference to it.
+While iterating on a module it's often convenient to edit its source file and pick up the changes without tearing down the whole coordinator. The :meth:`restart_module <dimos.core.coordination.module_coordinator.ModuleCoordinator.restart_module>` call stops a single deployed module, reloads its source via ``importlib.reload``, then redeploys it onto a fresh worker process while keeping its stream transports and reconnecting any other modules that held a reference to it.
 
 .. code-block:: python
 
@@ -310,7 +310,7 @@ While iterating on a module it's often convenient to edit its source file and pi
 Async modules (lock-free state)
 -------------------------------
 
-Modules contain a per-instance asyncio loop on a daemon thread (``self._loop``). It is possible to write modules using only ``async def`` methods so that everything runs on the same thread and you don't need to use locks. The module's auto-bound input handlers, async ``@rpc`` methods, and ``process_observable`` callbacks all run on ``self._loop``, and each handler subscription is serialized through a dedicated dispatcher task.
+Modules contain a per-instance asyncio loop on a daemon thread (``self._loop``). It is possible to write modules using only ``async def`` methods so that everything runs on the same thread and you don't need to use locks. The module's auto-bound input handlers, async :func:`@rpc <dimos.core.core.rpc>` methods, and :meth:`process_observable <dimos.core.module.ModuleBase.process_observable>` callbacks all run on ``self._loop``, and each handler subscription is serialized through a dedicated dispatcher task.
 
 .. _doc-usage-modules--auto-bound-input-handlers:
 
@@ -354,13 +354,13 @@ Each handler runs in a per-handler dispatcher task on ``self._loop``. Handlers a
 
 .. _doc-usage-modules--async-rpc-methods:
 
-Async ``@rpc`` methods
-~~~~~~~~~~~~~~~~~~~~~~
+Async :func:`@rpc <dimos.core.core.rpc>` methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``@rpc`` works on both sync and ``async def`` methods. When applied to an async method, the call site dispatches automatically:
+:func:`@rpc <dimos.core.core.rpc>` works on both sync and ``async def`` methods. When applied to an async method, the call site dispatches automatically:
 
-- From another thread (the RPC dispatcher, sync test code, a sync ``@rpc`` on the same module), the call blocks until the coroutine completes on ``self._loop``.
-- From inside the loop (another async ``@rpc``, a ``handle_*``, or a ``process_observable`` callback), it returns the coroutine so the caller can ``await`` it.
+- From another thread (the RPC dispatcher, sync test code, a sync :func:`@rpc <dimos.core.core.rpc>` on the same module), the call blocks until the coroutine completes on ``self._loop``.
+- From inside the loop (another async :func:`@rpc <dimos.core.core.rpc>`, a ``handle_*``, or a :meth:`process_observable <dimos.core.module.ModuleBase.process_observable>` callback), it returns the coroutine so the caller can ``await`` it.
 
 .. code-block:: python
 
@@ -376,7 +376,7 @@ Async ``@rpc`` methods
        async def set_my_name(self, new_name: str) -> None:
            self._my_name = new_name
 
-Async and sync ``@rpc`` methods are interchangeable for cross-module linking. Both are discovered via ``Module.rpcs`` and served through the same RPC machinery. A module ref or RPC client doesn't care whether the underlying method is sync or async.
+Async and sync :func:`@rpc <dimos.core.core.rpc>` methods are interchangeable for cross-module linking. Both are discovered via ``Module.rpcs`` and served through the same RPC machinery. A module ref or RPC client doesn't care whether the underlying method is sync or async.
 
 When the consumer types a module ref using a Spec that declares ``async def``, the proxy automatically exposes those methods as awaitables: ``await self._name_module.say_hello(name)``.
 
@@ -416,8 +416,8 @@ The reverse is also true: you can call a sync module from async code.
 
 .. _doc-usage-modules--spawn-schedule-a-long-running-coroutine-from-sync-code:
 
-``spawn``: schedule a long-running coroutine from sync code
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:meth:`spawn <dimos.core.module.ModuleBase.spawn>`: schedule a long-running coroutine from sync code
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 When you need to start a long-running async task from ``start()`` (e.g., a timer loop), use ``self.spawn(coro)`` instead of ``asyncio.run_coroutine_threadsafe(coro, self._loop)``. The helper wires up a done-callback that surfaces unhandled exceptions to the module logger. bare ``run_coroutine_threadsafe`` silently stores the exception on the returned Future, where it disappears unless the user remembers to read ``.result()``.
 
@@ -447,8 +447,8 @@ When you need to start a long-running async task from ``start()`` (e.g., a timer
 
 .. _doc-usage-modules--process_observable-async-subscriptions-to-arbitrary-observables:
 
-``process_observable``: async subscriptions to arbitrary observables
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:meth:`process_observable <dimos.core.module.ModuleBase.process_observable>`: async subscriptions to arbitrary observables
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Sometimes you have rxpy observables which you need to run inside ``self._loop``. You can do this with ``self.process_observable(observable, async_handler)`` .
 

@@ -11,7 +11,7 @@ The ``dimos`` CLI manages the full lifecycle of a DimOS robot stack — start, s
 Global Options
 --------------
 
-Every ``GlobalConfig`` field described in :doc:`/usage/configuration` is
+Every :class:`GlobalConfig <dimos.core.global_config.GlobalConfig>` field described in :doc:`/usage/configuration` is
 available as a CLI flag. Flags override environment variables, ``.env``, and
 blueprint defaults.
 
@@ -88,7 +88,7 @@ Configuration Precedence
 
 Values cascade (later overrides earlier):
 
-1. ``GlobalConfig`` default → ``simulation = ""``
+1. :class:`GlobalConfig <dimos.core.global_config.GlobalConfig>` default → ``simulation = ""``
 2. ``.env`` file → ``SIMULATION=mujoco``
 3. Environment variable → ``export SIMULATION=mujoco``
 4. Blueprint definition → ``.global_config(simulation="mujoco")``
@@ -173,7 +173,7 @@ When ``--daemon`` is used, the process:
 Adding a New Blueprint
 ^^^^^^^^^^^^^^^^^^^^^^
 
-For an in-repository DimOS blueprint, define a module-level ``Blueprint`` variable and regenerate the built-in registry:
+For an in-repository DimOS blueprint, define a module-level :class:`Blueprint <dimos.core.coordination.blueprints.Blueprint>` variable and regenerate the built-in registry:
 
 .. code-block:: bash
 
@@ -339,9 +339,9 @@ Works with any agentic blueprint — does not require MCP. Publishes directly to
 ``dimos mcp``
 ~~~~~~~~~~~~~
 
-Interact with the running MCP server. **Requires a blueprint that includes ``McpServer``** — for example ``unitree-go2-agentic``. The MCP server runs at ``http://localhost:9990/mcp`` by default (``--mcp-port`` / ``--mcp-host`` to override).
+Interact with the running MCP server. **Requires a blueprint that includes :class:`McpServer <dimos.agents.mcp.mcp_server.McpServer>`** — for example ``unitree-go2-agentic``. The MCP server runs at ``http://localhost:9990/mcp`` by default (``--mcp-port`` / ``--mcp-host`` to override).
 
-To add MCP to a blueprint, include both ``McpServer`` (exposes skills as HTTP tools) and ``McpClient.blueprint()`` (LLM agent that fetches tools from the server):
+To add MCP to a blueprint, include both :class:`McpServer <dimos.agents.mcp.mcp_server.McpServer>` (exposes skills as HTTP tools) and ``McpClient.blueprint()`` (LLM agent that fetches tools from the server):
 
 .. code-block:: python
 

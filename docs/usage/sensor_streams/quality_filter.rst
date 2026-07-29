@@ -10,7 +10,7 @@ Quality-Based Stream Filtering
 Quality-Based Stream Filtering
 ==============================
 
-When processing sensor streams, you often want to reduce frequency while keeping the best quality data. For discrete data like images that can't be averaged or merged, instead of blindly dropping frames, ``quality_barrier`` selects the highest quality item within each time window.
+When processing sensor streams, you often want to reduce frequency while keeping the best quality data. For discrete data like images that can't be averaged or merged, instead of blindly dropping frames, :func:`quality_barrier <dimos.utils.reactive.quality_barrier>` selects the highest quality item within each time window.
 
 .. _doc-usage-sensor_streams-quality_filter--the-problem:
 
@@ -26,8 +26,8 @@ Both ignore quality. You might get a blurry frame when a sharp one was available
 
 .. _doc-usage-sensor_streams-quality_filter--the-solution-quality_barrier:
 
-The Solution: ``quality_barrier``
----------------------------------
+The Solution: :func:`quality_barrier <dimos.utils.reactive.quality_barrier>`
+----------------------------------------------------------------------------
 
 .. code-block:: python
 
@@ -66,7 +66,7 @@ The Solution: ``quality_barrier``
 Image Sharpness Filtering
 -------------------------
 
-For camera streams, we provide ``sharpness_barrier`` which uses the image's sharpness score.
+For camera streams, we provide :func:`sharpness_barrier <dimos.msgs.sensor_msgs.Image.sharpness_barrier>` which uses the image's sharpness score.
 
 Let's use real camera data from the Unitree Go2 robot to demonstrate. We use the :doc:`Sensor Storage & Replay </usage/sensor_streams/storage_replay>` toolkit, which provides access to recorded robot data:
 
@@ -108,7 +108,7 @@ Let's use real camera data from the Unitree Go2 robot to demonstrate. We use the
      Frame 8: 0.346
      Frame 9: 0.322
 
-Using ``sharpness_barrier`` to select the sharpest frames:
+Using :func:`sharpness_barrier <dimos.msgs.sensor_msgs.Image.sharpness_barrier>` to select the sharpest frames:
 
 .. code-block:: python
 
@@ -290,7 +290,7 @@ from `Image.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/msgs/sens
 Custom Quality Functions
 ------------------------
 
-You can use ``quality_barrier`` with any quality metric:
+You can use :func:`quality_barrier <dimos.utils.reactive.quality_barrier>` with any quality metric:
 
 .. code-block:: python
 

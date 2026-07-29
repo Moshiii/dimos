@@ -282,7 +282,7 @@ Which peaks are significant?
 
 We got 15 peaks back, we ran a detector on all of them so we can start projecting into 3D but let's say we want some sort of pre-filter of just globally significant peaks. we can see most peaks prominence sits around 0.02–0.03 and only a couple (0.067 at t=37s, 0.047 at t=240s) really stand out. We might want to auto detect those.
 
-``significant()`` replaces that guesswork by thresholding on the distribution of prominences itself. Default outlier detection uses MAD (median absolute deviation)
+:func:`significant() <dimos.memory2.transform.significant>` replaces that guesswork by thresholding on the distribution of prominences itself. Default outlier detection uses MAD (median absolute deviation)
 
 Once we put the surviving peaks on the timeline we get two very obvious plants.
 
@@ -310,7 +310,7 @@ Once we put the surviving peaks on the timeline we get two very obvious plants.
 
 |image10|
 
-Rule of thumb: keep a small absolute floor on ``peaks(prominence=...)`` to reject shape-noise, then let ``significant()`` pick the statistical cutoff.
+Rule of thumb: keep a small absolute floor on ``peaks(prominence=...)`` to reject shape-noise, then let :func:`significant() <dimos.memory2.transform.significant>` pick the statistical cutoff.
 
 .. _doc-capabilities-memory-plot--semantic-peak-analysis:
 

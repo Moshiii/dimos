@@ -40,7 +40,7 @@ Robot configs can provide planning groups explicitly with ``RobotModelConfig.pla
 
 When code uses the discovery helper instead of explicit config, DimOS discovers groups in this order:
 
-1. Explicit ``srdf_path`` provided to the helper.
+1. Explicit :attr:`srdf_path <dimos.manipulation.planning.spec.config.RobotModelConfig.srdf_path>` provided to the helper.
 2. Conservative SRDF auto-discovery near the model path, with a warning.
 3. Fallback generation of one ``{robot_name}/manipulator`` group when the configured controllable joints form exactly one unambiguous serial chain.
 4. Error if no SRDF or fallback chain can provide a single valid group.
@@ -98,7 +98,7 @@ Joint-space planning targets group IDs. Each target ``JointState`` may be unname
        }
    )
 
-Pose planning targets pose-capable group IDs. Add auxiliary groups when another chain should participate as free DOFs but does not have its own pose target. Pose targets are ``Pose`` values keyed by planning group ID:
+Pose planning targets pose-capable group IDs. Add auxiliary groups when another chain should participate as free DOFs but does not have its own pose target. Pose targets are :class:`Pose <dimos.msgs.geometry_msgs.Pose.Pose>` values keyed by planning group ID:
 
 .. code-block:: python
 
@@ -114,7 +114,7 @@ After a successful planning call, preview and execution use the module's current
    manip.preview_plan()
    manip.execute_plan()
 
-Callers that already hold a ``GeneratedPlan`` may pass it explicitly:
+Callers that already hold a :class:`GeneratedPlan <dimos.manipulation.planning.spec.models.GeneratedPlan>` may pass it explicitly:
 
 .. code-block:: python
 
@@ -128,11 +128,11 @@ For robot-scoped compatibility APIs, unnamed joint vectors are interpreted in th
 Generated plans and execution
 -----------------------------
 
-A ``GeneratedPlan`` stores:
+A :class:`GeneratedPlan <dimos.manipulation.planning.spec.models.GeneratedPlan>` stores:
 
 - selected planning group IDs;
 - a geometric path of ``JointState`` waypoints keyed by global joint names;
-- one materialized synchronized ``JointTrajectory`` over the same selected global joint names;
+- one materialized synchronized :class:`JointTrajectory <dimos.msgs.trajectory_msgs.JointTrajectory.JointTrajectory>` over the same selected global joint names;
 - status, timing, path length, iteration count, and message metadata.
 
 Preview and execution consume the stored trajectory; they do not lazily parameterize the geometric path. Preview forwards the raw globally named trajectory through the visualization boundary, where renderers project it to their robot-local visuals while preserving stored timestamps. Execution splits the stored trajectory by affected trajectory task, translates selected joint names at the coordinator boundary, and invokes each trajectory controller without filling or commanding omitted joints. Controllers remain planning-group agnostic, and trajectory tasks still claim their full configured joint set while executing only the active planned subset.
@@ -144,8 +144,8 @@ Multi-task dispatch is not atomic: if one trajectory task accepts and a later ta
 Robot placement config
 ----------------------
 
-``RobotModelConfig.base_pose`` and ``RobotModelConfig.base_link`` describe robot placement: ``base_pose`` places ``base_link`` in the world and current backends use that link for weld/placement and optional model-authored world-joint stripping. This is robot placement metadata, not planning-chain metadata.
+:attr:`RobotModelConfig.base_pose <dimos.manipulation.planning.spec.config.RobotModelConfig.base_pose>` and :attr:`RobotModelConfig.base_link <dimos.manipulation.planning.spec.config.RobotModelConfig.base_link>` describe robot placement: :attr:`base_pose <dimos.manipulation.planning.spec.config.RobotModelConfig.base_pose>` places :attr:`base_link <dimos.manipulation.planning.spec.config.RobotModelConfig.base_link>` in the world and current backends use that link for weld/placement and optional model-authored world-joint stripping. This is robot placement metadata, not planning-chain metadata.
 
-Planning-group ``base_link`` and ``tip_link`` values are the only source for chain bases and pose target frames. Robot-scoped end-effector config is no longer supported; robot-level EE helper APIs are wrappers over a unique pose-targetable planning group and should use explicit group APIs when multiple pose groups exist.
+Planning-group :attr:`base_link <dimos.manipulation.planning.spec.config.RobotModelConfig.base_link>` and ``tip_link`` values are the only source for chain bases and pose target frames. Robot-scoped end-effector config is no longer supported; robot-level EE helper APIs are wrappers over a unique pose-targetable planning group and should use explicit group APIs when multiple pose groups exist.
 
-Robot placement can be encoded either in model assets or in ``base_pose``, depending on the blueprint. ``joint_names`` remains supported and should describe the ordered controllable local model joint set.
+Robot placement can be encoded either in model assets or in :attr:`base_pose <dimos.manipulation.planning.spec.config.RobotModelConfig.base_pose>`, depending on the blueprint. ``joint_names`` remains supported and should describe the ordered controllable local model joint set.

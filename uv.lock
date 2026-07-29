@@ -1881,6 +1881,7 @@ docs = [
     { name = "dimos", extra = ["agents", "web"] },
     { name = "furo", marker = "python_full_version >= '3.12'" },
     { name = "sphinx", marker = "python_full_version >= '3.12'" },
+    { name = "sphinx-codeautolink", marker = "python_full_version >= '3.12'" },
     { name = "sphinx-design", marker = "python_full_version >= '3.12'" },
     { name = "sphinxcontrib-spelling", marker = "python_full_version >= '3.12' and sys_platform != 'win32'" },
 ]
@@ -2170,6 +2171,7 @@ docs = [
     { name = "dimos", extras = ["agents", "web"] },
     { name = "furo", marker = "python_full_version >= '3.12'" },
     { name = "sphinx", marker = "python_full_version >= '3.12'", specifier = "<9" },
+    { name = "sphinx-codeautolink", marker = "python_full_version >= '3.12'", specifier = "==0.18.1" },
     { name = "sphinx-design", marker = "python_full_version >= '3.12'" },
     { name = "sphinxcontrib-spelling", marker = "python_full_version >= '3.12' and sys_platform != 'win32'" },
 ]
@@ -8385,6 +8387,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/98/0b/a866924ded68efec7a1759587a4e478aec7559d8165fac8b2ad1c0e774d6/sphinx_basic_ng-1.0.0b2.tar.gz", hash = "sha256:9ec55a47c90c8c002b5960c57492ec3021f5193cb26cebc2dc4ea226848651c9", size = 20736, upload-time = "2023-07-08T18:40:54.166Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3c/dd/018ce05c532a22007ac58d4f45232514cd9d6dd0ee1dc374e309db830983/sphinx_basic_ng-1.0.0b2-py3-none-any.whl", hash = "sha256:eb09aedbabfb650607e9b4b68c9d240b90b1e1be221d6ad71d61c52e29f7932b", size = 22496, upload-time = "2023-07-08T18:40:52.659Z" },
+]
+
+[[package]]
+name = "sphinx-codeautolink"
+version = "0.18.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "beautifulsoup4", marker = "python_full_version >= '3.12'" },
+    { name = "sphinx", marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/d3/51a6f2d822621d1e4eaf575ad5139e3120db5a0f535d518c1c0c1b9fb828/sphinx_codeautolink-0.18.1.tar.gz", hash = "sha256:820b55f630298297b4f8f18d8825529f25895d3734ac7ac06584f62845c4fd4b", size = 63342, upload-time = "2026-04-30T10:22:26.433Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/4a/f46a675afd0479558bcaa867060fdf5c1c4647446f77f0e8447cd36298d3/sphinx_codeautolink-0.18.1-py3-none-any.whl", hash = "sha256:59592ae4548ce49a169d1bcded5d91f9b1d3190b8125615845af9ec5cc13c808", size = 36936, upload-time = "2026-04-30T10:22:24.779Z" },
 ]
 
 [[package]]

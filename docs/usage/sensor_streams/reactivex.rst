@@ -326,7 +326,7 @@ When you subscribe, you get back a ``Disposable``. This is your "cancel button":
 
 **Rule of thumb:** Whenever you subscribe, save the disposable because you have to unsubscribe at some point by calling ``disposable.dispose()``.
 
-**In dimos modules:** Every ``Module`` has a ``self._disposables`` (a ``CompositeDisposable``) that automatically disposes everything when the module closes:
+**In dimos modules:** Every :class:`Module <dimos.core.module.Module>` has a ``self._disposables`` (a ``CompositeDisposable``) that automatically disposes everything when the module closes:
 
 .. code-block:: python
 
@@ -362,20 +362,20 @@ Creating Observables
 
 There are two common callback patterns in APIs. Use the appropriate helper:
 
-+----------------------------------------+-----------------------------------------------------+----------------------------+
-| Pattern                                | Example                                             | Helper                     |
-+========================================+=====================================================+============================+
-| Register/unregister with same callback | ``sensor.register(cb)`` / ``sensor.unregister(cb)`` | ``callback_to_observable`` |
-+----------------------------------------+-----------------------------------------------------+----------------------------+
-| Subscribe returns unsub function       | ``unsub = pubsub.subscribe(cb)``                    | ``to_observable``          |
-+----------------------------------------+-----------------------------------------------------+----------------------------+
++----------------------------------------+-----------------------------------------------------+------------------------------------------------------------------------------+
+| Pattern                                | Example                                             | Helper                                                                       |
++========================================+=====================================================+==============================================================================+
+| Register/unregister with same callback | ``sensor.register(cb)`` / ``sensor.unregister(cb)`` | :func:`callback_to_observable <dimos.utils.reactive.callback_to_observable>` |
++----------------------------------------+-----------------------------------------------------+------------------------------------------------------------------------------+
+| Subscribe returns unsub function       | ``unsub = pubsub.subscribe(cb)``                    | :func:`to_observable <dimos.utils.reactive.to_observable>`                   |
++----------------------------------------+-----------------------------------------------------+------------------------------------------------------------------------------+
 
 .. _doc-usage-sensor_streams-reactivex--from-registerunregister-apis:
 
 From register/unregister APIs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use ``callback_to_observable`` when the API has separate register and unregister functions that take the same callback reference:
+Use :func:`callback_to_observable <dimos.utils.reactive.callback_to_observable>` when the API has separate register and unregister functions that take the same callback reference:
 
 .. code-block:: python
 
@@ -421,7 +421,7 @@ Use ``callback_to_observable`` when the API has separate register and unregister
 From subscribe-returns-unsub APIs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use ``to_observable`` when the subscribe function returns an unsubscribe callable:
+Use :func:`to_observable <dimos.utils.reactive.to_observable>` when the subscribe function returns an unsubscribe callable:
 
 .. code-block:: python
 

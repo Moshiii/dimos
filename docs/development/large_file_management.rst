@@ -273,6 +273,6 @@ So content behind those LFS pointers is hosted as plain git blobs in `dimensiona
 
    .. image:: https://raw.githubusercontent.com/dimensionalOS/dimos-docs-assets/main/capabilities/navigation/assets/coverage.png
 
-Small text SVGs emitted by pikchr and ``to_svg`` are exempt: they are committed here as plain text and referenced relatively.
+Small text SVGs emitted by pikchr and :func:`to_svg <dimos.core.introspection.svg.to_svg>` are exempt: they are committed here as plain text and referenced relatively.
 
 .. |output| image:: assets/get_data_flow.svg

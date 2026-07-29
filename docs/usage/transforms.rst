@@ -87,12 +87,12 @@ Each sensor, joint, and reference point has its own frame.
 The Transform Class
 -------------------
 
-The ``Transform`` class at `geometry_msgs/Transform.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/msgs/geometry_msgs/Transform.py#L21>`__ represents a spatial transformation with:
+The :class:`Transform <dimos.msgs.geometry_msgs.Transform.Transform>` class at `geometry_msgs/Transform.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/msgs/geometry_msgs/Transform.py#L21>`__ represents a spatial transformation with:
 
 - ``frame_id`` - The parent frame name
-- ``child_frame_id`` - The child frame name
-- ``translation`` - A ``Vector3`` (x, y, z) offset
-- ``rotation`` - A ``Quaternion`` (x, y, z, w) orientation
+- :attr:`child_frame_id <dimos.msgs.geometry_msgs.Transform.Transform.child_frame_id>` - The child frame name
+- :attr:`translation <dimos.msgs.geometry_msgs.Transform.Transform.translation>` - A :class:`Vector3 <dimos.msgs.geometry_msgs.Vector3.Vector3>` (x, y, z) offset
+- :attr:`rotation <dimos.msgs.geometry_msgs.Transform.Transform.rotation>` - A :class:`Quaternion <dimos.msgs.geometry_msgs.Quaternion.Quaternion>` (x, y, z, w) orientation
 - ``ts`` - Timestamp for temporal lookups
 
 .. code-block:: python
@@ -195,7 +195,7 @@ Frame IDs in Modules
 Modules in DimOS automatically get a ``frame_id`` property. This is controlled by two config options in `core/module.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/core/module.py#L78>`__:
 
 - ``frame_id`` - The base frame name (defaults to the class name)
-- ``frame_id_prefix`` - Optional prefix for namespacing
+- :attr:`frame_id_prefix <dimos.core.module.ModuleConfig.frame_id_prefix>` - Optional prefix for namespacing
 
 .. code-block:: python
 

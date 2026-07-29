@@ -12,7 +12,7 @@ Temporal Message Alignment
 
 Robots have multiple sensors emitting data at different rates and latencies. A camera might run at 30fps, while lidar scans at 10Hz, and each has different processing delays. For perception tasks like projecting 2D detections into 3D pointclouds, we need to match data from these streams by timestamp.
 
-``align_timestamped`` solves this by buffering messages and matching them within a time tolerance.
+:func:`align_timestamped <dimos.types.timestamped.align_timestamped>` solves this by buffering messages and matching them within a time tolerance.
 
 .. raw:: html
 
@@ -88,7 +88,7 @@ You can read more about :doc:`sensor storage here </usage/data_streams/storage_r
 
    </details>
 
-Streams would normally come from an actual robot into your module via ``In`` inputs. `detection/module3D.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/perception/detection/module3D.py#L11>`__ is a good example of this.
+Streams would normally come from an actual robot into your module via :class:`In <dimos.core.stream.In>` inputs. `detection/module3D.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/perception/detection/module3D.py#L11>`__ is a good example of this.
 
 Assume we have them. Let's align them.
 
@@ -324,7 +324,7 @@ Parameters
 Usage in Modules
 ----------------
 
-Every module ``In`` port exposes an ``.observable()`` method that returns a backpressured stream of incoming messages. This makes it easy to align inputs from multiple sensors.
+Every module :class:`In <dimos.core.stream.In>` port exposes an ``.observable()`` method that returns a backpressured stream of incoming messages. This makes it easy to align inputs from multiple sensors.
 
 From `detection/module3D.py <https://github.com/dimensionalOS/dimos/blob/main/dimos/perception/detection/module3D.py>`__, projecting 2D detections into 3D pointclouds:
 

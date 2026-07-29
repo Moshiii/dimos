@@ -45,6 +45,7 @@ extensions = [
     "sphinx.ext.extlinks",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
+    "sphinx_codeautolink",
     "sphinx_design",
 ]
 
@@ -148,6 +149,11 @@ spelling_ignore_wiki_words = True
 # -- Nitpicky mode -----------------------------------------------------------
 
 nitpicky = True
+# ``highlight_language`` makes otherwise untyped literal blocks use the Python
+# lexer. Code-autolink safely skips non-Python examples (logs, file trees, and
+# configuration snippets); do not promote those expected parse failures to
+# strict-build warnings.
+suppress_warnings = ["codeautolink.parse_block"]
 nitpick_ignore: list[tuple[str, str]] = [
     # TypeVars / ParamSpecs rendered in signatures — type parameters, not
     # documentable targets.
@@ -156,9 +162,47 @@ nitpick_ignore: list[tuple[str, str]] = [
     ("py:class", "R"),
     ("py:class", "dimos.core.stream.T"),
     ("py:class", "dimos.core.core.T"),
+    ("py:class", "dimos.agents.annotation.F"),
+    ("py:class", "dimos.types.timestamped.PRIMARY"),
+    ("py:class", "dimos.types.timestamped.SECONDARY"),
+    ("py:class", "dimos.utils.reactive.T"),
+    ("py:class", "dimos.utils.reactive.LatestReader"),
+    ("py:class", "dimos.memory2.transform.T"),
     # Upstream entities that are not documented.
     ("py:class", "langchain_core.messages.base.BaseMessage"),
     ("py:class", "distributed.ActorFuture"),
+    ("py:class", "NDArray"),
+    ("py:class", "np.int8"),
+    ("py:class", "open3d.cuda.pybind.geometry.PointCloud"),
+    ("py:class", "open3d.cuda.pybind.t.geometry.PointCloud"),
+    # Types referenced by documented signatures but not part of this API slice.
+    ("py:class", "dimos.msgs.protocol.DimosMsg"),
+    ("py:class", "dimos.protocol.pubsub.impl.zenohpubsub.Topic"),
+    ("py:class", "dimos.msgs.trajectory_msgs.TrajectoryPoint.TrajectoryPoint"),
+    ("py:class", "VoxelGrid"),
+    ("py:class", "dimos.hardware.whole_body.spec.WholeBodyConfig"),
+    ("py:class", "WorldRobotID"),
+    ("py:class", "PlanningGroup"),
+    ("py:class", "JointState"),
+    # A prose return condition in align_timestamped's Google-style docstring.
+    ("py:class", "If single secondary observable"),
+    # Supporting memory and visualization types outside the documented slice.
+    ("py:class", "LayoutAlgo"),
+    ("py:class", "EmbeddingModel"),
+    ("py:class", "EmbeddedObservation"),
+    ("py:class", "dimos.memory2.backend.Backend"),
+    ("py:class", "dimos.memory2.transform.Transformer"),
+    ("py:class", "dimos.memory2.type.filter.StreamQuery"),
+    ("py:class", "dimos.memory2.transform.FnIterTransformer"),
+    ("py:class", "FnIterTransformer"),
+    ("py:class", "Observation"),
+    ("py:class", "DeferredColor"),
+    ("py:class", "dimos.memory2.vis.plot.plot.TimeAxis"),
+    ("py:class", "GeoPoint"),
+    ("py:class", "GeoPose"),
+    ("py:class", "ColorLike"),
+    ("py:class", "dimos.perception.detection.type.detection2d.base.Detection2D"),
+    ("py:class", "dimos.memory2.type.observation.Observation"),
     # TODO(PY315): Fix these references with lazy imports.
     ("py:class", "Observable"),
     ("py:class", "DisposableBase"),
@@ -191,3 +235,13 @@ def setup(app):
         return [nodes.inline(rawtext, text, classes=["brand"])], []
 
     app.add_role("brand", brand)
+
+    def shorten_long_class_signatures(
+        app, what, name, obj, options, signature, return_annotation
+    ):
+        """Collapse generated constructors that would overwhelm the API page."""
+        if what == "class" and signature and len(signature) > 120:
+            return "(...)", return_annotation
+        return None
+
+    app.connect("autodoc-process-signature", shorten_long_class_signatures)

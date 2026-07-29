@@ -4,11 +4,11 @@
 Blueprints
 ==========
 
-Blueprints (``BlueprintAtom``) are instructions for how to initialize a ``Module``.
+Blueprints (:class:`BlueprintAtom <dimos.core.coordination.blueprints.BlueprintAtom>`) are instructions for how to initialize a :class:`Module <dimos.core.module.Module>`.
 
-You don't typically want to run a single module, so multiple blueprints are handled together in ``Blueprint``.
+You don't typically want to run a single module, so multiple blueprints are handled together in :class:`Blueprint <dimos.core.coordination.blueprints.Blueprint>`.
 
-You create a ``Blueprint`` from a single module (say ``ConnectionModule``) with:
+You create a :class:`Blueprint <dimos.core.coordination.blueprints.Blueprint>` from a single module (say ``ConnectionModule``) with:
 
 .. code-block:: python
 
@@ -42,7 +42,7 @@ Now you can create the blueprint with:
 Linking blueprints
 ------------------
 
-You can link multiple blueprints together with ``autoconnect``:
+You can link multiple blueprints together with :func:`autoconnect <dimos.core.coordination.blueprints.autoconnect>`:
 
 .. code-block:: python
 
@@ -70,7 +70,7 @@ You can link multiple blueprints together with ``autoconnect``:
        module3(),
    )
 
-``blueprint`` itself is a ``Blueprint`` so you can link it with other modules:
+``blueprint`` itself is a :class:`Blueprint <dimos.core.coordination.blueprints.Blueprint>` so you can link it with other modules:
 
 .. code-block:: python
 
@@ -89,7 +89,7 @@ You can link multiple blueprints together with ``autoconnect``:
        module5(),
    )
 
-Blueprints are frozen data classes, and ``autoconnect()`` always constructs an expanded blueprint so you never have to worry about changes in one affecting the other.
+Blueprints are frozen data classes, and :func:`autoconnect() <dimos.core.coordination.blueprints.autoconnect>` always constructs an expanded blueprint so you never have to worry about changes in one affecting the other.
 
 .. _doc-usage-blueprints--publishing-external-blueprints:
 
@@ -121,8 +121,8 @@ External names are always ``<canonical-distribution-namespace>.<external-local-b
 
 Entry point targets may be either:
 
-- a ``Blueprint`` object, such as a module-level ``go2_blueprint``; or
-- a DimOS ``Module`` class, such as ``KeyboardTeleop``, which DimOS converts with ``.blueprint()``.
+- a :class:`Blueprint <dimos.core.coordination.blueprints.Blueprint>` object, such as a module-level ``go2_blueprint``; or
+- a DimOS :class:`Module <dimos.core.module.Module>` class, such as :class:`KeyboardTeleop <dimos.robot.unitree.keyboard_teleop.KeyboardTeleop>`, which DimOS converts with ``.blueprint()``.
 
 ``dimos list`` includes external names from package metadata without importing the target modules. ``dimos run my-robot-stack.go2`` imports only the requested entry point target.
 
@@ -133,7 +133,7 @@ Remote coordinator resolution happens in the coordinator environment. If a clien
 Duplicate module handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If the same module appears multiple times in ``autoconnect``, the **later blueprint wins** and overrides earlier ones:
+If the same module appears multiple times in :func:`autoconnect <dimos.core.coordination.blueprints.autoconnect>`, the **later blueprint wins** and overrides earlier ones:
 
 .. code-block:: python
 
@@ -193,9 +193,9 @@ If you don't like the name you can always override it like in the next section.
 Which transport is used?
 ------------------------
 
-By default ``LCMTransport`` is used if the object supports ``lcm_encode``. If it doesn't ``pLCMTransport`` is used (meaning "pickled LCM").
+By default :class:`LCMTransport <dimos.core.transport.LCMTransport>` is used if the object supports ``lcm_encode``. If it doesn't :class:`pLCMTransport <dimos.core.transport.pLCMTransport>` is used (meaning "pickled LCM").
 
-You can override transports with the ``transports`` method. It returns a new blueprint in which the override is set.
+You can override transports with the :meth:`transports <dimos.core.coordination.blueprints.Blueprint.transports>` method. It returns a new blueprint in which the override is set.
 
 .. code-block:: python
 
@@ -224,7 +224,7 @@ Note: ``expanded_blueprint`` does not get the transport overrides because it's c
 Remapping connections
 ---------------------
 
-Sometimes you need to rename a connection to match what other modules expect. You can use ``remappings`` to rename module connections:
+Sometimes you need to rename a connection to match what other modules expect. You can use :meth:`remappings <dimos.core.coordination.blueprints.Blueprint.remappings>` to rename module connections:
 
 .. code-block:: python
 
@@ -255,7 +255,7 @@ Sometimes you need to rename a connection to match what other modules expect. Yo
 After remapping:
 
 - The ``color_image`` output from ``ConnectionModule`` is treated as ``rgb_image``
-- It automatically connects to any module with an ``rgb_image`` input of type ``Image``
+- It automatically connects to any module with an ``rgb_image`` input of type :class:`Image <dimos.msgs.sensor_msgs.Image.Image>`
 - The topic name becomes ``/rgb_image`` instead of ``/color_image``
 
 If you want to override the topic, you still have to do it manually:
@@ -308,7 +308,7 @@ Inside a namespace everything is prefixed:
 
 - instance names (``robot0/go2connection``),
 - stream names and topics (``/robot0/lidar``),
-- TF frames (``frame_id_prefix``, unless you set one yourself),
+- TF frames (:attr:`frame_id_prefix <dimos.core.module.ModuleConfig.frame_id_prefix>`, unless you set one yourself),
 - and RPC topics (``robot0/go2connection/move``).
 
 Prefixed streams only connect within their namespace.
@@ -329,7 +329,7 @@ The downside of this is that the number of modules is fixed at blueprint creatio
 
    ROBOT_IPS=10.0.0.1,10.0.0.2 dimos run blueprint-name
 
-and construct ``robot_ips`` from the environment variable:
+and construct :attr:`robot_ips <dimos.core.global_config.GlobalConfig.robot_ips>` from the environment variable:
 
 .. code-block:: python
 
@@ -505,7 +505,7 @@ If a dependency might not be present in every blueprint, annotate it as ``SomeSp
 Defining skills
 ---------------
 
-Skills are methods on a ``Module`` decorated with ``@skill``. The agent automatically discovers all skills from launched modules at startup.
+Skills are methods on a :class:`Module <dimos.core.module.Module>` decorated with :func:`@skill <dimos.agents.annotation.skill>`. The agent automatically discovers all skills from launched modules at startup.
 
 .. code-block:: python
 
@@ -542,7 +542,7 @@ All you have to do to build a blueprint is call:
    16:30:01.321 [inf][ation/worker_manager_python.py] Shutting down all workers...
    16:30:01.480 [inf][ation/worker_manager_python.py] All workers shut down
 
-This returns a ``ModuleCoordinator`` instance that manages all deployed modules.
+This returns a :class:`ModuleCoordinator <dimos.core.coordination.module_coordinator.ModuleCoordinator>` instance that manages all deployed modules.
 
 .. _doc-usage-blueprints--running-and-shutting-down:
 

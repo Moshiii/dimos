@@ -4,9 +4,9 @@
 Premap & Relocalization
 =======================
 
-Relocalization lets a Go2 navigate on a previously built map instead of only on what it sees right now. At runtime, ``RelocalizationModule`` aligns live LiDAR to a saved premap and publishes a ``world → map`` transform, so the costmap and planner operate on the live scan and premap together.
+Relocalization lets a Go2 navigate on a previously built map instead of only on what it sees right now. At runtime, :class:`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>` aligns live LiDAR to a saved premap and publishes a ``world → map`` transform, so the costmap and planner operate on the live scan and premap together.
 
-|relocalize on the live go2 and nav_to a point in the premap|
+| relocalize on the live go2 and nav_to a point in the premap |
 
    **Note:** Requires DimOS v0.0.13 or newer for PGO loop closure and ``dimos map`` export.
 
@@ -83,7 +83,7 @@ Export a loop-closed global map as ``.pc2.lcm``:
 
 1. Current working directory
 2. ``DIMOS_PROJECT_ROOT``
-3. ``data/`` via LFS (``get_data``)
+3. ``data/`` via LFS (:func:`get_data <dimos.utils.data.get_data>`)
 
 Examples:
 
@@ -111,7 +111,7 @@ Open the companion ``{DB_NAME}.rrd`` in Rerun to verify loop closure before depl
 3. Relocalize in replay
 -----------------------
 
-Test alignment without the robot. ``unitree-go2-relocalization`` is ``unitree-go2`` plus ``RelocalizationModule``:
+Test alignment without the robot. ``unitree-go2-relocalization`` is ``unitree-go2`` plus :class:`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>`:
 
 .. code-block:: bash
 
@@ -172,7 +172,7 @@ Before sending navigation goals, walk through this checklist:
 How it works
 ------------
 
-The ``unitree-go2-relocalization`` blueprint is the standard :doc:`Go2 navigation stack </capabilities/navigation/deep_dive>` plus ``RelocalizationModule``:
+The ``unitree-go2-relocalization`` blueprint is the standard :doc:`Go2 navigation stack </capabilities/navigation/deep_dive>` plus :class:`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>`:
 
 .. raw:: html
 
@@ -197,7 +197,7 @@ The ``unitree-go2-relocalization`` blueprint is the standard :doc:`Go2 navigatio
 
    </details>
 
-|unitree-go2-relocalization blueprint module graph|
+| unitree-go2-relocalization blueprint module graph |
 
 Note that `CostMapper <https://github.com/dimensionalOS/dimos/blob/main/dimos/mapping/costmapper.py>`__ builds the costmap from the merged map only while `RelocalizationModule <https://github.com/dimensionalOS/dimos/blob/main/dimos/mapping/relocalization/module.py>`__ has a good alignment; until then it falls back to the live map alone.
 
@@ -206,15 +206,15 @@ Note that `CostMapper <https://github.com/dimensionalOS/dimos/blob/main/dimos/ma
 File formats
 ~~~~~~~~~~~~
 
-+--------------------+----------------------------------------------------------+-------------------------------+-----------------------------------------+
-| File               | Format                                                   | Produced by                   | Consumed by                             |
-+====================+==========================================================+===============================+=========================================+
-| ``{name}.db``      | memory2 SQLite (``lidar``, ``odom``, ``color_image``, …) | ``unitree-go2-memory``        | ``dimos map *``, ``--replay-db``        |
-+--------------------+----------------------------------------------------------+-------------------------------+-----------------------------------------+
-| ``{name}.pc2.lcm`` | LCM-encoded ``PointCloud2`` premap                       | ``dimos map global --export`` | ``RelocalizationModule`` (``map_file``) |
-+--------------------+----------------------------------------------------------+-------------------------------+-----------------------------------------+
-| ``{name}.rrd``     | Rerun recording (visual QA)                              | ``dimos map global``          | Rerun viewer                            |
-+--------------------+----------------------------------------------------------+-------------------------------+-----------------------------------------+
++--------------------+------------------------------------------------------------------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------+
+| File               | Format                                                                                   | Produced by                   | Consumed by                                                                                             |
++====================+==========================================================================================+===============================+=========================================================================================================+
+| ``{name}.db``      | memory2 SQLite (``lidar``, ``odom``, ``color_image``, …)                                 | ``unitree-go2-memory``        | ``dimos map *``, ``--replay-db``                                                                        |
++--------------------+------------------------------------------------------------------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------+
+| ``{name}.pc2.lcm`` | LCM-encoded :class:`PointCloud2 <dimos.msgs.sensor_msgs.PointCloud2.PointCloud2>` premap | ``dimos map global --export`` | :class:`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>` (``map_file``) |
++--------------------+------------------------------------------------------------------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------+
+| ``{name}.rrd``     | Rerun recording (visual QA)                                                              | ``dimos map global``          | Rerun viewer                                                                                            |
++--------------------+------------------------------------------------------------------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------+
 
 .. _doc-capabilities-navigation-relocalization--configuration-reference:
 

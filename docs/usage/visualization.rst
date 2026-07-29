@@ -82,7 +82,7 @@ Rerun Web (``rerun``, ``--rerun-open web``)
 Rendering with Custom Blueprints
 --------------------------------
 
-To enable visualization in your own blueprint, use ``vis_module``:
+To enable visualization in your own blueprint, use :func:`vis_module <dimos.visualization.vis_module.vis_module>`:
 
 .. code-block:: python
 
@@ -105,7 +105,7 @@ Run the stack locally (this blocks until you stop the process):
    if __name__ == "__main__":
        ModuleCoordinator.build(camera_demo).loop()
 
-Every LCM stream, such as ``color_image`` (output by CameraModule), that uses a data type (like ``Image``) that has a ``.to_rerun`` method will get rendered (``rr.log``) using the LCM topic as the rerun entity path. In other words: to render something, simply log it to a stream and it will automatically be available in rerun.
+Every LCM stream, such as ``color_image`` (output by CameraModule), that uses a data type (like :class:`Image <dimos.msgs.sensor_msgs.Image.Image>`) that has a ``.to_rerun`` method will get rendered (``rr.log``) using the LCM topic as the rerun entity path. In other words: to render something, simply log it to a stream and it will automatically be available in rerun.
 
 .. _doc-usage-visualization--performance-tuning:
 
@@ -152,7 +152,7 @@ Edit `dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py <https://github.co
 Direct Visualization from a Module
 ----------------------------------
 
-If you want to log data to Rerun directly from inside a module (e.g. for debugging or one-off visualizations), use ``rerun_init`` instead of calling ``rr.init()`` yourself. It handles colormap registration and can optionally start a gRPC server so a viewer can connect.
+If you want to log data to Rerun directly from inside a module (e.g. for debugging or one-off visualizations), use :func:`rerun_init <dimos.visualization.rerun.init.rerun_init>` instead of calling ``rr.init()`` yourself. It handles colormap registration and can optionally start a gRPC server so a viewer can connect.
 
 .. code-block:: python
 
@@ -174,7 +174,7 @@ If you want to log data to Rerun directly from inside a module (e.g. for debuggi
    )
    # Then connect with: dimos-viewer --connect rerun+http://127.0.0.1:9999/proxy
 
-When a ``RerunBridgeModule`` is already part of your blueprint, you typically don't need ``start_grpc`` — just call ``rerun_init()`` and log directly with ``rr.log()``. The data will appear in the existing viewer.
+When a :class:`RerunBridgeModule <dimos.visualization.rerun.bridge.RerunBridgeModule>` is already part of your blueprint, you typically don't need ``start_grpc`` — just call :func:`rerun_init() <dimos.visualization.rerun.init.rerun_init>` and log directly with ``rr.log()``. The data will appear in the existing viewer.
 
 .. _doc-usage-visualization--how-to-use-rerun-on-dev-and-the-tfentity-nuances:
 

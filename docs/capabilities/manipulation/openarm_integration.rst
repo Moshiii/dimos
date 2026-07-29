@@ -476,7 +476,7 @@ Design decisions
 - **Driver separate from adapter.** ``driver.py`` has zero dimos deps → unit-testable with a virtual CAN bus, reusable outside dimos.
 - **MIT mode for everything.** MIT can emulate position (high kp), velocity (kp=0, nonzero kd+dq), and torque (kp=kd=0, nonzero tau). One code path.
 - **Gravity compensation on by default.** Eliminates steady-state position error without needing high kp. Needs Pinocchio + the per-side URDFs.
-- **One adapter per CAN bus, keyed by ``address``.** Matches the Piper adapter pattern. Bimanual = two adapters with different ``address`` values.
+- **One adapter per CAN bus, keyed by :attr:`address <dimos.control.components.HardwareComponent.address>`.** Matches the Piper adapter pattern. Bimanual = two adapters with different :attr:`address <dimos.control.components.HardwareComponent.address>` values.
 - **Per-side URDFs for Drake planning.** Loading the full 14-DOF bimanual URDF twice (once per robot instance) creates phantom-arm collisions with the "other" arm frozen at zero. The per-side URDFs keep only one arm's links + the torso, avoiding the phantom collisions while matching the bimanual kinematics exactly.
 - **URDF stays in-tree (``data/openarm_description/``) for now.** Can migrate to LFS later — only the path constants in the OpenArm blueprint module change.
 - **CAN bringup stays manual (``sudo``).** Auto-bringup from ``connect()`` would need sudo-in-a-library or a systemd unit; the explicit script is clearer and testable. For production, add a oneshot systemd unit that runs the script at boot.

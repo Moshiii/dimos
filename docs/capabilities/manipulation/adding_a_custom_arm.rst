@@ -410,7 +410,7 @@ Step 2: Create Package Files
 How discovery works
 ~~~~~~~~~~~~~~~~~~~
 
-The ``AdapterRegistry`` in ``dimos/hardware/manipulators/registry.py`` discovers adapters from ``_registry.py`` manifests at import time:
+The :class:`AdapterRegistry <dimos.hardware.manipulators.registry.AdapterRegistry>` in ``dimos/hardware/manipulators/registry.py`` discovers adapters from ``_registry.py`` manifests at import time:
 
 1. It iterates over all subpackages under ``dimos/hardware/manipulators/``
 2. For each subpackage, it loads ``<subpackage>._registry`` and records each ``ADAPTER_FACTORIES`` entry (name → ``"module:attr"`` import path)
@@ -513,25 +513,25 @@ Create ``dimos/robot/yourarm/blueprints.py`` with your coordinator and (optional
 Blueprint field reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-+-------------------+-----------------------------------------------------------------------------------------------+
-| Field             | Description                                                                                   |
-+===================+===============================================================================================+
-| ``hardware_id``   | Unique name for this hardware component. Used to route commands.                              |
-+-------------------+-----------------------------------------------------------------------------------------------+
-| ``adapter_type``  | Name registered with ``adapter_registry`` (e.g., ``"yourarm"``).                              |
-+-------------------+-----------------------------------------------------------------------------------------------+
-| ``address``       | Connection info passed to adapter's ``__init__`` as ``address`` kwarg.                        |
-+-------------------+-----------------------------------------------------------------------------------------------+
-| ``joints``        | List of joint names. ``make_joints("arm", 6)`` creates ``["arm_joint1", ..., "arm_joint6"]``. |
-+-------------------+-----------------------------------------------------------------------------------------------+
-| ``auto_enable``   | If ``True``, servos are enabled automatically when the coordinator starts.                    |
-+-------------------+-----------------------------------------------------------------------------------------------+
-| ``task.name``     | Name used by the ManipulationModule to invoke trajectory execution via RPC.                   |
-+-------------------+-----------------------------------------------------------------------------------------------+
-| ``task.type``     | Task type: ``"trajectory"``, ``"servo"``, ``"velocity"``, or ``"cartesian_ik"``.              |
-+-------------------+-----------------------------------------------------------------------------------------------+
-| ``task.priority`` | Priority for per-joint arbitration. Higher number wins.                                       |
-+-------------------+-----------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| Field                                                                          | Description                                                                                                                     |
++================================================================================+=================================================================================================================================+
+| :attr:`hardware_id <dimos.control.components.HardwareComponent.hardware_id>`   | Unique name for this hardware component. Used to route commands.                                                                |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`adapter_type <dimos.control.components.HardwareComponent.adapter_type>` | Name registered with ``adapter_registry`` (e.g., ``"yourarm"``).                                                                |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`address <dimos.control.components.HardwareComponent.address>`           | Connection info passed to adapter's ``__init__`` as :attr:`address <dimos.control.components.HardwareComponent.address>` kwarg. |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`joints <dimos.control.components.HardwareComponent.joints>`             | List of joint names. ``make_joints("arm", 6)`` creates ``["arm_joint1", ..., "arm_joint6"]``.                                   |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`auto_enable <dimos.control.components.HardwareComponent.auto_enable>`   | If ``True``, servos are enabled automatically when the coordinator starts.                                                      |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| ``task.name``                                                                  | Name used by the ManipulationModule to invoke trajectory execution via RPC.                                                     |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| ``task.type``                                                                  | Task type: ``"trajectory"``, ``"servo"``, ``"velocity"``, or ``"cartesian_ik"``.                                                |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| ``task.priority``                                                              | Priority for per-joint arbitration. Higher number wins.                                                                         |
++--------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
 
 .. _doc-capabilities-manipulation-adding_a_custom_arm--step-4-add-urdf-and-planning-integration-optional:
 
@@ -547,7 +547,7 @@ If you want motion planning (collision-free trajectories via Drake), you need a 
 4a. Add your URDF
 ~~~~~~~~~~~~~~~~~
 
-Place your URDF/xacro files under LFS data so they can be resolved via ``LfsPath``. ``LfsPath`` is a ``Path`` subclass that lazily downloads LFS data on first access — this avoids downloading at import time when the blueprint module is loaded.
+Place your URDF/xacro files under LFS data so they can be resolved via :class:`LfsPath <dimos.utils.data.LfsPath>`. :class:`LfsPath <dimos.utils.data.LfsPath>` is a ``Path`` subclass that lazily downloads LFS data on first access — this avoids downloading at import time when the blueprint module is loaded.
 
 .. code-block:: python
 
@@ -644,27 +644,27 @@ Add this to your ``dimos/robot/yourarm/blueprints.py`` alongside the coordinator
 Key config fields
 ~~~~~~~~~~~~~~~~~
 
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| Field                               | Description                                                                                                                                                                       |
-+=====================================+===================================================================================================================================================================================+
-| ``model_path``                      | Path to ``.urdf`` or ``.xacro`` file                                                                                                                                              |
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ``joint_names``                     | Ordered controllable local model joint set (must match URDF); not itself a planning group                                                                                         |
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ``planning_groups`` / ``srdf_path`` | Explicit planning groups or SRDF source; direct ``RobotModelConfig(...)`` helpers should pass explicit groups, while shared config helpers can discover groups from SRDF/fallback |
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ``base_pose`` / ``base_link``       | Optional robot placement: ``base_pose`` places ``base_link`` in the world for weld/strip behavior                                                                                 |
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ``package_paths``                   | Maps ``package://`` URIs to filesystem paths (for xacro)                                                                                                                          |
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ``coordinator_task_name``           | Must match the ``TaskConfig.name`` in your coordinator blueprint                                                                                                                  |
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ``collision_exclusion_pairs``       | List of ``(link_a, link_b)`` tuples for links that may legitimately touch (e.g., gripper fingers)                                                                                 |
-+-------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Field                                                                                                                                                                           | Description                                                                                                                                                                                                                                         |
++=================================================================================================================================================================================+=====================================================================================================================================================================================================================================================+
+| :attr:`model_path <dimos.manipulation.planning.spec.config.RobotModelConfig.model_path>`                                                                                        | Path to ``.urdf`` or ``.xacro`` file                                                                                                                                                                                                                |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``joint_names``                                                                                                                                                                 | Ordered controllable local model joint set (must match URDF); not itself a planning group                                                                                                                                                           |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``planning_groups`` / :attr:`srdf_path <dimos.manipulation.planning.spec.config.RobotModelConfig.srdf_path>`                                                                    | Explicit planning groups or SRDF source; direct ``RobotModelConfig(...)`` helpers should pass explicit groups, while shared config helpers can discover groups from SRDF/fallback                                                                   |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`base_pose <dimos.manipulation.planning.spec.config.RobotModelConfig.base_pose>` / :attr:`base_link <dimos.manipulation.planning.spec.config.RobotModelConfig.base_link>` | Optional robot placement: :attr:`base_pose <dimos.manipulation.planning.spec.config.RobotModelConfig.base_pose>` places :attr:`base_link <dimos.manipulation.planning.spec.config.RobotModelConfig.base_link>` in the world for weld/strip behavior |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`package_paths <dimos.manipulation.planning.spec.config.RobotModelConfig.package_paths>`                                                                                  | Maps ``package://`` URIs to filesystem paths (for xacro)                                                                                                                                                                                            |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`coordinator_task_name <dimos.manipulation.planning.spec.config.RobotModelConfig.coordinator_task_name>`                                                                  | Must match the ``TaskConfig.name`` in your coordinator blueprint                                                                                                                                                                                    |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| :attr:`collision_exclusion_pairs <dimos.manipulation.planning.spec.config.RobotModelConfig.collision_exclusion_pairs>`                                                          | List of ``(link_a, link_b)`` tuples for links that may legitimately touch (e.g., gripper fingers)                                                                                                                                                   |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 Coordinator-facing joint states and trajectories use global joint names derived mechanically as ``{robot_name}/{local_joint_name}`` (for example, ``arm/joint1``). Keep hardware-native name translation inside the hardware adapter; manipulation planning config uses local model joint names.
 
-Planning-group ``base_link``/``tip_link`` values define kinematic chains and pose target frames. ``base_link`` is only the robot-scoped link placed by ``base_pose``; do not use it as a substitute for planning-group chain metadata. See :doc:`Planning Groups </capabilities/manipulation/planning_groups>`.
+Planning-group :attr:`base_link <dimos.manipulation.planning.spec.config.RobotModelConfig.base_link>`/``tip_link`` values define kinematic chains and pose target frames. :attr:`base_link <dimos.manipulation.planning.spec.config.RobotModelConfig.base_link>` is only the robot-scoped link placed by :attr:`base_pose <dimos.manipulation.planning.spec.config.RobotModelConfig.base_pose>`; do not use it as a substitute for planning-group chain metadata. See :doc:`Planning Groups </capabilities/manipulation/planning_groups>`.
 
 .. _doc-capabilities-manipulation-adding_a_custom_arm--step-5-register-blueprints:
 

@@ -37,7 +37,7 @@ How low is the latency in practice? With the World Cup on, four Dimensional team
 
 Below are the latencies recorded:
 
-|Round-trip command latency to robots hosted in San Francisco: ~15 ms from San Francisco, ~114 ms from Bangalore, ~134 ms from Buenos Aires, ~160 ms from Shanghai — every route under the ~200 ms delay of a typical video call|
+| Round-trip command latency to robots hosted in San Francisco: ~15 ms from San Francisco, ~114 ms from Bangalore, ~134 ms from Buenos Aires, ~160 ms from Shanghai — every route under the ~200 ms delay of a typical video call |
 
 .. _doc-capabilities-teleoperation-hosted--quick-start:
 
@@ -75,7 +75,7 @@ Available blueprints
 | ``teleop-hosted-go2-multicam``  | Adds a second RealSense, operator-selectable, mux'd into one video track |
 +---------------------------------+--------------------------------------------------------------------------+
 
-The transport blueprints bind ``Cloudflare*`` transports directly to the streams of several small, per-concern modules: ``Go2CommandModule`` (command / E-STOP / drive guard), ``CameraMuxModule`` (camera → video track), ``MapCompressModule`` (costmap → minimap), and ``HostedStatsModule`` (telemetry + acks). The broker-bound modules run in one worker so they share a single broker session; the ``GO2Connection`` driver runs in a second worker (``n_workers=2``).
+The transport blueprints bind ``Cloudflare*`` transports directly to the streams of several small, per-concern modules: :class:`Go2CommandModule <dimos.teleop.hosted.go2_command.Go2CommandModule>` (command / E-STOP / drive guard), :class:`CameraMuxModule <dimos.teleop.hosted.camera_mux.CameraMuxModule>` (camera → video track), :class:`MapCompressModule <dimos.teleop.hosted.map_compress.MapCompressModule>` (costmap → minimap), and :class:`HostedStatsModule <dimos.teleop.hosted.hosted_stats.HostedStatsModule>` (telemetry + acks). The broker-bound modules run in one worker so they share a single broker session; the :class:`GO2Connection <dimos.robot.unitree.go2.connection.GO2Connection>` driver runs in a second worker (``n_workers=2``).
 
 Enable the glass-to-glass latency benchmark with ``-o cameramuxmodule.latency_stamp=true``.
 
@@ -148,13 +148,13 @@ Operator inputs
 
 The browser is modality-agnostic — it streams whatever the device gives it, and the robot blueprint decides what to do with it.
 
-+----------------------+-----------------------------------------------------------------------------------------------+----------------------------------------+
-| Device               | Input                                                                                         | Maps to                                |
-+======================+===============================================================================================+========================================+
-| Desktop browser      | **WASD** keyboard                                                                             | ``TwistStamped`` → ``cmd_vel``         |
-+----------------------+-----------------------------------------------------------------------------------------------+----------------------------------------+
-| Quest 3 / VR headset | **Left thumbstick** Y → fwd/back, X → strafe; **right thumbstick** X → yaw; grip = boost/slow | same ``TwistStamped`` path as keyboard |
-+----------------------+-----------------------------------------------------------------------------------------------+----------------------------------------+
++----------------------+-----------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------+
+| Device               | Input                                                                                         | Maps to                                                                                          |
++======================+===============================================================================================+==================================================================================================+
+| Desktop browser      | **WASD** keyboard                                                                             | :class:`TwistStamped <dimos.msgs.geometry_msgs.TwistStamped.TwistStamped>` → ``cmd_vel``         |
++----------------------+-----------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------+
+| Quest 3 / VR headset | **Left thumbstick** Y → fwd/back, X → strafe; **right thumbstick** X → yaw; grip = boost/slow | same :class:`TwistStamped <dimos.msgs.geometry_msgs.TwistStamped.TwistStamped>` path as keyboard |
++----------------------+-----------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------+
 
 Shift = 2× speed, Ctrl = ½×. The operator can also send allow-listed sport commands (StandDown, RecoveryStand, Sit, Damp, Hello, Stretch, and — gated behind ``allow_acrobatics`` — FrontJump, FrontPounce), toggle obstacle avoidance / rage mode / the head LED, pick the camera, E-STOP, and click the minimap to navigate.
 
@@ -192,7 +192,7 @@ Configuration
 
 Each concern is its own module, so its commonly-tuned fields live under that module's config key (module class name, lowercased). Pass with ``-o``, e.g. ``-o hostedstatsmodule.telemetry_hz=5``.
 
-``hostedstatsmodule`` — ``HostedStatsModule``:
+``hostedstatsmodule`` — :class:`HostedStatsModule <dimos.teleop.hosted.hosted_stats.HostedStatsModule>`:
 
 ================ ======= ==============================
 Field            Default Notes
@@ -200,7 +200,7 @@ Field            Default Notes
 ``telemetry_hz`` ``3.0`` Robot → operator HUD push rate
 ================ ======= ==============================
 
-``go2commandmodule`` — ``Go2CommandModule``:
+``go2commandmodule`` — :class:`Go2CommandModule <dimos.teleop.hosted.go2_command.Go2CommandModule>`:
 
 +------------------------------------------+-------------------+---------------------------------------------+
 | Field                                    | Default           | Notes                                       |
@@ -216,7 +216,7 @@ Field            Default Notes
 | ``damp_on_operator_lost``                | ``false``         | Damp the robot when the operator link drops |
 +------------------------------------------+-------------------+---------------------------------------------+
 
-``cameramuxmodule`` — ``CameraMuxModule``:
+``cameramuxmodule`` — :class:`CameraMuxModule <dimos.teleop.hosted.camera_mux.CameraMuxModule>`:
 
 +-----------------------------------------+---------------------+----------------------------------------------+
 | Field                                   | Default             | Notes                                        |
@@ -228,7 +228,7 @@ Field            Default Notes
 | ``cameras``                             | ``["cam1","cam2"]`` | Named inputs; first is the boot default view |
 +-----------------------------------------+---------------------+----------------------------------------------+
 
-``mapcompressmodule`` — ``MapCompressModule``:
+``mapcompressmodule`` — :class:`MapCompressModule <dimos.teleop.hosted.map_compress.MapCompressModule>`:
 
 +--------------------------+--------------------+------------------------------------------------------------------------------+
 | Field                    | Default            | Notes                                                                        |
@@ -245,7 +245,7 @@ Broker settings live under ``transports.broker.*``: ``api_key`` (required), ``br
 How it connects
 ---------------
 
-The per-process ``BrokerProvider`` owns the session; blueprint transports bind to it. Channels:
+The per-process :class:`BrokerProvider <dimos.protocol.pubsub.impl.webrtc.providers.broker.BrokerProvider>` owns the session; blueprint transports bind to it. Channels:
 
 .. code-block:: text
 

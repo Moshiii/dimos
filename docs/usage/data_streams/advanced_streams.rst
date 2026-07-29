@@ -45,7 +45,7 @@ In robotics, we deal with hardware that produces data at its own pace - a camera
 
 |output|
 
-**The solution:** The ``backpressure()`` wrapper handles this by:
+**The solution:** The :func:`backpressure() <dimos.utils.reactive.backpressure>` wrapper handles this by:
 
 1. **Sharing the source** - Camera runs once, all subscribers share the stream
 2. **Per-subscriber speed** - Fast subscribers get every frame, slow ones get the latest when ready
@@ -173,19 +173,19 @@ If you are doing this periodically as a part of a processing loop, it is very li
            ops.sample(0.05),
        ).subscribe(self.twist.publish) # shoots off the Twist out of the module
 
-If you'd still like to switch to synchronous fetching, we provide two approaches, ``getter_hot()`` and ``getter_cold()``
+If you'd still like to switch to synchronous fetching, we provide two approaches, :func:`getter_hot() <dimos.utils.reactive.getter_hot>` and :func:`getter_cold() <dimos.utils.reactive.getter_cold>`
 
-+------------------+--------------------------------+----------------------------------+
-|                  | ``getter_hot()``               | ``getter_cold()``                |
-+==================+================================+==================================+
-| **Subscription** | Stays active in background     | Fresh subscription each call     |
-+------------------+--------------------------------+----------------------------------+
-| **Read speed**   | Instant (value already cached) | Slower (waits for value)         |
-+------------------+--------------------------------+----------------------------------+
-| **Resources**    | Keeps connection open          | Opens/closes each call           |
-+------------------+--------------------------------+----------------------------------+
-| **Use when**     | Frequent reads, need latest    | Occasional reads, save resources |
-+------------------+--------------------------------+----------------------------------+
++------------------+--------------------------------------------------------+----------------------------------------------------------+
+|                  | :func:`getter_hot() <dimos.utils.reactive.getter_hot>` | :func:`getter_cold() <dimos.utils.reactive.getter_cold>` |
++==================+========================================================+==========================================================+
+| **Subscription** | Stays active in background                             | Fresh subscription each call                             |
++------------------+--------------------------------------------------------+----------------------------------------------------------+
+| **Read speed**   | Instant (value already cached)                         | Slower (waits for value)                                 |
++------------------+--------------------------------------------------------+----------------------------------------------------------+
+| **Resources**    | Keeps connection open                                  | Opens/closes each call                                   |
++------------------+--------------------------------------------------------+----------------------------------------------------------+
+| **Use when**     | Frequent reads, need latest                            | Occasional reads, save resources                         |
++------------------+--------------------------------------------------------+----------------------------------------------------------+
 
 .. raw:: html
 
@@ -267,12 +267,12 @@ If you'd still like to switch to synchronous fetching, we provide two approaches
 
 |image2|
 
-**Prefer ``getter_cold()``** when you can afford to wait and warmup isn't expensive. It's simpler (no cleanup needed) and doesn't hold resources. Only use ``getter_hot()`` when you need instant reads or the source is expensive to start.
+**Prefer :func:`getter_cold() <dimos.utils.reactive.getter_cold>`** when you can afford to wait and warmup isn't expensive. It's simpler (no cleanup needed) and doesn't hold resources. Only use :func:`getter_hot() <dimos.utils.reactive.getter_hot>` when you need instant reads or the source is expensive to start.
 
 .. _doc-usage-data_streams-advanced_streams--getter_hot-background-subscription-instant-reads:
 
-``getter_hot()`` - Background subscription, instant reads
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:func:`getter_hot() <dimos.utils.reactive.getter_hot>` - Background subscription, instant reads
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Subscribes immediately and keeps updating in the background. Each call returns the cached latest value instantly.
 
@@ -305,8 +305,8 @@ Subscribes immediately and keeps updating in the background. Each call returns t
 
 .. _doc-usage-data_streams-advanced_streams--getter_cold-fresh-subscription-each-call:
 
-``getter_cold()`` - Fresh subscription each call
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:func:`getter_cold() <dimos.utils.reactive.getter_cold>` - Fresh subscription each call
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Each call creates a new subscription, waits for one value, and cleans up. Slower but doesn't hold resources:
 

@@ -48,7 +48,7 @@ Both the config dataclass and pubsub topics get converted to CLI args passed dow
        pointcloud: Out[PointCloud2]
        imu: Out[Imu]
 
-That's it. ``MyLidar`` is a full DimOS module. You can use it with ``autoconnect``, blueprints, transport overrides, and specs. Once this module is started, your ``./build/my_lidar`` will get called with specific CLI args.
+That's it. ``MyLidar`` is a full DimOS module. You can use it with :func:`autoconnect <dimos.core.coordination.blueprints.autoconnect>`, blueprints, transport overrides, and specs. Once this module is started, your ``./build/my_lidar`` will get called with specific CLI args.
 
 .. _doc-usage-native_modules--how-it-works:
 
@@ -84,7 +84,7 @@ For the example above, the launched command would look like:
 
    2026-02-14T11:22:12.123963Z [info     ] Starting native process   [dimos/core/native_module.py] cmd='./build/my_lidar --pointcloud /lidar#sensor_msgs.PointCloud2 --imu /imu#sensor_msgs.Imu --host_ip 192.168.1.5 --frequency 10.0' cwd=/home/lesh/coding/dimos/docs/usage/build
 
-Topic strings use the format ``/<name>#<msg_type>``, which is the LCM channel name that Python ``LCMTransport`` subscribers use. The native binary publishes on these exact channels.
+Topic strings use the format ``/<name>#<msg_type>``, which is the LCM channel name that Python :class:`LCMTransport <dimos.core.transport.LCMTransport>` subscribers use. The native binary publishes on these exact channels.
 
 When ``stop()`` is called, the process receives SIGTERM. If it doesn't exit within ``shutdown_timeout`` seconds (default 10), it gets SIGKILL.
 
@@ -93,34 +93,34 @@ When ``stop()`` is called, the process receives SIGTERM. If it doesn't exit with
 Config
 ------
 
-``NativeModuleConfig`` extends ``ModuleConfig`` with subprocess fields:
+:class:`NativeModuleConfig <dimos.core.native_module.NativeModuleConfig>` extends :class:`ModuleConfig <dimos.core.module.ModuleConfig>` with subprocess fields:
 
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| Field                | Type               | Default         | Description                                                                                                      |
-+======================+====================+=================+==================================================================================================================+
-| ``executable``       | ``str``            | *(required)*    | Path to the native binary (relative to ``cwd`` if set)                                                           |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| ``build_command``    | ``str | None``     | ``None``        | Shell command to run if executable is missing (auto-build)                                                       |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| ``cwd``              | ``str | None``     | ``None``        | Working directory for build and runtime. Relative paths are resolved against the Python file defining the module |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| ``extra_args``       | ``list[str]``      | ``[]``          | Additional CLI arguments appended after auto-generated ones                                                      |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| ``extra_env``        | ``dict[str, str]`` | ``{}``          | Extra environment variables for the subprocess                                                                   |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| ``shutdown_timeout`` | ``float``          | ``10.0``        | Seconds to wait for SIGTERM before SIGKILL                                                                       |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| ``log_format``       | ``LogFormat``      | ``TEXT``        | How to parse subprocess output (``TEXT`` or ``JSON``)                                                            |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
-| ``cli_exclude``      | ``frozenset[str]`` | ``frozenset()`` | Config fields to skip when generating CLI args                                                                   |
-+----------------------+--------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| Field                | Type                                                    | Default         | Description                                                                                                      |
++======================+=========================================================+=================+==================================================================================================================+
+| ``executable``       | ``str``                                                 | *(required)*    | Path to the native binary (relative to ``cwd`` if set)                                                           |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| ``build_command``    | ``str | None``                                          | ``None``        | Shell command to run if executable is missing (auto-build)                                                       |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| ``cwd``              | ``str | None``                                          | ``None``        | Working directory for build and runtime. Relative paths are resolved against the Python file defining the module |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| ``extra_args``       | ``list[str]``                                           | ``[]``          | Additional CLI arguments appended after auto-generated ones                                                      |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| ``extra_env``        | ``dict[str, str]``                                      | ``{}``          | Extra environment variables for the subprocess                                                                   |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| ``shutdown_timeout`` | ``float``                                               | ``10.0``        | Seconds to wait for SIGTERM before SIGKILL                                                                       |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| ``log_format``       | :class:`LogFormat <dimos.core.native_module.LogFormat>` | ``TEXT``        | How to parse subprocess output (``TEXT`` or ``JSON``)                                                            |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
+| ``cli_exclude``      | ``frozenset[str]``                                      | ``frozenset()`` | Config fields to skip when generating CLI args                                                                   |
++----------------------+---------------------------------------------------------+-----------------+------------------------------------------------------------------------------------------------------------------+
 
 .. _doc-usage-native_modules--auto-cli-arg-generation:
 
 Auto CLI arg generation
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Any field you add to your config subclass automatically becomes a ``--name value`` CLI arg. Fields from ``NativeModuleConfig`` itself (like ``executable``, ``extra_args``, ``cwd``) are **not** passed — they're for Python-side orchestration only.
+Any field you add to your config subclass automatically becomes a ``--name value`` CLI arg. Fields from :class:`NativeModuleConfig <dimos.core.native_module.NativeModuleConfig>` itself (like ``executable``, ``extra_args``, ``cwd``) are **not** passed — they're for Python-side orchestration only.
 
 .. code-block:: python
 
@@ -161,7 +161,7 @@ If a config field shouldn't be a CLI arg, add it to ``cli_exclude``:
 Using with blueprints
 ---------------------
 
-Native modules work with ``autoconnect`` exactly like Python modules:
+Native modules work with :func:`autoconnect <dimos.core.coordination.blueprints.autoconnect>` exactly like Python modules:
 
 .. code-block:: python
 
@@ -176,7 +176,7 @@ Native modules work with ``autoconnect`` exactly like Python modules:
        PointCloudConsumer.blueprint(),
    ).build().loop()
 
-``autoconnect`` matches ports by ``(name, type)``, assigns LCM topics, and passes them to the native binary as CLI args. You can override transports as usual:
+:func:`autoconnect <dimos.core.coordination.blueprints.autoconnect>` matches ports by ``(name, type)``, assigns LCM topics, and passes them to the native binary as CLI args. You can override transports as usual:
 
 .. code-block:: python
 
