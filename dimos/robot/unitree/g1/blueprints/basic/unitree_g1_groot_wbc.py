@@ -71,7 +71,7 @@ _NAV_VOXEL_RESOLUTION = 0.08
 _NAV_OVERHEAD_SAFETY_MARGIN = 0.2
 _NAV_MAX_STEP_HEIGHT = 0.10
 _NAV_ROTATION_DIAMETER = 0.8
-_NAV_SAFE_RADIUS_MARGIN = 0.6
+_NAV_PATH_WIDTH_MARGIN = 1.1
 _RERUN_ROOT = "world/odometry/g1"
 _URDF_PATH = Path(__file__).resolve().parents[2] / "g1.urdf"
 _NOMINAL_PELVIS_Z = 0.74
@@ -96,10 +96,9 @@ _navigation = autoconnect(
             can_pass_under=G1.height_clearance + _NAV_OVERHEAD_SAFETY_MARGIN,
             can_climb=_NAV_MAX_STEP_HEIGHT,
         ),
-        initial_safe_radius_meters=G1.width_clearance + _NAV_SAFE_RADIUS_MARGIN,
     ),
     ReplanningAStarPlanner.blueprint(
-        robot_width=G1.width_clearance,
+        robot_width=G1.width_clearance / _NAV_PATH_WIDTH_MARGIN,
         robot_rotation_diameter=_NAV_ROTATION_DIAMETER,
     ),
     MovementManager.blueprint(),
