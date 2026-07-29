@@ -156,6 +156,9 @@ all_blueprints = {
     "xarm-perception-sim-agent": "dimos.robot.manipulators.xarm.blueprints.agentic:xarm_perception_sim_agent",
     "xarm6-planner-only": "dimos.robot.manipulators.xarm.blueprints.basic:xarm6_planner_only",
     "xarm6-worldbelief": "dimos.robot.manipulators.xarm.blueprints.worldbelief:xarm6_worldbelief",
+    "xarm6-worldbelief-replay": "dimos.robot.manipulators.xarm.blueprints.worldbelief:xarm6_worldbelief_replay",
+    "xarm6-worldbelief-replay-kitchen": "dimos.robot.manipulators.xarm.blueprints.worldbelief:xarm6_worldbelief_replay_kitchen",
+    "xarm6-worldbelief-replay-stationery": "dimos.robot.manipulators.xarm.blueprints.worldbelief:xarm6_worldbelief_replay_stationery",
     "xarm7-planner-coordinator": "dimos.robot.manipulators.xarm.blueprints.basic:xarm7_planner_coordinator",
     "xarm7-planner-coordinator-agent": "dimos.robot.manipulators.xarm.blueprints.agentic:xarm7_planner_coordinator_agent",
 }
@@ -177,7 +180,7 @@ all_modules = {
     "control-coordinator": "dimos.control.coordinator.ControlCoordinator",
     "cost-mapper": "dimos.mapping.costmapper.CostMapper",
     "dan-holonomic-tc": "dimos.navigation.dannav.holonomic_tc.module.DanHolonomicTC",
-    "dan-local-planner": "dimos.navigation.dannav.local_planner.module.DanLocalPlanner",
+    "dan-local-planner": "dimos.navigation.dannav.local_planner.local_planner.DanLocalPlanner",
     "demo-calculator-skill": "dimos.agents.skills.demo_calculator_skill.DemoCalculatorSkill",
     "demo-monitoring": "dimos.agents.demos.demo_capabilities.DemoMonitoring",
     "demo-robot": "dimos.agents.skills.demo_robot.DemoRobot",
