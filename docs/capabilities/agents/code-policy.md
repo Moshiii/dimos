@@ -51,7 +51,7 @@ general-purpose manipulation or perception recorder.
 
 For example, an agent can submit:
 
-```python
+```python skip
 latest_joint_state = memory.streams.coordinator_joint_state.last()
 print(latest_joint_state.ts, latest_joint_state.data.position)
 
