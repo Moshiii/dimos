@@ -28,8 +28,8 @@ import torch
 
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.perception.detection.detectors.base import Detector
-from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
 from dimos.perception.detection.type.detection2d.bbox import Detection2DBBox
+from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
 from dimos.perception.detection.type.detection2d.seg import Detection2DSeg
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
@@ -126,7 +126,7 @@ class EdgeTAMImageSegmenter:
                 name=det.name,
                 confidence=det.confidence,
             )
-            for det, mask in zip(detections, masks)
+            for det, mask in zip(detections, masks, strict=False)
         ]
         return ImageDetections2D(image, segmented)
 
