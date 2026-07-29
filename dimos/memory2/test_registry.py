@@ -175,20 +175,6 @@ class TestBackendSerialization:
 @pytest.mark.skipif_macos
 @pytest.mark.skipif_aarch64
 class TestStoreReopen:
-    def test_reader_observes_appends_after_attaching(self, tmp_path) -> None:
-        db = str(tmp_path / "live.db")
-        with SqliteStore(path=db) as writer:
-            writer_stream = writer.stream("events", str)
-            writer_stream.append("before", ts=1.0)
-
-            with SqliteStore(path=db, must_exist=True) as reader:
-                reader_stream = reader.stream("events", str)
-                assert reader_stream.last().data == "before"
-
-                writer_stream.append("after", ts=2.0)
-
-                assert reader_stream.last().data == "after"
-
     def test_reopen_preserves_data(self, tmp_path) -> None:
         """Create a store, write data, close, reopen, read back."""
         db = str(tmp_path / "test.db")

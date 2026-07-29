@@ -42,15 +42,17 @@ class ManipulationPolicyRecorder(WorldBeliefRecorder):
 
     def _prepare_streams(self) -> None:
         super()._prepare_streams()
-        codecs = {
-            "detections_2d": "lz4+lcm",
-            "detections_3d": "lz4+lcm",
-            "objects": "lz4+pickle",
-            "pointcloud": "lz4+lcm",
+        stream_types_and_codecs = {
+            "detections_2d": (Detection2DArray, "lz4+lcm"),
+            "detections_3d": (Detection3DArray, "lz4+lcm"),
+            # Memory2 validates payloads with isinstance(), so store the
+            # collection's runtime type rather than list[Object].
+            "objects": (list, "lz4+pickle"),
+            "pointcloud": (PointCloud2, "lz4+lcm"),
         }
-        for port_name, codec in codecs.items():
+        for port_name, (data_type, codec) in stream_types_and_codecs.items():
             stream_name = self.config.stream_remapping.get(port_name, port_name)
-            self.store.stream(stream_name, self.inputs[port_name].type, codec=codec)
+            self.store.stream(stream_name, data_type, codec=codec)
 
 
 manipulation_policy_recorder = ManipulationPolicyRecorder.blueprint

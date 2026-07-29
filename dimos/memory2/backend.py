@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, get_origin
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from dimos.core.resource import CompositeResource
 from dimos.memory2.codecs.base import Codec, codec_id
@@ -99,8 +99,7 @@ class Backend(CompositeResource, Generic[T]):
         payload = obs.data
 
         # Validate payload type matches stream type
-        runtime_type = get_origin(self.data_type) or self.data_type
-        if runtime_type is not object and not isinstance(payload, runtime_type):
+        if self.data_type is not object and not isinstance(payload, self.data_type):
             raise TypeError(
                 f"Stream expects {self.data_type.__qualname__}, got {type(payload).__qualname__}"
             )

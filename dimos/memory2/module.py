@@ -393,11 +393,7 @@ class Recorder(MemoryModule):
                     ts,
                     getattr(msg, "ts", None),
                 )
-            try:
-                stream.append(msg, ts=ts, pose=pose, tags={"reception_ts": recv_ts})
-            except Exception:
-                logger.exception("Failed to record %s at time %s", name, ts)
-                raise
+            stream.append(msg, ts=ts, pose=pose, tags={"reception_ts": recv_ts})
 
         # Stamp arrival time before the coalescing dispatch queue.
         stamped = input_topic.pure_observable().pipe(ops.map(lambda msg: (time.time(), msg)))

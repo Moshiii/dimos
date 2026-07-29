@@ -46,15 +46,6 @@ class TestStoreBasic:
         assert obs.tags["camera"] == "front"
         assert obs.ts > 0
 
-    def test_parameterized_collection_stream_validates_by_runtime_origin(
-        self, session: Store
-    ) -> None:
-        stream = session.stream("objects", list[str], codec="pickle")
-
-        stored = stream.append(["cup", "bowl"])
-
-        assert stored.data == ["cup", "bowl"]
-
     def test_append_multiple_and_fetch(self, session: Store) -> None:
         s = session.stream("sensor", float)
         s.append(1.0, ts=100.0)

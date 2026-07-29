@@ -68,13 +68,16 @@ def test_derived_and_proprioceptive_observations_are_typed_and_queryable(
     joint_state = JointState(name=["joint1"], position=[0.25])
     pointcloud = PointCloud2(frame_id="world", ts=12.0)
     recorder.store.stream("coordinator_joint_state", JointState).append(joint_state)
-    recorder.store.stream("pointcloud", PointCloud2).append(pointcloud)
-    recorder.store.stream("objects", list, codec="lz4+pickle").append([])
 
     reader = SqliteStore(path=recorder.recording_path(), must_exist=True)
     reader.start()
     try:
         stored_joint_state = reader.streams.coordinator_joint_state.last().data
+
+        # The policy reader stays attached while the recorder appends new data.
+        recorder.store.stream("pointcloud", PointCloud2).append(pointcloud)
+        recorder.store.stream("objects", list, codec="lz4+pickle").append([])
+
         stored_pointcloud = reader.streams.pointcloud.last().data
         stored_objects = reader.streams.objects.last().data
 
