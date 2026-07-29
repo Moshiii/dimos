@@ -242,12 +242,16 @@ class _WorldBeliefReplaySource(Module):
             self._playback = playback
 
             for name in self._stream_names:
-                disposable = replay.stream(name).observable().subscribe(
-                    on_next=lambda msg, stream=name: self._publish(stream, msg, generation),
-                    on_error=lambda error, stream=name: self._stream_failed(
-                        stream, error, generation
-                    ),
-                    on_completed=lambda stream=name: self._stream_completed(stream, generation),
+                disposable = (
+                    replay.stream(name)
+                    .observable()
+                    .subscribe(
+                        on_next=lambda msg, stream=name: self._publish(stream, msg, generation),
+                        on_error=lambda error, stream=name: self._stream_failed(
+                            stream, error, generation
+                        ),
+                        on_completed=lambda stream=name: self._stream_completed(stream, generation),
+                    )
                 )
                 playback.add(disposable)
 
