@@ -17,13 +17,21 @@ from typing import Any
 
 import pytest
 
+from dimos.agents.mcp.mcp_client import McpClient
+from dimos.agents.mcp.mcp_server import McpServer
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import Blueprint
+from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
 from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
+from dimos.manipulation.pick_and_place_module import (
+    PickAndPlaceModule,
+    PickAndPlaceModuleConfig,
+)
 from dimos.manipulation.visualization.config import (
     NoManipulationVisualizationConfig,
 )
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
+from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.get_all_blueprints import get_blueprint_by_name
 from dimos.robot.manipulators.a1z.blueprints.teleop import keyboard_teleop_a1z
 from dimos.robot.manipulators.a750.blueprints.teleop import keyboard_teleop_a750
@@ -40,12 +48,15 @@ from dimos.robot.manipulators.piper.blueprints.teleop import (
     coordinator_teleop_piper,
     keyboard_teleop_piper,
 )
+from dimos.robot.manipulators.xarm.blueprints.agentic import xarm_graspgenx_agent
 from dimos.robot.manipulators.xarm.blueprints.basic import (
     dual_xarm6_planner,
     dual_xarm6_planner_coordinator,
     xarm6_planner_only,
     xarm7_planner_coordinator,
 )
+from dimos.robot.manipulators.xarm.blueprints.graspgenx import xarm_graspgenx
+from dimos.robot.manipulators.xarm.blueprints.perception import xarm_perception
 from dimos.robot.manipulators.xarm.blueprints.teleop import (
     keyboard_teleop_xarm6,
     keyboard_teleop_xarm7,
@@ -55,6 +66,11 @@ from dimos.robot.manipulators.xarm.config import (
     make_xarm7_sim_module_kwargs,
     make_xarm7_sim_robot_config,
     make_xarm_hardware,
+)
+from dimos.robot.manipulators.xarm.grasp_config import (
+    XARM_GRASP_FRAME_TO_TCP,
+    XARM_GRIPPER_SWEEP,
+    make_xarm_graspgenx_config,
 )
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModuleConfig
 from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
@@ -76,6 +92,10 @@ def _manipulation_config(blueprint: Blueprint) -> ManipulationModuleConfig:
 
 def _coordinator_tasks(blueprint: Blueprint) -> list[TaskConfig]:
     return _module_kwargs(blueprint, ControlCoordinator)["tasks"]
+
+
+def _module_count(blueprint: Blueprint, module_type: type) -> int:
+    return sum(atom.module is module_type for atom in blueprint.active_blueprints)
 
 
 def test_quest_piper_teleop_routes_to_declarative_teleop_task() -> None:
@@ -183,6 +203,43 @@ def test_xarm_perception_sim_uses_aligned_camera_frame() -> None:
     assert sim_robot.xacro_args["attach_rpy"] == "0 0 0"
     assert sim_config.base_frame_id == "link7"
     assert sim_config.reset_joint_positions == sim_robot.home_joints
+
+
+def test_xarm_graspgenx_geometry_is_explicit_and_import_safe() -> None:
+    config = make_xarm_graspgenx_config()
+
+    assert config.gripper == XARM_GRIPPER_SWEEP
+    assert config.grasp_frame_to_tcp == XARM_GRASP_FRAME_TO_TCP
+    assert config.gripper.extents_open == (0.085, 0.032, 0.067)
+    assert config.gripper.extents_half_open == (0.0425, 0.032, 0.067)
+    assert config.gripper.fingertip_depth == 0.162
+    assert config.grasp_frame_to_tcp[2][3] == 0.172
+
+
+def test_existing_xarm_perception_keeps_explicit_heuristic_fallback() -> None:
+    config = PickAndPlaceModuleConfig(**_module_kwargs(xarm_perception, PickAndPlaceModule))
+
+    assert config.heuristic_grasp_fallback is True
+    assert _module_count(xarm_perception, GraspGenXModule) == 0
+
+
+def test_xarm_graspgenx_composes_one_provider_of_each_kind() -> None:
+    config = PickAndPlaceModuleConfig(**_module_kwargs(xarm_graspgenx, PickAndPlaceModule))
+
+    assert _module_count(xarm_graspgenx, ObjectSceneRegistrationModule) == 1
+    assert _module_count(xarm_graspgenx, GraspGenXModule) == 1
+    assert _module_count(xarm_graspgenx, PickAndPlaceModule) == 1
+    assert config.heuristic_grasp_fallback is False
+    assert config.grasp_approach_vector == (0.0, 0.0, -1.0)
+    assert config.grasp_verification.enabled is False
+
+
+def test_xarm_graspgenx_agent_composes_one_mcp_pair() -> None:
+    assert _module_count(xarm_graspgenx_agent, McpServer) == 1
+    assert _module_count(xarm_graspgenx_agent, McpClient) == 1
+    assert _module_count(xarm_graspgenx_agent, ObjectSceneRegistrationModule) == 1
+    assert _module_count(xarm_graspgenx_agent, GraspGenXModule) == 1
+    assert _module_count(xarm_graspgenx_agent, PickAndPlaceModule) == 1
 
 
 def test_eef_twist_task_helper_uses_hardware_joints_and_default_name() -> None:
