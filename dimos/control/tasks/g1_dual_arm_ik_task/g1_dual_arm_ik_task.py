@@ -395,9 +395,15 @@ class G1DualArmIKTask(BaseControlTask):
                 self._targets.clear()
                 self._last_solution = None
 
-    def reset_runtime_state(self) -> bool:
+    def reset_runtime_state(self, reactivate: bool | None = None) -> bool:
         """Forget engagement, targets, and the held solution after a
-        simulation discontinuity (respawn/teleport)."""
+        simulation discontinuity (respawn/teleport).
+
+        ``reactivate`` is part of the protocol signature but moot here:
+        there is no arming concept, and re-engaging is always the
+        operator's trigger hold.
+        """
+        del reactivate
         with self._lock:
             self._engaged = False
             self._targets.clear()
