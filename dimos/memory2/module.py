@@ -323,6 +323,11 @@ class Recorder(MemoryModule):
     _pose_setters: dict[str, Any] = {}
 
     @rpc
+    def recording_path(self) -> str:
+        """Return the active memory2 recording database path."""
+        return str(self.config.db_path)
+
+    @rpc
     def start(self) -> None:
         super().start()
 
@@ -393,7 +398,11 @@ class Recorder(MemoryModule):
                     ts,
                     getattr(msg, "ts", None),
                 )
-            stream.append(msg, ts=ts, pose=pose, tags={"reception_ts": recv_ts})
+            try:
+                stream.append(msg, ts=ts, pose=pose, tags={"reception_ts": recv_ts})
+            except Exception:
+                logger.exception("Failed to record %s at time %s", name, ts)
+                raise
 
         # Stamp arrival time before the coalescing dispatch queue.
         stamped = input_topic.pure_observable().pipe(ops.map(lambda msg: (time.time(), msg)))

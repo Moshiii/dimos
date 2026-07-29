@@ -75,6 +75,9 @@ dimos mcp call relative_move --arg forward=0.5      # Call a skill
 dimos mcp status                                    # Server status
 ```
 
+For agent-authored Python that combines observations, control flow, and several
+RPCs, see [Code policies](./code-policy.md).
+
 ## Input Methods
 
 | Method | How it works |

@@ -77,11 +77,6 @@ class WorldBeliefRecorder(Recorder):
             logger.info("WorldBelief recording DB: %s", db_path)
         super().start()
 
-    @rpc
-    def recording_path(self) -> str:
-        """Return the active recording path."""
-        return str(self.config.db_path)
-
     def _prepare_streams(self) -> None:
         super()._prepare_streams()
         depth = self.config.stream_remapping.get("depth_image", "depth_image")

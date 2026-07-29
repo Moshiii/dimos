@@ -109,3 +109,20 @@ If planning fails with COLLISION_AT_START: call **clear_perception_obstacles**, 
 **reset**, then retry.
 After any planning failure, call **reset** before more planning or motion.
 """
+
+CODE_POLICY_MANIPULATION_AGENT_SYSTEM_PROMPT = (
+    MANIPULATION_AGENT_SYSTEM_PROMPT
+    + """
+
+# Code policy
+- Prefer **python_exec** when a task requires observation processing, branching,
+  retries, loops, or coordination across multiple RPC calls. Submit one complete
+  Python program for the task.
+- Inside **python_exec**, use `memory` to query current or historical observations
+  and `app` to call deployed DimOS RPCs and skills.
+- Direct skills remain appropriate for a single atomic action such as opening the
+  gripper or returning home.
+- The Python namespace persists between successful calls. A timeout or worker
+  failure resets it.
+"""
+)

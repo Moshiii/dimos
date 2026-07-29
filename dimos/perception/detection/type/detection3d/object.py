@@ -380,7 +380,7 @@ def aggregate_pointclouds(objects: list[Object]) -> PointCloud2:
         Combined PointCloud2 with all points colored by object (empty if no points).
     """
     if not objects:
-        return PointCloud2(pointcloud=o3d.geometry.PointCloud(), frame_id="", ts=0.0)
+        return PointCloud2(pointcloud=o3d.geometry.PointCloud(), frame_id="", ts=time.time())
 
     all_points = []
     all_colors = []
@@ -405,9 +405,13 @@ def aggregate_pointclouds(objects: list[Object]) -> PointCloud2:
         all_points.append(points)
         all_colors.append(blended)
 
+    frame_id = objects[0].frame_id
+    timestamp = objects[0].ts or time.time()
     if not all_points:
         return PointCloud2(
-            pointcloud=o3d.geometry.PointCloud(), frame_id=objects[0].frame_id, ts=objects[0].ts
+            pointcloud=o3d.geometry.PointCloud(),
+            frame_id=frame_id,
+            ts=timestamp,
         )
 
     combined_points = np.vstack(all_points)
@@ -415,8 +419,8 @@ def aggregate_pointclouds(objects: list[Object]) -> PointCloud2:
 
     pc = PointCloud2.from_numpy(
         combined_points,
-        frame_id=objects[0].frame_id,
-        timestamp=objects[0].ts,
+        frame_id=frame_id,
+        timestamp=timestamp,
     )
     pcd = pc.pointcloud
     pcd.colors = o3d.utility.Vector3dVector(combined_colors)

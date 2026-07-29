@@ -16,16 +16,22 @@
 
 from __future__ import annotations
 
+from dimos.agents.code_policy.policy_kernel import PolicyKernel
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
+from dimos.constants import STATE_DIR
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.perception.manipulation_policy_recorder import ManipulationPolicyRecorder
+from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.agent_prompts import (
     BASE_MANIPULATION_AGENT_SYSTEM_PROMPT,
+    CODE_POLICY_MANIPULATION_AGENT_SYSTEM_PROMPT,
     MANIPULATION_AGENT_SYSTEM_PROMPT,
 )
 from dimos.robot.manipulators.xarm.blueprints.basic import xarm7_planner_coordinator
 from dimos.robot.manipulators.xarm.blueprints.perception import xarm_perception
 from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_perception_sim
+from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 
 xarm7_planner_coordinator_agent = autoconnect(
     xarm7_planner_coordinator,
@@ -41,6 +47,21 @@ xarm_perception_agent = autoconnect(
 
 xarm_perception_sim_agent = autoconnect(
     xarm_perception_sim,
+    ManipulationPolicyRecorder.blueprint(
+        db_path=STATE_DIR
+        / "code_policy"
+        / "xarm_perception_sim"
+        / "recordings"
+        / "observations.db",
+    ),
+    PolicyKernel.blueprint(),
     McpServer.blueprint(),
-    McpClient.blueprint(system_prompt=MANIPULATION_AGENT_SYSTEM_PROMPT),
+    McpClient.blueprint(system_prompt=CODE_POLICY_MANIPULATION_AGENT_SYSTEM_PROMPT),
+).remappings(
+    [
+        # Mujoco's raw cloud and scene registration's derived cloud otherwise
+        # share one transport. Policies should observe the registered scene.
+        (MujocoSimModule, "pointcloud", "raw_pointcloud"),
+        (ObjectSceneRegistrationModule, "pointcloud", "pointcloud"),
+    ]
 )
