@@ -203,6 +203,11 @@ _rerun_config: dict[str, Any] = {
         "world/navigation_costmap": 2.0,
         "world/path": 0,
     },
+    "latest_state": {
+        "world/global_map",
+        "world/global_costmap",
+        "world/navigation_costmap",
+    },
     "static": _static_entities,
 }
 
@@ -211,8 +216,12 @@ for _section in ("static", "visual_override", "max_hz"):
         **_rerun_config.get(_section, {}),
         **_platform.rerun_config.get(_section, {}),
     }
+_rerun_config["latest_state"] = {
+    *_rerun_config["latest_state"],
+    *_platform.rerun_config.get("latest_state", set()),
+}
 for _key, _value in _platform.rerun_config.items():
-    if _key not in {"static", "visual_override", "max_hz"}:
+    if _key not in {"static", "visual_override", "max_hz", "latest_state"}:
         _rerun_config[_key] = _value
 
 if not _platform.simulation:

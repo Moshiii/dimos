@@ -28,7 +28,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from multiprocessing import resource_tracker
 from multiprocessing.shared_memory import SharedMemory
 from pathlib import Path
 from typing import Any
@@ -120,18 +119,6 @@ def _buffer_name(key: str, buffer: str) -> str:
     return f"{_NAME_PREFIX}_{key}_{buffer}"
 
 
-def _unregister(shm: SharedMemory) -> SharedMemory:
-    """Detach ``shm`` from ``resource_tracker`` to silence spurious warnings.
-
-    Same technique as ``dimos.simulation.mujoco.shared_memory._unregister``.
-    """
-    try:
-        resource_tracker.unregister(shm._name, "shared_memory")  # type: ignore[attr-defined]
-    except Exception:
-        pass
-    return shm
-
-
 @dataclass(frozen=True)
 class ManipShmSet:
     """Frozen set of named SharedMemory buffers for sim <-> adapter IPC.
@@ -164,7 +151,7 @@ class ManipShmSet:
         for buffer_name, size in _shm_sizes.items():
             name = _buffer_name(key, buffer_name)
             try:
-                stale = _unregister(SharedMemory(name=name))
+                stale = SharedMemory(name=name)
                 stale.close()
                 try:
                     stale.unlink()
@@ -182,7 +169,7 @@ class ManipShmSet:
         buffers: dict[str, SharedMemory] = {}
         for buffer_name in _shm_sizes:
             name = _buffer_name(key, buffer_name)
-            buffers[buffer_name] = _unregister(SharedMemory(name=name))
+            buffers[buffer_name] = SharedMemory(name=name)
         return cls(**buffers)
 
     def as_list(self) -> list[SharedMemory]:
