@@ -76,7 +76,7 @@ dimos mcp status                                    # Server status
 ```
 
 For agent-authored Python that combines observations, control flow, and several
-RPCs, see [Code policies](./code-policy.md).
+RPCs, see [Code policies](/docs/capabilities/agents/code-policy.md).
 
 ## Input Methods
 

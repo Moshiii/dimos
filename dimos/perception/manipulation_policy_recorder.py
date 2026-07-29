@@ -21,7 +21,14 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.vision_msgs.Detection2DArray import Detection2DArray
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.perception.detection.type.detection3d.object import Object as DetObject
-from dimos.perception.worldbelief_recorder import WorldBeliefRecorder
+from dimos.perception.worldbelief_recorder import (
+    WorldBeliefRecorder,
+    WorldBeliefRecorderConfig,
+)
+
+
+class ManipulationPolicyRecorderConfig(WorldBeliefRecorderConfig):
+    timestamp_db_path: bool = False
 
 
 class ManipulationPolicyRecorder(WorldBeliefRecorder):
@@ -31,6 +38,7 @@ class ManipulationPolicyRecorder(WorldBeliefRecorder):
     detections_3d: In[Detection3DArray]
     objects: In[list[DetObject]]
     pointcloud: In[PointCloud2]
+    config: ManipulationPolicyRecorderConfig
 
     def _prepare_streams(self) -> None:
         super()._prepare_streams()

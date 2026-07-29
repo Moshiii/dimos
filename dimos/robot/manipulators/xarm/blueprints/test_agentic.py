@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dimos.agents.code_policy.policy_kernel import PolicyKernel
+from dimos.agents.code_policy import CodePolicyModule
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.core.module import ModuleBase
@@ -36,21 +36,21 @@ def _skill_names(module_type: type[ModuleBase]) -> set[str]:
     }
 
 
-def test_sim_agent_composes_one_recorder_and_policy_kernel_only_in_simulation() -> None:
+def test_sim_agent_composes_one_recorder_and_code_policy_only_in_simulation() -> None:
     sim_modules = _module_types(xarm_perception_sim_agent)
     real_modules = _module_types(xarm_perception_agent)
 
-    assert sim_modules.count(PolicyKernel) == 1
+    assert sim_modules.count(CodePolicyModule) == 1
     assert sim_modules.count(ManipulationPolicyRecorder) == 1
     assert sum(issubclass(module, Recorder) for module in sim_modules) == 1
-    assert PolicyKernel not in real_modules
+    assert CodePolicyModule not in real_modules
     assert all(not issubclass(module, Recorder) for module in real_modules)
 
 
 def test_sim_agent_exposes_code_policy_and_retains_atomic_skills() -> None:
     sim_modules = _module_types(xarm_perception_sim_agent)
 
-    assert "python_exec" in _skill_names(PolicyKernel)
+    assert "python_exec" in _skill_names(CodePolicyModule)
     assert PickAndPlaceModule in sim_modules
     assert {"pick", "open_gripper"} <= _skill_names(PickAndPlaceModule)
 

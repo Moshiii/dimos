@@ -122,7 +122,8 @@ CODE_POLICY_MANIPULATION_AGENT_SYSTEM_PROMPT = (
   and `app` to call deployed DimOS RPCs and skills.
 - Direct skills remain appropriate for a single atomic action such as opening the
   gripper or returning home.
-- The Python namespace persists between successful calls. A timeout or worker
-  failure resets it.
+- The Python namespace persists between calls. A timeout interrupts the active
+  cell and normally preserves the namespace; an unresponsive or dead kernel
+  resets it.
 """
 )

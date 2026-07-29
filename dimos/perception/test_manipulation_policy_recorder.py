@@ -49,6 +49,18 @@ def test_recorder_declares_raw_and_derived_policy_streams(
     assert set(recorder.inputs) == EXPECTED_POLICY_STREAMS
 
 
+def test_recorder_keeps_explicit_policy_database_path(
+    mocker,
+    recorder: ManipulationPolicyRecorder,
+) -> None:
+    parent_start = mocker.patch("dimos.perception.worldbelief_recorder.Recorder.start")
+
+    recorder.start()
+
+    assert recorder.recording_path().endswith("policy.db")
+    parent_start.assert_called_once_with()
+
+
 def test_derived_and_proprioceptive_observations_are_typed_and_queryable(
     recorder: ManipulationPolicyRecorder,
 ) -> None:

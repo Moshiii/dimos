@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from dimos.agents.code_policy.policy_kernel import PolicyKernel
+from dimos.agents.code_policy import CodePolicyModule
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 from dimos.constants import STATE_DIR
@@ -33,6 +33,10 @@ from dimos.robot.manipulators.xarm.blueprints.perception import xarm_perception
 from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_perception_sim
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 
+_XARM_SIM_POLICY_RECORDING_PATH = (
+    STATE_DIR / "code_policy" / "xarm_perception_sim" / "recordings" / "observations.db"
+)
+
 xarm7_planner_coordinator_agent = autoconnect(
     xarm7_planner_coordinator,
     McpServer.blueprint(),
@@ -48,13 +52,11 @@ xarm_perception_agent = autoconnect(
 xarm_perception_sim_agent = autoconnect(
     xarm_perception_sim,
     ManipulationPolicyRecorder.blueprint(
-        db_path=STATE_DIR
-        / "code_policy"
-        / "xarm_perception_sim"
-        / "recordings"
-        / "observations.db",
+        db_path=_XARM_SIM_POLICY_RECORDING_PATH,
     ),
-    PolicyKernel.blueprint(),
+    CodePolicyModule.blueprint(
+        recording_path=str(_XARM_SIM_POLICY_RECORDING_PATH),
+    ),
     McpServer.blueprint(),
     McpClient.blueprint(system_prompt=CODE_POLICY_MANIPULATION_AGENT_SYSTEM_PROMPT),
 ).remappings(

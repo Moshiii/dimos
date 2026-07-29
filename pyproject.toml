@@ -222,6 +222,9 @@ agents = [
     "langchain-huggingface>=1,<2",
     "langchain-ollama>=1,<2",
     "ollama>=0.6.0",
+    # Persistent code-policy kernels
+    "ipykernel>=7,<8",
+    "jupyter-client>=8,<9",
 
     # Audio
     "openai",
@@ -393,6 +396,8 @@ project-deps = [
     "lap>=0.5.12",
     "langchain-openai>=1,<2",
     "ollama>=0.6.0",
+    "ipykernel>=7,<8",
+    "jupyter-client>=8,<9",
 ]
 
 tests = [

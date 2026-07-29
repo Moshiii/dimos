@@ -323,11 +323,6 @@ class Recorder(MemoryModule):
     _pose_setters: dict[str, Any] = {}
 
     @rpc
-    def recording_path(self) -> str:
-        """Return the active memory2 recording database path."""
-        return str(self.config.db_path)
-
-    @rpc
     def start(self) -> None:
         super().start()
 
