@@ -262,9 +262,9 @@ def test_teleop_tasks_use_arm_slices_and_pink() -> None:
             assert control_ik["posture_cost"] == 0.05
             assert task.params["tool_offset_m"] == (0.17, 0.0, 0.0)
             assert task.params["max_joint_delta_deg"] == 45.0
-            assert task.params["max_step_deg_per_tick"] == 1.5
-            assert task.params["max_target_offset_m"] == 0.08
-            assert task.params["max_target_rot_deg"] == 20.0
+            assert task.params["max_step_deg_per_tick"] is None
+            assert task.params["max_target_offset_m"] == 0.20
+            assert task.params["max_target_rot_deg"] == 30.0
 
 
 def test_sim_planner_models_have_matching_trajectory_tasks() -> None:
@@ -658,7 +658,14 @@ def test_replay_fixture_drives_production_pipeline() -> None:
     fp_joy = LCMJoy._get_packed_fingerprint()
 
     margin = np.deg2rad(left_cfg.params["joint_limit_margin_deg"]) - 1e-9
-    step_limit = np.deg2rad(left_cfg.params["max_step_deg_per_tick"]) + 1e-9
+    # With the per-tick step gate off, the Pink velocity clamp bounds the
+    # per-tick delta at max_velocity * dt instead.
+    raw_step = left_cfg.params["max_step_deg_per_tick"]
+    step_limit = (
+        np.deg2rad(raw_step)
+        if raw_step is not None
+        else task._config.control_ik.max_velocity * 0.02
+    ) + 1e-9
     lower, upper = task._ik.position_limits
     q_start = (lower + upper) / 2.0
     positions = dict(zip(cfg.LEFT_ARM_JOINTS, q_start.tolist(), strict=True))

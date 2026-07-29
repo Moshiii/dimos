@@ -53,11 +53,12 @@ from dimos.robot.manipulators.a1z.config import (
 _TASK_NAMES = {"left": "teleop_left_arm", "right": "teleop_right_arm"}
 _TELEOP_PRIORITY = 20  # preempts the servo holder (10) on the arm joints while engaged
 
-# Tracking configuration carried from the prior hardware-validated
-# integration; v3 hardware validation pending. Near the folded home pose,
-# small cartesian targets need large joint motion, so a plain per-tick
-# delta gate wedges tracking; the chase window (recentered every tick),
-# bounded stepping, and the 45 degree hard reject work together instead.
+# Speed-test configuration for the second hardware session: the Pink
+# velocity clamp (max_velocity, smooth follow with no jerk) is the sole
+# joint-rate cap, backed by the vendor tracker's own speed limit; the
+# per-tick step gate is off so a slow coordinator tick cannot shrink the
+# effective rate. The chase window (recentered every tick) keeps catch-up
+# bounded and the 45 degree hard reject stays as the gross-error gate.
 # The controlled point is the grasp center between the fingertips, 0.17 m
 # past joint 6 (0.08165 gripper mount + 0.0369 finger base + mid-finger,
 # from the vendor description). Orientation is held as firmly as position;
@@ -65,9 +66,9 @@ _TELEOP_PRIORITY = 20  # preempts the servo holder (10) on the arm joints while 
 # free wrist, which sweeps the tool sideways through the lever arm.
 _ARM_IK_LIMITS = {
     "max_joint_delta_deg": 45.0,
-    "max_step_deg_per_tick": 1.5,
-    "max_target_offset_m": 0.08,
-    "max_target_rot_deg": 20.0,
+    "max_step_deg_per_tick": None,
+    "max_target_offset_m": 0.20,
+    "max_target_rot_deg": 30.0,
     "joint_limit_margin_deg": 2.0,
     "tool_offset_m": (0.17, 0.0, 0.0),
     "rotation_frame": "local",
