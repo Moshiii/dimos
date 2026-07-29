@@ -45,6 +45,7 @@ extensions = [
     "sphinx.ext.extlinks",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
+    "sphinx_design",
 ]
 
 try:
@@ -109,8 +110,29 @@ extlinks = {
 
 # -- Options for HTML output -------------------------------------------------
 
-# The default theme for now; a dedicated theme is added in a later PR.
-html_theme = "alabaster"
+html_theme = "furo"
+html_title = "Dimensional · DimOS"
+html_logo = "_static/dimensional-logo-master-transparent.png"
+html_favicon = "_static/favicon.png"
+html_static_path = ["_static"]
+html_css_files = ["dimensional.css"]
+templates_path = ["_templates"]
+html_theme_options = {
+    "source_repository": github_repo_url,
+    "source_branch": "main",
+    "source_directory": "docs/",
+    "sidebar_hide_name": True,
+    "light_css_variables": {
+        "color-brand-primary": "#1682a3",
+        "color-brand-content": "#08708f",
+        "color-brand-visited": "#7358a6",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#50c5df",
+        "color-brand-content": "#68d4e9",
+        "color-brand-visited": "#c3a9ff",
+    },
+}
 
 # -- Options for the spelling builder ----------------------------------------
 

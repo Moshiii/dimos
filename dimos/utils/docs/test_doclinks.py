@@ -311,8 +311,8 @@ class TestDocLinking:
 
         assert len(errors) == 0
         assert len(changes) == 1
-        assert "[Configuration](/docs-old/" in new_content
-        assert ".md)" in new_content
+        assert "[Configuration](/docs/" in new_content
+        assert ".rst)" in new_content
 
     def test_case_insensitive_lookup(self, file_index, doc_index):
         """Should match case-insensitively."""
@@ -332,7 +332,7 @@ class TestDocLinking:
 
         assert len(errors) == 0
         assert "[CONFIGURATION](" in new_content  # Preserves original text
-        assert ".md)" in new_content
+        assert ".rst)" in new_content
 
     def test_doc_link_github_mode(self, file_index, doc_index):
         """Should generate GitHub URLs for doc links."""
@@ -350,13 +350,13 @@ class TestDocLinking:
             doc_index=doc_index,
         )
 
-        assert "https://github.com/org/repo/blob/main/docs-old/" in new_content
-        assert ".md)" in new_content
+        assert "https://github.com/org/repo/blob/main/docs/" in new_content
+        assert ".rst)" in new_content
 
     def test_doc_link_relative_mode(self, file_index, doc_index):
         """Should generate relative paths for doc links."""
         content = "See [Blueprints](.md)"
-        doc_path = REPO_ROOT / "docs-old/usage/test.md"
+        doc_path = REPO_ROOT / "docs/usage/test.md"
 
         new_content, _changes, errors = process_markdown(
             content,
@@ -371,7 +371,7 @@ class TestDocLinking:
 
         assert len(errors) == 0
         # Should be relative path from docs/usage/ to target doc
-        assert "[Blueprints](blueprints.md)" in new_content
+        assert "[Blueprints](blueprints.rst)" in new_content
 
     def test_doc_not_found_error(self, file_index, doc_index):
         """Should error when doc doesn't exist."""
@@ -608,16 +608,16 @@ class TestLinkResolution:
 
     def test_resolves_relative_md_link(self, file_index, doc_index):
         """Should resolve a valid relative .md link to absolute path."""
-        # docs/usage/configuration.md exists — link from docs/usage/test.md
+        # docs/usage/configuration.rst exists — an old Markdown link is repaired.
         content = "[Configuration](configuration.md)"
         new_content, changes, errors = self._process(content, file_index, doc_index)
 
         assert len(errors) == 0
-        assert "configuration.md" in new_content
+        assert "configuration.rst" in new_content
 
     def test_validates_absolute_md_link(self, file_index, doc_index):
         """Valid absolute .md link should be left unchanged."""
-        content = "[Configuration](/docs-old/usage/configuration.md)"
+        content = "[Configuration](/docs/usage/configuration.rst)"
         new_content, changes, errors = self._process(content, file_index, doc_index)
 
         assert len(errors) == 0

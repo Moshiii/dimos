@@ -69,12 +69,11 @@ Manual system install
 
 To set up your system dependencies, follow one of these guides:
 
-- `Ubuntu 22.04 / 24.04 <https://github.com/dimensionalOS/dimos/blob/main/docs-old/installation/ubuntu.md>`_ (stable)
-- `NixOS / General Linux <https://github.com/dimensionalOS/dimos/blob/main/docs-old/installation/nix.md>`_ (stable)
-- `macOS <https://github.com/dimensionalOS/dimos/blob/main/docs-old/installation/osx.md>`_ (alpha)
+- :doc:`Ubuntu 22.04 or 24.04 <installation/ubuntu>` (stable)
+- :doc:`NixOS or Nix-managed Linux <installation/nix>` (stable)
+- :doc:`macOS 12.6 or newer <installation/osx>` (alpha)
 
-Full system requirements, tested configs, and dependency tiers are listed in
-`docs-old/requirements.md <https://github.com/dimensionalOS/dimos/blob/main/docs-old/requirements.md>`_.
+See :doc:`requirements` for tested configurations and dependency tiers.
 
 Python install
 --------------
@@ -131,8 +130,7 @@ Featured runfiles
    * - :bash:`dimos run demo-camera`
      - Webcam demo — no hardware needed
 
-Full blueprint docs are in
-`docs-old/usage/blueprints.md <https://github.com/dimensionalOS/dimos/blob/main/docs-old/usage/blueprints.md>`_.
+See :doc:`/usage/blueprints` for the complete blueprint guide.
 
 Agent CLI and MCP
 =================
@@ -150,8 +148,7 @@ with agents, and call skills via :abbr:`MCP (Model Context Protocol)`.
    dimos mcp call relative_move --arg forward=0.5  # Call a skill directly
    dimos stop                               # Shut down
 
-Full CLI reference:
-`docs-old/usage/cli.md <https://github.com/dimensionalOS/dimos/blob/main/docs-old/usage/cli.md>`_.
+See :doc:`/usage/cli` for the complete CLI reference.
 
 Using DimOS as a Library
 ========================
@@ -233,4 +230,10 @@ Table of Contents
    :name: mastertoc
    :maxdepth: 2
 
+   installation/index
+   usage/index
+   capabilities/index
+   platforms/index
+   development/index
+   coding-agents/index
    api

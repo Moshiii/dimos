@@ -108,25 +108,25 @@ def build_file_index(root: Path, tracked_files: list[Path] | None = None) -> dic
 
 def build_doc_index(root: Path, tracked_files: list[Path] | None = None) -> dict[str, list[Path]]:
     """
-    Build an index mapping lowercase doc names to .md file paths.
+    Build an index mapping lowercase doc names to Markdown and RST paths.
 
-    For docs/usage/modules.md, creates entry:
-    - "modules" -> [Path("docs/usage/modules.md")]
+    For docs/usage/modules.rst, creates entry:
+    - "modules" -> [Path("docs/usage/modules.rst")]
 
     Also indexes directory index files:
-    - "modules" -> [Path("docs/modules/index.md")] (if modules/index.md exists)
+    - "modules" -> [Path("docs/modules/index.rst")] (if modules/index.rst exists)
     """
     index: dict[str, list[Path]] = defaultdict(list)
     if tracked_files is None:
         tracked_files = get_git_tracked_files(root)
 
     for rel_path in tracked_files:
-        if rel_path.suffix != ".md":
+        if rel_path.suffix not in {".md", ".rst"}:
             continue
 
         stem = rel_path.stem.lower()
 
-        # For index.md files, also index by parent directory name
+        # For index files, also index by parent directory name.
         if stem == "index":
             parent_name = rel_path.parent.name.lower()
             if parent_name:
