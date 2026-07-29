@@ -127,7 +127,7 @@ def render_store(
                     parents.add(t.frame_id)
                     tf_children.add(t.child_frame_id)
 
-    rerun_init("dimos mem rerun")
+    rerun_init()
     rr.save(out)
 
     for tf_root in sorted(parents - tf_children):

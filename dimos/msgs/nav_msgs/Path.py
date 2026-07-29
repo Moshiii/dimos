@@ -222,7 +222,7 @@ class Path(Timestamped):
         self,
         color: tuple[int, int, int] | tuple[int, int, int, int] = (0, 255, 128),
         z_offset: float = 0.0,
-        radii: float = 0.025,
+        radii: float = 0.005,
         in_frame: bool = True,
         dash: float | None = None,
     ) -> Archetype | InFrame:

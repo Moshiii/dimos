@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 from dimos_lcm.vision_msgs import BoundingBox3D, ObjectHypothesis, ObjectHypothesisWithPose
 import pytest
 import rerun as rr
@@ -21,7 +23,7 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.vision_msgs.Detection3D import Detection3D
-from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
+from dimos.msgs.vision_msgs.Detection3DArray import _FLAT_HALF_Z, Detection3DArray
 from dimos.visualization.rerun.in_frame import InFrame
 
 
@@ -75,11 +77,102 @@ def test_detection3darray_to_rerun_preserves_wire_pose_size_and_identity() -> No
     boxes = framed.archetypes[0]
     assert isinstance(boxes, rr.Boxes3D)
     assert boxes.centers.as_arrow_array().to_pylist() == [[1.0, 2.0, 3.0]]
-    assert boxes.half_sizes.as_arrow_array().to_pylist()[0] == pytest.approx([0.1, 0.2, 0.0])
+    assert boxes.half_sizes.as_arrow_array().to_pylist()[0] == pytest.approx(
+        [0.1, 0.2, _FLAT_HALF_Z]
+    )
     assert boxes.quaternions.as_arrow_array().to_pylist()[0] == pytest.approx(
         [0.0, 0.0, 0.70710678, 0.70710678]
     )
     assert boxes.labels.as_arrow_array().to_pylist() == ["DICT_APRILTAG_36h11:7 id=7"]
+
+
+def test_detection3darray_to_rerun_colors_each_label_consistently() -> None:
+    a, b = _detection3d(marker_id="7"), _detection3d(marker_id="8")
+    msg = Detection3DArray(
+        header=Header(12.5, "world"),
+        detections=[a, b, _detection3d(marker_id="7")],
+        detections_length=3,
+    )
+
+    boxes = msg.to_rerun().archetypes[0]
+    colors = boxes.colors.as_arrow_array().to_pylist()
+
+    assert colors[0] == colors[2] != colors[1]  # same label, same color
+
+
+def test_detection3darray_to_rerun_gives_flat_detections_thickness() -> None:
+    # Rerun draws a zero-extent box as a point, so a flat fiducial needs depth.
+    det = _detection3d()
+    det.bbox.size = Vector3(0.075, 0.075, 0.0)
+    msg = Detection3DArray(header=Header(12.5, "world"), detections=[det], detections_length=1)
+
+    boxes = msg.to_rerun().archetypes[0]
+
+    assert boxes.half_sizes.as_arrow_array().to_pylist()[0] == pytest.approx(
+        [0.0375, 0.0375, _FLAT_HALF_Z]
+    )
+
+
+def test_detection3darray_to_rerun_keeps_real_depth() -> None:
+    det = _detection3d()
+    det.bbox.size = Vector3(0.2, 0.4, 0.6)
+    msg = Detection3DArray(header=Header(12.5, "world"), detections=[det], detections_length=1)
+
+    boxes = msg.to_rerun().archetypes[0]
+
+    assert boxes.half_sizes.as_arrow_array().to_pylist()[0] == pytest.approx([0.1, 0.2, 0.3])
+
+
+def _unsolved_detection3d() -> Detection3D:
+    """A detection the detector located but could not solve a pose for."""
+    det = _detection3d()
+    nan = float("nan")
+    det.bbox.center.position = Vector3(nan, nan, nan)
+    det.bbox.center.orientation = Quaternion(nan, nan, nan, nan)
+    det.bbox.size = Vector3(nan, nan, nan)
+    det.results[0].pose.pose.position = Vector3(0.1, -0.2, 1.8)
+    return det
+
+
+def test_detection3darray_to_rerun_is_a_point_until_the_pose_solves() -> None:
+    msg = Detection3DArray(
+        header=Header(12.5, "world"),
+        detections=[_unsolved_detection3d()],
+        detections_length=1,
+    )
+
+    boxes = msg.to_rerun().archetypes[0]
+
+    assert boxes.centers.as_arrow_array().to_pylist()[0] == pytest.approx([0.1, -0.2, 1.8])
+    # zero extent is how rerun draws a point
+    assert boxes.half_sizes.as_arrow_array().to_pylist()[0] == pytest.approx([0.0, 0.0, 0.0])
+
+
+def test_detection3darray_to_rerun_stays_one_archetype_across_both_states() -> None:
+    # A second archetype on the entity leaves the unused visualizer resolving to NaN.
+    solved = Detection3DArray(
+        header=Header(12.5, "world"), detections=[_detection3d()], detections_length=1
+    )
+    unsolved = Detection3DArray(
+        header=Header(12.5, "world"), detections=[_unsolved_detection3d()], detections_length=1
+    )
+
+    assert isinstance(solved.to_rerun().archetypes[0], rr.Boxes3D)
+    assert isinstance(unsolved.to_rerun().archetypes[0], rr.Boxes3D)
+
+
+def test_detection3darray_to_rerun_never_emits_nan_geometry() -> None:
+    msg = Detection3DArray(
+        header=Header(12.5, "world"),
+        detections=[_unsolved_detection3d(), _detection3d()],
+        detections_length=2,
+    )
+
+    boxes = msg.to_rerun().archetypes[0]
+
+    for component in (boxes.centers, boxes.half_sizes, boxes.quaternions):
+        flat = [v for row in component.as_arrow_array().to_pylist() for v in row]
+        assert all(math.isfinite(v) for v in flat)
 
 
 def test_detection3darray_to_rerun_empty_array_is_safe() -> None:
@@ -95,4 +188,3 @@ def test_detection3darray_to_rerun_empty_array_is_safe() -> None:
     boxes = framed.archetypes[0]
     assert isinstance(boxes, rr.Boxes3D)
     assert boxes.centers.as_arrow_array().to_pylist() == []
-    assert boxes.labels.as_arrow_array().to_pylist() == []

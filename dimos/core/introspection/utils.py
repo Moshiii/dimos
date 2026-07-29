@@ -16,6 +16,9 @@
 
 import hashlib
 import re
+from typing import TypeVar
+
+_C = TypeVar("_C")
 
 # Colors for type nodes and edges (bright, distinct, good on dark backgrounds)
 TYPE_COLORS = [
@@ -75,7 +78,7 @@ RPC_COLOR = "#7986CB"  # indigo
 SKILL_COLOR = "#4ECDC4"  # teal
 
 
-def color_for_string(colors: list[str], s: str) -> str:
+def color_for_string(colors: list[_C], s: str) -> _C:
     """Get a consistent color for a string based on its hash."""
     h = int(hashlib.md5(s.encode()).hexdigest(), 16)
     return colors[h % len(colors)]
