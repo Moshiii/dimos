@@ -235,6 +235,16 @@ kinematics behavior. Meshcat preview and publishing are exposed separately
 through `VisualizationSpec`, so non-visual planning paths do not require a
 visualization backend.
 
+All `WorldSpec` obstacle operations are runtime operations and require the
+world to be finalized first. `update_obstacle(obstacle)` replaces the complete
+obstacle identified by `obstacle.name`; callers must provide every geometry and
+appearance field. `update_obstacle_pose(name, pose)` is the pose-only fast path
+and preserves the other fields. Each update is serialized with native scene
+queries, so collision checking sees either the old obstacle or the new one,
+never the remove/add intermediate state. This boundary applies to each native
+operation, not to an entire generic planning run; RoboPlan's opaque native
+planner is locked for its whole native call.
+
 ## Blueprints
 
 | Blueprint | Description |
@@ -243,9 +253,8 @@ visualization backend.
 | `keyboard-teleop-piper` | Piper 6-DOF keyboard teleop with Drake viz |
 | `keyboard-teleop-xarm6` | XArm6 6-DOF keyboard teleop with Drake viz |
 | `keyboard-teleop-xarm7` | XArm7 7-DOF keyboard teleop with Drake viz |
-| `xarm6-planner-only` | XArm6 standalone planner (no coordinator) |
 | `xarm7-planner-coordinator` | XArm7 planner with coordinator integration |
-| `dual-xarm6-planner` | Dual XArm6 planning |
+| `dual-xarm6-planner-coordinator` | Dual XArm6 planning with mock coordinator hardware |
 | `xarm-perception` | XArm7 + RealSense camera for perception |
 | `xarm-perception-agent` | XArm7 perception + LLM agent |
 | `xarm-perception-sim` | XArm7 simulation perception stack |
