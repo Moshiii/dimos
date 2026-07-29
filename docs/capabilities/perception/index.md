@@ -9,7 +9,7 @@ title: "Perception"
 The experimental xArm6 WorldBelief stack records RGB-D observations and processes
 them on demand to maintain object identities across scans and process restarts.
 Its implementation lives in
-`dimos/perception/experimental/world_belief/` while the shared detector,
+`dimos/experimental/world_belief/` while the shared detector,
 embedding, and 3D object primitives remain in their standard packages.
 
 Run the hardware blueprint:
