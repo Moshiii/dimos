@@ -261,9 +261,7 @@ def setup(app):
 
     app.add_role("brand", brand)
 
-    def shorten_long_class_signatures(
-        app, what, name, obj, options, signature, return_annotation
-    ):
+    def shorten_long_class_signatures(app, what, name, obj, options, signature, return_annotation):
         """Collapse generated constructors that would overwhelm the API page."""
         if what == "class" and signature and len(signature) > 120:
             return "(...)", return_annotation
