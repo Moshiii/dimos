@@ -20,17 +20,52 @@ Current version is |release|.
    `AGENTS.md <https://github.com/dimensionalOS/dimos/blob/main/AGENTS.md>`_ and the
    `Agent CLI and MCP`_ interfaces to start building Dimensional applications.
 
-Capabilities
-============
+Capabilities at a glance
+========================
 
-- **Navigation and mapping** — SLAM, dynamic obstacle avoidance, route planning, and
-  autonomous exploration, via both DimOS native and ROS
-  (`watch video <https://x.com/stash_pomichter/status/2010471593806545367>`__).
-- **Perception** — detectors, 3D projections, VLMs, and audio processing.
-- **Agentive control, MCP** — *"hey Robot, go find the kitchen"*
-  (`watch video <https://x.com/stash_pomichter/status/2015912688854200322>`__).
-- **Spatial memory** — spatial and temporal RAG, dynamic memory, object localization and
-  permanence (`watch video <https://x.com/stash_pomichter/status/1980741077205414328>`__).
+.. grid:: 1 1 2 2
+   :gutter: 2
+
+   .. grid-item-card:: Navigation & mapping
+      :link: capabilities/navigation/index
+      :link-type: doc
+
+      **SLAM**, dynamic obstacle avoidance, route planning, and autonomous exploration
+      via both DimOS native and ROS integrations.
+
+   .. grid-item-card:: Perception
+
+      Detectors, 3D projections, VLMs, and audio processing.
+
+   .. grid-item-card:: Agents
+      :link: capabilities/agents/index
+      :link-type: doc
+
+      Agentive control and MCP. Example: *"Hey robot, go find the kitchen."*
+
+   .. grid-item-card:: Spatial memory
+      :link: capabilities/memory/index
+      :link-type: doc
+
+      Spatio-temporal RAG, dynamic memory, object localization and permanence.
+
+Start here
+==========
+
+.. grid:: 1 1 2 2
+   :gutter: 2
+
+   .. grid-item-card:: Quickstart
+      :link: quickstart
+      :link-type: doc
+
+      Install DimOS, run your first blueprint, and inspect the running system.
+
+   .. grid-item-card:: Platforms
+      :link: platforms/index
+      :link-type: doc
+
+      Go2 quadruped and G1 humanoid setup, simulation, and blueprints for real hardware.
 
 Hardware
 ========
@@ -230,6 +265,8 @@ Table of Contents
    :name: mastertoc
    :maxdepth: 2
 
+   Introduction <self>
+   Quickstart <quickstart>
    installation/index
    usage/index
    capabilities/index

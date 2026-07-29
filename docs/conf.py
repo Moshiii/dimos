@@ -59,7 +59,11 @@ except ImportError:
 
 source_suffix = ".rst"
 master_doc = "index"
-exclude_patterns = ["_build"]
+exclude_patterns = [
+    "_build",
+    # Empty placeholder: keep its source intact, but do not publish a blank page.
+    "capabilities/perception/index.rst",
+]
 
 # The default language to highlight source code in.
 highlight_language = "python3"
@@ -111,28 +115,49 @@ extlinks = {
 
 # -- Options for HTML output -------------------------------------------------
 
-html_theme = "furo"
+html_theme = "pydata_sphinx_theme"
 html_title = "Dimensional · DimOS"
 html_logo = "_static/dimensional-logo-master-transparent.png"
 html_favicon = "_static/favicon.png"
 html_static_path = ["_static"]
 html_css_files = ["dimensional.css"]
 templates_path = ["_templates"]
+html_sidebars = {
+    "**": ["sidebar-collapse.html", "sidebar-global-nav.html"],
+}
+html_context = {
+    # Match the hosted documentation while still respecting the reader's saved
+    # theme choice. PyData's switcher exposes light, dark, and system modes.
+    "default_mode": "dark",
+}
 html_theme_options = {
-    "source_repository": github_repo_url,
-    "source_branch": "main",
-    "source_directory": "docs/",
-    "sidebar_hide_name": True,
-    "light_css_variables": {
-        "color-brand-primary": "#1682a3",
-        "color-brand-content": "#08708f",
-        "color-brand-visited": "#7358a6",
-    },
-    "dark_css_variables": {
-        "color-brand-primary": "#50c5df",
-        "color-brand-content": "#68d4e9",
-        "color-brand-visited": "#c3a9ff",
-    },
+    # Use supported theme regions instead of positioning sidebar fragments as
+    # a custom header. This keeps the mobile menu and theme switcher native.
+    "navbar_start": ["navbar-logo"],
+    "navbar_center": ["search-button-field"],
+    "navbar_end": ["navbar-icon-links"],
+    # Persistent items stay in the top bar at mobile widths instead of moving
+    # into the navigation drawer.
+    "navbar_persistent": ["theme-switcher"],
+    "navbar_align": "content",
+    "search_bar_text": "Search docs",
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": github_repo_url,
+            "icon": "fa-brands fa-github",
+            "type": "fontawesome",
+        },
+    ],
+    # Avoid a second toolbar between the global header and the document title.
+    "article_header_start": [],
+    "article_header_end": [],
+    "primary_sidebar_end": [],
+    "secondary_sidebar_items": ["page-toc"],
+    "show_nav_level": 1,
+    "show_toc_level": 2,
+    "navigation_with_keys": True,
+    "back_to_top_button": True,
 }
 
 # -- Options for the spelling builder ----------------------------------------
