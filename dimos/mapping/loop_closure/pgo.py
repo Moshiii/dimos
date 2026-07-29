@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar, Unpack, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar, cast
 
 import numpy as np
 import open3d as o3d  # type: ignore[import-untyped]
@@ -64,6 +64,7 @@ from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     import gtsam  # type: ignore[import-not-found,import-untyped]
+    from typing_extensions import Unpack  # TODO(PY311): import from typing
 
 T = TypeVar("T")
 
