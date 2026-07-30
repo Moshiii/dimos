@@ -25,9 +25,14 @@ from dimos.manipulation.pick_and_place_module import (
 from dimos.perception.experimental.object_scene_registration import (
     ObjectSceneRegistrationModule,
 )
-from dimos.robot.manipulators.xarm.blueprints.agentic import xarm_graspgenx_agent
+from dimos.perception.sim_object_scene import SimObjectScene
+from dimos.robot.manipulators.xarm.blueprints.agentic import (
+    xarm_grasp_sim_agent,
+    xarm_graspgenx_agent,
+)
 from dimos.robot.manipulators.xarm.blueprints.graspgenx import xarm_graspgenx
 from dimos.robot.manipulators.xarm.blueprints.perception import xarm_perception
+from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_grasp_sim
 from dimos.robot.manipulators.xarm.grasp_config import (
     XARM_GRASP_FRAME_TO_TCP,
     XARM_GRIPPER_SWEEP,
@@ -78,3 +83,19 @@ def test_xarm_graspgenx_agent_composes_one_mcp_pair() -> None:
     assert _module_count(xarm_graspgenx_agent, ObjectSceneRegistrationModule) == 1
     assert _module_count(xarm_graspgenx_agent, GraspGenXModule) == 1
     assert _module_count(xarm_graspgenx_agent, PickAndPlaceModule) == 1
+
+
+def test_xarm_grasp_sim_uses_gt_scene_provider() -> None:
+    assert _module_count(xarm_grasp_sim, ObjectSceneRegistrationModule) == 0
+    assert _module_count(xarm_grasp_sim, SimObjectScene) == 1
+    assert _module_count(xarm_grasp_sim, GraspGenXModule) == 1
+    assert _module_count(xarm_grasp_sim, PickAndPlaceModule) == 1
+
+
+def test_xarm_grasp_sim_agent_keeps_gt_scene_provider() -> None:
+    assert _module_count(xarm_grasp_sim_agent, McpServer) == 1
+    assert _module_count(xarm_grasp_sim_agent, McpClient) == 1
+    assert _module_count(xarm_grasp_sim_agent, ObjectSceneRegistrationModule) == 0
+    assert _module_count(xarm_grasp_sim_agent, SimObjectScene) == 1
+    assert _module_count(xarm_grasp_sim_agent, GraspGenXModule) == 1
+    assert _module_count(xarm_grasp_sim_agent, PickAndPlaceModule) == 1
