@@ -38,6 +38,7 @@ def _xarm7_perception_sim(scene_path: object) -> object:
             robots=[make_xarm7_sim_robot_config()],
             planning_timeout=10.0,
             visualization={"backend": "viser"},
+            heuristic_grasp_fallback=True,
         ),
         MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(scene_path)),
         ObjectSceneRegistrationModule.blueprint(target_frame="world"),

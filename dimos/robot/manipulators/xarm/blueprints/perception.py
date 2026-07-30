@@ -45,6 +45,7 @@ xarm_perception = autoconnect(
         planning_timeout=10.0,
         visualization={"backend": "meshcat"},
         floor_z=-0.02,
+        heuristic_grasp_fallback=True,
     ),
     RealSenseCamera.blueprint(
         base_frame_id="link7",
