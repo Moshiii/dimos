@@ -85,11 +85,15 @@ def test_xarm_graspgenx_agent_composes_one_mcp_pair() -> None:
     assert _module_count(xarm_graspgenx_agent, PickAndPlaceModule) == 1
 
 
-def test_xarm_grasp_sim_uses_gt_scene_provider() -> None:
+def test_xarm_grasp_sim_uses_gt_scene_and_pick_diagnostics() -> None:
+    config = PickAndPlaceModuleConfig(**_module_kwargs(xarm_grasp_sim, PickAndPlaceModule))
+
     assert _module_count(xarm_grasp_sim, ObjectSceneRegistrationModule) == 0
     assert _module_count(xarm_grasp_sim, SimObjectScene) == 1
     assert _module_count(xarm_grasp_sim, GraspGenXModule) == 1
     assert _module_count(xarm_grasp_sim, PickAndPlaceModule) == 1
+    assert config.max_grasp_candidates_to_check == 30
+    assert config.pick_suppress_all_object_obstacles is True
 
 
 def test_xarm_grasp_sim_agent_keeps_gt_scene_provider() -> None:
