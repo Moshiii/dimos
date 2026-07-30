@@ -22,6 +22,7 @@ from dimos.perception.experimental.object_scene_registration import ObjectSceneR
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
     XARM7_SIM_PATH,
+    XARM_GRASP_SIM_PATH,
     make_xarm7_sim_hardware,
     make_xarm7_sim_module_kwargs,
     make_xarm7_sim_robot_config,
@@ -29,20 +30,24 @@ from dimos.robot.manipulators.xarm.config import (
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
-_xarm7_sim_hw = make_xarm7_sim_hardware(XARM7_SIM_PATH)
 
-xarm_perception_sim = autoconnect(
-    PickAndPlaceModule.blueprint(
-        robots=[make_xarm7_sim_robot_config()],
-        planning_timeout=10.0,
-        visualization={"backend": "meshcat"},
-        heuristic_grasp_fallback=True,
-    ),
-    MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(XARM7_SIM_PATH)),
-    ObjectSceneRegistrationModule.blueprint(target_frame="world"),
-    coordinator(
-        hardware=[_xarm7_sim_hw],
-        tasks=[trajectory_task(_xarm7_sim_hw)],
-    ),
-    RerunBridgeModule.blueprint(),
-)
+def _xarm7_perception_sim(scene_path: object) -> object:
+    hw = make_xarm7_sim_hardware(scene_path)
+    return autoconnect(
+        PickAndPlaceModule.blueprint(
+            robots=[make_xarm7_sim_robot_config()],
+            planning_timeout=10.0,
+            visualization={"backend": "viser"},
+            heuristic_grasp_fallback=True,
+        ),
+        MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(scene_path)),
+        ObjectSceneRegistrationModule.blueprint(target_frame="world"),
+        coordinator(hardware=[hw], tasks=[trajectory_task(hw)]),
+        RerunBridgeModule.blueprint(),
+    )
+
+
+xarm_perception_sim = _xarm7_perception_sim(XARM7_SIM_PATH)
+
+# Same stack on the room-and-objects scene instead of the bare stock table.
+xarm_grasp_sim = _xarm7_perception_sim(XARM_GRASP_SIM_PATH)
