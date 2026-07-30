@@ -105,6 +105,8 @@ class EdgeTAMImageSegmenter:
 
     def segment(self, detections: ImageDetections2D) -> ImageDetections2D:
         """Refine box detections into mask detections (Detection2DSeg)."""
+        import cv2
+
         if not len(detections):
             return detections
 

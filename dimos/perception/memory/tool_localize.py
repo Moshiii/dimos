@@ -22,8 +22,6 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import rerun as rr
-import rerun.blueprint as rrb
 
 from dimos.memory2.embed import EmbedImages
 from dimos.memory2.store.sqlite import SqliteStore
@@ -184,59 +182,65 @@ print(f"cross-view: {verified3d.count()} observing frames re-detect in 3d")
 
 # Rerun output uses the source timestamps directly.
 
-rerun_init("memory-localize")
-rr.save(out)
-rr.send_blueprint(
-    rrb.Blueprint(
-        rrb.Horizontal(
-            rrb.Spatial3DView(origin="/", name="Scene"),
-            rrb.Spatial2DView(origin="camera", name="Live"),
-            column_shares=[2, 1],
+
+def render() -> None:
+    """Write the .rrd — rerun stays an inline import."""
+    import rerun as rr
+    import rerun.blueprint as rrb
+
+    rerun_init("memory-localize")
+    rr.save(out)
+    rr.send_blueprint(
+        rrb.Blueprint(
+            rrb.Horizontal(
+                rrb.Spatial3DView(origin="/", name="Scene"),
+                rrb.Spatial2DView(origin="camera", name="Live"),
+                column_shares=[2, 1],
+            )
         )
     )
-)
 
-GREEN, RED = [46, 204, 113], [231, 76, 60]
-POINT_SIZE = 0.005
+    GREEN, RED = [46, 204, 113], [231, 76, 60]
+    POINT_SIZE = 0.005
 
+    def at(ts: float) -> None:
+        rr.set_time("ts", timestamp=ts)
 
-def at(ts: float) -> None:
-    rr.set_time("ts", timestamp=ts)
+    # scene backdrop from one depth frame
+    backdrop_obs = detections3d.first()
+    backdrop = PointCloud2.from_rgbd(
+        backdrop_obs.data.image, depth_at(backdrop_obs), camera_info, depth_scale=0.001
+    ).transform(-tf.get(OPTICAL_FRAME, "world", backdrop_obs.ts, 0.5))
+    rr.log("map", backdrop.voxel_downsample(0.01).to_rerun(voxel_size=POINT_SIZE), static=True)
 
-
-# scene backdrop from one depth frame
-backdrop_obs = detections3d.first()
-backdrop = PointCloud2.from_rgbd(
-    backdrop_obs.data.image, depth_at(backdrop_obs), camera_info, depth_scale=0.001
-).transform(-tf.get(OPTICAL_FRAME, "world", backdrop_obs.ts, 0.5))
-rr.log("map", backdrop.voxel_downsample(0.01).to_rerun(voxel_size=POINT_SIZE), static=True)
-
-# live camera feed + camera frustum tracking the wrist along the timeline
-rr.log("camera", camera_info.to_rerun(), static=True)
-for obs in images.transform(throttle(0.1)):
-    at(obs.ts)
-    rr.log("camera/image", obs.data.to_rerun())
-    rr.log("camera", camera_pose(obs.ts).to_rerun())
-
-# marked frames: into the live feed, plus a frozen frustum pinned at the
-# capture pose (not the moving camera entity, which would drag them along)
-for i, obs in enumerate(detections):
-    at(obs.ts)
-    annotated = obs.data.annotated_image()
-    rr.log("camera/image", annotated.to_rerun())
-    frame = f"detections/frames/{i}"
-    rr.log(frame, camera_pose(obs.ts).to_rerun())
-    rr.log(frame, camera_info.to_rerun())
-    rr.log(f"{frame}/image", annotated.to_rerun())
-
-# 3d detections: green = embedding matches, red = cross-view re-detections
-for tag, stream, rgb in [("matched", detections3d, GREEN), ("verified", verified3d, RED)]:
-    for i, obs in enumerate(stream):
+    # live camera feed + camera frustum tracking the wrist along the timeline
+    rr.log("camera", camera_info.to_rerun(), static=True)
+    for obs in images.transform(throttle(0.1)):
         at(obs.ts)
-        for j, det in enumerate(obs.data):
-            rr.log(
-                f"detections/{tag}/{i}_{j}_{det.name.replace(' ', '_')}",
-                det.pointcloud.to_rerun(voxel_size=POINT_SIZE, colors=rgb),
-            )
+        rr.log("camera/image", obs.data.to_rerun())
+        rr.log("camera", camera_pose(obs.ts).to_rerun())
 
+    # marked frames: into the live feed, plus a frozen frustum pinned at the
+    # capture pose (not the moving camera entity, which would drag them along)
+    for i, obs in enumerate(detections):
+        at(obs.ts)
+        annotated = obs.data.annotated_image()
+        rr.log("camera/image", annotated.to_rerun())
+        frame = f"detections/frames/{i}"
+        rr.log(frame, camera_pose(obs.ts).to_rerun())
+        rr.log(frame, camera_info.to_rerun())
+        rr.log(f"{frame}/image", annotated.to_rerun())
+
+    # 3d detections: green = embedding matches, red = cross-view re-detections
+    for tag, stream, rgb in [("matched", detections3d, GREEN), ("verified", verified3d, RED)]:
+        for i, obs in enumerate(stream):
+            at(obs.ts)
+            for j, det in enumerate(obs.data):
+                rr.log(
+                    f"detections/{tag}/{i}_{j}_{det.name.replace(' ', '_')}",
+                    det.pointcloud.to_rerun(voxel_size=POINT_SIZE, colors=rgb),
+                )
+
+
+render()
 print(f"saved {out}")
