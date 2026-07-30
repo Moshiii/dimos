@@ -114,6 +114,9 @@ def pytest_configure(config):
         "markers",
         "self_hosted_serial: self_hosted tests that must not run concurrently with other tests"
         " (GPU, exclusive hardware/display)",
+    )
+    config.addinivalue_line(
+        "markers",
         "web_browser: cockpit browser e2e (playwright chromium); runs in the CI web job",
     )
     config.addinivalue_line("markers", "skipif_in_ci: skip when CI env var is set")
