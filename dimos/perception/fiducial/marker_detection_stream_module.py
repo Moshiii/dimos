@@ -36,6 +36,7 @@ from dimos.memory2.stream import Stream
 from dimos.memory2.transform import QualityWindow, SpeedLimit
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.perception.detection.type.detection3d.marker import Detection3DMarker
 from dimos.perception.fiducial.marker_pose import camera_optical_frame_id, is_fisheye_model
@@ -69,6 +70,7 @@ class MarkerDetectionStreamModule(StreamModule[Image, Detection3DArray]):
     config: MarkerDetectionStreamModuleConfig
 
     color_image: In[Image]
+    tf: In[TFMessage]
     detections: Out[Detection3DArray]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -122,7 +124,7 @@ class MarkerDetectionStreamModule(StreamModule[Image, Detection3DArray]):
 
         ts = getattr(image, "ts", None) or time.time()
         optical = camera_optical_frame_id(image, info)
-        t_world_optical = self.tf.get(
+        t_world_optical = self.tfbuffer.get(
             self.config.world_frame,
             optical,
             time_point=ts,
@@ -156,8 +158,8 @@ class MarkerDetectionStreamModule(StreamModule[Image, Detection3DArray]):
         Module.start(self)
 
         # The pipeline reads color_image and writes detections by name; extra
-        # inputs are legal (the H264InputMixin adds a compressed-video In
-        # that feeds color_image internally).
+        # inputs are legal (tf is a plain In port now, and the H264InputMixin
+        # adds a compressed-video In that feeds color_image internally).
         if len(self.outputs) != 1:
             raise TypeError(
                 f"{self.__class__.__name__} must have exactly one Out port, "

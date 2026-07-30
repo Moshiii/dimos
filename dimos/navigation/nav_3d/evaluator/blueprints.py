@@ -39,6 +39,7 @@ from dimos.navigation.nav_3d.mls_planner.viz import (
     render_surface_map,
 )
 from dimos.visualization.rerun.bridge import RerunBridgeModule
+from dimos.visualization.rerun.in_frame import InFrame
 from dimos.visualization.rerun.websocket_server import RerunWebSocketServer
 
 _POSE_MARKER_RADIUS = 0.4
@@ -60,7 +61,7 @@ def _render_goal_pose(msg: PoseStamped) -> Archetype:
     )
 
 
-def _render_global_map(msg: PointCloud2) -> Archetype:
+def _render_global_map(msg: PointCloud2) -> Archetype | InFrame:
     return msg.to_rerun(voxel_size=0.03, colors=[128, 128, 128])
 
 

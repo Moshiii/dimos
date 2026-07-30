@@ -35,6 +35,8 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype
 
+    from dimos.visualization.rerun.in_frame import InFrame
+
 # Small lift so graph artifacts render visibly above the surface points instead of z-fighting.
 _GRAPH_Z_LIFT = 0.05
 
@@ -44,7 +46,7 @@ def render_surface_map(
     voxel_size: float = 0.1,
     wall_clearance_m: float = 0.0,
     clearance_clamp_m: float = 1.0,
-) -> Archetype:
+) -> Archetype | InFrame:
     """Floor cells colored by wall clearance: dark navy where tight, pale blue in the open.
 
     Clearance rides the cloud's intensity channel; cells below ``wall_clearance_m`` are

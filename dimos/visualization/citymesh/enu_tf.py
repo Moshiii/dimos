@@ -39,11 +39,12 @@ import math
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.core.stream import In
+from dimos.core.stream import IO, In
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.NavSatFix import NavSatFix
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -100,6 +101,7 @@ class EnuSnapTF(Module):
 
     config: Config
     gps: In[NavSatFix]
+    tf: IO[TFMessage]
 
     @rpc
     def start(self) -> None:
@@ -108,7 +110,7 @@ class EnuSnapTF(Module):
 
     def _on_fix(self, msg: NavSatFix) -> None:
         try:
-            pose = self.tf.get(
+            pose = self.tfbuffer.get(
                 self.config.parent,
                 self.config.robot_frame,
                 time_point=msg.ts,
@@ -127,4 +129,4 @@ class EnuSnapTF(Module):
             logger.exception("enu snap failed")
             return
         if transform is not None:
-            self.tf.publish(transform.now())
+            self.tf.publish(TFMessage(transform.now()))

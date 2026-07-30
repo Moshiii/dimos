@@ -74,6 +74,7 @@ class DroneReplay(Module):
     video: Out[CompressedVideo]
     gps: Out[NavSatFix]
     camera_info: Out[CameraInfo]
+    tf: Out[TFMessage]
 
     _store: SqliteStore | None = None
     _subscriptions: list[Any]
@@ -137,7 +138,7 @@ class DroneReplay(Module):
         self._video_count += 1
 
     def _republish_tf(self, msg: TFMessage) -> None:
-        self.tf.publish(*(t.now() for t in msg.transforms))
+        self.tf.publish(TFMessage(*(t.now() for t in msg.transforms)))
 
     @rpc
     def stop(self) -> None:
