@@ -53,8 +53,10 @@ from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.Header import Header
-from dimos.perception.detection.type.detection3d.object import Object as DetObject
-from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
+from dimos.perception.experimental.object import Object as DetObject
+from dimos.perception.experimental.object_scene_registration import (
+    ObjectSceneRegistrationModule,
+)
 
 
 def _make_det_object(
