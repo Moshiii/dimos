@@ -76,6 +76,34 @@ _Avoid_: module registry, general RPC gateway, service locator
 The separation of public scheduling, agent execution, and private scoring so an evaluated system cannot access answer-bearing benchmark material.
 _Avoid_: worker-only separation, permission flag, hidden oracle module
 
+**Authoritative simulator semantics**:
+Scene-authored facts owned by a simulator about entity identity, semantic class, state, canonical orientation, spatial regions, and relationships. These facts may include explicitly authored values and policy-derived values with declared provenance, but never unlabelled geometric guesses.
+_Avoid_: benchmark-local annotation layer, agent perception result, asset-title heuristic, simulator geometry when meaning has not been declared
+
+**Simulator oracle surface**:
+A private benchmark-facing view of authoritative simulator semantics and state used to generate and score tasks while remaining unavailable to the evaluated agent.
+_Avoid_: agent observation, public scene API, benchmark-owned semantic copy
+
+**Scene oracle view**:
+A typed, read-only generation-time projection of one coherently reset DimSim scene, containing the authoritative entity identity, semantics, state, geometry, and region facts needed by task generators. It is normally consumed in memory; generated corpora retain its content digest and provenance rather than treating the projection as a second source of truth.
+_Avoid_: sensor snapshot, voxel-map snapshot, public agent observation, benchmark-owned scene annotation
+
+**Objective embodied task**:
+An embodied task whose goal or answer is produced by a versioned executable predicate over authoritative simulator semantics, has one typed interpretation, and remains stable under declared geometric or state tolerances.
+_Avoid_: plausible natural-language prompt, LLM-judged ground truth, convention-dependent question, boundary-sensitive answer
+
+**Compiled benchmark task**:
+An immutable task definition generated offline from authoritative simulator semantics, accepted only after objective-answer and ambiguity gates pass, and released with stable identity, versioned language, and a private executable oracle contract.
+_Avoid_: live-generated evaluation prompt, English-only task record, manually supplied expected answer
+
+**Benchmark episode**:
+One execution binding of a compiled benchmark task to a scene reset, start state, runtime capability profile, and resource limits. Multiple episodes may exercise one task without changing its semantic identity.
+_Avoid_: task definition, agent trajectory, question paraphrase
+
+**Frozen benchmark release**:
+A versioned, content-addressed collection of compiled tasks and episodes whose agent-visible records are physically separated from private oracle and reset records before scored execution.
+_Avoid_: runtime question generation, mutable task database, public bundle containing hidden answers
+
 **Prediction ledger**:
 An immutable record of canonical per-case agent submissions and their run provenance, maintained separately from private score records.
 _Avoid_: chat log, live score feed, mutable result cache
