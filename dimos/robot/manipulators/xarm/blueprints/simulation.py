@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
@@ -27,11 +28,12 @@ from dimos.robot.manipulators.xarm.config import (
     make_xarm7_sim_module_kwargs,
     make_xarm7_sim_robot_config,
 )
+from dimos.robot.manipulators.xarm.grasp_config import make_xarm_graspgenx_config
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 
-def _xarm7_perception_sim(scene_path: object) -> object:
+def _xarm7_perception_sim(scene_path: object, static_box_obstacles: tuple = ()) -> object:
     hw = make_xarm7_sim_hardware(scene_path)
     return autoconnect(
         PickAndPlaceModule.blueprint(
@@ -39,6 +41,7 @@ def _xarm7_perception_sim(scene_path: object) -> object:
             planning_timeout=10.0,
             visualization={"backend": "viser"},
             heuristic_grasp_fallback=True,
+            static_box_obstacles=list(static_box_obstacles),
         ),
         MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(scene_path)),
         ObjectSceneRegistrationModule.blueprint(target_frame="world"),
@@ -49,5 +52,14 @@ def _xarm7_perception_sim(scene_path: object) -> object:
 
 xarm_perception_sim = _xarm7_perception_sim(XARM7_SIM_PATH)
 
-# Same stack on the room-and-objects scene instead of the bare stock table.
-xarm_grasp_sim = _xarm7_perception_sim(XARM_GRASP_SIM_PATH)
+# The room-and-objects scene with learned grasps: GraspGenX proposals feed
+# pick's provider path, and the table matches data/xarm_grasp_sim/scene.xml so
+# the planner always respects it.
+_XARM_GRASP_TABLE = {"name": "table", "center": (0.47, 0.0, 0.065), "size": (0.38, 0.60, 0.13)}
+
+xarm_grasp_sim = autoconnect(
+    _xarm7_perception_sim(XARM_GRASP_SIM_PATH, static_box_obstacles=(_XARM_GRASP_TABLE,)),
+    GraspGenXModule.blueprint(
+        **make_xarm_graspgenx_config().model_dump(exclude={"rpc_transport", "tf_transport", "g"})
+    ),
+)
