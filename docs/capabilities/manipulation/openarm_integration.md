@@ -8,12 +8,12 @@
 
 Guide for running the **OpenArm** — an open-source bimanual 7-DOF research arm built from Damiao DM-J quasi-direct-drive motors — under the dimos manipulation + control stack.
 
-**If you're standing in front of the hardware and just want to run it, skip to** {ref}`Quick start <doc-capabilities-manipulation-openarm-integration-quick-start>`**.**
+**If you're standing in front of the hardware and just want to run it, skip to** [Quick start](#quick-start)**.**
 
 Related:
 
 - Upstream hardware + C++ reference: [enactic/openarm_can](https://github.com/enactic/openarm_can)
-- How to integrate any new arm: {doc}`/capabilities/manipulation/adding_a_custom_arm`
+- How to integrate any new arm: [How to Integrate a New Manipulator Arm](adding_a_custom_arm.md)
 
 ______________________________________________________________________
 
@@ -247,7 +247,7 @@ True
 True
 ```
 
-If you don't know which Cartesian targets are reachable, check first with the workspace tool — see {ref}`Workspace analysis <doc-capabilities-manipulation-openarm-integration-workspace-analysis>` below. `plan_pose` will fail with `NO_SOLUTION` if the IK can't find a configuration reaching the target.
+If you don't know which Cartesian targets are reachable, check first with the workspace tool — see [Workspace analysis](#workspace-analysis) below. `plan_pose` will fail with `NO_SOLUTION` if the IK can't find a configuration reaching the target.
 
 (doc-capabilities-manipulation-openarm-integration-adding-obstacles)=
 
@@ -425,7 +425,7 @@ ______________________________________________________________________
 - **Driver separate from adapter.** `driver.py` has zero dimos deps → unit-testable with a virtual CAN bus, reusable outside dimos.
 - **MIT mode for everything.** MIT can emulate position (high kp), velocity (kp=0, nonzero kd+dq), and torque (kp=kd=0, nonzero tau). One code path.
 - **Gravity compensation on by default.** Eliminates steady-state position error without needing high kp. Needs Pinocchio + the per-side URDFs.
-- **One adapter per CAN bus, keyed by :attr:\`address \<dimos.control.components.HardwareComponent.address>\`.** Matches the Piper adapter pattern. Bimanual = two adapters with different {attr}`address <dimos.control.components.HardwareComponent.address>` values.
+- **One adapter per CAN bus, keyed by [`address`][address].** Matches the Piper adapter pattern. Bimanual = two adapters with different [`address`][address] values.
 - **Per-side URDFs for Drake planning.** Loading the full 14-DOF bimanual URDF twice (once per robot instance) creates phantom-arm collisions with the "other" arm frozen at zero. The per-side URDFs keep only one arm's links + the torso, avoiding the phantom collisions while matching the bimanual kinematics exactly.
 - **URDF stays in-tree (\`\`data/openarm_description/\`\`) for now.** Can migrate to LFS later — only the path constants in the OpenArm blueprint module change.
 - **CAN bringup stays manual (\`\`sudo\`\`).** Auto-bringup from `connect()` would need sudo-in-a-library or a systemd unit; the explicit script is clearer and testable. For production, add a oneshot systemd unit that runs the script at boot.
@@ -466,3 +466,5 @@ ______________________________________________________________________
 ```
 
 Expected: 24 passed (13 driver + 11 adapter). All tests use `can.Bus(interface="virtual")` loopback — no real hardware needed.
+
+[address]: #dimos.control.components.HardwareComponent.address

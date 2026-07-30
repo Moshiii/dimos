@@ -17,15 +17,15 @@ DimOS uses reactive streams (RxPY) to handle sensor data. This approach naturall
 
    * - Guide
      - Description
-   * - :doc:`ReactiveX fundamentals <reactivex>`
+   * - [ReactiveX fundamentals](reactivex.md)
      - Observables, subscriptions, and disposables
-   * - :doc:`Advanced streams <advanced_streams>`
+   * - [Advanced streams](advanced_streams.md)
      - Backpressure, parallel subscribers, and synchronous getters
-   * - :doc:`Quality-based filtering <quality_filter>`
+   * - [Quality-based filtering](quality_filter.md)
      - Select the highest-quality frames when downsampling streams
-   * - :doc:`Temporal alignment <temporal_alignment>`
+   * - [Temporal alignment](temporal_alignment.md)
      - Match messages from multiple sensors by timestamp
-   * - :doc:`Storage and replay <storage_replay>`
+   * - [Storage and replay](storage_replay.md)
      - Record streams and replay them with their original timing
 :::
 

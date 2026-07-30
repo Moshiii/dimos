@@ -2,27 +2,25 @@
 
 # Links and Cross-References
 
-Use Sphinx cross-references for content inside the documentation tree. The
-strict build reports missing targets.
+Use standard Markdown links for pages and sections. MyST resolves them as
+Sphinx cross-references, and the strict build reports missing targets.
 
 | Target | Syntax |
 | --- | --- |
-| Another page | ``{doc}`/usage/configuration` `` |
-| Named section | ``{ref}`configuration-precedence` `` |
-| Python class | ``{class}`dimos.core.stream.In` `` |
-| Python function | ``{func}`dimos.core.coordination.blueprints.autoconnect` `` |
+| Another page | `[Configuration](../../usage/configuration.md)` |
+| Named section | `[Configurable modules](../../usage/configuration.md#configurable-modules)` |
+| Python class | ``[`In`][In]`` |
+| Python function | ``[`autoconnect()`][autoconnect]`` |
 | External site | A standard Markdown link, such as `[Sphinx](https://www.sphinx-doc.org/)` |
 
-Give important sections explicit, stable labels immediately before the
-heading:
+Define each Python target once at the bottom of the page:
 
-````md
-(configuration-precedence)=
-
-# Configuration precedence
+```md
+[In]: #dimos.core.stream.In
+[autoconnect]: #dimos.core.coordination.blueprints.autoconnect
 ```
-````
 
 Use GitHub links for files that are not part of the Sphinx documentation,
-such as a package-specific `README.md`. Prefer API roles for Python symbols
-because they follow the generated API documentation.
+such as a package-specific `README.md`. Prefer Markdown reference links for
+Python symbols. They render on GitHub, and Sphinx resolves their targets
+against the generated API documentation.

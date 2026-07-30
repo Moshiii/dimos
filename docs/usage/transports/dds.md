@@ -8,7 +8,7 @@ The `dds` extra provides DDS (Data Distribution Service) transport support via [
 
 ## Recommended: nix-provided cyclonedds
 
-No `sudo`, no system pollution. Requires the {doc}`Nix installation guide </installation/nix>`.
+No `sudo`, no system pollution. Requires the [Nix installation guide](../../installation/nix.md).
 
 ```bash
 nix build nixpkgs#cyclonedds        # creates ./result symlink (GC root)

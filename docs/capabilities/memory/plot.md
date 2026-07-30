@@ -321,7 +321,7 @@ t= 279.6s score=0.230 prominence=0.030
 
 We got 15 peaks back, we ran a detector on all of them so we can start projecting into 3D but let's say we want some sort of pre-filter of just globally significant peaks. we can see most peaks prominence sits around 0.02–0.03 and only a couple (0.067 at t=37s, 0.047 at t=240s) really stand out. We might want to auto detect those.
 
-{func}`significant() <dimos.memory2.transform.significant>` replaces that guesswork by thresholding on the distribution of prominences itself. Default outlier detection uses MAD (median absolute deviation)
+[`significant()`][significant] replaces that guesswork by thresholding on the distribution of prominences itself. Default outlier detection uses MAD (median absolute deviation)
 
 Once we put the surviving peaks on the timeline we get two very obvious plants.
 
@@ -349,7 +349,7 @@ plot.to_svg("assets/plot_plantness_significant.svg")
 
 {{ image10 }}
 
-Rule of thumb: keep a small absolute floor on `peaks(prominence=...)` to reject shape-noise, then let {func}`significant() <dimos.memory2.transform.significant>` pick the statistical cutoff.
+Rule of thumb: keep a small absolute floor on `peaks(prominence=...)` to reject shape-noise, then let [`significant()`][significant] pick the statistical cutoff.
 
 (doc-capabilities-memory-plot-semantic-peak-analysis)=
 
@@ -466,3 +466,5 @@ drawing.to_svg("assets/peak_detections.svg")
 - These are 3D bounding boxes with associated pointclouds, render in rerun
 - Some basic statistical outlier filters—we have many overlapping detections here and we can be pretty sure there are plants right of the robot, but it is unclear on the left.
 - Now that we have 3d locations in space, we can load all camera images observing detections in space (not just rely on radius around the embedding peak) see in how many of these images we actually detect an object. (another strategy for false positive filtering)
+
+[significant]: #dimos.memory2.transform.significant

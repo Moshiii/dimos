@@ -96,12 +96,12 @@ Each sensor, joint, and reference point has its own frame.
 
 ## The Transform Class
 
-The {class}`Transform <dimos.msgs.geometry_msgs.Transform.Transform>` class at [geometry_msgs/Transform.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/msgs/geometry_msgs/Transform.py#L21) represents a spatial transformation with:
+The [`Transform`][Transform] class at [geometry_msgs/Transform.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/msgs/geometry_msgs/Transform.py#L21) represents a spatial transformation with:
 
 - `frame_id` - The parent frame name
-- {attr}`child_frame_id <dimos.msgs.geometry_msgs.Transform.Transform.child_frame_id>` - The child frame name
-- {attr}`translation <dimos.msgs.geometry_msgs.Transform.Transform.translation>` - A {class}`Vector3 <dimos.msgs.geometry_msgs.Vector3.Vector3>` (x, y, z) offset
-- {attr}`rotation <dimos.msgs.geometry_msgs.Transform.Transform.rotation>` - A {class}`Quaternion <dimos.msgs.geometry_msgs.Quaternion.Quaternion>` (x, y, z, w) orientation
+- [`child_frame_id`][child_frame_id] - The child frame name
+- [`translation`][translation] - A [`Vector3`][Vector3] (x, y, z) offset
+- [`rotation`][rotation] - A [`Quaternion`][Quaternion] (x, y, z, w) orientation
 - `ts` - Timestamp for temporal lookups
 
 ```python
@@ -201,7 +201,7 @@ print(matrix)
 Modules in DimOS automatically get a `frame_id` property. This is controlled by two config options in [core/module.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/module.py#L78):
 
 - `frame_id` - The base frame name (defaults to the class name)
-- {attr}`frame_id_prefix <dimos.core.module.ModuleConfig.frame_id_prefix>` - Optional prefix for namespacing
+- [`frame_id_prefix`][frame_id_prefix] - Optional prefix for namespacing
 
 ```python
 from dimos.core.module import Module, ModuleConfig
@@ -400,7 +400,7 @@ Transform tree:
 └──────────────┘
 ```
 
-You can view these transforms in 3D using the Rerun viewer (see {doc}`Visualization </usage/visualization>`).
+You can view these transforms in 3D using the Rerun viewer (see [Visualization](visualization.md)).
 
 {{ transforms }}
 
@@ -513,5 +513,13 @@ For the mathematical foundations, the ROS documentation provides detailed backgr
 
 See also:
 
-- {doc}`Modules </usage/modules>` for understanding the module system
-- {doc}`Configuration </usage/configuration>` for module configuration patterns
+- [Modules](modules.md) for understanding the module system
+- [Configuration](configuration.md) for module configuration patterns
+
+[Transform]: #dimos.msgs.geometry_msgs.Transform.Transform
+[child_frame_id]: #dimos.msgs.geometry_msgs.Transform.Transform.child_frame_id
+[translation]: #dimos.msgs.geometry_msgs.Transform.Transform.translation
+[Vector3]: #dimos.msgs.geometry_msgs.Vector3.Vector3
+[rotation]: #dimos.msgs.geometry_msgs.Transform.Transform.rotation
+[Quaternion]: #dimos.msgs.geometry_msgs.Quaternion.Quaternion
+[frame_id_prefix]: #dimos.core.module.ModuleConfig.frame_id_prefix

@@ -75,7 +75,7 @@ ______________________________________________________________________
 
 ## Rendering with Custom Blueprints
 
-To enable visualization in your own blueprint, use {func}`vis_module <dimos.visualization.vis_module.vis_module>`:
+To enable visualization in your own blueprint, use [`vis_module`][vis_module]:
 
 ```python
 from dimos.core.coordination.blueprints import autoconnect
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     ModuleCoordinator.build(camera_demo).loop()
 ```
 
-Every LCM stream, such as `color_image` (output by CameraModule), that uses a data type (like {class}`Image <dimos.msgs.sensor_msgs.Image.Image>`) that has a `.to_rerun` method will get rendered (`rr.log`) using the LCM topic as the rerun entity path. In other words: to render something, simply log it to a stream and it will automatically be available in rerun.
+Every LCM stream, such as `color_image` (output by CameraModule), that uses a data type (like [`Image`][Image]) that has a `.to_rerun` method will get rendered (`rr.log`) using the LCM topic as the rerun entity path. In other words: to render something, simply log it to a stream and it will automatically be available in rerun.
 
 (doc-usage-visualization-performance-tuning)=
 
@@ -141,7 +141,7 @@ ______________________________________________________________________
 
 ## Direct Visualization from a Module
 
-If you want to log data to Rerun directly from inside a module (e.g. for debugging or one-off visualizations), use {func}`rerun_init <dimos.visualization.rerun.init.rerun_init>` instead of calling `rr.init()` yourself. It handles colormap registration and can optionally start a gRPC server so a viewer can connect.
+If you want to log data to Rerun directly from inside a module (e.g. for debugging or one-off visualizations), use [`rerun_init`][rerun_init] instead of calling `rr.init()` yourself. It handles colormap registration and can optionally start a gRPC server so a viewer can connect.
 
 ```python
 import rerun as rr
@@ -163,10 +163,15 @@ rerun_init(
 # Then connect with: dimos-viewer --connect rerun+http://127.0.0.1:9999/proxy
 ```
 
-When a {class}`RerunBridgeModule <dimos.visualization.rerun.bridge.RerunBridgeModule>` is already part of your blueprint, you typically don't need `start_grpc` — just call {func}`rerun_init() <dimos.visualization.rerun.init.rerun_init>` and log directly with `rr.log()`. The data will appear in the existing viewer.
+When a [`RerunBridgeModule`][RerunBridgeModule] is already part of your blueprint, you typically don't need `start_grpc` — just call [`rerun_init()`][rerun_init] and log directly with `rr.log()`. The data will appear in the existing viewer.
 
 (doc-usage-visualization-how-to-use-rerun-on-dev-and-the-tfentity-nuances)=
 
 ## How to use Rerun on `dev` (and the TF/entity nuances)
 
 Rerun on `dev` is **module-driven**: modules decide what to log, and `Blueprint.build()` sets up the shared viewer + default layout.
+
+[vis_module]: #dimos.visualization.vis_module.vis_module
+[Image]: #dimos.msgs.sensor_msgs.Image.Image
+[rerun_init]: #dimos.visualization.rerun.init.rerun_init
+[RerunBridgeModule]: #dimos.visualization.rerun.bridge.RerunBridgeModule

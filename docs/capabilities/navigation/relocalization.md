@@ -13,7 +13,7 @@ myst:
 
 # Premap & Relocalization
 
-Relocalization lets a Go2 navigate on a previously built map instead of only on what it sees right now. At runtime, {class}`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>` aligns live LiDAR to a saved premap and publishes a `world → map` transform, so the costmap and planner operate on the live scan and premap together.
+Relocalization lets a Go2 navigate on a previously built map instead of only on what it sees right now. At runtime, [`RelocalizationModule`][RelocalizationModule] aligns live LiDAR to a saved premap and publishes a `world → map` transform, so the costmap and planner operate on the live scan and premap together.
 
 {{ relocalization_demo }}
 
@@ -84,7 +84,7 @@ dimos map global recording_go2 --export
 
 1. Current working directory
 2. `DIMOS_PROJECT_ROOT`
-3. `data/` via LFS ({func}`get_data <dimos.utils.data.get_data>`)
+3. `data/` via LFS ([`get_data`][get_data])
 
 Examples:
 
@@ -111,7 +111,7 @@ Open the companion `{DB_NAME}.rrd` in Rerun to verify loop closure before deploy
 
 ## 3. Relocalize in replay
 
-Test alignment without the robot. `unitree-go2-relocalization` is `unitree-go2` plus {class}`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>`:
+Test alignment without the robot. `unitree-go2-relocalization` is `unitree-go2` plus [`RelocalizationModule`][RelocalizationModule]:
 
 ```bash
 dimos --replay --replay-db recording_go2 run unitree-go2-relocalization \
@@ -168,7 +168,7 @@ Before sending navigation goals, walk through this checklist:
 
 ## How it works
 
-The `unitree-go2-relocalization` blueprint is the standard {doc}`Go2 navigation stack </capabilities/navigation/deep_dive>` plus {class}`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>`:
+The `unitree-go2-relocalization` blueprint is the standard [Go2 navigation stack](deep_dive.md) plus [`RelocalizationModule`][RelocalizationModule]:
 
 ```{raw} html
 <details>
@@ -204,7 +204,7 @@ Note that [CostMapper](https://github.com/dimensionalOS/dimos/blob/main/dimos/ma
 | File             | Format                                                                                   | Produced by                 | Consumed by                                                                                           |
 | ---------------- | ---------------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `{name}.db`      | memory2 SQLite (`lidar`, `odom`, `color_image`, …)                                       | `unitree-go2-memory`        | `dimos map *`, `--replay-db`                                                                          |
-| `{name}.pc2.lcm` | LCM-encoded {class}`PointCloud2 <dimos.msgs.sensor_msgs.PointCloud2.PointCloud2>` premap | `dimos map global --export` | {class}`RelocalizationModule <dimos.mapping.relocalization.module.RelocalizationModule>` (`map_file`) |
+| `{name}.pc2.lcm` | LCM-encoded [`PointCloud2`][PointCloud2] premap | `dimos map global --export` | [`RelocalizationModule`][RelocalizationModule] (`map_file`) |
 | `{name}.rrd`     | Rerun recording (visual QA)                                                              | `dimos map global`          | Rerun viewer                                                                                          |
 
 (doc-capabilities-navigation-relocalization-configuration-reference)=
@@ -251,4 +251,8 @@ To accept all candidates for visualization only (not for production nav):
 
 ## Related docs
 
-For hardware setup, simulation, and the full blueprint list, see the {doc}`Go2 platform guide </platforms/quadruped/go2/index>`. The [v0.0.13 release notes](https://github.com/dimensionalOS/dimos/releases/tag/v0.0.13) summarize the PGO, `dimos map`, and relocalization work this guide builds on.
+For hardware setup, simulation, and the full blueprint list, see the [Go2 platform guide](../../platforms/quadruped/go2/index.md). The [v0.0.13 release notes](https://github.com/dimensionalOS/dimos/releases/tag/v0.0.13) summarize the PGO, `dimos map`, and relocalization work this guide builds on.
+
+[RelocalizationModule]: #dimos.mapping.relocalization.module.RelocalizationModule
+[get_data]: #dimos.utils.data.get_data
+[PointCloud2]: #dimos.msgs.sensor_msgs.PointCloud2.PointCloud2

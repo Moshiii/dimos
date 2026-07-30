@@ -1,9 +1,9 @@
 # Quickstart
 
 Install DimOS, run a replay or simulation, then explore the CLI and
-{abbr}`MCP (Model Context Protocol)`. No hardware is required.
+MCP. No hardware is required.
 
-In this quickstart, you will replay a {brand}`Unitree` Go2 office navigation session
+In this quickstart, you will replay a Unitree Go2 office navigation session
 without hardware, then see how to switch to simulation or a live robot.
 
 If you use coding agents (OpenClaw, Claude Code, or similar), point them at
@@ -59,11 +59,11 @@ If you prefer to install system dependencies yourself, follow the guide for your
 
    * - OS guide
      - Notes
-   * - :doc:`Ubuntu <installation/ubuntu>`
+   * - [Ubuntu](installation/ubuntu.md)
      - Primary tested path
-   * - :doc:`Nix <installation/nix>`
+   * - [Nix](installation/nix.md)
      - Flakes and development shell
-   * - :doc:`macOS <installation/osx>`
+   * - [macOS](installation/osx.md)
      - Homebrew-based; less mature than Linux
 :::
 
@@ -110,7 +110,7 @@ export ROBOT_IP=<YOUR_ROBOT_IP>
 dimos run unitree-go2
 ```
 
-Do not skip the {doc}`Unitree Go2 platform guide <platforms/quadruped/go2/index>`;
+Do not skip the [Unitree Go2 platform guide](platforms/quadruped/go2/index.md);
 latency, time synchronization, and safety practices matter.
 
 ## Featured runfiles
@@ -141,11 +141,11 @@ latency, time synchronization, and safety practices matter.
      - Quadruped agentic stack with a local LLM (requires ``ollama serve``)
 :::
 
-See {doc}`usage/blueprints` for the complete blueprint reference.
+See [Blueprints](usage/blueprints.md) for the complete blueprint reference.
 
 ## Agent CLI and MCP
 
-The {program}`dimos` CLI runs blueprints, inspects state, talks to agents, and invokes
+The `dimos` CLI runs blueprints, inspects state, talks to agents, and invokes
 skills through MCP.
 
 ```bash
@@ -158,7 +158,7 @@ dimos mcp call relative_move --arg forward=0.5
 dimos stop
 ```
 
-See {doc}`usage/cli` for the complete CLI reference.
+See [CLI Reference](usage/cli.md) for the complete CLI reference.
 
 ## What next?
 

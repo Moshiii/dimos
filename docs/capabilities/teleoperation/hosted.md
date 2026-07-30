@@ -31,7 +31,7 @@ Once connected, four streams flow continuously:
 | Telemetry | robot → operator | Battery, posture, link latency/rate for the HUD     |
 | Commands  | operator → robot | Drive input, sport commands, nav goals, E-STOP      |
 
-All broker-facing modules share a single broker session, so there's exactly one video track and one control plane per robot — see {ref}`How it connects <doc-capabilities-teleoperation-hosted-how-it-connects>` for the channel-level detail.
+All broker-facing modules share a single broker session, so there's exactly one video track and one control plane per robot — see [How it connects](#how-it-connects) for the channel-level detail.
 
 How low is the latency in practice? With the World Cup on, four Dimensional teammates across the globe; San Francisco, Bangalore, Buenos Aires, and Shanghai played soccer with Go2s hosted in SF, over the public internet.
 
@@ -69,7 +69,7 @@ The API key alone is enough — the broker derives the robot identity from it. `
 | `teleop-hosted-go2-transport` | Drive + camera + minimap + click-to-nav (recommended)                    |
 | `teleop-hosted-go2-multicam`  | Adds a second RealSense, operator-selectable, mux'd into one video track |
 
-The transport blueprints bind `Cloudflare*` transports directly to the streams of several small, per-concern modules: {class}`Go2CommandModule <dimos.teleop.hosted.go2_command.Go2CommandModule>` (command / E-STOP / drive guard), {class}`CameraMuxModule <dimos.teleop.hosted.camera_mux.CameraMuxModule>` (camera → video track), {class}`MapCompressModule <dimos.teleop.hosted.map_compress.MapCompressModule>` (costmap → minimap), and {class}`HostedStatsModule <dimos.teleop.hosted.hosted_stats.HostedStatsModule>` (telemetry + acks). The broker-bound modules run in one worker so they share a single broker session; the {class}`GO2Connection <dimos.robot.unitree.go2.connection.GO2Connection>` driver runs in a second worker (`n_workers=2`).
+The transport blueprints bind `Cloudflare*` transports directly to the streams of several small, per-concern modules: [`Go2CommandModule`][Go2CommandModule] (command / E-STOP / drive guard), [`CameraMuxModule`][CameraMuxModule] (camera → video track), [`MapCompressModule`][MapCompressModule] (costmap → minimap), and [`HostedStatsModule`][HostedStatsModule] (telemetry + acks). The broker-bound modules run in one worker so they share a single broker session; the [`GO2Connection`][GO2Connection] driver runs in a second worker (`n_workers=2`).
 
 Enable the glass-to-glass latency benchmark with `-o cameramuxmodule.latency_stamp=true`.
 
@@ -137,8 +137,8 @@ The browser is modality-agnostic — it streams whatever the device gives it, an
 
 | Device               | Input                                                                                         | Maps to                                                                                          |
 | -------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Desktop browser      | **WASD** keyboard                                                                             | {class}`TwistStamped <dimos.msgs.geometry_msgs.TwistStamped.TwistStamped>` → `cmd_vel`           |
-| Quest 3 / VR headset | **Left thumbstick** Y → fwd/back, X → strafe; **right thumbstick** X → yaw; grip = boost/slow | same {class}`TwistStamped <dimos.msgs.geometry_msgs.TwistStamped.TwistStamped>` path as keyboard |
+| Desktop browser      | **WASD** keyboard                                                                             | [`TwistStamped`][TwistStamped] → `cmd_vel`           |
+| Quest 3 / VR headset | **Left thumbstick** Y → fwd/back, X → strafe; **right thumbstick** X → yaw; grip = boost/slow | same [`TwistStamped`][TwistStamped] path as keyboard |
 
 Shift = 2× speed, Ctrl = ½×. The operator can also send allow-listed sport commands (StandDown, RecoveryStand, Sit, Damp, Hello, Stretch, and — gated behind `allow_acrobatics` — FrontJump, FrontPounce), toggle obstacle avoidance / rage mode / the head LED, pick the camera, E-STOP, and click the minimap to navigate.
 
@@ -169,13 +169,13 @@ This writes `recording_teleop_<ts>.db` + a `report_<ts>.json` on disconnect; reg
 
 Each concern is its own module, so its commonly-tuned fields live under that module's config key (module class name, lowercased). Pass with `-o`, e.g. `-o hostedstatsmodule.telemetry_hz=5`.
 
-`hostedstatsmodule` — {class}`HostedStatsModule <dimos.teleop.hosted.hosted_stats.HostedStatsModule>`:
+`hostedstatsmodule` — [`HostedStatsModule`][HostedStatsModule]:
 
 | Field          | Default | Notes                          |
 | -------------- | ------- | ------------------------------ |
 | `telemetry_hz` | `3.0`   | Robot → operator HUD push rate |
 
-`go2commandmodule` — {class}`Go2CommandModule <dimos.teleop.hosted.go2_command.Go2CommandModule>`:
+`go2commandmodule` — [`Go2CommandModule`][Go2CommandModule]:
 
 | Field                                | Default       | Notes                                       |
 | ------------------------------------ | ------------- | ------------------------------------------- |
@@ -185,7 +185,7 @@ Each concern is its own module, so its commonly-tuned fields live under that mod
 | `allow_acrobatics`                   | `false`       | Gate FrontJump / FrontPounce etc.           |
 | `damp_on_operator_lost`              | `false`       | Damp the robot when the operator link drops |
 
-`cameramuxmodule` — {class}`CameraMuxModule <dimos.teleop.hosted.camera_mux.CameraMuxModule>`:
+`cameramuxmodule` — [`CameraMuxModule`][CameraMuxModule]:
 
 | Field                               | Default           | Notes                                        |
 | ----------------------------------- | ----------------- | -------------------------------------------- |
@@ -193,7 +193,7 @@ Each concern is its own module, so its commonly-tuned fields live under that mod
 | `video_max_width` / `video_max_fps` | `0` (source)      | Publish-side caps for constrained uplinks    |
 | `cameras`                           | `["cam1","cam2"]` | Named inputs; first is the boot default view |
 
-`mapcompressmodule` — {class}`MapCompressModule <dimos.teleop.hosted.map_compress.MapCompressModule>`:
+`mapcompressmodule` — [`MapCompressModule`][MapCompressModule]:
 
 | Field                | Default        | Notes                                                                        |
 | -------------------- | -------------- | ---------------------------------------------------------------------------- |
@@ -206,7 +206,7 @@ Broker settings live under `transports.broker.*`: `api_key` (required), `broker_
 
 ## How it connects
 
-The per-process {class}`BrokerProvider <dimos.protocol.pubsub.impl.webrtc.providers.broker.BrokerProvider>` owns the session; blueprint transports bind to it. Channels:
+The per-process [`BrokerProvider`][BrokerProvider] owns the session; blueprint transports bind to it. Channels:
 
 ```text
 robot                          broker (Cloudflare)                operator browser/Quest
@@ -220,3 +220,11 @@ robot                          broker (Cloudflare)                operator brows
 ```
 
 For the broker session, datachannels, and reconnect behavior, see [dimos/teleop/hosted/README.md](https://github.com/dimensionalOS/dimos/blob/main/dimos/teleop/hosted/README.md).
+
+[Go2CommandModule]: #dimos.teleop.hosted.go2_command.Go2CommandModule
+[CameraMuxModule]: #dimos.teleop.hosted.camera_mux.CameraMuxModule
+[MapCompressModule]: #dimos.teleop.hosted.map_compress.MapCompressModule
+[HostedStatsModule]: #dimos.teleop.hosted.hosted_stats.HostedStatsModule
+[GO2Connection]: #dimos.robot.unitree.go2.connection.GO2Connection
+[TwistStamped]: #dimos.msgs.geometry_msgs.TwistStamped.TwistStamped
+[BrokerProvider]: #dimos.protocol.pubsub.impl.webrtc.providers.broker.BrokerProvider

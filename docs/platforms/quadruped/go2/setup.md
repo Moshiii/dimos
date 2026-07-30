@@ -24,9 +24,9 @@ Full autonomous navigation, mapping, and agentic control on a real Go2 — no RO
 
 First, install system dependencies for your platform:
 
-- {doc}`Ubuntu </installation/ubuntu>`
-- {doc}`macOS </installation/osx>`
-- {doc}`Nix </installation/nix>`
+- [Ubuntu](../../../installation/ubuntu.md)
+- [macOS](../../../installation/osx.md)
+- [Nix](../../../installation/nix.md)
 
 Then install DimOS:
 

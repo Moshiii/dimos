@@ -14,7 +14,6 @@
 from pathlib import Path
 import sys
 
-from docutils import nodes
 import tomllib
 
 _REPO_ROOT = Path(__file__).parents[1]
@@ -176,10 +175,8 @@ html_theme_options = {
 
 spelling_warning = True
 # Acronyms (LCM, ROS, RPC, SLAM) and CamelCase names (DimOS, MuJoCo, NumPy, WebRTC)
-# are skipped automatically. Code entities use their Python-domain roles (:mod:,
-# :func:, :class:), abbreviations/programs use :abbr:/:program:, and product names use
-# the custom :brand: role (registered in setup() below) — all skipped by the checker —
-# so the wordlist only holds genuine prose vocabulary.
+# are skipped automatically. API names use linked inline code, and the wordlist holds
+# product names and genuine prose vocabulary.
 spelling_ignore_acronyms = True
 spelling_ignore_wiki_words = True
 
@@ -258,21 +255,6 @@ nitpick_ignore_regex = [
 
 
 def setup(app):
-    """Register a ``:brand:`` role for product names that have no built-in role.
-
-    The role wraps its text in an inline node — a ``<span class="brand">`` — so it
-    renders as ordinary prose, can be styled via CSS, and is skipped by the spelling
-    checker.
-    """
-
-    def brand(name, rawtext, text, lineno, inliner, options=None, content=None):
-        # A structural ``inline`` node (rather than tagging a Text node) survives
-        # doctree pickling — CI builds html before spelling — and carries a
-        # ``brand`` class for styling.
-        return [nodes.inline(rawtext, text, classes=["brand"])], []
-
-    app.add_role("brand", brand)
-
     def shorten_long_class_signatures(app, what, name, obj, options, signature, return_annotation):
         """Collapse generated constructors that would overwhelm the API page."""
         if what == "class" and signature and len(signature) > 120:

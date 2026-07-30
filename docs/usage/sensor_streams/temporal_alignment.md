@@ -28,7 +28,7 @@ myst:
 
 Robots have multiple sensors emitting data at different rates and latencies. A camera might run at 30fps, while lidar scans at 10Hz, and each has different processing delays. For perception tasks like projecting 2D detections into 3D pointclouds, we need to match data from these streams by timestamp.
 
-{func}`align_timestamped <dimos.types.timestamped.align_timestamped>` solves this by buffering messages and matching them within a time tolerance.
+[`align_timestamped`][align_timestamped] solves this by buffering messages and matching them within a time tolerance.
 
 ```{raw} html
 <details>
@@ -67,7 +67,7 @@ Below we set up replay of real camera and lidar data from the Unitree Go2 robot.
 <summary>Stream Setup</summary>
 ```
 
-You can read more about {doc}`sensor storage here </usage/sensor_streams/storage_replay>` and {doc}`LFS data storage here </development/large_file_management>`.
+You can read more about [sensor storage here](storage_replay.md) and [LFS data storage here](../../development/large_file_management.md).
 
 ```python
 from reactivex import Subject
@@ -103,7 +103,7 @@ lidar_stream = lidar_replay.stream(from_timestamp=seek_ts, duration=2.0).pipe(
 </details>
 ```
 
-Streams would normally come from an actual robot into your module via {class}`In <dimos.core.stream.In>` inputs. [detection/module3D.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/perception/detection/module3D.py#L11) is a good example of this.
+Streams would normally come from an actual robot into your module via [`In`][In] inputs. [detection/module3D.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/perception/detection/module3D.py#L11) is a good example of this.
 
 Assume we have them. Let's align them.
 
@@ -230,7 +230,7 @@ plot_alignment_timeline(video_frames, lidar_scans, aligned_pairs, '{output}')
 
 ## Combine Frame Alignment with a Quality Filter
 
-More on {doc}`quality filtering here </usage/sensor_streams/quality_filter>`.
+More on [quality filtering here](quality_filter.md).
 
 ```python
 from dimos.msgs.sensor_msgs.Image import Image, sharpness_barrier
@@ -330,7 +330,7 @@ text "waiting..." at (Buffer.w.x - 0.4in, Buffer.w.y - 0.15in)
 
 ## Usage in Modules
 
-Every module {class}`In <dimos.core.stream.In>` port exposes an `.observable()` method that returns a backpressured stream of incoming messages. This makes it easy to align inputs from multiple sensors.
+Every module [`In`][In] port exposes an `.observable()` method that returns a backpressured stream of incoming messages. This makes it easy to align inputs from multiple sensors.
 
 From [detection/module3D.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/perception/detection/module3D.py), projecting 2D detections into 3D pointclouds:
 
@@ -350,3 +350,6 @@ class Detection3DModule(Detection2DModule):
 ```
 
 The 2D detection stream (camera + ML model) is the primary, matched with raw pointcloud data from lidar. The longer `buffer_size=20.0` accounts for variable ML inference times.
+
+[align_timestamped]: #dimos.types.timestamped.align_timestamped
+[In]: #dimos.core.stream.In

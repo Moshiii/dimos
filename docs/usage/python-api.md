@@ -45,7 +45,7 @@ app.stop()
 
 ## RPC calls
 
-Modules can define {func}`@rpc <dimos.core.core.rpc>` methods which you can call. Here's an example:
+Modules can define [`@rpc`][rpc] methods which you can call. Here's an example:
 
 ```python
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -105,7 +105,7 @@ app.run(SomeModule)               # or by Module class
 app.restart(SomeModule)           # hot-restart it on the daemon
 ```
 
-Strings and registered Module classes take a name-based fast path. Other Module classes and {class}`Blueprint <dimos.core.coordination.blueprints.Blueprint>` objects are pickled and unpickled on the daemon, so their module classes must be importable there and all kwargs must be picklable.
+Strings and registered Module classes take a name-based fast path. Other Module classes and [`Blueprint`][Blueprint] objects are pickled and unpickled on the daemon, so their module classes must be importable there and all kwargs must be picklable.
 
 (doc-usage-python-api-limitations)=
 
@@ -131,13 +131,13 @@ You can use this in development. You can write a module, load it, gather feedbac
 
 ### What needs a daemon restart
 
-Hot-restart (`app.restart(MyModule)`) reloads the module's source, so the body of `start()`, handlers, and {func}`@rpc <dimos.core.core.rpc>` methods all pick up changes. But the following require a full daemon restart (`dimos stop` then `dimos run ...`):
+Hot-restart (`app.restart(MyModule)`) reloads the module's source, so the body of `start()`, handlers, and [`@rpc`][rpc] methods all pick up changes. But the following require a full daemon restart (`dimos stop` then `dimos run ...`):
 
 - Adding or removing `In[T]` / `Out[T]` stream declarations on any module (autoconnect wiring is computed at coordinator build time).
 - Adding or removing module-ref / Spec declarations (`_thing: SomeSpec`).
 - Changing the blueprint's set of modules.
 
-If you find yourself needing data from an existing module that isn't on its {class}`Out <dimos.core.stream.Out>` streams, the canonical fix is to add an `Out[T]` to that module and restart the daemon — don't spin up a parallel connection to the underlying hardware.
+If you find yourself needing data from an existing module that isn't on its [`Out`][Out] streams, the canonical fix is to add an `Out[T]` to that module and restart the daemon — don't spin up a parallel connection to the underlying hardware.
 
 (doc-usage-python-api-operational-gotchas)=
 
@@ -145,4 +145,9 @@ If you find yourself needing data from an existing module that isn't on its {cla
 
 - `--daemon` does not detach right away. Background it with `&` or `nohup` if you want the terminal back.
 - `dimos stop` reads its target from a registry under `$XDG_STATE_HOME/dimos/runs`. If the registry file is removed but the process is alive, `dimos stop` won't see it — kill the PID directly (find it with `ps aux | grep "dimos.*--daemon"`).
-- {meth}`load_blueprint <dimos.core.coordination.module_coordinator.ModuleCoordinator.load_blueprint>` over LCM has a 120s RPC timeout. If it raises `TimeoutError` after that long, the module may still have been deployed and started — check the daemon log for the `Deployed module` entry before assuming failure.
+- [`load_blueprint`][load_blueprint] over LCM has a 120s RPC timeout. If it raises `TimeoutError` after that long, the module may still have been deployed and started — check the daemon log for the `Deployed module` entry before assuming failure.
+
+[rpc]: #dimos.core.core.rpc
+[Blueprint]: #dimos.core.coordination.blueprints.Blueprint
+[Out]: #dimos.core.stream.Out
+[load_blueprint]: #dimos.core.coordination.module_coordinator.ModuleCoordinator.load_blueprint

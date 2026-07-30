@@ -81,7 +81,7 @@ pytest -m self_hosted dimos/path/to/test_something.py
 
 ## Testing on a fresh Ubuntu install
 
-CI tests DimOS with pre-built images and cached dependencies, so it cannot catch gaps between what the {doc}`Ubuntu installation guide </installation/ubuntu>` tells a new user to do and what a clean machine needs.
+CI tests DimOS with pre-built images and cached dependencies, so it cannot catch gaps between what the [Ubuntu installation guide](../installation/ubuntu.md) tells a new user to do and what a clean machine needs.
 
 The [misc/fresh-ubuntu-tests/](https://github.com/dimensionalOS/dimos/blob/main/misc/fresh-ubuntu-tests/) harness closes that gap. It replays the documented install + test flow inside a fresh, official, **unmodified** Ubuntu Desktop 24.04 VM (VirtualBox).
 

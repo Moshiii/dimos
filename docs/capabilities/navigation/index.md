@@ -28,16 +28,16 @@ The Go2 navigation stack uses a simple **column-carving voxel map** strategy: ea
    * - **Live mapping**
      - Explore a new space while the map updates every frame
      - ``unitree-go2``
-     - :doc:`Navigation deep dive <deep_dive>`
+     - [Navigation deep dive](deep_dive.md)
    * - **Premap and relocalization**
      - Return to a known space and plan on a loop-closed map
      - ``unitree-go2-relocalization``
-     - :doc:`Relocalization <relocalization>`
+     - [Relocalization](relocalization.md)
 :::
 
 Live column-carving maps are fast and reactive, but odometry drifts over long distances. For spaces you revisit, record once, run pose-graph optimization (PGO) offline, then relocalize against the exported premap at runtime.
 
-For hardware setup, simulation, and the full blueprint list, see the {doc}`Go2 platform guide </platforms/quadruped/go2/index>`.
+For hardware setup, simulation, and the full blueprint list, see the [Go2 platform guide](../../platforms/quadruped/go2/index.md).
 
 ```{toctree}
 :hidden: true

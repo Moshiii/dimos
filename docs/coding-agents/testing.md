@@ -4,7 +4,7 @@
 
 Rules for writing tests in dimos. These address recurring issues found in code review.
 
-For grid testing (spec/impl tests across multiple backends), see {doc}`Grid Testing Strategy </development/grid_testing>`.
+For grid testing (spec/impl tests across multiple backends), see [Grid Testing Strategy](../development/grid_testing.md).
 
 (doc-coding-agents-testing-imports-at-the-top)=
 

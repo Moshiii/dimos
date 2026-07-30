@@ -10,7 +10,7 @@
 
 Run the full Go2 navigation stack without any hardware — replay recorded sessions or simulate in MuJoCo. Same code, no robot.
 
-See {doc}`Setup </platforms/quadruped/go2/setup>` for installing DimOS first.
+See [Setup](setup.md) for installing DimOS first.
 
 (try-it-no-hardware-needed)=
 

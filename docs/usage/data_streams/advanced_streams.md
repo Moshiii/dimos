@@ -20,7 +20,7 @@ myst:
 
 # Advanced Stream Handling
 
-**Prerequisite:** Read {doc}`ReactiveX Fundamentals </usage/data_streams/reactivex>` first for Observable basics.
+**Prerequisite:** Read [ReactiveX Fundamentals](reactivex.md) first for Observable basics.
 
 (doc-usage-data-streams-advanced-streams-backpressure-and-parallel-subscribers-to-hardware)=
 
@@ -54,7 +54,7 @@ text "items pile up!" at (Queue.x, Queue.y - 0.45in)
 
 {{ output }}
 
-**The solution:** The {func}`backpressure() <dimos.utils.reactive.backpressure>` wrapper handles this by:
+**The solution:** The [`backpressure()`][backpressure] wrapper handles this by:
 
 1. **Sharing the source** - Camera runs once, all subscribers share the stream
 2. **Per-subscriber speed** - Fast subscribers get every frame, slow ones get the latest when ready
@@ -157,7 +157,7 @@ class MLModel(Module):
 
 Sometimes you don't want a stream, you just want to call a function and get the latest value.
 
-If you are doing this periodically as a part of a processing loop, it is very likely that your code will be much cleaner and safer using actual reactivex pipeline. So bias towards checking our {doc}`reactivex quick guide </usage/data_streams/reactivex>` and [official docs](https://rxpy.readthedocs.io/)
+If you are doing this periodically as a part of a processing loop, it is very likely that your code will be much cleaner and safer using actual reactivex pipeline. So bias towards checking our [reactivex quick guide](reactivex.md) and [official docs](https://rxpy.readthedocs.io/)
 
 (TODO we should actually make this example actually executable)
 
@@ -179,9 +179,9 @@ self.color_image.observable().pipe(
 ).subscribe(self.twist.publish) # shoots off the Twist out of the module
 ```
 
-If you'd still like to switch to synchronous fetching, we provide two approaches, {func}`getter_hot() <dimos.utils.reactive.getter_hot>` and {func}`getter_cold() <dimos.utils.reactive.getter_cold>`
+If you'd still like to switch to synchronous fetching, we provide two approaches, [`getter_hot()`][getter_hot] and [`getter_cold()`][getter_cold]
 
-|                  | {func}`getter_hot() <dimos.utils.reactive.getter_hot>` | {func}`getter_cold() <dimos.utils.reactive.getter_cold>` |
+|                  | [`getter_hot()`][getter_hot] | [`getter_cold()`][getter_cold] |
 | ---------------- | ------------------------------------------------------ | -------------------------------------------------------- |
 | **Subscription** | Stays active in background                             | Fresh subscription each call                             |
 | **Read speed**   | Instant (value already cached)                         | Slower (waits for value)                                 |
@@ -268,11 +268,11 @@ text "blocking" italic with .n at Blk2.n + (0, -0.05in)
 
 {{ image2 }}
 
-**Prefer :func:\`getter_cold() \<dimos.utils.reactive.getter_cold>\`** when you can afford to wait and warmup isn't expensive. It's simpler (no cleanup needed) and doesn't hold resources. Only use {func}`getter_hot() <dimos.utils.reactive.getter_hot>` when you need instant reads or the source is expensive to start.
+**Prefer [`getter_cold()`][getter_cold]** when you can afford to wait and warmup isn't expensive. It's simpler (no cleanup needed) and doesn't hold resources. Only use [`getter_hot()`][getter_hot] when you need instant reads or the source is expensive to start.
 
 (doc-usage-data-streams-advanced-streams-getter-hot-background-subscription-instant-reads)=
 
-### {func}`getter_hot() <dimos.utils.reactive.getter_hot>` - Background subscription, instant reads
+### [`getter_hot()`][getter_hot] - Background subscription, instant reads
 
 Subscribes immediately and keeps updating in the background. Each call returns the cached latest value instantly.
 
@@ -305,7 +305,7 @@ after 700ms: 6
 
 (doc-usage-data-streams-advanced-streams-getter-cold-fresh-subscription-each-call)=
 
-### {func}`getter_cold() <dimos.utils.reactive.getter_cold>` - Fresh subscription each call
+### [`getter_cold()`][getter_cold] - Fresh subscription each call
 
 Each call creates a new subscription, waits for one value, and cleans up. Slower but doesn't hold resources:
 
@@ -326,3 +326,7 @@ call 1: 0
 call 2: 0
 call 3: 0
 ```
+
+[backpressure]: #dimos.utils.reactive.backpressure
+[getter_hot]: #dimos.utils.reactive.getter_hot
+[getter_cold]: #dimos.utils.reactive.getter_cold

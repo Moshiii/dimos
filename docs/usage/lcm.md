@@ -8,7 +8,7 @@ The LCM project provides pubsub clients and code generators for many languages. 
 
 Our messages are ported from ROS (they are structurally compatible in order to facilitate easy communication to ROS if needed) Repo that hosts our message definitions and autogenerators is at [dimos-lcm](https://github.com/dimensionalOS/dimos-lcm/)
 
-our LCM implementation significantly {ref}`outperforms ROS for local communication <doc-usage-transports-index-benchmarks>`
+our LCM implementation significantly [outperforms ROS for local communication](transports/index.md#benchmarks)
 
 (doc-usage-lcm-supported-languages)=
 
@@ -28,7 +28,7 @@ Types generated (but no examples yet) for: [C#](https://github.com/dimensionalOS
 
 ### Native Modules
 
-Given LCM is so portable, we can easily run dimos {doc}`Modules </usage/modules>` written in {doc}`third party languages </usage/native_modules>`
+Given LCM is so portable, we can easily run dimos [Modules](modules.md) written in [third party languages](native_modules.md)
 
 (doc-usage-lcm-dimos-lcm-package)=
 
@@ -98,7 +98,7 @@ LCM encoded: 32 bytes
 
 ## PointCloud2 with Open3D
 
-A more complex example is {class}`PointCloud2 <dimos.msgs.sensor_msgs.PointCloud2.PointCloud2>`, which wraps Open3D point clouds while maintaining LCM binary compatibility:
+A more complex example is [`PointCloud2`][PointCloud2], which wraps Open3D point clouds while maintaining LCM binary compatibility:
 
 ```python
 import time
@@ -174,9 +174,9 @@ DimOS provides overlays for common message types:
 
 | Package         | Messages                                                                                                                                                                                                                                                                                                        |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `geometry_msgs` | {class}`Vector3 <dimos.msgs.geometry_msgs.Vector3.Vector3>`, {class}`Quaternion <dimos.msgs.geometry_msgs.Quaternion.Quaternion>`, {class}`Pose <dimos.msgs.geometry_msgs.Pose.Pose>`, {class}`Twist <dimos.msgs.geometry_msgs.Twist.Twist>`, {class}`Transform <dimos.msgs.geometry_msgs.Transform.Transform>` |
-| `sensor_msgs`   | {class}`Image <dimos.msgs.sensor_msgs.Image.Image>`, {class}`PointCloud2 <dimos.msgs.sensor_msgs.PointCloud2.PointCloud2>`, {class}`CameraInfo <dimos.msgs.sensor_msgs.CameraInfo.CameraInfo>`, `LaserScan`                                                                                                     |
-| `nav_msgs`      | `Odometry`, {class}`Path <dimos.msgs.nav_msgs.Path.Path>`, {class}`OccupancyGrid <dimos.msgs.nav_msgs.OccupancyGrid.OccupancyGrid>`                                                                                                                                                                             |
+| `geometry_msgs` | [`Vector3`][Vector3], [`Quaternion`][Quaternion], [`Pose`][Pose], [`Twist`][Twist], [`Transform`][Transform] |
+| `sensor_msgs`   | [`Image`][Image], [`PointCloud2`][PointCloud2], [`CameraInfo`][CameraInfo], `LaserScan`                                                                                                     |
+| `nav_msgs`      | `Odometry`, [`Path`][Path], [`OccupancyGrid`][OccupancyGrid]                                                                                                                                                                             |
 | `vision_msgs`   | `Detection2D`, `Detection3D`, `BoundingBox2D`                                                                                                                                                                                                                                                                   |
 
 Base LCM types (without DimOS extensions) are available in `dimos_lcm.*`.
@@ -192,3 +192,14 @@ To create a new message type:
 3. Add `lcm_encode()` and `lcm_decode()` methods if custom serialization is needed
 
 See [PointCloud2.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/msgs/sensor_msgs/PointCloud2.py) and [Vector3.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/msgs/geometry_msgs/Vector3.py) for examples.
+
+[PointCloud2]: #dimos.msgs.sensor_msgs.PointCloud2.PointCloud2
+[Vector3]: #dimos.msgs.geometry_msgs.Vector3.Vector3
+[Quaternion]: #dimos.msgs.geometry_msgs.Quaternion.Quaternion
+[Pose]: #dimos.msgs.geometry_msgs.Pose.Pose
+[Twist]: #dimos.msgs.geometry_msgs.Twist.Twist
+[Transform]: #dimos.msgs.geometry_msgs.Transform.Transform
+[Image]: #dimos.msgs.sensor_msgs.Image.Image
+[CameraInfo]: #dimos.msgs.sensor_msgs.CameraInfo.CameraInfo
+[Path]: #dimos.msgs.nav_msgs.Path.Path
+[OccupancyGrid]: #dimos.msgs.nav_msgs.OccupancyGrid.OccupancyGrid

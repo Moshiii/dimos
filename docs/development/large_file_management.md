@@ -266,4 +266,6 @@ So content behind those LFS pointers is hosted as plain git blobs in [dimensiona
 ```
 ````
 
-Small text SVGs emitted by pikchr and {func}`to_svg <dimos.core.introspection.svg.to_svg>` are exempt: they are committed here as plain text and referenced relatively.
+Small text SVGs emitted by pikchr and [`to_svg`][to_svg] are exempt: they are committed here as plain text and referenced relatively.
+
+[to_svg]: #dimos.core.introspection.svg.to_svg

@@ -41,7 +41,7 @@ uv run mypy dimos
 uv run pytest --numprocesses=auto dimos
 ```
 
-See {doc}`/development/testing` for self-hosted test requirements.
+See [Testing](../development/testing.md) for self-hosted test requirements.
 
 ## Choose a transport
 
@@ -49,7 +49,7 @@ LCM over UDP can be unreliable on macOS for large or high-rate replay
 workloads. DimOS therefore uses Zenoh as the default global stream transport
 on macOS. Use `--transport=lcm` only when you need the legacy multicast path.
 
-See the {ref}`Zenoh quick start <doc-usage-transports-index-zenoh-quickstart>`.
+See the [Zenoh quick start](../usage/transports/index.md#zenoh-quickstart).
 
 ```bash
 dimos --dtop --replay --replay-db=go2_bigoffice run unitree-go2

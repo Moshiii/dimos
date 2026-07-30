@@ -1,3 +1,4 @@
+AgileX
 Backends
 Booleans
 Buenos
@@ -25,6 +26,7 @@ LFS
 Libs
 Livox
 Lua
+Mavic
 MCP
 Mbit
 Meshcat

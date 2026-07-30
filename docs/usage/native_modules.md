@@ -6,7 +6,7 @@
 
 # Native Modules
 
-Prerequisite for this is to understand dimos {doc}`Modules </usage/modules>` and {doc}`Blueprints </usage/blueprints>`.
+Prerequisite for this is to understand dimos [Modules](modules.md) and [Blueprints](blueprints.md).
 
 Native modules let you wrap **any executable** as a first-class DimOS module, given it speaks LCM.
 
@@ -14,7 +14,7 @@ Python will handle blueprint wiring, lifecycle, and logging. Native binary handl
 
 Python module **never touches the pubsub data**. It just passes configuration and LCM topic to use via CLI args to your executable.
 
-On how to speak LCM with the rest of dimos, you can read our {doc}`LCM intro </usage/lcm>`
+On how to speak LCM with the rest of dimos, you can read our [LCM intro](lcm.md)
 
 (doc-usage-native-modules-defining-a-native-module)=
 
@@ -43,7 +43,7 @@ class MyLidar(NativeModule):
     imu: Out[Imu]
 ```
 
-That's it. `MyLidar` is a full DimOS module. You can use it with {func}`autoconnect <dimos.core.coordination.blueprints.autoconnect>`, blueprints, transport overrides, and specs. Once this module is started, your `./build/my_lidar` will get called with specific CLI args.
+That's it. `MyLidar` is a full DimOS module. You can use it with [`autoconnect`][autoconnect], blueprints, transport overrides, and specs. Once this module is started, your `./build/my_lidar` will get called with specific CLI args.
 
 (doc-usage-native-modules-how-it-works)=
 
@@ -78,7 +78,7 @@ mylidar.start()
 2026-02-14T11:22:12.123963Z [info     ] Starting native process   [dimos/core/native_module.py] cmd='./build/my_lidar --pointcloud /lidar#sensor_msgs.PointCloud2 --imu /imu#sensor_msgs.Imu --host_ip 192.168.1.5 --frequency 10.0' cwd=/home/lesh/coding/dimos/docs/usage/build
 ```
 
-Topic strings use the format `/<name>#<msg_type>`, which is the LCM channel name that Python {class}`LCMTransport <dimos.core.transport.LCMTransport>` subscribers use. The native binary publishes on these exact channels.
+Topic strings use the format `/<name>#<msg_type>`, which is the LCM channel name that Python [`LCMTransport`][LCMTransport] subscribers use. The native binary publishes on these exact channels.
 
 When `stop()` is called, the process receives SIGTERM. If it doesn't exit within `shutdown_timeout` seconds (default 10), it gets SIGKILL.
 
@@ -86,7 +86,7 @@ When `stop()` is called, the process receives SIGTERM. If it doesn't exit within
 
 ## Config
 
-{class}`NativeModuleConfig <dimos.core.native_module.NativeModuleConfig>` extends {class}`ModuleConfig <dimos.core.module.ModuleConfig>` with subprocess fields:
+[`NativeModuleConfig`][NativeModuleConfig] extends [`ModuleConfig`][ModuleConfig] with subprocess fields:
 
 | Field              | Type                                                    | Default       | Description                                                                                                      |
 | ------------------ | ------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -96,14 +96,14 @@ When `stop()` is called, the process receives SIGTERM. If it doesn't exit within
 | `extra_args`       | `list[str]`                                             | `[]`          | Additional CLI arguments appended after auto-generated ones                                                      |
 | `extra_env`        | `dict[str, str]`                                        | `{}`          | Extra environment variables for the subprocess                                                                   |
 | `shutdown_timeout` | `float`                                                 | `10.0`        | Seconds to wait for SIGTERM before SIGKILL                                                                       |
-| `log_format`       | {class}`LogFormat <dimos.core.native_module.LogFormat>` | `TEXT`        | How to parse subprocess output (`TEXT` or `JSON`)                                                                |
+| `log_format`       | [`LogFormat`][LogFormat] | `TEXT`        | How to parse subprocess output (`TEXT` or `JSON`)                                                                |
 | `cli_exclude`      | `frozenset[str]`                                        | `frozenset()` | Config fields to skip when generating CLI args                                                                   |
 
 (doc-usage-native-modules-auto-cli-arg-generation)=
 
 ### Auto CLI arg generation
 
-Any field you add to your config subclass automatically becomes a `--name value` CLI arg. Fields from {class}`NativeModuleConfig <dimos.core.native_module.NativeModuleConfig>` itself (like `executable`, `extra_args`, `cwd`) are **not** passed — they're for Python-side orchestration only.
+Any field you add to your config subclass automatically becomes a `--name value` CLI arg. Fields from [`NativeModuleConfig`][NativeModuleConfig] itself (like `executable`, `extra_args`, `cwd`) are **not** passed — they're for Python-side orchestration only.
 
 ```python
 from pydantic import Field
@@ -142,7 +142,7 @@ class MyNativeConfig(NativeModuleConfig):
 
 ## Using with blueprints
 
-Native modules work with {func}`autoconnect <dimos.core.coordination.blueprints.autoconnect>` exactly like Python modules:
+Native modules work with [`autoconnect`][autoconnect] exactly like Python modules:
 
 ```python
 from dimos.core.coordination.blueprints import autoconnect
@@ -157,7 +157,7 @@ autoconnect(
 ).build().loop()
 ```
 
-{func}`autoconnect <dimos.core.coordination.blueprints.autoconnect>` matches ports by `(name, type)`, assigns LCM topics, and passes them to the native binary as CLI args. You can override transports as usual:
+[`autoconnect`][autoconnect] matches ports by `(name, type)`, assigns LCM topics, and passes them to the native binary as CLI args. You can override transports as usual:
 
 ```python
 blueprint = autoconnect(
@@ -308,3 +308,9 @@ CI pre-builds the `cmu_nav` native modules and pushes the Nix store paths to the
 extra-substituters = https://dimensionalos.cachix.org
 extra-trusted-public-keys = dimensionalos.cachix.org-1:20ynj6TjpoD3qTxkdNoeHtgs2G2pNvgAq1EQYLTHJXI=
 ```
+
+[autoconnect]: #dimos.core.coordination.blueprints.autoconnect
+[LCMTransport]: #dimos.core.transport.LCMTransport
+[NativeModuleConfig]: #dimos.core.native_module.NativeModuleConfig
+[ModuleConfig]: #dimos.core.module.ModuleConfig
+[LogFormat]: #dimos.core.native_module.LogFormat

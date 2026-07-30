@@ -55,8 +55,8 @@ So: treat the API as uniform, but pick a backend whose semantics match the task.
 For most users, the important choice is between `lcm`, `zenoh`, and shared memory overrides:
 
 - `lcm`: current legacy default on most platforms. Fast and simple, but UDP multicast is best-effort.
-- `zenoh`: network transport with reliable delivery semantics and the same typed message model through {class}`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>`.
-- shared memory ({class}`pSHMTransport <dimos.core.transport.pSHMTransport>`, etc.): best for large local streams on a single machine.
+- `zenoh`: network transport with reliable delivery semantics and the same typed message model through [`LCMEncoderMixin`][LCMEncoderMixin].
+- shared memory ([`pSHMTransport`][pSHMTransport], etc.): best for large local streams on a single machine.
 
 At the CLI level, you can select the stream transport globally with:
 
@@ -82,7 +82,7 @@ Zenoh ships with DimOS by default (`eclipse-zenoh` is a base dependency), so the
 
 **Two ways to override for one run or for your shell:**
 
-1. **CLI:** `dimos --transport=zenoh ...` or `dimos --transport=lcm ...` (see {doc}`CLI </usage/cli>` for precedence with `.env` and blueprints).
+1. **CLI:** `dimos --transport=zenoh ...` or `dimos --transport=lcm ...` (see [CLI](../cli.md) for precedence with `.env` and blueprints).
 2. **Environment:** `DIMOS_TRANSPORT=zenoh` or `DIMOS_TRANSPORT=lcm`.
 
 Typical **replay on macOS** (default is already Zenoh, so no transport flag is required):
@@ -97,7 +97,7 @@ The same workload on **Linux** (default remains `lcm` until you opt in):
 dimos --transport=zenoh --dtop --replay --replay-db=go2_bigoffice run unitree-go2
 ```
 
-Architecture notes (Rerun bridge, TF still on LCM) live under {ref}`Zenoh <doc-usage-transports-index-zenoh>` in PubSub transports below.
+Architecture notes (Rerun bridge, TF still on LCM) live under [Zenoh](#zenoh) in PubSub transports below.
 
 (doc-usage-transports-index-benchmarks)=
 
@@ -155,11 +155,11 @@ We'll go through these layers top-down.
 
 ## Using transports with blueprints
 
-See {doc}`Blueprints </usage/blueprints>` for the blueprint API.
+See [Blueprints](../blueprints.md) for the blueprint API.
 
 From [unitree/go2/blueprints/smart/unitree_go2.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py).
 
-Example: rebind a few streams from the default {class}`LCMTransport <dimos.core.transport.LCMTransport>` to {class}`ROSTransport <dimos.core.transport.ROSTransport>` (defined at [transport.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/transport.py#L226)) so you can visualize in **rviz2**.
+Example: rebind a few streams from the default [`LCMTransport`][LCMTransport] to [`ROSTransport`][ROSTransport] (defined at [transport.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/transport.py#L226)) so you can visualize in **rviz2**.
 
 ```python
 nav = autoconnect(
@@ -186,7 +186,7 @@ ros = nav.transports(
 
 Each **stream** on a module can use a different transport. Set `.transport` on the stream **before starting** modules.
 
-The runnable example below uses a tiny synthetic image publisher instead of {class}`CameraModule <dimos.hardware.sensors.camera.module.CameraModule>` so it works without a webcam and in CI; the wiring is the same as with a real camera.
+The runnable example below uses a tiny synthetic image publisher instead of [`CameraModule`][CameraModule] so it works without a webcam and in CI; the wiring is the same as with a real camera.
 
 ```python
 import time
@@ -271,7 +271,7 @@ Received: (480, 640, 3)
 13:11:42.920 [inf][ation/worker_manager_python.py] All workers shut down
 ```
 
-See {doc}`Modules </usage/modules>` for more on module architecture.
+See [Modules](../modules.md) for more on module architecture.
 
 (doc-usage-transports-index-inspecting-traffic-cli)=
 
@@ -298,7 +298,7 @@ Image(shape=(480, 640, 3), format=RGB, dtype=uint8, dev=cpu, ts=2026-01-24 20:28
 
 ## Implementing a transport
 
-At the stream layer, a transport is implemented by subclassing {class}`Transport <dimos.core.stream.Transport>` (see [core/stream.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/stream.py#L83)) and implementing:
+At the stream layer, a transport is implemented by subclassing [`Transport`][Transport] (see [core/stream.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/stream.py#L83)) and implementing:
 
 - `broadcast(...)`
 - `subscribe(...)`
@@ -316,13 +316,13 @@ Encoding is an implementation detail, but we encourage using LCM-compatible mess
 
 ### Encoding helpers
 
-Many of our message types provide `lcm_encode` / `lcm_decode` for compact, language-agnostic binary encoding (often faster than pickle). For details, see {doc}`LCM </usage/lcm>`.
+Many of our message types provide `lcm_encode` / `lcm_decode` for compact, language-agnostic binary encoding (often faster than pickle). For details, see [LCM](../lcm.md).
 
 (doc-usage-transports-index-pubsub-transports)=
 
 ## PubSub transports
 
-Even though transport can be anything (TCP connection, unix socket) for now all our transport backends implement the {class}`PubSub <dimos.protocol.pubsub.spec.PubSub>` interface.
+Even though transport can be anything (TCP connection, unix socket) for now all our transport backends implement the [`PubSub`][PubSub] interface.
 
 - `publish(topic, message)`
 - `subscribe(topic, callback) -> unsubscribe`
@@ -349,7 +349,7 @@ def subscribe(
     ...
 ```
 
-Topic/message types are flexible: bytes, JSON, or our ROS-compatible {doc}`LCM </usage/lcm>` types. We also have pickle-based transports for arbitrary Python objects.
+Topic/message types are flexible: bytes, JSON, or our ROS-compatible [LCM](../lcm.md) types. We also have pickle-based transports for arbitrary Python objects.
 
 (doc-usage-transports-index-lcm-udp-multicast)=
 
@@ -387,7 +387,7 @@ Received velocity: x=1.0, y=0.0, z=0.5
 
 ### Zenoh
 
-Zenoh provides network pubsub without relying on UDP multicast for the user-facing stream transport. In DimOS it carries the same typed messages by encoding them with {class}`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>`, so existing `dimos.msgs.*` types still work.
+Zenoh provides network pubsub without relying on UDP multicast for the user-facing stream transport. In DimOS it carries the same typed messages by encoding them with [`LCMEncoderMixin`][LCMEncoderMixin], so existing `dimos.msgs.*` types still work.
 
 Use Zenoh when:
 
@@ -395,9 +395,9 @@ Use Zenoh when:
 - you are replaying large or high-rate data and want a more reliable network path
 - you want to keep the DimOS typed stream model while changing the transport backend
 
-At the stream level, the transport wrappers are {class}`ZenohTransport <dimos.core.transport.ZenohTransport>` and {class}`pZenohTransport <dimos.core.transport.pZenohTransport>`. Install, defaults, and CLI versus environment overrides are in the {ref}`Zenoh quickstart <doc-usage-transports-index-zenoh-quickstart>` above.
+At the stream level, the transport wrappers are [`ZenohTransport`][ZenohTransport] and [`pZenohTransport`][pZenohTransport]. Install, defaults, and CLI versus environment overrides are in the [Zenoh quickstart](#zenoh-quickstart) above.
 
-Performance note: zenoh's session-to-session path (modules in different processes, the common case) benchmarks faster than LCM for small messages and for >=2MiB ones. Delivery *within* one shared session (co-located modules in one worker) is its slow path for 256KiB-1MiB messages (a few GiB/s); pin shared memory transports for heavy co-located streams. The benchmark has both cases ({class}`Zenoh <dimos.protocol.pubsub.impl.zenohpubsub.Zenoh>` = shared session, `ZenohPeers` = separate sessions).
+Performance note: zenoh's session-to-session path (modules in different processes, the common case) benchmarks faster than LCM for small messages and for >=2MiB ones. Delivery *within* one shared session (co-located modules in one worker) is its slow path for 256KiB-1MiB messages (a few GiB/s); pin shared memory transports for heavy co-located streams. The benchmark has both cases ([`Zenoh`][Zenoh] = shared session, `ZenohPeers` = separate sessions).
 
 The Rerun bridge also follows the global transport. When `transport=zenoh`, the bridge listens on Zenoh and on LCM for TF data.
 
@@ -418,8 +418,8 @@ blueprint = blueprint.transports(
 
 When the factory builds transports from the global switch, it applies defaults (`default_zenoh_qos` in [transport_factory.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/transport_factory.py#L65)):
 
-- RPC topics and the agent channels ({attr}`human_input <dimos.agents.mcp.mcp_client.McpClient.human_input>`, {attr}`agent <dimos.agents.mcp.mcp_client.McpClient.agent>`, {attr}`agent_idle <dimos.agents.mcp.mcp_client.McpClient.agent_idle>`): reliable, block under congestion (never drop).
-- {class}`Image <dimos.msgs.sensor_msgs.Image.Image>`/{class}`PointCloud2 <dimos.msgs.sensor_msgs.PointCloud2.PointCloud2>` streams: best-effort, drop under congestion (latest wins).
+- RPC topics and the agent channels ([`human_input`][human_input], [`agent`][agent], [`agent_idle`][agent_idle]): reliable, block under congestion (never drop).
+- [`Image`][Image]/[`PointCloud2`][PointCloud2] streams: best-effort, drop under congestion (latest wins).
 - Everything else: zenoh defaults (reliable, drop under congestion).
 
 The publisher for a key is declared with the first publish's QoS. LCM has no per-topic settings, so QoS only applies when `transport=zenoh`.
@@ -489,9 +489,9 @@ Received: [SensorReading(value=22.5)]
 
 (doc-usage-transports-index-a-minimal-transport-memory)=
 
-## A minimal transport: {class}`Memory <dimos.protocol.pubsub.impl.memory.Memory>`
+## A minimal transport: [`Memory`][Memory]
 
-The simplest toy backend is {class}`Memory <dimos.protocol.pubsub.impl.memory.Memory>` (single process). Start from there when implementing a new pubsub backend.
+The simplest toy backend is [`Memory`][Memory] (single process). Start from there when implementing a new pubsub backend.
 
 ```python
 from dimos.protocol.pubsub.impl.memory import Memory
@@ -525,7 +525,7 @@ See [pubsub/impl/memory.py](https://github.com/dimensionalOS/dimos/blob/main/dim
 
 Transports often need to serialize messages before sending and deserialize after receiving.
 
-{class}`PubSubEncoderMixin <dimos.protocol.pubsub.encoders.PubSubEncoderMixin>` at [pubsub/encoders.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/protocol/pubsub/encoders.py#L39) provides a clean way to add encoding/decoding to any pubsub implementation.
+[`PubSubEncoderMixin`][PubSubEncoderMixin] at [pubsub/encoders.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/protocol/pubsub/encoders.py#L39) provides a clean way to add encoding/decoding to any pubsub implementation.
 
 (doc-usage-transports-index-available-mixins)=
 
@@ -533,11 +533,11 @@ Transports often need to serialize messages before sending and deserialize after
 
 | Mixin                                                                            | Encoding        | Use case                           |
 | -------------------------------------------------------------------------------- | --------------- | ---------------------------------- |
-| {class}`PickleEncoderMixin <dimos.protocol.pubsub.encoders.PickleEncoderMixin>`  | Python pickle   | Any Python object, Python-only     |
-| {class}`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>`        | LCM binary      | Cross-language (C/C++/Python/Go/…) |
-| {class}`JpegEncoderMixin <dimos.protocol.pubsub.impl.jpeg_lcm.JpegEncoderMixin>` | JPEG compressed | Image data, reduces bandwidth      |
+| [`PickleEncoderMixin`][PickleEncoderMixin]  | Python pickle   | Any Python object, Python-only     |
+| [`LCMEncoderMixin`][LCMEncoderMixin]        | LCM binary      | Cross-language (C/C++/Python/Go/…) |
+| [`JpegEncoderMixin`][JpegEncoderMixin] | JPEG compressed | Image data, reduces bandwidth      |
 
-{class}`LCMEncoderMixin <dimos.protocol.pubsub.encoders.LCMEncoderMixin>` is especially useful: you can use LCM message definitions with *any* transport (not just UDP multicast). See {doc}`LCM </usage/lcm>` for details.
+[`LCMEncoderMixin`][LCMEncoderMixin] is especially useful: you can use LCM message definitions with *any* transport (not just UDP multicast). See [LCM](../lcm.md) for details.
 
 (doc-usage-transports-index-creating-a-custom-mixin)=
 
@@ -603,13 +603,13 @@ python -m pytest -sv -k "not bytes" dimos/protocol/pubsub/benchmark/tool_benchma
 
 | Transport                                                     | Use case                            | Cross-process | Network | Notes                                 |
 | ------------------------------------------------------------- | ----------------------------------- | ------------- | ------- | ------------------------------------- |
-| {class}`Memory <dimos.protocol.pubsub.impl.memory.Memory>`    | Testing only, single process        | No            | No      | Minimal reference impl                |
+| [`Memory`][Memory]    | Testing only, single process        | No            | No      | Minimal reference impl                |
 | `SharedMemory`                                                | Multi-process on same machine       | Yes           | No      | Highest throughput (IPC)              |
 | `LCM`                                                         | Robot LAN broadcast (UDP multicast) | Yes           | Yes     | Best-effort; can drop packets on LAN  |
-| {class}`Zenoh <dimos.protocol.pubsub.impl.zenohpubsub.Zenoh>` | Reliable network stream transport   | Yes           | Yes     | Recommended on macOS for heavy replay |
-| {class}`Redis <dimos.protocol.pubsub.impl.redispubsub.Redis>` | Network pubsub via Redis server     | Yes           | Yes     | Central broker; adds hop              |
+| [`Zenoh`][Zenoh] | Reliable network stream transport   | Yes           | Yes     | Recommended on macOS for heavy replay |
+| [`Redis`][Redis] | Network pubsub via Redis server     | Yes           | Yes     | Central broker; adds hop              |
 | `ROS`                                                         | ROS 2 topic communication           | Yes           | Yes     | Integrates with RViz/ROS tools        |
-| {class}`DDS <dimos.protocol.pubsub.impl.ddspubsub.DDS>`       | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP                                   |
+| [`DDS`][DDS]       | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP                                   |
 
 ```{toctree}
 :hidden: true
@@ -617,3 +617,25 @@ python -m pytest -sv -k "not bytes" dimos/protocol/pubsub/benchmark/tool_benchma
 
 dds
 ```
+
+[LCMEncoderMixin]: #dimos.protocol.pubsub.encoders.LCMEncoderMixin
+[pSHMTransport]: #dimos.core.transport.pSHMTransport
+[LCMTransport]: #dimos.core.transport.LCMTransport
+[ROSTransport]: #dimos.core.transport.ROSTransport
+[CameraModule]: #dimos.hardware.sensors.camera.module.CameraModule
+[Transport]: #dimos.core.stream.Transport
+[PubSub]: #dimos.protocol.pubsub.spec.PubSub
+[ZenohTransport]: #dimos.core.transport.ZenohTransport
+[pZenohTransport]: #dimos.core.transport.pZenohTransport
+[Zenoh]: #dimos.protocol.pubsub.impl.zenohpubsub.Zenoh
+[human_input]: #dimos.agents.mcp.mcp_client.McpClient.human_input
+[agent]: #dimos.agents.mcp.mcp_client.McpClient.agent
+[agent_idle]: #dimos.agents.mcp.mcp_client.McpClient.agent_idle
+[Image]: #dimos.msgs.sensor_msgs.Image.Image
+[PointCloud2]: #dimos.msgs.sensor_msgs.PointCloud2.PointCloud2
+[Memory]: #dimos.protocol.pubsub.impl.memory.Memory
+[PubSubEncoderMixin]: #dimos.protocol.pubsub.encoders.PubSubEncoderMixin
+[PickleEncoderMixin]: #dimos.protocol.pubsub.encoders.PickleEncoderMixin
+[JpegEncoderMixin]: #dimos.protocol.pubsub.impl.jpeg_lcm.JpegEncoderMixin
+[Redis]: #dimos.protocol.pubsub.impl.redispubsub.Redis
+[DDS]: #dimos.protocol.pubsub.impl.ddspubsub.DDS

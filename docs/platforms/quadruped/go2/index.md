@@ -2,9 +2,9 @@
 
 # Unitree Go2
 
-- {doc}`Setup your Dog </platforms/quadruped/go2/setup>` — requirements, install, connecting to your Go2, and agentic control
-- {doc}`Simulation </platforms/quadruped/go2/simulation>` — try it with no hardware via replay or MuJoCo
-- {doc}`Mapping & Navigation </capabilities/navigation/index>` — live nav, premap recording, and relocalization
+- [Setup your Dog](setup.md) — requirements, install, connecting to your Go2, and agentic control
+- [Simulation](simulation.md) — try it with no hardware via replay or MuJoCo
+- [Mapping & Navigation](../../../capabilities/navigation/index.md) — live nav, premap recording, and relocalization
 
 (doc-platforms-quadruped-go2-index-available-blueprints)=
 
@@ -25,13 +25,13 @@
 
 ## Deep Dive
 
-- {doc}`Navigation overview </capabilities/navigation/index>` — live mapping vs premap relocalization
-- {doc}`Navigation stack </capabilities/navigation/deep_dive>` — column-carving voxel mapping, costmap generation, A\* planning
-- {doc}`Relocalization </capabilities/navigation/relocalization>` — record → `dimos map global --export` → replay or live deploy
-- {doc}`Visualization </usage/visualization>` — Rerun, performance tuning
-- {doc}`Data Streams </usage/data_streams/index>` — RxPY streams, backpressure, quality filtering
-- {doc}`Transports </usage/transports/index>` — LCM, SHM, DDS
-- {doc}`Blueprints </usage/blueprints>` — composing modules
+- [Navigation overview](../../../capabilities/navigation/index.md) — live mapping vs premap relocalization
+- [Navigation stack](../../../capabilities/navigation/deep_dive.md) — column-carving voxel mapping, costmap generation, A\* planning
+- [Relocalization](../../../capabilities/navigation/relocalization.md) — record → `dimos map global --export` → replay or live deploy
+- [Visualization](../../../usage/visualization.md) — Rerun, performance tuning
+- [Data Streams](../../../usage/data_streams/index.md) — RxPY streams, backpressure, quality filtering
+- [Transports](../../../usage/transports/index.md) — LCM, SHM, DDS
+- [Blueprints](../../../usage/blueprints.md) — composing modules
 
 ```{toctree}
 :hidden: true

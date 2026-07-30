@@ -8,7 +8,7 @@ The `dimos` CLI manages the full lifecycle of a DimOS robot stack — start, sto
 
 ## Global Options
 
-Every {class}`GlobalConfig <dimos.core.global_config.GlobalConfig>` field described in {doc}`/usage/configuration` is
+Every [`GlobalConfig`][GlobalConfig] field described in [Configuration](configuration.md) is
 available as a CLI flag. Flags override environment variables, `.env`, and
 blueprint defaults.
 
@@ -54,7 +54,7 @@ dimos [GLOBAL OPTIONS] COMMAND [ARGS]
 
 Values cascade (later overrides earlier):
 
-1. {class}`GlobalConfig <dimos.core.global_config.GlobalConfig>` default → `simulation = ""`
+1. [`GlobalConfig`][GlobalConfig] default → `simulation = ""`
 2. `.env` file → `SIMULATION=mujoco`
 3. Environment variable → `export SIMULATION=mujoco`
 4. Blueprint definition → `.global_config(simulation="mujoco")`
@@ -130,13 +130,13 @@ When `--daemon` is used, the process:
 
 #### Adding a New Blueprint
 
-For an in-repository DimOS blueprint, define a module-level {class}`Blueprint <dimos.core.coordination.blueprints.Blueprint>` variable and regenerate the built-in registry:
+For an in-repository DimOS blueprint, define a module-level [`Blueprint`][Blueprint] variable and regenerate the built-in registry:
 
 ```bash
 pytest dimos/robot/test_all_blueprints_generation.py
 ```
 
-This auto-generates `dimos/robot/all_blueprints.py` for built-in blueprints. External packages do not edit that file; they expose blueprints through Python package entry points. See {doc}`blueprints </usage/blueprints>` for composition and external publishing details.
+This auto-generates `dimos/robot/all_blueprints.py` for built-in blueprints. External packages do not edit that file; they expose blueprints through Python package entry points. See [blueprints](blueprints.md) for composition and external publishing details.
 
 (doc-usage-cli-dimos-status)=
 
@@ -280,9 +280,9 @@ Works with any agentic blueprint — does not require MCP. Publishes directly to
 
 ### `dimos mcp`
 
-Interact with the running MCP server. **Requires a blueprint that includes :class:\`McpServer \<dimos.agents.mcp.mcp_server.McpServer>\`** — for example `unitree-go2-agentic`. The MCP server runs at `http://localhost:9990/mcp` by default (`--mcp-port` / `--mcp-host` to override).
+Interact with the running MCP server. **Requires a blueprint that includes [`McpServer`][McpServer]** — for example `unitree-go2-agentic`. The MCP server runs at `http://localhost:9990/mcp` by default (`--mcp-port` / `--mcp-host` to override).
 
-To add MCP to a blueprint, include both {class}`McpServer <dimos.agents.mcp.mcp_server.McpServer>` (exposes skills as HTTP tools) and `McpClient.blueprint()` (LLM agent that fetches tools from the server):
+To add MCP to a blueprint, include both [`McpServer`][McpServer] (exposes skills as HTTP tools) and `McpClient.blueprint()` (LLM agent that fetches tools from the server):
 
 ```python
 from dimos.agents.mcp.mcp_client import McpClient
@@ -372,7 +372,7 @@ humancli
 
 ### `lcmspy`
 
-Deprecated alias for `dimos spy --transport lcm` (the LCM-only view of the spy). Prefer {ref}`dimos spy <doc-usage-cli-dimos-spy>`.
+Deprecated alias for `dimos spy --transport lcm` (the LCM-only view of the spy). Prefer [dimos spy](#dimos-spy).
 
 ```bash
 lcmspy
@@ -425,3 +425,7 @@ Also available as `dimos rerun-bridge`.
 | `~/.local/state/dimos/runs/<run-id>.json`       | Run registry (PID, blueprint, args, ports). Used by `status`/`stop`/`restart`. Cleaned up when processes exit. |
 | `~/.local/state/dimos/logs/<run-id>/main.jsonl` | Structured logs (main process + all workers)                                                                   |
 | `.env`                                          | Local config overrides (`ROBOT_IP=192.168.123.161`)                                                            |
+
+[GlobalConfig]: #dimos.core.global_config.GlobalConfig
+[Blueprint]: #dimos.core.coordination.blueprints.Blueprint
+[McpServer]: #dimos.agents.mcp.mcp_server.McpServer

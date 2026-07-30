@@ -51,7 +51,7 @@ The Go2 navigation stack runs entirely without ROS. It uses a **column-carving v
 
 {{ live_go2_navigation_in_rerun }}
 
-For return visits to a known space, use {doc}`premap relocalization </capabilities/navigation/relocalization>` instead of relying on live mapping alone.
+For return visits to a known space, use [premap relocalization](relocalization.md) instead of relying on live mapping alone.
 
 (doc-capabilities-navigation-deep-dive-data-flow)=
 
@@ -127,7 +127,7 @@ Each incoming LiDAR frame is spliced into the global map via column carving: any
 - Dynamic objects (people, doors) get cleared automatically
 - The latest observation always wins
 
-Live column-carving has no loop closure. We trust Go2 odometry, which is stable but drifts over distance. You can reliably map and navigate large spaces around 500 m² in our tests, but not kilometer-scale outdoor routes. For return visits with loop-closed maps, use {doc}`premap relocalization </capabilities/navigation/relocalization>` and build the premap offline with `dimos map global --export`.
+Live column-carving has no loop closure. We trust Go2 odometry, which is stable but drifts over distance. You can reliably map and navigate large spaces around 500 m² in our tests, but not kilometer-scale outdoor routes. For return visits with loop-closed maps, use [premap relocalization](relocalization.md) and build the premap offline with `dimos map global --export`.
 
 (doc-capabilities-navigation-deep-dive-configuration)=
 

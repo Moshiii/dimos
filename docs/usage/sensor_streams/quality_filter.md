@@ -23,7 +23,7 @@ myst:
 
 # Quality-Based Stream Filtering
 
-When processing sensor streams, you often want to reduce frequency while keeping the best quality data. For discrete data like images that can't be averaged or merged, instead of blindly dropping frames, {func}`quality_barrier <dimos.utils.reactive.quality_barrier>` selects the highest quality item within each time window.
+When processing sensor streams, you often want to reduce frequency while keeping the best quality data. For discrete data like images that can't be averaged or merged, instead of blindly dropping frames, [`quality_barrier`][quality_barrier] selects the highest quality item within each time window.
 
 (doc-usage-sensor-streams-quality-filter-the-problem)=
 
@@ -38,7 +38,7 @@ Both ignore quality. You might get a blurry frame when a sharp one was available
 
 (doc-usage-sensor-streams-quality-filter-the-solution-quality-barrier)=
 
-## The Solution: {func}`quality_barrier <dimos.utils.reactive.quality_barrier>`
+## The Solution: [`quality_barrier`][quality_barrier]
 
 ```python
 import reactivex as rx
@@ -76,9 +76,9 @@ Qualities: [0.9]
 
 ## Image Sharpness Filtering
 
-For camera streams, we provide {func}`sharpness_barrier <dimos.msgs.sensor_msgs.Image.sharpness_barrier>` which uses the image's sharpness score.
+For camera streams, we provide [`sharpness_barrier`][sharpness_barrier] which uses the image's sharpness score.
 
-Let's use real camera data from the Unitree Go2 robot to demonstrate. We use the {doc}`Sensor Storage & Replay </usage/sensor_streams/storage_replay>` toolkit, which provides access to recorded robot data:
+Let's use real camera data from the Unitree Go2 robot to demonstrate. We use the [Sensor Storage & Replay](storage_replay.md) toolkit, which provides access to recorded robot data:
 
 ```python
 from dimos.msgs.sensor_msgs.Image import Image, sharpness_barrier
@@ -118,7 +118,7 @@ Sharpness scores:
   Frame 9: 0.322
 ```
 
-Using {func}`sharpness_barrier <dimos.msgs.sensor_msgs.Image.sharpness_barrier>` to select the sharpest frames:
+Using [`sharpness_barrier`][sharpness_barrier] to select the sharpest frames:
 
 ```python
 # Create a stream from the recorded frames
@@ -297,7 +297,7 @@ Normalized sharpness:    0.332
 
 ## Custom Quality Functions
 
-You can use {func}`quality_barrier <dimos.utils.reactive.quality_barrier>` with any quality metric:
+You can use [`quality_barrier`][quality_barrier] with any quality metric:
 
 ```python
 # Example: select by "confidence" field
@@ -347,3 +347,6 @@ Convenience wrapper for images that uses `image.sharpness` as the quality functi
 | `target_frequency` | `float` | Output frequency in Hz |
 
 **Returns:** A pipe operator for use with `.pipe()`
+
+[quality_barrier]: #dimos.utils.reactive.quality_barrier
+[sharpness_barrier]: #dimos.msgs.sensor_msgs.Image.sharpness_barrier

@@ -2,7 +2,7 @@
 
 # Configuration
 
-DimOS provides a {class}`Configurable <dimos.protocol.service.spec.Configurable>` base class. See [service/spec.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/protocol/service/spec.py#L22).
+DimOS provides a [`Configurable`][Configurable] base class. See [service/spec.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/protocol/service/spec.py#L22).
 
 This allows using pydantic models to specify configuration structure and default values per module.
 
@@ -47,7 +47,7 @@ https://errors.pydantic.dev/2.12/v/extra_forbidden
 
 ## Configurable Modules
 
-{doc}`Modules </usage/modules>` inherit from {class}`Configurable <dimos.protocol.service.spec.Configurable>`, so all of the above applies. Module configs should inherit from {class}`ModuleConfig <dimos.core.module.ModuleConfig>` ([core/module.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/module.py#L40)), which includes shared configuration for all modules like transport protocols, frame IDs, etc.
+[Modules](modules.md) inherit from [`Configurable`][Configurable], so all of the above applies. Module configs should inherit from [`ModuleConfig`][ModuleConfig] ([core/module.py](https://github.com/dimensionalOS/dimos/blob/main/dimos/core/module.py#L40)), which includes shared configuration for all modules like transport protocols, frame IDs, etc.
 
 ```python
 from dimos.core.core import rpc
@@ -125,3 +125,6 @@ Config(
     device='CPU'
 )
 ```
+
+[Configurable]: #dimos.protocol.service.spec.Configurable
+[ModuleConfig]: #dimos.core.module.ModuleConfig

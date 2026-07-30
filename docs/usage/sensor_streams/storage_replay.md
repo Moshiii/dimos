@@ -231,7 +231,7 @@ Each pickle file contains a tuple `(timestamp, data)`:
 
 Files are numbered sequentially: `000.pickle`, `001.pickle`, etc.
 
-Recordings are stored in the `data/` directory. See {doc}`Data Loading </development/large_file_management>` for how data storage works, including Git LFS handling for large datasets.
+Recordings are stored in the `data/` directory. See [Data Loading](../../development/large_file_management.md) for how data storage works, including Git LFS handling for large datasets.
 
 (doc-usage-sensor-streams-storage-replay-api-reference)=
 

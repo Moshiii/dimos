@@ -311,7 +311,7 @@ disposed
 
 **Rule of thumb:** Whenever you subscribe, save the disposable because you have to unsubscribe at some point by calling `disposable.dispose()`.
 
-**In dimos modules:** Every {class}`Module <dimos.core.module.Module>` has a `self._disposables` (a `CompositeDisposable`) that automatically disposes everything when the module closes:
+**In dimos modules:** Every [`Module`][Module] has a `self._disposables` (a `CompositeDisposable`) that automatically disposes everything when the module closes:
 
 ```python
 import time
@@ -348,14 +348,14 @@ There are two common callback patterns in APIs. Use the appropriate helper:
 
 | Pattern                                | Example                                         | Helper                                                                       |
 | -------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------- |
-| Register/unregister with same callback | `sensor.register(cb)` / `sensor.unregister(cb)` | {func}`callback_to_observable <dimos.utils.reactive.callback_to_observable>` |
-| Subscribe returns unsub function       | `unsub = pubsub.subscribe(cb)`                  | {func}`to_observable <dimos.utils.reactive.to_observable>`                   |
+| Register/unregister with same callback | `sensor.register(cb)` / `sensor.unregister(cb)` | [`callback_to_observable`][callback_to_observable] |
+| Subscribe returns unsub function       | `unsub = pubsub.subscribe(cb)`                  | [`to_observable`][to_observable]                   |
 
 (doc-usage-data-streams-reactivex-from-registerunregister-apis)=
 
 ### From register/unregister APIs
 
-Use {func}`callback_to_observable <dimos.utils.reactive.callback_to_observable>` when the API has separate register and unregister functions that take the same callback reference:
+Use [`callback_to_observable`][callback_to_observable] when the API has separate register and unregister functions that take the same callback reference:
 
 ```python
 import reactivex as rx
@@ -400,7 +400,7 @@ callbacks after dispose: 0
 
 ### From subscribe-returns-unsub APIs
 
-Use {func}`to_observable <dimos.utils.reactive.to_observable>` when the subscribe function returns an unsubscribe callable:
+Use [`to_observable`][to_observable] when the subscribe function returns an unsubscribe callable:
 
 ```python
 from dimos.utils.reactive import to_observable
@@ -530,3 +530,7 @@ after dispose: True
 | `timeout(sec)`        | Error if no value within timeout         | `ops.timeout(5.0)`                    |
 
 See [RxPY documentation](https://rxpy.readthedocs.io/) for complete operator reference.
+
+[Module]: #dimos.core.module.Module
+[callback_to_observable]: #dimos.utils.reactive.callback_to_observable
+[to_observable]: #dimos.utils.reactive.to_observable

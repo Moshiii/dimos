@@ -39,4 +39,4 @@ uv run mypy dimos
 uv run pytest --numprocesses=auto dimos
 ```
 
-See {doc}`/development/testing` for self-hosted test requirements.
+See [Testing](../development/testing.md) for self-hosted test requirements.

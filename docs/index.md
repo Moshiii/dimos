@@ -80,13 +80,13 @@ Go2 quadruped and G1 humanoid setup, simulation, and blueprints for real hardwar
    * - Category
      - Supported platforms
    * - Quadruped
-     - :brand:`Unitree` Go2 pro/air (stable), :brand:`Unitree` B1 (experimental)
+     - Unitree Go2 pro/air (stable), Unitree B1 (experimental)
    * - Humanoid
-     - :brand:`Unitree` G1 (beta)
+     - Unitree G1 (beta)
    * - Arm
-     - :brand:`xArm` (beta), :brand:`AgileX` Piper (beta)
+     - xArm (beta), AgileX Piper (beta)
    * - Drone
-     - MAVLink (alpha), DJI :brand:`Mavic` (alpha)
+     - MAVLink (alpha), DJI Mavic (alpha)
    * - Misc
      - Force Torque Sensor (experimental)
 :::
@@ -105,11 +105,11 @@ See `scripts/install.sh --help` for non-interactive and advanced options.
 
 To set up your system dependencies, follow one of these guides:
 
-- {doc}`Ubuntu 22.04 or 24.04 <installation/ubuntu>` (stable)
-- {doc}`NixOS or Nix-managed Linux <installation/nix>` (stable)
-- {doc}`macOS 12.6 or newer <installation/osx>` (alpha)
+- [Ubuntu 22.04 or 24.04](installation/ubuntu.md) (stable)
+- [NixOS or Nix-managed Linux](installation/nix.md) (stable)
+- [macOS 12.6 or newer](installation/osx.md) (alpha)
 
-See {doc}`requirements` for tested configurations and dependency tiers.
+See [System Requirements](requirements.md) for tested configurations and dependency tiers.
 
 ### Python install
 
@@ -164,12 +164,12 @@ dimos run unitree-go2
      - Webcam demo — no hardware needed
 :::
 
-See {doc}`/usage/blueprints` for the complete blueprint guide.
+See [Blueprints](usage/blueprints.md) for the complete blueprint guide.
 
 ## Agent CLI and MCP
 
-The {program}`dimos` CLI manages the full lifecycle — run blueprints, inspect state, interact
-with agents, and call skills via {abbr}`MCP (Model Context Protocol)`.
+The `dimos` CLI manages the full lifecycle — run blueprints, inspect state, interact
+with agents, and call skills via MCP.
 
 ```bash
 dimos run unitree-go2-agentic --daemon   # Start in background
@@ -181,15 +181,15 @@ dimos mcp call relative_move --arg forward=0.5  # Call a skill directly
 dimos stop                               # Shut down
 ```
 
-See {doc}`/usage/cli` for the complete CLI reference.
+See [CLI Reference](usage/cli.md) for the complete CLI reference.
 
 ## Using DimOS as a Library
 
 The example below is a simple robot-connection module that publishes a stream of
-{class}`~dimos.msgs.sensor_msgs.Image.Image` frames, and a listener that subscribes to them.
+[`Image`][Image] frames, and a listener that subscribes to them.
 DimOS modules are subsystems that communicate using standardized messages over typed
-{class}`~dimos.core.stream.In` / {class}`~dimos.core.stream.Out` streams, with remotely
-callable methods marked by the {func}`~dimos.core.core.rpc` decorator.
+[`In`][In] / [`Out`][Out] streams, with remotely
+callable methods marked by the [`rpc()`][rpc] decorator.
 
 ```{literalinclude} code/index.py
 :pyobject: RobotConnection
@@ -199,10 +199,10 @@ callable methods marked by the {func}`~dimos.core.core.rpc` decorator.
 :pyobject: Listener
 ```
 
-Compose the modules with {func}`~dimos.core.coordination.blueprints.autoconnect` — which
+Compose the modules with [`autoconnect()`][autoconnect] — which
 connects streams by `(name, type)` — and run them by handing the resulting blueprint to
-{meth}`~dimos.core.coordination.module_coordinator.ModuleCoordinator.build`, then
-{meth}`~dimos.core.coordination.module_coordinator.ModuleCoordinator.loop`:
+[`build()`][build], then
+[`loop()`][loop]:
 
 ```{literalinclude} code/index.py
 :lines: 2-
@@ -212,18 +212,18 @@ connects streams by `(name, type)` — and run them by handing the resulting blu
 ### Blueprints
 
 Blueprints are instructions for how to construct and wire modules. Each
-{class}`~dimos.core.module.Module` exposes a {attr}`~dimos.core.module.Module.blueprint` factory, and
-{func}`~dimos.core.coordination.blueprints.autoconnect` composes several into a single
-{class}`~dimos.core.coordination.blueprints.Blueprint`. Blueprints can be composed, remapped,
+[`Module`][Module] exposes a [`blueprint`][blueprint] factory, and
+[`autoconnect()`][autoconnect] composes several into a single
+[`Blueprint`][blueprints-Blueprint]. Blueprints can be composed, remapped,
 or have transports overridden with
-{meth}`~dimos.core.coordination.blueprints.Blueprint.transports` when
-{func}`~dimos.core.coordination.blueprints.autoconnect` cannot
+[`transports()`][transports] when
+[`autoconnect()`][autoconnect] cannot
 resolve conflicting names or message types on its own.
 
-The example below connects the image stream from a {brand}`Unitree` Go2 to an
-{abbr}`MCP (Model Context Protocol)`-backed agent for
+The example below connects the image stream from a Unitree Go2 to an
+MCP-backed agent for
 reasoning and action execution, pinning the `color_image` stream onto an explicit
-{class}`~dimos.core.transport.LCMTransport`:
+[`LCMTransport`][LCMTransport]:
 
 ```{literalinclude} code/index.py
 :lines: 2-
@@ -232,7 +232,7 @@ reasoning and action execution, pinning the `color_image` stream onto an explici
 
 ### API reference
 
-See {doc}`api` for the full API reference.
+See [API Reference](api.rst) for the full API reference.
 
 ## Development
 
@@ -269,3 +269,16 @@ development/index
 coding-agents/index
 api
 ```
+
+[Image]: #dimos.msgs.sensor_msgs.Image.Image
+[In]: #dimos.core.stream.In
+[Out]: #dimos.core.stream.Out
+[rpc]: #dimos.core.core.rpc
+[autoconnect]: #dimos.core.coordination.blueprints.autoconnect
+[build]: #dimos.core.coordination.module_coordinator.ModuleCoordinator.build
+[loop]: #dimos.core.coordination.module_coordinator.ModuleCoordinator.loop
+[Module]: #dimos.core.module.Module
+[blueprint]: #dimos.core.module.Module.blueprint
+[blueprints-Blueprint]: #dimos.core.coordination.blueprints.Blueprint
+[transports]: #dimos.core.coordination.blueprints.Blueprint.transports
+[LCMTransport]: #dimos.core.transport.LCMTransport

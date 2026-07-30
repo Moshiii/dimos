@@ -22,7 +22,7 @@ Rules dimos code is expected to follow. They address recurring issues found in c
 - Specify only what differs from defaults. Don't restate defaults like `tick_rate=100.0`, `publish_joint_state=True`, or default topics (`/cmd_vel`, `/odom`).
 - `.transports({...})` applies to all matching modules, so define a remap once, not twice across sub-blueprints.
 - No lambdas -- they can't be pickled to worker processes. Use named functions.
-- Do no work at import time: no subprocesses, viewers, model parsing, or network. In particular don't call `get_data(...)` (it blocks import until the download finishes) -- use {class}`LfsPath <dimos.utils.data.LfsPath>` (resolved at access time) or build the config in `start`/`build`. Any process you start must be managed (shut down when not needed).
+- Do no work at import time: no subprocesses, viewers, model parsing, or network. In particular don't call `get_data(...)` (it blocks import until the download finishes) -- use [`LfsPath`][LfsPath] (resolved at access time) or build the config in `start`/`build`. Any process you start must be managed (shut down when not needed).
 - Blueprint files define blueprints, not modules/classes.
 - Helper blueprints not meant to run alone must start with `_` (the in-repo `all_blueprints.py` generator skips them); demo/non-shared built-in ones get a `demo_` prefix (hidden from `dimos list`). Externally packaged blueprints are not added to `all_blueprints.py`; expose them with `dimos.blueprints` Python package entry points.
 
@@ -31,7 +31,7 @@ Rules dimos code is expected to follow. They address recurring issues found in c
 ## Concurrency and thread safety
 
 - Boolean stop/started flags (`self._running`, `self._started`, `self._shutdown`, ...) aren't thread safe. Use a `threading.Event`.
-- Any state touched by more than one thread needs a lock everywhere -- the read side too, not just writes. {func}`@rpc <dimos.core.core.rpc>` methods run on different threads, so their state needs a lock.
+- Any state touched by more than one thread needs a lock everywhere -- the read side too, not just writes. [`@rpc`][rpc] methods run on different threads, so their state needs a lock.
 - Lazy "initialize on first access" can race across threads. Guard it with a lock.
 - Don't acquire and release the same lock twice in a row when one critical section would do. Use a reentrant lock where required.
 - `list(some_collection)` to snapshot while another thread mutates only works because `list` holds the GIL. Python is moving off the GIL, so use a lock (or `Condition`) instead.
@@ -44,7 +44,7 @@ Rules dimos code is expected to follow. They address recurring issues found in c
 ## Configuration
 
 - Don't use environment variables for what the config/CLI system already handles. Config values override from the CLI (`-o module.param=value`).
-- Don't bake personal/hardware config into source or blueprints: IPs (`192.168.x.x`), interface names (`enp86s0`), default IPs in constructors. Use a {class}`GlobalConfig <dimos.core.global_config.GlobalConfig>` field with a sensible default (often `None`) and set it via `.env` or CLI.
+- Don't bake personal/hardware config into source or blueprints: IPs (`192.168.x.x`), interface names (`enp86s0`), default IPs in constructors. Use a [`GlobalConfig`][GlobalConfig] field with a sensible default (often `None`) and set it via `.env` or CLI.
 - Type required fields as required, not `... | None = None`. Then you drop the runtime None-check and the `or default` / `or ""` / `or "can0"` patterns.
 - Listen on `global_config.listen_host` by default, not `0.0.0.0`.
 
@@ -165,7 +165,7 @@ Rules dimos code is expected to follow. They address recurring issues found in c
 - `_close_module` is a leftover; `Module.stop` now calls it, so move that code into `stop()` rather than calling `_close_module` directly.
 - During shutdown, keep stopping the other modules even if one errors.
 - Track and join threads; don't leak them. Hold a reference to a thread you start so you can join it -- and check a join/stop isn't coming from the thread it's trying to join.
-- Transports and publishers ({class}`LCMTransport <dimos.core.transport.LCMTransport>`, {class}`pLCMTransport <dimos.core.transport.pLCMTransport>`, ...) are often created but never closed; add a `stop()`. But a transport shared between modules shouldn't be closed by one of them.
+- Transports and publishers ([`LCMTransport`][LCMTransport], [`pLCMTransport`][pLCMTransport], ...) are often created but never closed; add a `stop()`. But a transport shared between modules shouldn't be closed by one of them.
 - Shut down subprocesses, in tests always via a fixture so they die even on failure. Cleanup belongs in real code, not test code -- tests should only call the cleanup utilities.
 
 (doc-coding-agents-code-quality-rules-tests)=
@@ -198,3 +198,9 @@ Rules dimos code is expected to follow. They address recurring issues found in c
 - Put types in annotations, not docstrings -- mypy doesn't read docstrings.
 - `hasattr` (and the `# type: ignore[attr-defined]` that follows) is almost always broken design: it breaks the abstraction and the type checker can't help. Define the method on a Protocol/base so every implementation provides it (often just `pass`); then you don't need the `hasattr` check before calling.
 - `strict=False` is the default on `zip` but silences length mismatches -- you usually want `strict=True`.
+
+[LfsPath]: #dimos.utils.data.LfsPath
+[rpc]: #dimos.core.core.rpc
+[GlobalConfig]: #dimos.core.global_config.GlobalConfig
+[LCMTransport]: #dimos.core.transport.LCMTransport
+[pLCMTransport]: #dimos.core.transport.pLCMTransport

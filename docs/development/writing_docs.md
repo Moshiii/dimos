@@ -10,10 +10,12 @@ Place user-facing guides in `docs/usage` or `docs/capabilities` and
 contributor-only guides in `docs/development`. Add every new page to the
 nearest `toctree` so readers can discover it.
 
-Use MyST's `{doc}`, `{ref}`, and Python-domain roles for internal links. Prefer
-`literalinclude` for source examples, and keep images beside the relevant
-section in an `assets` directory. See
-{doc}`/coding-agents/docs/index` for the complete authoring conventions.
+Use standard Markdown links for documentation pages and sections. Use
+Markdown reference links for Python symbols. Both forms render cleanly on
+GitHub and remain checked by Sphinx. Prefer `literalinclude` for source
+examples, and keep images beside the relevant section in an `assets`
+directory. See
+[Writing DimOS Documentation](../coding-agents/docs/index.md) for the complete authoring conventions.
 
 Run the same strict checks as CI:
 

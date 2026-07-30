@@ -2,11 +2,11 @@
 
 # Blueprints
 
-Blueprints ({class}`BlueprintAtom <dimos.core.coordination.blueprints.BlueprintAtom>`) are instructions for how to initialize a {class}`Module <dimos.core.module.Module>`.
+Blueprints ([`BlueprintAtom`][BlueprintAtom]) are instructions for how to initialize a [`Module`][Module].
 
-You don't typically want to run a single module, so multiple blueprints are handled together in {class}`Blueprint <dimos.core.coordination.blueprints.Blueprint>`.
+You don't typically want to run a single module, so multiple blueprints are handled together in [`Blueprint`][Blueprint].
 
-You create a {class}`Blueprint <dimos.core.coordination.blueprints.Blueprint>` from a single module (say `ConnectionModule`) with:
+You create a [`Blueprint`][Blueprint] from a single module (say `ConnectionModule`) with:
 
 ```python
 from dimos.core.coordination.blueprints import Blueprint
@@ -39,7 +39,7 @@ blueprint = connection('arg1', 'arg2', kwarg='value')
 
 ## Linking blueprints
 
-You can link multiple blueprints together with {func}`autoconnect <dimos.core.coordination.blueprints.autoconnect>`:
+You can link multiple blueprints together with [`autoconnect`][autoconnect]:
 
 ```python
 from dimos.core.coordination.blueprints import autoconnect
@@ -67,7 +67,7 @@ blueprint = autoconnect(
 )
 ```
 
-`blueprint` itself is a {class}`Blueprint <dimos.core.coordination.blueprints.Blueprint>` so you can link it with other modules:
+`blueprint` itself is a [`Blueprint`][Blueprint] so you can link it with other modules:
 
 ```python
 class Module4(Module):
@@ -86,7 +86,7 @@ expanded_blueprint = autoconnect(
 )
 ```
 
-Blueprints are frozen data classes, and {func}`autoconnect() <dimos.core.coordination.blueprints.autoconnect>` always constructs an expanded blueprint so you never have to worry about changes in one affecting the other.
+Blueprints are frozen data classes, and [`autoconnect()`][autoconnect] always constructs an expanded blueprint so you never have to worry about changes in one affecting the other.
 
 (doc-usage-blueprints-publishing-external-blueprints)=
 
@@ -117,8 +117,8 @@ External names are always `<canonical-distribution-namespace>.<external-local-bl
 
 Entry point targets may be either:
 
-- a {class}`Blueprint <dimos.core.coordination.blueprints.Blueprint>` object, such as a module-level `go2_blueprint`; or
-- a DimOS {class}`Module <dimos.core.module.Module>` class, such as {class}`KeyboardTeleop <dimos.robot.unitree.keyboard_teleop.KeyboardTeleop>`, which DimOS converts with `.blueprint()`.
+- a [`Blueprint`][Blueprint] object, such as a module-level `go2_blueprint`; or
+- a DimOS [`Module`][Module] class, such as [`KeyboardTeleop`][KeyboardTeleop], which DimOS converts with `.blueprint()`.
 
 `dimos list` includes external names from package metadata without importing the target modules. `dimos run my-robot-stack.go2` imports only the requested entry point target.
 
@@ -128,7 +128,7 @@ Remote coordinator resolution happens in the coordinator environment. If a clien
 
 ### Duplicate module handling
 
-If the same module appears multiple times in {func}`autoconnect <dimos.core.coordination.blueprints.autoconnect>`, the **later blueprint wins** and overrides earlier ones:
+If the same module appears multiple times in [`autoconnect`][autoconnect], the **later blueprint wins** and overrides earlier ones:
 
 ```python
 blueprint = autoconnect(
@@ -185,9 +185,9 @@ If you don't like the name you can always override it like in the next section.
 
 ## Which transport is used?
 
-By default {class}`LCMTransport <dimos.core.transport.LCMTransport>` is used if the object supports `lcm_encode`. If it doesn't {class}`pLCMTransport <dimos.core.transport.pLCMTransport>` is used (meaning "pickled LCM").
+By default [`LCMTransport`][LCMTransport] is used if the object supports `lcm_encode`. If it doesn't [`pLCMTransport`][pLCMTransport] is used (meaning "pickled LCM").
 
-You can override transports with the {meth}`transports <dimos.core.coordination.blueprints.Blueprint.transports>` method. It returns a new blueprint in which the override is set.
+You can override transports with the [`transports`][transports] method. It returns a new blueprint in which the override is set.
 
 ```python
 from dimos.core.transport import pSHMTransport, pLCMTransport
@@ -215,7 +215,7 @@ Note: `expanded_blueprint` does not get the transport overrides because it's cre
 
 ## Remapping connections
 
-Sometimes you need to rename a connection to match what other modules expect. You can use {meth}`remappings <dimos.core.coordination.blueprints.Blueprint.remappings>` to rename module connections:
+Sometimes you need to rename a connection to match what other modules expect. You can use [`remappings`][remappings] to rename module connections:
 
 ```python
 from dimos.core.coordination.blueprints import autoconnect
@@ -246,7 +246,7 @@ blueprint = (
 After remapping:
 
 - The `color_image` output from `ConnectionModule` is treated as `rgb_image`
-- It automatically connects to any module with an `rgb_image` input of type {class}`Image <dimos.msgs.sensor_msgs.Image.Image>`
+- It automatically connects to any module with an `rgb_image` input of type [`Image`][Image]
 - The topic name becomes `/rgb_image` instead of `/color_image`
 
 If you want to override the topic, you still have to do it manually:
@@ -298,7 +298,7 @@ Inside a namespace everything is prefixed:
 
 - instance names (`robot0/go2connection`),
 - stream names and topics (`/robot0/lidar`),
-- TF frames ({attr}`frame_id_prefix <dimos.core.module.ModuleConfig.frame_id_prefix>`, unless you set one yourself),
+- TF frames ([`frame_id_prefix`][frame_id_prefix], unless you set one yourself),
 - and RPC topics (`robot0/go2connection/move`).
 
 Prefixed streams only connect within their namespace.
@@ -319,7 +319,7 @@ The downside of this is that the number of modules is fixed at blueprint creatio
 ROBOT_IPS=10.0.0.1,10.0.0.2 dimos run blueprint-name
 ```
 
-and construct {attr}`robot_ips <dimos.core.global_config.GlobalConfig.robot_ips>` from the environment variable:
+and construct [`robot_ips`][robot_ips] from the environment variable:
 
 ```python
 robot_ips = (global_config.robot_ips or "").split(",")
@@ -490,7 +490,7 @@ class ModuleC(Module):
 
 ## Defining skills
 
-Skills are methods on a {class}`Module <dimos.core.module.Module>` decorated with {func}`@skill <dimos.agents.annotation.skill>`. The agent automatically discovers all skills from launched modules at startup.
+Skills are methods on a [`Module`][Module] decorated with [`@skill`][skill]. The agent automatically discovers all skills from launched modules at startup.
 
 ```python
 from dimos.core.core import rpc
@@ -526,7 +526,7 @@ module_coordinator.stop()
 16:30:01.480 [inf][ation/worker_manager_python.py] All workers shut down
 ```
 
-This returns a {class}`ModuleCoordinator <dimos.core.coordination.module_coordinator.ModuleCoordinator>` instance that manages all deployed modules.
+This returns a [`ModuleCoordinator`][ModuleCoordinator] instance that manages all deployed modules.
 
 (doc-usage-blueprints-running-and-shutting-down)=
 
@@ -539,3 +539,18 @@ module_coordinator.loop()
 ```
 
 This will wait for Ctrl+C and then automatically stop all modules and clean up resources.
+
+[BlueprintAtom]: #dimos.core.coordination.blueprints.BlueprintAtom
+[Module]: #dimos.core.module.Module
+[Blueprint]: #dimos.core.coordination.blueprints.Blueprint
+[autoconnect]: #dimos.core.coordination.blueprints.autoconnect
+[KeyboardTeleop]: #dimos.robot.unitree.keyboard_teleop.KeyboardTeleop
+[LCMTransport]: #dimos.core.transport.LCMTransport
+[pLCMTransport]: #dimos.core.transport.pLCMTransport
+[transports]: #dimos.core.coordination.blueprints.Blueprint.transports
+[remappings]: #dimos.core.coordination.blueprints.Blueprint.remappings
+[Image]: #dimos.msgs.sensor_msgs.Image.Image
+[frame_id_prefix]: #dimos.core.module.ModuleConfig.frame_id_prefix
+[robot_ips]: #dimos.core.global_config.GlobalConfig.robot_ips
+[skill]: #dimos.agents.annotation.skill
+[ModuleCoordinator]: #dimos.core.coordination.module_coordinator.ModuleCoordinator

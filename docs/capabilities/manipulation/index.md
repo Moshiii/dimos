@@ -62,7 +62,7 @@ dimos run xarm7-planner-coordinator \
   -o manipulationmodule.kinematics.dt=0.02
 ```
 
-For blueprints that instantiate {class}`PickAndPlaceModule <dimos.manipulation.pick_and_place_module.PickAndPlaceModule>`, use the corresponding module prefix:
+For blueprints that instantiate [`PickAndPlaceModule`][PickAndPlaceModule], use the corresponding module prefix:
 
 ```bash
 dimos run xarm-perception-sim \
@@ -130,7 +130,7 @@ Safety behavior for unsupported RoboPlan features:
 
 - Planning-critical unsupported inputs fail loudly before planning. Examples include unsupported obstacle geometry, unavailable robot loading APIs, or unavailable collision query APIs. RoboPlan worlds generate a minimal SRDF from the DimOS robot config, including configured collision-exclusion pairs.
 - Unverified non-critical query methods raise explicit `NotImplementedError`. In particular, signed minimum-distance semantics are not implemented for RoboPlan until a safe equivalent is verified.
-- Embedded Meshcat visualization requires a world implementing {class}`VisualizationSpec <dimos.manipulation.planning.spec.protocols.VisualizationSpec>`; use Viser or `none` with the RoboPlan backend.
+- Embedded Meshcat visualization requires a world implementing [`VisualizationSpec`][VisualizationSpec]; use Viser or `none` with the RoboPlan backend.
 
 (doc-capabilities-manipulation-index-planning-visualization)=
 
@@ -138,7 +138,7 @@ Safety behavior for unsupported RoboPlan features:
 
 Manipulation visualization is configured on `ManipulationModuleConfig.visualization`.
 It is independent from the global Rerun stream viewer described in
-{doc}`/usage/visualization`.
+[Viewer Backends](../../usage/visualization.md).
 
 Backend choices:
 
@@ -178,11 +178,11 @@ Viser support is included in the `manipulation` extra:
 uv sync --extra manipulation --inexact
 ```
 
-The Viser panel talks to the concrete {class}`ManipulationOperator <dimos.manipulation.visualization.operator.ManipulationOperator>` bound into its {class}`VisualizationSession <dimos.manipulation.planning.spec.models.VisualizationSession>`. GUI callbacks enqueue operations through that operator for target evaluation, planning, preview, execution, cancellation, reset, and clear-plan actions. The panel owns only target drafts, selection state, and callback generations; it does not touch {class}`WorldSpec <dimos.manipulation.planning.spec.protocols.WorldSpec>`, IK, planner objects, {class}`ManipulationModule <dimos.manipulation.manipulation_module.ManipulationModule>`, {class}`WorldMonitor <dimos.manipulation.planning.monitor.world_monitor.WorldMonitor>`, or live Drake contexts directly.
+The Viser panel talks to the concrete [`ManipulationOperator`][ManipulationOperator] bound into its [`VisualizationSession`][VisualizationSession]. GUI callbacks enqueue operations through that operator for target evaluation, planning, preview, execution, cancellation, reset, and clear-plan actions. The panel owns only target drafts, selection state, and callback generations; it does not touch [`WorldSpec`][WorldSpec], IK, planner objects, [`ManipulationModule`][ManipulationModule], [`WorldMonitor`][WorldMonitor], or live Drake contexts directly.
 
-External manipulation visualizers are initialized from a backend-neutral {class}`VisualizationSession <dimos.manipulation.planning.spec.models.VisualizationSession>` after the planning world has added its robots. The session contains static {class}`PlanningSceneInfo <dimos.manipulation.planning.spec.models.PlanningSceneInfo>` metadata: world robot IDs, {class}`RobotModelConfig <dimos.manipulation.planning.spec.config.RobotModelConfig>` values, and resolved planning groups. Runtime joint state is then pushed through {class}`VisualizationStateFrame <dimos.manipulation.planning.spec.models.VisualizationStateFrame>` updates so renderers do not poll world/module state or own freshness policy. Embedded Meshcat visualization does not need extra setup because it observes the Drake world directly.
+External manipulation visualizers are initialized from a backend-neutral [`VisualizationSession`][VisualizationSession] after the planning world has added its robots. The session contains static [`PlanningSceneInfo`][PlanningSceneInfo] metadata: world robot IDs, [`RobotModelConfig`][RobotModelConfig] values, and resolved planning groups. Runtime joint state is then pushed through [`VisualizationStateFrame`][VisualizationStateFrame] updates so renderers do not poll world/module state or own freshness policy. Embedded Meshcat visualization does not need extra setup because it observes the Drake world directly.
 
-Previews use the stored synchronized {class}`JointTrajectory <dimos.msgs.trajectory_msgs.JointTrajectory.JointTrajectory>` from the generated plan. Viser projects the globally named trajectory into robot-local preview ghosts and plays the stored timestamped points directly; optional preview duration only scales the stored delays. Execute freshness is enforced by the manipulation module/operator immediately before dispatch, not by Viser-side telemetry snapshots.
+Previews use the stored synchronized [`JointTrajectory`][JointTrajectory] from the generated plan. Viser projects the globally named trajectory into robot-local preview ghosts and plays the stored timestamped points directly; optional preview duration only scales the stored delays. Execute freshness is enforced by the manipulation module/operator immediately before dispatch, not by Viser-side telemetry snapshots.
 
 (perception-agent)=
 
@@ -195,7 +195,7 @@ Previews use the stored synchronized {class}`JointTrajectory <dimos.msgs.traject
 XARM7_IP=<ip> dimos run coordinator-xarm7 xarm-perception-agent
 ```
 
-For a simulation walkthrough, see {doc}`Agentic xArm simulation </capabilities/manipulation/agentic>`.
+For a simulation walkthrough, see [Agentic xArm simulation](agentic.md).
 
 (doc-capabilities-manipulation-index-architecture)=
 
@@ -215,7 +215,7 @@ KeyboardTeleopModule ──→ ControlCoordinator ──→ ManipulationModule
 - **ControlCoordinator** — 100Hz control loop with mock or real hardware adapters
 - **ManipulationModule** — world backend, optional visualization, RRT motion planning, obstacle management
 
-Internally, planning code depends on {class}`WorldSpec <dimos.manipulation.planning.spec.protocols.WorldSpec>` for world, collision, and kinematics behavior. Meshcat preview and publishing are exposed separately through {class}`VisualizationSpec <dimos.manipulation.planning.spec.protocols.VisualizationSpec>`, so non-visual planning paths do not require a visualization backend.
+Internally, planning code depends on [`WorldSpec`][WorldSpec] for world, collision, and kinematics behavior. Meshcat preview and publishing are exposed separately through [`VisualizationSpec`][VisualizationSpec], so non-visual planning paths do not require a visualization backend.
 
 (doc-capabilities-manipulation-index-blueprints)=
 
@@ -246,7 +246,7 @@ Internally, planning code depends on {class}`WorldSpec <dimos.manipulation.plann
      - XArm7 perception with an LLM agent
    * - ``xarm-perception-sim``
      - XArm7 simulated perception stack
-   * - :doc:`xarm-perception-sim-agent <agentic>`
+   * - [xarm-perception-sim-agent](agentic.md)
      - XArm7 simulated perception stack with an LLM agent
 :::
 
@@ -262,7 +262,7 @@ Internally, planning code depends on {class}`WorldSpec <dimos.manipulation.plann
      - Teleoperation
      - Planning
      - Perception
-   * - :doc:`A-750 <a750>`
+   * - [A-750](a750.md)
      - 6
      - Yes
      - Yes
@@ -288,7 +288,7 @@ Internally, planning code depends on {class}`WorldSpec <dimos.manipulation.plann
 
 ## Adding a Custom Arm
 
-{doc}`guide is here </capabilities/manipulation/adding_a_custom_arm>`
+[guide is here](adding_a_custom_arm.md)
 
 (doc-capabilities-manipulation-index-key-files)=
 
@@ -335,3 +335,15 @@ a750
 piper_integration
 openarm_integration
 ```
+
+[PickAndPlaceModule]: #dimos.manipulation.pick_and_place_module.PickAndPlaceModule
+[VisualizationSpec]: #dimos.manipulation.planning.spec.protocols.VisualizationSpec
+[ManipulationOperator]: #dimos.manipulation.visualization.operator.ManipulationOperator
+[VisualizationSession]: #dimos.manipulation.planning.spec.models.VisualizationSession
+[WorldSpec]: #dimos.manipulation.planning.spec.protocols.WorldSpec
+[ManipulationModule]: #dimos.manipulation.manipulation_module.ManipulationModule
+[WorldMonitor]: #dimos.manipulation.planning.monitor.world_monitor.WorldMonitor
+[PlanningSceneInfo]: #dimos.manipulation.planning.spec.models.PlanningSceneInfo
+[RobotModelConfig]: #dimos.manipulation.planning.spec.config.RobotModelConfig
+[VisualizationStateFrame]: #dimos.manipulation.planning.spec.models.VisualizationStateFrame
+[JointTrajectory]: #dimos.msgs.trajectory_msgs.JointTrajectory.JointTrajectory
