@@ -183,6 +183,34 @@ Viser support is included in the `manipulation` extra:
 uv sync --extra manipulation --inexact
 ```
 
+### Grasp proposal providers and live visualization
+
+`PickAndPlaceModule` requires exactly one module implementing `GraspGenSpec`.
+Provider selection is explicit in the blueprint:
+
+- `xarm-perception` and `xarm-perception-sim` use
+  `HeuristicGraspModule`.
+- `xarm-graspgenx` uses `GraspGenXModule` and the Viser manipulation
+  visualization backend.
+
+Both providers receive the same request: the segmented object point cloud plus
+the selected detection's center and size. A provider error fails grasp
+generation; the pick pipeline does not silently switch to another proposal
+method.
+
+When `PickAndPlaceModuleConfig.grasp_visualization` supplies the robot's gripper
+and grasp-frame-to-TCP geometry, the pick pipeline automatically publishes two
+Viser layers:
+
+- `grasp/object-cloud` contains the point cloud sent to the proposal provider.
+- `grasp/proposals` shows pending candidates in gray, the candidate currently
+  undergoing connected motion planning in yellow, and rejected candidates in
+  red. After a connected plan succeeds, only the selected candidate remains,
+  in green.
+
+These are visualization-only layers. They do not add collision geometry or
+change planning outcomes, and visualization errors do not fail a pick.
+
 The Viser panel talks to the concrete `ManipulationOperator` bound into its
 `VisualizationSession`. GUI callbacks enqueue operations through that operator
 for target evaluation, planning, preview, execution, cancellation, reset, and

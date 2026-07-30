@@ -25,6 +25,7 @@ import torch
 
 from dimos.manipulation.demo_graspgenx.fixture import load_demo_clouds
 from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -60,7 +61,7 @@ def recorded_grasp_proposals() -> tuple[np.ndarray, GraspCandidateArray]:
     module = GraspGenXModule(**config.model_dump(exclude={"rpc_transport", "tf_transport", "g"}))
     try:
         module.start()
-        proposals = module.propose_grasps(object_cloud)
+        proposals = module.propose_grasps(GraspProposalInput.from_pointcloud(object_cloud))
     finally:
         module.stop()
     return object_cloud.points_f32(), proposals

@@ -31,6 +31,7 @@ from dimos.manipulation.grasping.grasp_gen_x import (
     GraspGenXModule,
     SweepVolumeGripperConfig,
 )
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
@@ -103,7 +104,7 @@ def run_demo(
         raise TypeError("proposer must implement GraspGenSpec.propose_grasps")
 
     scene, object_cloud = load_demo_clouds()
-    result = proposer.propose_grasps(object_cloud)
+    result = proposer.propose_grasps(GraspProposalInput.from_pointcloud(object_cloud))
     _validate(result, object_cloud)
     image_path = renderer(output_path, scene, object_cloud, result, gripper)
     best_score = float(result.candidates[0].score)

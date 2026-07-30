@@ -32,14 +32,17 @@ from dimos.core.coordination.blueprints import BlueprintAtom, autoconnect
 from dimos.core.coordination.module_coordinator import _resolve_single_ref
 from dimos.core.module import ModuleBase
 from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.manipulation.pick_and_place_module import (
     GraspVerificationConfig,
+    GraspVisualizationConfig,
     PickAndPlaceModule,
     PickAndPlaceModuleConfig,
     _FeasibleGrasp,
     _GraspVerification,
 )
 from dimos.manipulation.skill_errors import ManipulationSkillError
+from dimos.manipulation.visualization.layers import LineSetElement, VisualizationLayer
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -141,25 +144,7 @@ class TestFindObjectInDetections:
 
 
 class TestGraspHeuristics:
-    """Test grasp orientation and occlusion offset static methods."""
-
-    def test_occlusion_offset_toward_robot(self):
-        center = Vector3(x=0.5, y=0.0, z=0.3)
-        size = Vector3(x=0.1, y=0.1, z=0.1)
-
-        ox, oy = PickAndPlaceModule._occlusion_offset(center, size)
-        # Offset should shift x closer to robot origin (smaller x)
-        assert ox < center.x
-        assert abs(oy - center.y) < 1e-6  # y should stay ~0
-
-    def test_occlusion_offset_at_origin(self):
-        center = Vector3(x=0.0, y=0.0, z=0.3)
-        size = Vector3(x=0.1, y=0.1, z=0.1)
-
-        ox, oy = PickAndPlaceModule._occlusion_offset(center, size)
-        # At origin, no shift should occur (division-by-zero guard)
-        assert abs(ox) < 1e-3
-        assert abs(oy) < 1e-3
+    """Test the shared grasp/place orientation wrapper."""
 
     def test_grasp_orientation_near_is_top_down(self):
         q = PickAndPlaceModule._grasp_orientation(gx=0.3, gy=0.0, xy_dist=0.3)
@@ -231,40 +216,45 @@ def test_grasp_pipeline_config_rejects_invalid_values(
         PickAndPlaceModuleConfig(**kwargs)
 
 
-def test_pick_module_declares_optional_perception_and_grasp_specs() -> None:
+def test_pick_module_declares_optional_perception_and_required_grasp_spec() -> None:
     atom = BlueprintAtom.create(PickAndPlaceModule, kwargs={})
 
     refs = {ref.name: ref for ref in atom.module_refs}
 
     assert refs["_object_scene"].optional is True
-    assert refs["_grasp_generator"].optional is True
+    assert refs["_grasp_generator"].optional is False
 
 
-@pytest.mark.parametrize(
-    ("ref_name", "provider"),
-    [
-        ("_grasp_generator", GraspGenXModule),
-        ("_object_scene", ObjectSceneRegistrationModule),
-    ],
-)
-def test_optional_provider_resolves_when_absent_present_or_ambiguous(
-    ref_name: str, provider: type[ModuleBase]
-) -> None:
+def test_optional_object_scene_resolves_when_absent_or_present() -> None:
     consumer = BlueprintAtom.create(PickAndPlaceModule, kwargs={})
-    module_ref = next(ref for ref in consumer.module_refs if ref.name == ref_name)
+    module_ref = next(ref for ref in consumer.module_refs if ref.name == "_object_scene")
 
     absent = autoconnect(PickAndPlaceModule.blueprint())
     assert _resolve_single_ref(consumer, module_ref, module_ref.spec, absent, set()) is None
 
-    present = autoconnect(PickAndPlaceModule.blueprint(), provider.blueprint())
+    present = autoconnect(PickAndPlaceModule.blueprint(), ObjectSceneRegistrationModule.blueprint())
     assert (
-        _resolve_single_ref(consumer, module_ref, module_ref.spec, present, set()) == provider.name
+        _resolve_single_ref(consumer, module_ref, module_ref.spec, present, set())
+        == ObjectSceneRegistrationModule.name
     )
 
+
+def test_required_grasp_provider_rejects_absent_or_ambiguous_and_resolves_one() -> None:
+    consumer = BlueprintAtom.create(PickAndPlaceModule, kwargs={})
+    module_ref = next(ref for ref in consumer.module_refs if ref.name == "_grasp_generator")
+    absent = autoconnect(PickAndPlaceModule.blueprint())
+    with pytest.raises(Exception):
+        _resolve_single_ref(consumer, module_ref, module_ref.spec, absent, set())
+
+    present = autoconnect(PickAndPlaceModule.blueprint(), GraspGenXModule.blueprint())
+    assert (
+        _resolve_single_ref(consumer, module_ref, module_ref.spec, present, set())
+        == GraspGenXModule.name
+    )
     ambiguous = autoconnect(
         PickAndPlaceModule.blueprint(),
-        provider.blueprint(instance_name="provider-a"),
-        provider.blueprint(instance_name="provider-b"),
+        GraspGenXModule.blueprint(instance_name="provider-a"),
+        GraspGenXModule.blueprint(instance_name="provider-b"),
     )
     with pytest.raises(Exception, match="Multiple modules met that spec"):
         _resolve_single_ref(consumer, module_ref, module_ref.spec, ambiguous, set())
@@ -285,6 +275,35 @@ def _candidate(x: float, score: float) -> GraspCandidate:
     )
 
 
+def _grasp_visualization_config() -> GraspVisualizationConfig:
+    return GraspVisualizationConfig(
+        gripper={
+            "extents_open": (0.1, 0.05, 0.1),
+            "offset_open": (0.0, 0.0, 0.1),
+            "extents_half_open": (0.05, 0.05, 0.05),
+            "offset_half_open": (0.0, 0.0, 0.05),
+            "fingertip_depth": 0.1,
+        },
+        grasp_frame_to_tcp=(
+            (1.0, 0.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0, 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        ),
+    )
+
+
+class _LayerRecorder:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.layers: list[VisualizationLayer] = []
+        self.error = error
+
+    def set_layer(self, layer: VisualizationLayer) -> None:
+        if self.error is not None:
+            raise self.error
+        self.layers.append(layer)
+
+
 class TestProposalSelection:
     def test_provider_receives_real_world_frame_cloud(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -302,11 +321,13 @@ class TestProposalSelection:
         module._grasp_generator = generator
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now + 0.1)
 
-        candidates = module._provider_candidates(
-            detection, SimpleNamespace(proposal_source="grasp_provider")
-        )
+        candidates = module._provider_candidates(detection)
 
-        generator.propose_grasps.assert_called_once_with(cloud)
+        proposal_input = generator.propose_grasps.call_args.args[0]
+        assert isinstance(proposal_input, GraspProposalInput)
+        assert proposal_input.object_pointcloud is cloud
+        assert proposal_input.object_center.as_tuple == detection.center.as_tuple
+        assert proposal_input.object_size.as_tuple == detection.size.as_tuple
         assert [(candidate.pose.position.x, candidate.score) for candidate in candidates] == [
             (0.4, 0.8)
         ]
@@ -327,9 +348,7 @@ class TestProposalSelection:
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=100.0)
 
         with pytest.raises(RuntimeError, match="point cloud"):
-            module._provider_candidates(
-                _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-            )
+            module._provider_candidates(_make_det_object())
 
     @pytest.mark.parametrize(
         ("cloud_frame", "proposal_frame"),
@@ -356,9 +375,7 @@ class TestProposalSelection:
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now)
 
         with pytest.raises(RuntimeError, match="frame"):
-            module._provider_candidates(
-                _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-            )
+            module._provider_candidates(_make_det_object())
 
     def test_provider_preserves_stable_order_for_equal_scores(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -375,32 +392,9 @@ class TestProposalSelection:
         module._grasp_generator = generator
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now)
 
-        candidates = module._provider_candidates(
-            _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-        )
+        candidates = module._provider_candidates(_make_det_object())
 
         assert [candidate.pose.position.x for candidate in candidates] == [0.2, 0.3, 0.1]
-
-    def test_explicit_heuristic_fallback_identifies_source(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> None:
-        module.config.heuristic_grasp_fallback = True
-        transaction = SimpleNamespace(proposal_source="grasp_provider")
-        pose = Pose(0.4, 0.0, 0.2)
-        mocker.patch.object(module, "_generate_grasps_for_pick", return_value=[pose])
-
-        candidates = module._provider_candidates(_make_det_object(), transaction)
-
-        assert transaction.proposal_source == "heuristic"
-        assert [(candidate.pose, candidate.score) for candidate in candidates] == [(pose, 0.0)]
-
-    def test_provider_is_required_when_fallback_is_disabled(
-        self, module: PickAndPlaceModule
-    ) -> None:
-        with pytest.raises(RuntimeError, match="fallback is disabled"):
-            module._provider_candidates(
-                _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-            )
 
     def test_selection_skips_higher_scored_infeasible_candidate(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -470,6 +464,83 @@ class TestProposalSelection:
 
         plan_sequence.assert_not_called()
         assert transaction.rejections == {"invalid": 1}
+
+    def test_selection_visualization_tracks_current_rejected_and_selected(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        recorder = _LayerRecorder()
+        module._world_monitor = SimpleNamespace(visualization=recorder)
+        module.config.grasp_visualization = _grasp_visualization_config()
+        mocker.patch.object(
+            module,
+            "_check_connected_pose_sequence",
+            side_effect=[(0, None), (None, JointState())],
+        )
+
+        selected = module._select_feasible_grasp(
+            [_candidate(0.4, 0.9), _candidate(0.5, 0.8)],
+            "arm",
+            0.1,
+            SimpleNamespace(rejections=Counter()),
+        )
+
+        proposal_layers = [layer for layer in recorder.layers if layer.id == "grasp/proposals"]
+        assert selected.rank == 2
+        assert [element.id for element in proposal_layers[-1].elements] == ["rank-2"]
+        selected_element = proposal_layers[-1].elements[0]
+        assert isinstance(selected_element, LineSetElement)
+        np.testing.assert_array_equal(selected_element.colors, [0, 220, 80])
+        rejected_current = proposal_layers[-2].elements
+        np.testing.assert_array_equal(rejected_current[0].colors, [230, 50, 50])
+        np.testing.assert_array_equal(rejected_current[1].colors, [255, 220, 0])
+
+    def test_selection_visualization_retains_all_rejected_candidates(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        recorder = _LayerRecorder()
+        module._world_monitor = SimpleNamespace(visualization=recorder)
+        module.config.grasp_visualization = _grasp_visualization_config()
+        mocker.patch.object(
+            module,
+            "_check_connected_pose_sequence",
+            side_effect=[(0, None), (1, None)],
+        )
+
+        with pytest.raises(RuntimeError, match="No feasible grasp"):
+            module._select_feasible_grasp(
+                [_candidate(0.4, 0.9), _candidate(0.5, 0.8)],
+                "arm",
+                0.1,
+                SimpleNamespace(rejections=Counter()),
+            )
+
+        final = recorder.layers[-1]
+        assert [element.id for element in final.elements] == ["rank-1", "rank-2"]
+        for element in final.elements:
+            assert isinstance(element, LineSetElement)
+            np.testing.assert_array_equal(element.colors, [230, 50, 50])
+
+    def test_visualization_failure_does_not_change_selection(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        module._world_monitor = SimpleNamespace(
+            visualization=_LayerRecorder(RuntimeError("renderer unavailable"))
+        )
+        module.config.grasp_visualization = _grasp_visualization_config()
+        mocker.patch.object(
+            module,
+            "_check_connected_pose_sequence",
+            return_value=(None, JointState()),
+        )
+
+        selected = module._select_feasible_grasp(
+            [_candidate(0.4, 0.9)],
+            "arm",
+            0.1,
+            SimpleNamespace(rejections=Counter()),
+        )
+
+        assert selected.rank == 1
 
 
 class TestPickTransaction:
@@ -727,6 +798,7 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     gripper = mocker.patch.object(module, "_set_gripper_position", return_value=True)
     suppression = SimpleNamespace(cleanup_error=None)
     world = mocker.Mock()
+    world.visualization = None
     world.suppress_object_obstacle.return_value = nullcontext(suppression)
     module._world_monitor = world
     mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now)
@@ -734,12 +806,13 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     result = module.pick("cup", object_id="abc12345")
 
     assert result.is_success()
-    assert result.metadata["proposal_source"] == "grasp_provider"
     assert result.metadata["candidate_rank"] == 2
     assert result.metadata["candidate_score"] == 0.8
     assert result.metadata["rejections"] == {"pre_grasp_infeasible": 1}
     scene.get_object_pointcloud_by_object_id.assert_called_once_with("abc12345")
-    generator.propose_grasps.assert_called_once_with(scene.get_object_pointcloud_by_object_id())
+    proposal_input = generator.propose_grasps.call_args.args[0]
+    assert isinstance(proposal_input, GraspProposalInput)
+    assert proposal_input.object_pointcloud is scene.get_object_pointcloud_by_object_id()
     world.suppress_object_obstacle.assert_called_once_with("abc12345")
     assert world.method_calls == [mocker.call.suppress_object_obstacle("abc12345")]
     assert plan_sequence.call_count == 2

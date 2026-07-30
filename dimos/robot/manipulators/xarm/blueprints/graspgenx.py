@@ -21,14 +21,14 @@ import math
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
-from dimos.robot.manipulators.xarm.blueprints.perception import xarm_perception
+from dimos.robot.manipulators.xarm.blueprints.perception import _xarm_perception_core
 from dimos.robot.manipulators.xarm.config import make_xarm7_model_config
 from dimos.robot.manipulators.xarm.grasp_config import make_xarm_graspgenx_config
 
 _graspgenx_config = make_xarm_graspgenx_config()
 
 xarm_graspgenx = autoconnect(
-    xarm_perception,
+    _xarm_perception_core,
     PickAndPlaceModule.blueprint(
         robots=[
             make_xarm7_model_config(
@@ -39,11 +39,14 @@ xarm_graspgenx = autoconnect(
             )
         ],
         planning_timeout=10.0,
-        visualization={"backend": "meshcat"},
+        visualization={"backend": "viser"},
         floor_z=-0.02,
-        heuristic_grasp_fallback=False,
         planning_frame="world",
         grasp_approach_vector=(0.0, 0.0, -1.0),
+        grasp_visualization={
+            "gripper": _graspgenx_config.gripper,
+            "grasp_frame_to_tcp": _graspgenx_config.grasp_frame_to_tcp,
+        },
         grasp_verification={
             # Enable only after completing the hardware calibration recorded
             # in the grasp-pipeline OpenSpec change.

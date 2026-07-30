@@ -106,6 +106,17 @@ their parent **All** control. Proposals are ordered from highest to lowest score
 and colored from green to orange. Press Ctrl-C to stop the demo and release the
 Viser and GraspGenX resources.
 
+In the live `xarm-graspgenx` pick pipeline, these layers appear automatically
+while a pick skill runs. The proposal layer changes with connected-plan
+evaluation: pending candidates are gray, the current candidate is yellow,
+rejected candidates are red, and the final selected candidate is retained alone
+in green. The standalone demo keeps its separate score-ranked green-to-orange
+coloring.
+
+The object-cloud and proposal layers are display data only. Publishing them does
+not insert obstacles into the planning world, and a visualization failure does
+not change the pick result.
+
 ## Performance Tuning
 
 ### Symptom: Slow Map Updates

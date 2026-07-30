@@ -21,12 +21,8 @@ from dataclasses import dataclass
 from threading import Event
 from typing import Protocol
 
-import numpy as np
-from numpy.typing import NDArray
-
 from dimos.manipulation.demo_graspgenx.demo import _validate
 from dimos.manipulation.demo_graspgenx.fixture import load_demo_clouds
-from dimos.manipulation.demo_graspgenx.render import gripper_wireframe_geometry
 from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
 from dimos.manipulation.grasping.grasp_gen_x import (
     GraspGenXConfig,
@@ -34,20 +30,20 @@ from dimos.manipulation.grasping.grasp_gen_x import (
     RigidTransform,
     SweepVolumeGripperConfig,
 )
-from dimos.manipulation.visualization.layers import (
-    LineSetElement,
-    PointCloudElement,
-    VisualizationLayer,
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
+from dimos.manipulation.visualization.grasp import (
+    GraspCandidateVisualState,
+    VisualizedGraspCandidate,
+    build_grasp_object_cloud_layer,
+    build_grasp_proposals_layer,
 )
+from dimos.manipulation.visualization.layers import VisualizationLayer
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.manipulation.visualization.viser.visualizer import ViserManipulationVisualizer
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.robot.manipulators.xarm.grasp_config import make_xarm_graspgenx_config
 
 DEFAULT_MAX_CANDIDATES = 20
-OBJECT_CLOUD_LAYER_ID = "grasp/object-cloud"
-PROPOSAL_LAYER_ID = "grasp/proposals"
-
 CloudLoader = Callable[[], tuple[PointCloud2, PointCloud2]]
 Waiter = Callable[[], None]
 
@@ -70,16 +66,6 @@ class GraspVisualizationDemoResult:
     visualization_url: str | None
 
 
-def _rank_color(rank_index: int, count: int) -> NDArray[np.uint8]:
-    fraction = 0.0 if count <= 1 else rank_index / (count - 1)
-    start = np.asarray([0, 220, 80], dtype=float)
-    end = np.asarray([255, 140, 0], dtype=float)
-    return np.asarray(
-        np.rint(start + fraction * (end - start)),
-        dtype=np.uint8,
-    )
-
-
 def run_demo(
     proposer: GraspGenSpec,
     visualizer: LayerVisualizer,
@@ -93,37 +79,24 @@ def run_demo(
     if max_candidates <= 0:
         raise ValueError("max_candidates must be positive")
     _, object_cloud = cloud_loader()
-    proposals = proposer.propose_grasps(object_cloud)
+    proposals = proposer.propose_grasps(GraspProposalInput.from_pointcloud(object_cloud))
     _validate(proposals, object_cloud)
     ranked = sorted(proposals.candidates, key=lambda candidate: candidate.score, reverse=True)
     displayed = ranked[:max_candidates]
 
-    points, colors = object_cloud.as_numpy()
-    cloud_layer = VisualizationLayer(
-        OBJECT_CLOUD_LAYER_ID,
-        object_cloud.frame_id,
-        (PointCloudElement("object", points, colors),),
-    )
-    wireframes = []
-    for index, candidate in enumerate(displayed):
-        vertices, edges = gripper_wireframe_geometry(
-            candidate,
-            gripper,
-            grasp_frame_to_tcp,
-        )
-        wireframes.append(
-            LineSetElement(
-                f"rank-{index + 1}",
-                vertices,
-                edges,
-                colors=_rank_color(index, len(displayed)),
-                line_width=2.5,
+    cloud_layer = build_grasp_object_cloud_layer(object_cloud)
+    proposal_layer = build_grasp_proposals_layer(
+        [
+            VisualizedGraspCandidate(
+                candidate,
+                index,
+                GraspCandidateVisualState.RANKED,
             )
-        )
-    proposal_layer = VisualizationLayer(
-        PROPOSAL_LAYER_ID,
-        proposals.header.frame_id,
-        tuple(wireframes),
+            for index, candidate in enumerate(displayed, start=1)
+        ],
+        frame_id=proposals.header.frame_id,
+        gripper=gripper,
+        grasp_frame_to_tcp=grasp_frame_to_tcp,
     )
     visualizer.set_layer(cloud_layer)
     visualizer.set_layer(proposal_layer)

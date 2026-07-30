@@ -32,6 +32,7 @@ from dimos.manipulation.grasping.grasp_gen_x import (
     GraspGenXError,
     GraspGenXModule,
 )
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
@@ -60,6 +61,10 @@ def module_args(value: GraspGenXConfig | None = None) -> dict[str, Any]:
 def cloud(points: np.ndarray | None = None) -> PointCloud2:
     xyz = np.zeros((1, 3), dtype=np.float32) if points is None else points
     return PointCloud2.from_numpy(xyz, frame_id="camera", timestamp=12.5)
+
+
+def proposal_input(value: PointCloud2 | None = None) -> GraspProposalInput:
+    return GraspProposalInput.from_pointcloud(value if value is not None else cloud())
 
 
 def test_public_adapter_import_does_not_load_optional_runtime() -> None:
@@ -110,8 +115,8 @@ def test_messages_round_trip_empty_and_score() -> None:
 def test_spec_signature() -> None:
     signature = inspect.signature(GraspGenSpec.propose_grasps)
 
-    assert list(signature.parameters) == ["self", "object_pointcloud"]
-    assert signature.parameters["object_pointcloud"].annotation.__name__ == "PointCloud2"
+    assert list(signature.parameters) == ["self", "proposal_input"]
+    assert signature.parameters["proposal_input"].annotation is GraspProposalInput
     assert signature.return_annotation is GraspCandidateArray
 
 
@@ -159,7 +164,7 @@ def test_start_is_synchronous_and_idempotent(runtime: Any) -> None:
         module.start()
 
         runtime.assert_called_once_with(module.config)
-        assert len(module.propose_grasps(cloud())) == 1
+        assert len(module.propose_grasps(proposal_input())) == 1
     finally:
         module.stop()
 
@@ -193,7 +198,7 @@ def test_adapter_sorts_stably_truncates_and_applies_tcp_transform(runtime: Any) 
     module = GraspGenXModule(**module_args(cfg))
     try:
         module.start()
-        result = module.propose_grasps(cloud())
+        result = module.propose_grasps(proposal_input())
 
         assert [candidate.score for candidate in result] == pytest.approx([0.9, 0.5])
         assert [candidate.pose.position.x for candidate in result] == pytest.approx([13.0, 11.0])
@@ -211,7 +216,7 @@ def test_empty_backend_result_preserves_input_header(runtime: Any) -> None:
     module = GraspGenXModule(**module_args())
     try:
         module.start()
-        result = module.propose_grasps(cloud())
+        result = module.propose_grasps(proposal_input())
 
         assert result.header.frame_id == "camera"
         assert result.header.timestamp == pytest.approx(12.5)
@@ -233,7 +238,7 @@ def test_invalid_cloud_points_are_rejected(runtime: Any, points: np.ndarray) -> 
     try:
         module.start()
         with pytest.raises(ValueError, match="pointcloud|XYZ"):
-            module.propose_grasps(cloud(points))
+            module.propose_grasps(proposal_input(cloud(points)))
         runtime.return_value.infer.assert_not_called()
     finally:
         module.stop()
@@ -255,7 +260,7 @@ def test_invalid_backend_outputs_are_rejected(
     try:
         module.start()
         with pytest.raises(ValueError):
-            module.propose_grasps(cloud())
+            module.propose_grasps(proposal_input())
     finally:
         module.stop()
 
@@ -266,7 +271,7 @@ def test_inference_failure_is_wrapped(runtime: Any) -> None:
     try:
         module.start()
         with pytest.raises(GraspGenXError, match="inference"):
-            module.propose_grasps(cloud())
+            module.propose_grasps(proposal_input())
     finally:
         module.stop()
 
@@ -279,11 +284,11 @@ def test_not_started_and_missing_metadata_are_rejected(runtime: Any) -> None:
     missing_timestamp.ts = None
     try:
         with pytest.raises(GraspGenXError, match="not been started"):
-            module.propose_grasps(cloud())
+            module.propose_grasps(proposal_input())
         module.start()
         with pytest.raises(ValueError, match="frame_id"):
-            module.propose_grasps(missing_frame)
+            module.propose_grasps(proposal_input(missing_frame))
         with pytest.raises(ValueError, match="timestamp"):
-            module.propose_grasps(missing_timestamp)
+            module.propose_grasps(proposal_input(missing_timestamp))
     finally:
         module.stop()

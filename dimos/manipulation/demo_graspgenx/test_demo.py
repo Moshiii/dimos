@@ -22,10 +22,10 @@ import pytest
 from pytest_mock import MockerFixture
 
 import dimos.manipulation.demo_graspgenx.demo as demo
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.Header import Header
 
 from . import __main__
@@ -37,8 +37,9 @@ class FakeGraspProposer:
     def __init__(self) -> None:
         self.calls = 0
 
-    def propose_grasps(self, object_pointcloud: PointCloud2) -> GraspCandidateArray:
+    def propose_grasps(self, proposal_input: GraspProposalInput) -> GraspCandidateArray:
         self.calls += 1
+        object_pointcloud = proposal_input.object_pointcloud
         center = object_pointcloud.pointcloud.get_center()
         candidates = [
             GraspCandidate(
@@ -148,7 +149,7 @@ def test_python_module_entrypoint_is_direct_and_user_visible(
 
 def test_empty_result_fails_explicitly(tmp_path: Path) -> None:
     class Empty:
-        def propose_grasps(self, cloud: object) -> GraspCandidateArray:
+        def propose_grasps(self, proposal_input: GraspProposalInput) -> GraspCandidateArray:
             _, object_cloud = load_demo_clouds()
             return GraspCandidateArray(Header(object_cloud.ts, "world"), [])
 

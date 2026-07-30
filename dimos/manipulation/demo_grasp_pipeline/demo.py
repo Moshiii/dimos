@@ -33,6 +33,7 @@ from dimos.manipulation.grasping.grasp_gen_x import (
     GraspGenXModule,
     RigidTransform,
 )
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.manipulation.manipulation_module import ConnectedPoseSequenceResult
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -255,7 +256,7 @@ def run_demo(
         raise ValueError("max_candidates must be positive")
 
     scene, object_cloud = _relocate_clouds(*cloud_loader(), workspace_center)
-    proposals = proposer.propose_grasps(object_cloud)
+    proposals = proposer.propose_grasps(GraspProposalInput.from_pointcloud(object_cloud))
     if (
         proposals.header.frame_id != object_cloud.frame_id
         or proposals.header.timestamp != object_cloud.ts

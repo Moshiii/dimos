@@ -29,6 +29,7 @@ from dimos.manipulation.demo_grasp_visualization.demo import (
     run_demo,
 )
 from dimos.manipulation.demo_graspgenx.demo import deployment_config
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.manipulation.visualization.layers import (
     LineSetElement,
     PointCloudElement,
@@ -46,8 +47,9 @@ class Proposer:
         self.candidates = candidates
         self.calls = 0
 
-    def propose_grasps(self, cloud: PointCloud2) -> GraspCandidateArray:
+    def propose_grasps(self, proposal_input: GraspProposalInput) -> GraspCandidateArray:
         self.calls += 1
+        cloud = proposal_input.object_pointcloud
         return GraspCandidateArray(Header(float(cloud.ts), cloud.frame_id), self.candidates)
 
 

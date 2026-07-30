@@ -24,12 +24,12 @@ from pydantic import Field, FiniteFloat, field_validator
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.Header import Header
 from dimos.protocol.service.spec import BaseConfig
 
@@ -127,9 +127,10 @@ class GraspGenXModule(Module, GraspGenSpec):
         super().stop()
 
     @rpc
-    def propose_grasps(self, object_pointcloud: PointCloud2) -> GraspCandidateArray:
+    def propose_grasps(self, proposal_input: GraspProposalInput) -> GraspCandidateArray:
         if self._runtime is None:
             raise GraspGenXError("GraspGenX module has not been started")
+        object_pointcloud = proposal_input.object_pointcloud
         if object_pointcloud.ts is None:
             raise ValueError("object pointcloud must have a timestamp")
         if not object_pointcloud.frame_id:

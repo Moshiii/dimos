@@ -25,10 +25,9 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
-import math
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from pydantic import Field, FiniteFloat, model_validator
@@ -38,11 +37,23 @@ from dimos.agents.skill_result import SkillResult
 from dimos.core.core import rpc
 from dimos.core.stream import In
 from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
+from dimos.manipulation.grasping.grasp_gen_x import (
+    RigidTransform,
+    SweepVolumeGripperConfig,
+)
+from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
+from dimos.manipulation.grasping.heuristic_grasp import grasp_orientation
 from dimos.manipulation.manipulation_module import (
     ManipulationModule,
     ManipulationModuleConfig,
 )
 from dimos.manipulation.skill_errors import ManipulationSkillError
+from dimos.manipulation.visualization.grasp import (
+    GraspCandidateVisualState,
+    VisualizedGraspCandidate,
+    build_grasp_object_cloud_layer,
+    build_grasp_proposals_layer,
+)
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -65,14 +76,6 @@ logger = setup_logger()
 # Beyond this XY distance from the base, the arm cannot reach both high and far,
 # so pre-grasp/pre-place offsets are reduced.
 _FAR_REACH_XY_THRESHOLD = 0.7
-
-# Beyond this XY distance, the occlusion inset is increased so the grasp
-# targets closer to the true center rather than the front surface.
-_FAR_OCCLUSION_XY_THRESHOLD = 0.8
-
-# Objects taller than this are grasped in the upper third to avoid
-# plunging deep and colliding with the object body.
-_TALL_OBJECT_MIN_HEIGHT = 0.06
 
 
 class GraspVerificationConfig(BaseConfig):
@@ -98,10 +101,16 @@ class GraspVerificationConfig(BaseConfig):
         return self
 
 
+class GraspVisualizationConfig(BaseConfig):
+    """Robot-specific geometry for grasp proposal wireframes."""
+
+    gripper: SweepVolumeGripperConfig
+    grasp_frame_to_tcp: RigidTransform
+
+
 class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     """Configuration for PickAndPlaceModule."""
 
-    heuristic_grasp_fallback: bool = False
     planning_frame: str = "world"
     max_object_pointcloud_age: FiniteFloat = Field(default=10.0, gt=0.0)
     max_grasp_candidates_to_check: int = Field(default=5, gt=0)
@@ -109,6 +118,7 @@ class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     grasp_retreat_offset: FiniteFloat | None = Field(default=None, gt=0.0)
     grasp_approach_vector: tuple[FiniteFloat, FiniteFloat, FiniteFloat] = (0.0, 0.0, -1.0)
     grasp_verification: GraspVerificationConfig = Field(default_factory=GraspVerificationConfig)
+    grasp_visualization: GraspVisualizationConfig | None = None
 
     @model_validator(mode="after")
     def _validate_grasp_pipeline(self) -> PickAndPlaceModuleConfig:
@@ -159,7 +169,6 @@ class _GraspVerification:
 class _PickTransaction:
     object_id: str = ""
     object_name: str = ""
-    proposal_source: Literal["grasp_provider", "heuristic"] = "grasp_provider"
     phase: _PickPhase = _PickPhase.RESOLVE
     selected: _FeasibleGrasp | None = None
     rejections: Counter[str] = field(default_factory=Counter)
@@ -183,7 +192,7 @@ class PickAndPlaceModule(ManipulationModule):
 
     config: PickAndPlaceModuleConfig
     _object_scene: ObjectSceneRegistrationSpec | None = None
-    _grasp_generator: GraspGenSpec | None = None
+    _grasp_generator: GraspGenSpec
 
     # Input: Objects from perception (for obstacle integration)
     objects: In[list[DetObject]]
@@ -359,97 +368,9 @@ class PickAndPlaceModule(ManipulationModule):
         return None
 
     @staticmethod
-    def _occlusion_offset(
-        center: Vector3, size: Vector3, inset: float = 0.02
-    ) -> tuple[float, float]:
-        """Offset a detected object center toward the robot to compensate for single-viewpoint occlusion.
-
-        Returns adjusted (x, y) shifted toward the nearest visible surface + inset.
-        """
-        xy_dist = (center.x**2 + center.y**2) ** 0.5
-        if xy_dist > 1e-3:
-            dx, dy = -center.x / xy_dist, -center.y / xy_dist
-            half_depth = max(size.x, size.y) / 2.0
-            offset = half_depth - inset
-            return center.x + dx * offset, center.y + dy * offset
-        return center.x, center.y
-
-    @staticmethod
     def _grasp_orientation(gx: float, gy: float, xy_dist: float) -> Quaternion:
-        """Compute grasp orientation that tilts toward the object for far reaches.
-
-        Close objects (< 0.6m): top-down (pitch = 180°)
-        Far objects (> 1.0m): tilted 45° toward object
-        In between: linear interpolation
-        """
-        near = 0.6
-        far = 1.0
-        max_tilt = math.pi / 4  # 45° from vertical
-
-        if xy_dist <= near:
-            tilt = 0.0
-        elif xy_dist >= far:
-            tilt = max_tilt
-        else:
-            tilt = max_tilt * (xy_dist - near) / (far - near)
-
-        # Yaw to face the object direction
-        yaw = math.atan2(gy, gx)
-        pitch = math.pi - tilt
-        return Quaternion.from_euler(Vector3(0.0, pitch, yaw))
-
-    def _generate_grasps_for_pick(
-        self, object_name: str, object_id: str | None = None
-    ) -> list[Pose] | None:
-        """Generate a grasp pose for an object.
-
-        Near objects (< 0.6m XY): apply occlusion offset to compensate for
-        single-viewpoint depth underestimation.
-        Far objects (>= 0.6m XY): use raw detected center — depth error
-        already pushes the center too deep, offset would overshoot.
-
-        Uses distance-adaptive pitch tilt for all distances.
-
-        Args:
-            object_name: Name of the object
-            object_id: Optional object ID
-
-        Returns:
-            List with one grasp pose, or None if object not found
-        """
-        det = self._find_object_in_detections(object_name, object_id)
-        if det is None:
-            logger.warning(f"Object '{object_name}' not found in detections")
-            return None
-
-        cx, cy, cz = det.center.x, det.center.y, det.center.z
-        xy_dist = (cx**2 + cy**2) ** 0.5
-
-        # Distance-adaptive occlusion offset:
-        # Near (< 0.8m): small inset — grasp shifted well toward robot (front surface)
-        # Far (>= 0.8m): larger inset — less toward-robot shift (grasp closer to true center)
-        inset = 0.01 if xy_dist < _FAR_OCCLUSION_XY_THRESHOLD else 0.05
-        gx, gy = self._occlusion_offset(det.center, det.size, inset=inset)
-
-        # For tall objects, grasp in the upper third instead of center
-        # to avoid plunging deep and colliding with the object.
-        obj_height = det.size.z
-        if obj_height > _TALL_OBJECT_MIN_HEIGHT:
-            gz = cz + obj_height * 0.2  # shift up ~20% from center (upper third)
-        else:
-            gz = cz
-
-        grasp_dist = (gx**2 + gy**2) ** 0.5
-        orientation = self._grasp_orientation(gx, gy, grasp_dist)
-        pose = Pose(Vector3(gx, gy, gz), orientation)
-
-        logger.info(
-            f"Heuristic grasp for '{object_name}': center=({cx:.3f}, {cy:.3f}, {cz:.3f}), "
-            f"grasp=({gx:.3f}, {gy:.3f}, {gz:.3f}), xy_dist={xy_dist:.2f}m, "
-            f"inset={inset:.2f}m, "
-            f"size=({det.size.x:.3f}, {det.size.y:.3f}, {det.size.z:.3f})"
-        )
-        return [pose]
+        """Compute the shared distance-adaptive grasp/place orientation."""
+        return grasp_orientation(gx, gy, xy_dist)
 
     def _resolve_object_position(self, object_name: str) -> tuple[float, float, float] | None:
         """Resolve an object name to its detected center position.
@@ -598,28 +519,11 @@ then refreshes perception obstacles.
             f"No unique current detection matches {selector}; scan again and use an object ID",
         )
 
-    def _provider_candidates(
-        self, detection: DetObject, transaction: _PickTransaction
-    ) -> list[GraspCandidate]:
-        if self._grasp_generator is None:
-            if not self.config.heuristic_grasp_fallback:
-                raise _PickPipelineError(
-                    "GRASP_PROVIDER_UNAVAILABLE",
-                    "No grasp proposal provider is connected and heuristic fallback is disabled",
-                )
-            transaction.proposal_source = "heuristic"
-            poses = self._generate_grasps_for_pick(detection.name, detection.object_id)
-            if not poses:
-                raise _PickPipelineError(
-                    "GRASP_GENERATION_FAILED",
-                    f"Heuristic grasp generation failed for '{detection.name}'",
-                )
-            return [GraspCandidate(pose=pose, score=0.0) for pose in poses]
-
+    def _provider_candidates(self, detection: DetObject) -> list[GraspCandidate]:
         if self._object_scene is None:
             raise _PickPipelineError(
                 "GRASP_PROVIDER_UNAVAILABLE",
-                "No object-scene provider is connected for learned grasp input",
+                "No object-scene provider is connected for grasp input",
             )
 
         pointcloud = self._object_scene.get_object_pointcloud_by_object_id(detection.object_id)
@@ -649,8 +553,14 @@ then refreshes perception obstacles.
                 f"planning frame '{self.config.planning_frame}'",
             )
 
+        self._publish_grasp_object_cloud(pointcloud)
+        proposal_input = GraspProposalInput(
+            object_pointcloud=pointcloud,
+            object_center=detection.center,
+            object_size=detection.size,
+        )
         try:
-            proposals = self._grasp_generator.propose_grasps(pointcloud)
+            proposals = self._grasp_generator.propose_grasps(proposal_input)
         except Exception as exc:
             raise _PickPipelineError(
                 "GRASP_GENERATION_FAILED", f"Grasp proposal failed: {exc}"
@@ -667,6 +577,32 @@ then refreshes perception obstacles.
                 f"No grasp proposals were generated for '{detection.name}'",
             )
         return sorted(proposals.candidates, key=lambda candidate: candidate.score, reverse=True)
+
+    def _publish_grasp_object_cloud(self, pointcloud: PointCloud2) -> None:
+        visualization = self._world_monitor.visualization if self._world_monitor else None
+        if visualization is None:
+            return
+        try:
+            visualization.set_layer(build_grasp_object_cloud_layer(pointcloud))
+        except Exception:
+            logger.warning("Grasp object-cloud visualization failed", exc_info=True)
+
+    def _publish_grasp_candidates(self, candidates: list[VisualizedGraspCandidate]) -> None:
+        visualization = self._world_monitor.visualization if self._world_monitor else None
+        geometry = self.config.grasp_visualization
+        if visualization is None or geometry is None:
+            return
+        try:
+            visualization.set_layer(
+                build_grasp_proposals_layer(
+                    candidates,
+                    frame_id=self.config.planning_frame,
+                    gripper=geometry.gripper,
+                    grasp_frame_to_tcp=geometry.grasp_frame_to_tcp,
+                )
+            )
+        except Exception:
+            logger.warning("Grasp proposal visualization failed", exc_info=True)
 
     @staticmethod
     def _valid_candidate(candidate: GraspCandidate) -> bool:
@@ -701,10 +637,38 @@ then refreshes perception obstacles.
         pre_offset = self.config.grasp_pre_grasp_offset or robot_pre_grasp_offset
         retreat_offset = self.config.grasp_retreat_offset or pre_offset
         limit = min(len(candidates), self.config.max_grasp_candidates_to_check)
+        displayed = candidates[:limit]
+        states = [GraspCandidateVisualState.PENDING] * limit
+        self._publish_grasp_candidates(
+            [
+                VisualizedGraspCandidate(candidate, rank, state)
+                for rank, (candidate, state) in enumerate(
+                    zip(displayed, states, strict=True), start=1
+                )
+            ]
+        )
 
-        for rank, candidate in enumerate(candidates[:limit], start=1):
+        for rank, candidate in enumerate(displayed, start=1):
+            states[rank - 1] = GraspCandidateVisualState.CURRENT
+            self._publish_grasp_candidates(
+                [
+                    VisualizedGraspCandidate(item, item_rank, state)
+                    for item_rank, (item, state) in enumerate(
+                        zip(displayed, states, strict=True), start=1
+                    )
+                ]
+            )
             if not self._valid_candidate(candidate):
                 transaction.rejections[_CandidateRejection.INVALID.value] += 1
+                states[rank - 1] = GraspCandidateVisualState.REJECTED
+                self._publish_grasp_candidates(
+                    [
+                        VisualizedGraspCandidate(item, item_rank, state)
+                        for item_rank, (item, state) in enumerate(
+                            zip(displayed, states, strict=True), start=1
+                        )
+                    ]
+                )
                 continue
             pre_grasp = self._compute_pre_grasp_pose(candidate.pose, pre_offset, vector)
             retreat = self._compute_pre_grasp_pose(candidate.pose, retreat_offset, vector)
@@ -720,7 +684,25 @@ then refreshes perception obstacles.
             )
             if failed_index is not None:
                 transaction.rejections[rejections[failed_index].value] += 1
+                states[rank - 1] = GraspCandidateVisualState.REJECTED
+                self._publish_grasp_candidates(
+                    [
+                        VisualizedGraspCandidate(item, item_rank, state)
+                        for item_rank, (item, state) in enumerate(
+                            zip(displayed, states, strict=True), start=1
+                        )
+                    ]
+                )
                 continue
+            self._publish_grasp_candidates(
+                [
+                    VisualizedGraspCandidate(
+                        candidate,
+                        rank,
+                        GraspCandidateVisualState.SELECTED,
+                    )
+                ]
+            )
             return _FeasibleGrasp(candidate, rank, pre_grasp, retreat)
 
         summary = ", ".join(
@@ -787,7 +769,6 @@ then refreshes perception obstacles.
         result.metadata = {
             "phase": transaction.phase.value,
             "object_id": transaction.object_id,
-            "proposal_source": transaction.proposal_source,
             "object_may_be_held": may_hold,
             "rejections": dict(transaction.rejections),
         }
@@ -857,7 +838,6 @@ then refreshes perception obstacles.
             f"Pick complete — grasped '{transaction.object_name}' using candidate "
             f"{selected.rank} (score={selected.candidate.score:.4f}); {verified.detail}",
             object_id=transaction.object_id,
-            proposal_source=transaction.proposal_source,
             candidate_rank=selected.rank,
             candidate_score=selected.candidate.score,
             verification=verified.detail,
@@ -897,7 +877,7 @@ then refreshes perception obstacles.
             transaction.object_id = detection.object_id
             transaction.object_name = detection.name
             transaction.phase = _PickPhase.PROPOSE
-            candidates = self._provider_candidates(detection, transaction)
+            candidates = self._provider_candidates(detection)
 
             if self._world_monitor is None:
                 raise _PickPipelineError(
