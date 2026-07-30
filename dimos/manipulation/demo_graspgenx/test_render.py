@@ -18,7 +18,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from .render import _fork_strips, _fork_strips_local, _score_colors
+from .render import (
+    _fork_strips,
+    _fork_strips_local,
+    _score_colors,
+    gripper_wireframe_geometry,
+)
 
 
 def _candidate(
@@ -76,3 +81,17 @@ def test_score_colors_are_relative_and_monotonic() -> None:
     colors = _score_colors(np.asarray([0.1, 0.5, 0.9]))
     assert len({tuple(color) for color in colors}) == 3
     assert np.all(np.diff(colors.mean(axis=1)) > 0)
+
+
+def test_wireframe_converts_tcp_pose_back_to_grasp_frame() -> None:
+    grasp_frame_to_tcp = np.eye(4)
+    grasp_frame_to_tcp[0, 3] = 0.2
+
+    vertices, edges = gripper_wireframe_geometry(
+        _candidate((1.0, 2.0, 3.0)),
+        _gripper(),
+        grasp_frame_to_tcp,
+    )
+
+    np.testing.assert_allclose(vertices[1], [0.8, 2.0, 3.0], atol=1e-6)
+    np.testing.assert_array_equal(edges, [[0, 1], [2, 3], [4, 5], [6, 7]])

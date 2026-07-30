@@ -90,10 +90,38 @@ def _fork_strips_local(gripper: SweepVolumeLike) -> tuple[np.ndarray, ...]:
 
 
 def _fork_strips(candidate: Any, gripper: SweepVolumeLike) -> tuple[np.ndarray, ...]:
+    return gripper_wireframe_strips(candidate, gripper, np.eye(4, dtype=float))
+
+
+def gripper_wireframe_strips(
+    candidate: Any,
+    gripper: SweepVolumeLike,
+    grasp_frame_to_tcp: Sequence[Sequence[float]] | np.ndarray,
+) -> tuple[np.ndarray, ...]:
+    """Convert one TCP proposal into world-frame sweep-volume wireframe strips."""
     p, q = candidate.pose.position, candidate.pose.orientation
-    translation = np.asarray([p.x, p.y, p.z], dtype=float)
-    rotation = _rotation(q)
+    world_to_tcp = np.eye(4, dtype=float)
+    world_to_tcp[:3, :3] = _rotation(q)
+    world_to_tcp[:3, 3] = np.asarray([p.x, p.y, p.z], dtype=float)
+    grasp_to_tcp = np.asarray(grasp_frame_to_tcp, dtype=float)
+    if grasp_to_tcp.shape != (4, 4):
+        raise ValueError("grasp_frame_to_tcp must have shape (4, 4)")
+    world_to_grasp = world_to_tcp @ np.linalg.inv(grasp_to_tcp)
+    rotation = world_to_grasp[:3, :3]
+    translation = world_to_grasp[:3, 3]
     return tuple((rotation @ strip.T).T + translation for strip in _fork_strips_local(gripper))
+
+
+def gripper_wireframe_geometry(
+    candidate: Any,
+    gripper: SweepVolumeLike,
+    grasp_frame_to_tcp: Sequence[Sequence[float]] | np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return indexed world-frame vertices and edges for one grasp proposal."""
+    strips = gripper_wireframe_strips(candidate, gripper, grasp_frame_to_tcp)
+    vertices = np.vstack(strips).astype(np.float32)
+    edges = np.arange(len(vertices), dtype=np.int32).reshape((-1, 2))
+    return vertices, edges
 
 
 def _set_equal_axes(axis: Any, points: np.ndarray) -> None:

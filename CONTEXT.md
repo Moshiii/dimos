@@ -35,3 +35,19 @@ _Avoid_: Backend-specific public failure codes
 **Pipeline Demo**:
 A no-hardware contributor command that runs a recorded Segmented Object Cloud through real grasp proposal and connected motion validation, then saves candidate outcomes and all planned segments. It stops before trajectory execution.
 _Avoid_: Grasp-only demo, hardware pick demo
+
+**Visualization Layer**:
+A display-only, named collection of visual elements owned by exactly one producer. Publishing replaces its contents, while clearing leaves the layer registered and preserves viewer-owned visibility; the layer cannot affect collision checking or other planning behavior.
+_Avoid_: Collision layer, shared scene state, visualization object
+
+**Visual Element**:
+A backend-neutral drawable contained in a Visualization Layer, initially a point cloud or line set. It carries no collision or planning authority.
+_Avoid_: Grasp visualization command, Viser handle, collision object
+
+**Visualization Layer Group**:
+A viewer-only grouping of independently replaceable and toggleable Visualization Layers that share a name prefix, such as `grasp/object-cloud` and `grasp/proposals`.
+_Avoid_: Compound layer, element-level visibility
+
+**Accepted Collision Projection**:
+A display-only representation published after the planning world accepts a collision-object change. Its presence, absence, or rendering failure never changes collision checking.
+_Avoid_: Collision authority, visualization obstacle

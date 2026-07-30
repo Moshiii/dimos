@@ -89,6 +89,23 @@ if __name__ == "__main__":
 
 Every LCM stream, such as `color_image` (output by CameraModule), that uses a data type (like `Image`) that has a `.to_rerun` method will get rendered (`rr.log`) using the LCM topic as the rerun entity path. In other words: to render something, simply log it to a stream and it will automatically be available in rerun.
 
+## Grasp Proposal Visualization
+
+The manipulation package includes an interactive Viser demo for inspecting the
+banana object point cloud and the score-ranked GraspGenX proposals together:
+
+```bash
+uv sync --extra manipulation --extra graspgenx
+uv run python -m dimos.manipulation.demo_grasp_visualization \
+    --max-candidates 20
+```
+
+Open the URL printed by the command. The **Grasp / Object Cloud** and
+**Grasp / Proposals** controls can be toggled independently or together from
+their parent **All** control. Proposals are ordered from highest to lowest score
+and colored from green to orange. Press Ctrl-C to stop the demo and release the
+Viser and GraspGenX resources.
+
 ## Performance Tuning
 
 ### Symptom: Slow Map Updates
