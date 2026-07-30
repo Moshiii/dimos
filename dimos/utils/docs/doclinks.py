@@ -110,17 +110,21 @@ def build_doc_index(root: Path, tracked_files: list[Path] | None = None) -> dict
     """
     Build an index mapping lowercase doc names to Markdown and RST paths.
 
-    For docs/usage/modules.rst, creates entry:
-    - "modules" -> [Path("docs/usage/modules.rst")]
+    For docs/usage/modules.md, creates entry:
+    - "modules" -> [Path("docs/usage/modules.md")]
 
     Also indexes directory index files:
-    - "modules" -> [Path("docs/modules/index.rst")] (if modules/index.rst exists)
+    - "modules" -> [Path("docs/modules/index.md")] (if modules/index.md exists)
     """
     index: dict[str, list[Path]] = defaultdict(list)
     if tracked_files is None:
         tracked_files = get_git_tracked_files(root)
 
     for rel_path in tracked_files:
+        # ``docs-old`` is a temporary Mintlify fallback, not a second canonical
+        # documentation tree. Indexing it would make every shared page ambiguous.
+        if rel_path.parts and rel_path.parts[0] == "docs-old":
+            continue
         if rel_path.suffix not in {".md", ".rst"}:
             continue
 

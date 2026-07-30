@@ -168,6 +168,30 @@ jobs:
       - name: Check docs spelling
         run: uv run make -C docs spelling
 
+  docs-mintlify:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # For checkout
+    defaults:
+      run:
+        working-directory: docs-old
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs-old/package-lock.json
+      - name: Install Mintlify dependencies
+        run: npm ci
+      - name: Validate Mintlify docs
+        run: npm run validate
+      - name: Export Mintlify docs
+        run: npm run build
+
   web:
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -706,6 +730,7 @@ jobs:
     - lint
     - rust
     - docs
+    - docs-mintlify
     - web
     - tests
     - cmu-nav-natives

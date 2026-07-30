@@ -1,0 +1,12 @@
+{
+  "name": "dimos-docs",
+  "private": true,
+  "scripts": {
+    "dev": "mint dev",
+    "build": "mint export --output \"${TMPDIR:-/tmp}/dimos-mintlify-export.zip\"",
+    "validate": "mint validate"
+  },
+  "devDependencies": {
+    "mint": "^4.2.562"
+  }
+}

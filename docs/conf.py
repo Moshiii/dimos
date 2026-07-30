@@ -40,6 +40,7 @@ github_repo_url = f"{github_url}/{github_repo_slug}"
 # -- General configuration ---------------------------------------------------
 
 extensions = [
+    "myst_parser",
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",  # parse the Google-style ``Args:``/``Returns:`` docstrings
     "sphinx.ext.extlinks",
@@ -57,13 +58,24 @@ except ImportError:
     # Spelling is optional locally (e.g. unavailable in Windows), checked in CI.
     pass
 
-source_suffix = ".rst"
+source_suffix = {
+    ".md": "markdown",
+    ".rst": "restructuredtext",
+}
 master_doc = "index"
 exclude_patterns = [
     "_build",
     # Empty placeholder: keep its source intact, but do not publish a blank page.
-    "capabilities/perception/index.rst",
+    "capabilities/perception/index.md",
 ]
+
+# MyST keeps Markdown authoring compatible with Sphinx roles and directives.
+# ``colon_fence`` makes nested directives (cards, grids, notes) readable without
+# backtick-fence collisions, while substitutions preserve the diagrams inherited
+# from the original documentation.
+myst_enable_extensions = ["colon_fence", "substitution"]
+myst_heading_anchors = 3
+myst_substitutions = {"release": release}
 
 # The default language to highlight source code in.
 highlight_language = "python3"

@@ -143,7 +143,7 @@ docs/
 
 ## For Coding Agents
 
-If you are a coding agent working on this dimos codebase, our coding agent focused docs are at `docs/coding-agents/index.rst`
+If you are a coding agent working on this dimos codebase, our coding agent focused docs are at `docs/coding-agents/index.md`
 
 ---
 
@@ -345,7 +345,7 @@ uv run pytest dimos/core/test_blueprints.py -v
 uv run mypy dimos/
 ```
 
-`uv run pytest` excludes `self_hosted` and `mujoco` markers, and never collects `tool_*.py` files. CI runs `self_hosted`-marked tests on the self-hosted runner only. See `docs/development/testing.rst`.
+`uv run pytest` excludes `self_hosted` and `mujoco` markers, and never collects `tool_*.py` files. CI runs `self_hosted`-marked tests on the self-hosted runner only. See `docs/development/testing.md`.
 
 ---
 
@@ -387,11 +387,11 @@ CI asserts the file is current — if it's stale, CI fails. Externally packaged 
 
 ## Further Reading
 
-- Module system: `docs/usage/modules.rst`
-- Blueprints: `docs/usage/blueprints.rst`
-- Visualization: `docs/usage/visualization.rst`
-- Configuration: `docs/usage/configuration.rst`
-- Testing: `docs/development/testing.rst`
-- CLI / dimos run: `docs/usage/cli.rst`
-- LFS data: `docs/development/large_file_management.rst`
-- Agent system: `docs/coding-agents/index.rst`
+- Module system: `docs/usage/modules.md`
+- Blueprints: `docs/usage/blueprints.md`
+- Visualization: `docs/usage/visualization.md`
+- Configuration: `docs/usage/configuration.md`
+- Testing: `docs/development/testing.md`
+- CLI / dimos run: `docs/usage/cli.md`
+- LFS data: `docs/development/large_file_management.md`
+- Agent system: `docs/coding-agents/index.md`
