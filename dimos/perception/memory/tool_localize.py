@@ -19,6 +19,7 @@ Run: uv run python -m dimos.perception.memory.tool_localize [query] [out.rrd]
 """
 
 import argparse
+from pathlib import Path
 
 import numpy as np
 import rerun as rr
@@ -32,7 +33,6 @@ from dimos.memory2.utils.progress import progress
 from dimos.models.embedding.clip import CLIPModel
 from dimos.models.segmentation.edge_tam import EdgeTAMImageSegmenter
 from dimos.models.vl.moondream import MoondreamVlModel
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.perception.detection.project import ProjectDepthTo3D, sees
 from dimos.utils.data import get_data
@@ -41,6 +41,7 @@ from dimos.visualization.rerun.init import rerun_init
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("query", nargs="?", default="plant")
 parser.add_argument("out", nargs="?", default="localize.rrd")
+parser.add_argument("--dataset", type=Path, help="memory2 recording database")
 parser.add_argument(
     "--from", dest="start", type=float, default=0.0, help="start offset into the recording (s)"
 )
@@ -48,11 +49,10 @@ parser.add_argument("--duration", type=float, default=None, help="how much to pa
 args = parser.parse_args()
 query, out = args.query, args.out
 
-store = SqliteStore(
-    path=get_data(
-        "xarm6_worldbelief_realsense_d435i_stationery/xarm6_worldbelief_20260722_134516_554064.db"
-    )
+dataset = args.dataset or get_data(
+    "xarm6_worldbelief_realsense_d435i_stationery_calibrated/xarm6_worldbelief_20260729_203624_161992.db"
 )
+store = SqliteStore(path=dataset)
 tf = StreamTF.from_store(store)
 camera_info = store.streams.camera_info.first().data
 OPTICAL_FRAME = "camera_color_optical_frame"
@@ -81,25 +81,20 @@ def still(ts, envelope=0.15):
     return all(camera_speed(ts + o) <= SPEED_MAX for o in (-envelope, 0.0, envelope))
 
 
-# one-time: persist a 1 fps embedded stream into the recording,
-# each observation stamped with the camera pose from tf
-EMBEDDED = "color_image_embedded"
+# Embed only the requested window and keep the source recording read-only.
 clip = CLIPModel()
-expected = int(hi - lo)  # ~1 fps over the full recording
-if EMBEDDED in store.list_streams():
-    cached = store.streams[EMBEDDED]
-    if cached.count() < expected * 0.9 or cached.first().pose_tuple is None:
-        store.delete_stream(EMBEDDED)  # partial or pose-less cache from an older run
-if EMBEDDED not in store.list_streams():
-    with progress(int(hi - lo) + 1, "embed (once, persisted)") as bar:
-        store.streams.color_image.transform(throttle(1.0)).map(
-            lambda obs: obs.derive(data=obs.data, pose=camera_pose(obs.ts))
-        ).transform(EmbedImages(clip)).tap(bar).save(store.stream(EMBEDDED, Image)).drain()
+with progress(int(span) + 1, "embed") as bar:
+    embedded = (
+        images.transform(throttle(1.0))
+        .map(lambda obs: obs.derive(data=obs.data, pose=camera_pose(obs.ts)))
+        .transform(EmbedImages(clip))
+        .tap(bar)
+        .materialize()
+    )
 
 # motion gate: only capture while the wrist is (near-)still — the arm parks
 # often, and any real motion measurably blurs the frames
 SPEED_MAX = 0.02  # m/s
-embedded = store.stream(EMBEDDED, Image)
 speeds = [camera_speed(obs.ts) for obs in embedded.after(t0).before(t1)]
 print(f"motion gate: > {SPEED_MAX} m/s rejects {np.mean([s > SPEED_MAX for s in speeds]):.0%}")
 
@@ -187,7 +182,7 @@ with progress(verify_frames.count(), "cross-view") as bar:
     )
 print(f"cross-view: {verified3d.count()} observing frames re-detect in 3d")
 
-# --- rerun output: direct logging, everything on the "ts" timeline ---
+# Rerun output uses the source timestamps directly.
 
 rerun_init("memory-localize")
 rr.save(out)
@@ -195,7 +190,7 @@ rr.send_blueprint(
     rrb.Blueprint(
         rrb.Horizontal(
             rrb.Spatial3DView(origin="/", name="Scene"),
-            rrb.Spatial2DView(origin="live", name="Live"),
+            rrb.Spatial2DView(origin="camera", name="Live"),
             column_shares=[2, 1],
         )
     )
@@ -220,7 +215,7 @@ rr.log("map", backdrop.voxel_downsample(0.01).to_rerun(voxel_size=POINT_SIZE), s
 rr.log("camera", camera_info.to_rerun(), static=True)
 for obs in images.transform(throttle(0.1)):
     at(obs.ts)
-    rr.log("live", obs.data.to_rerun())
+    rr.log("camera/image", obs.data.to_rerun())
     rr.log("camera", camera_pose(obs.ts).to_rerun())
 
 # marked frames: into the live feed, plus a frozen frustum pinned at the
@@ -228,7 +223,7 @@ for obs in images.transform(throttle(0.1)):
 for i, obs in enumerate(detections):
     at(obs.ts)
     annotated = obs.data.annotated_image()
-    rr.log("live", annotated.to_rerun())
+    rr.log("camera/image", annotated.to_rerun())
     frame = f"detections/frames/{i}"
     rr.log(frame, camera_pose(obs.ts).to_rerun())
     rr.log(frame, camera_info.to_rerun())
