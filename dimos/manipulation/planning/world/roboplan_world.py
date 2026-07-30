@@ -77,6 +77,8 @@ logger = setup_logger()
 
 _WORLD_FRAME = "dimos_world"
 
+_START_STATE_ATOL = 0.01
+
 
 @dataclass
 class _RoboPlanRobotData:
@@ -465,7 +467,7 @@ class RoboPlanWorld:
             )
         robot = self._get_robot(robot_id)
         current = self._live_context.q_by_robot[robot_id]
-        if not np.allclose(q_start, current, atol=1e-6, rtol=0.0):
+        if not np.allclose(q_start, current, atol=_START_STATE_ATOL, rtol=0.0):
             return PlanningResult(
                 status=PlanningStatus.INVALID_START,
                 message="Requested start state does not match current scene state",
@@ -521,7 +523,9 @@ class RoboPlanWorld:
         start_by_name = dict(zip(normalized_start.name, normalized_start.position, strict=True))
         current_by_name = self._current_global_positions()
         if any(
-            not np.isclose(start_by_name[name], current_by_name[name], atol=1e-6, rtol=0.0)
+            not np.isclose(
+                start_by_name[name], current_by_name[name], atol=_START_STATE_ATOL, rtol=0.0
+            )
             for name in selection.joint_names
         ):
             return PlanningResult(

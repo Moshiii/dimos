@@ -1567,7 +1567,7 @@ class ManipulationModule(Module):
                 self._error_message = msg
 
     def _stored_plan_freshness_error(
-        self, plan: GeneratedPlan, tolerance: float = 1e-6
+        self, plan: GeneratedPlan, tolerance: float = 0.01
     ) -> str | None:
         """Return why current selected joints no longer match the plan start."""
         if self._world_monitor is None:
