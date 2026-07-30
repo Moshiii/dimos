@@ -19,10 +19,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+import pytest_mock
 
 from dimos.core.module import ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.memory2.module import StreamModule
+from dimos.memory2.module import Recorder, RecorderConfig, StreamModule
 from dimos.memory2.stream import Stream
 from dimos.memory2.transform import Transformer
 from dimos.memory2.type.observation import Observation
@@ -93,3 +94,14 @@ def test_blueprint_ports(module_cls: type[StreamModule]) -> None:
     stream_names = {s.name for s in atom.streams}
     assert "numbers" in stream_names
     assert "doubled" in stream_names
+
+
+async def test_poseless_stream_skips_tf_lookup(mocker: pytest_mock.MockerFixture) -> None:
+    recorder = mocker.MagicMock(spec=Recorder)
+    recorder.config = RecorderConfig(poseless_streams=["commands"])
+    recorder._pose_setters = {}
+
+    pose = await Recorder._resolve_pose(recorder, "commands", object(), 1.0)
+
+    assert pose is None
+    recorder.tf.get.assert_not_called()

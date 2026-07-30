@@ -60,7 +60,11 @@ learning_collect_quest_xarm7 = autoconnect(
     teleop_quest_xarm7,
     *_camera_if_real(),
     EpisodeMonitorModule.blueprint(),  # default button_map: toggle=B, discard=Y
-    CollectionRecorder.blueprint(db_path=_session_db("xarm7")),
+    CollectionRecorder.blueprint(
+        db_path=_session_db("xarm7"),
+        poseless_streams=["color_image", "coordinator_joint_state", "status"],
+        record_tf=False,
+    ),
 ).remappings(_JOINTS_FROM_ARM)
 
 
@@ -68,5 +72,9 @@ learning_collect_quest_piper = autoconnect(
     teleop_quest_piper,
     *_camera_if_real(),
     EpisodeMonitorModule.blueprint(),  # default button_map: toggle=B, discard=Y
-    CollectionRecorder.blueprint(db_path=_session_db("piper")),
+    CollectionRecorder.blueprint(
+        db_path=_session_db("piper"),
+        poseless_streams=["color_image", "coordinator_joint_state", "status"],
+        record_tf=False,
+    ),
 ).remappings(_JOINTS_FROM_ARM)
