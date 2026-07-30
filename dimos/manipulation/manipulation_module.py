@@ -170,8 +170,8 @@ class ManipulationModuleConfig(ModuleConfig):
     # Set to None to disable.
     floor_z: float | None = None
     # Static box obstacles added at startup, for scene furniture the planner
-    # must always respect (e.g. a table): {"name", "center": (x,y,z) of the box
-    # center, "size": (x,y,z) full extents}, world frame, axis-aligned.
+    # must always respect (e.g. a table). Center and size are world-frame,
+    # axis-aligned, full extents.
     static_box_obstacles: list[StaticBoxObstacle] = Field(default_factory=list)
 
 
