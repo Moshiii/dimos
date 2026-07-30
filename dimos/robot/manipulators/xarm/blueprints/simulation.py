@@ -39,6 +39,7 @@ def _xarm7_perception_sim(
     scene_path: object,
     static_box_obstacles: tuple = (),
     object_scene: object | None = None,
+    pick_and_place_kwargs: dict[str, object] | None = None,
 ) -> object:
     hw = make_xarm7_sim_hardware(scene_path)
     return autoconnect(
@@ -48,6 +49,7 @@ def _xarm7_perception_sim(
             visualization={"backend": "viser"},
             heuristic_grasp_fallback=True,
             static_box_obstacles=list(static_box_obstacles),
+            **(pick_and_place_kwargs or {}),
         ),
         MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(scene_path)),
         object_scene or ObjectSceneRegistrationModule.blueprint(target_frame="world"),
@@ -76,6 +78,10 @@ xarm_grasp_sim = autoconnect(
         XARM_GRASP_SIM_PATH,
         static_box_obstacles=(_XARM_GRASP_TABLE,),
         object_scene=SimObjectScene.blueprint(objects=_XARM_GRASP_OBJECTS),
+        pick_and_place_kwargs={
+            "max_grasp_candidates_to_check": 30,
+            "pick_suppress_all_object_obstacles": True,
+        },
     ),
     GraspGenXModule.blueprint(
         **make_xarm_graspgenx_config().model_dump(exclude={"rpc_transport", "tf_transport", "g"})
