@@ -17,16 +17,30 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from copy import copy
-from importlib import import_module
+from dataclasses import dataclass
 from threading import Event, RLock, Thread, current_thread
 import time
-from typing import Any, Protocol
+from typing import Protocol, TypedDict, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import Field
+from pydantic import Field, field_validator
 from reactivex.disposable import Disposable
+
+try:
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+    from lerobot.policies.pretrained import PreTrainedPolicy
+    from lerobot.policies.utils import prepare_observation_for_inference
+    from lerobot.processor import PolicyProcessorPipeline
+    from lerobot.utils.import_utils import register_third_party_plugins
+    import torch
+    from torch import Tensor
+except ImportError as exc:
+    raise ImportError(
+        "LeRobot policy inference is not installed. Install the `lerobot` extra with "
+        "`pip install 'dimos[lerobot]'` or run `uv sync --extra lerobot`."
+    ) from exc
 
 from dimos.agents.annotation import skill
 from dimos.agents.capabilities import CAP_MOVEMENT
@@ -46,20 +60,25 @@ _STATE_FEATURE = "observation.state"
 _ACTION_FEATURE = "action"
 _TOOL_NAME = "execute_learned_policy"
 
+RawObservation = dict[str, NDArray[np.uint8] | NDArray[np.float32]]
+PreparedObservation = dict[str, Tensor | str]
+PolicyBatch = dict[str, Tensor]
 
-class PolicyBackend(Protocol):
-    """Minimal inference interface, separated so module behavior is testable without torch."""
 
+class _Resettable(Protocol):
     def reset(self) -> None: ...
 
-    def predict(
-        self,
-        image: NDArray[np.uint8],
-        state: NDArray[np.float32],
-        *,
-        task: str,
-        robot_type: str,
-    ) -> NDArray[np.float32]: ...
+
+class PolicyStatus(TypedDict):
+    running: bool
+    observations_ready: bool
+    observation_error: str | None
+    active_policy: str | None
+    policy_path: str | None
+    available_policies: list[str]
+    task: str
+    commands_sent: int
+    last_error: str | None
 
 
 class LeRobotPolicyConfig(BaseConfig):
@@ -78,122 +97,30 @@ class LeRobotPolicyModuleConfig(ModuleConfig):
     robot_type: str = ""
     max_observation_age_s: float = Field(default=0.5, gt=0)
 
+    @field_validator("policies")
+    @classmethod
+    def policy_names_must_not_be_empty(
+        cls, policies: dict[str, LeRobotPolicyConfig]
+    ) -> dict[str, LeRobotPolicyConfig]:
+        if any(not name.strip() for name in policies):
+            raise ValueError("policy names must not be empty")
+        return policies
 
-class _LeRobotBackend:
-    """Lazy LeRobot/torch adapter using the upstream inference pipeline."""
-
-    def __init__(
-        self,
-        config: LeRobotPolicyModuleConfig,
-        policy: LeRobotPolicyConfig,
-    ) -> None:
-        try:
-            torch = import_module("torch")
-            PreTrainedConfig = import_module("lerobot.configs.policies").PreTrainedConfig
-            policy_factory = import_module("lerobot.policies.factory")
-            get_policy_class = policy_factory.get_policy_class
-            make_pre_post_processors = policy_factory.make_pre_post_processors
-            prepare_observation_for_inference = import_module(
-                "lerobot.policies.utils"
-            ).prepare_observation_for_inference
-            register_third_party_plugins = import_module(
-                "lerobot.utils.import_utils"
-            ).register_third_party_plugins
-        except ImportError as exc:
-            raise ImportError(
-                "LeRobot policy inference is not installed. Run `uv sync --extra lerobot`."
-            ) from exc
-
-        register_third_party_plugins()
-        policy_config = PreTrainedConfig.from_pretrained(policy.policy_path)
-        if policy.device is not None:
-            policy_config.device = policy.device
-        if policy_config.device is None:
-            raise RuntimeError("LeRobot did not resolve an inference device")
-
-        self._validate_features(policy_config, len(config.joint_names))
-        self._device = torch.device(policy_config.device)
-        if self._device.type == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError(
-                f"Policy requested device {policy_config.device!r}, but CUDA is not available"
-            )
-
-        policy_class = get_policy_class(policy_config.type)
-        self._policy = policy_class.from_pretrained(policy.policy_path, config=policy_config)
-        self._preprocessor, self._postprocessor = make_pre_post_processors(
-            policy_cfg=policy_config,
-            pretrained_path=policy.policy_path,
-            preprocessor_overrides={"device_processor": {"device": str(self._device)}},
-        )
-        self._prepare_observation = prepare_observation_for_inference
-        self._torch = torch
-        self._use_amp = bool(policy_config.use_amp)
-
-    @staticmethod
-    def _validate_features(policy_config: Any, joint_count: int) -> None:
-        inputs = policy_config.input_features or {}
-        outputs = policy_config.output_features or {}
-        missing = {_IMAGE_FEATURE, _STATE_FEATURE} - set(inputs)
-        if missing:
-            raise ValueError(
-                "Policy is incompatible with the DimOS single-camera runtime; "
-                f"missing input features: {sorted(missing)}"
-            )
-        if _ACTION_FEATURE not in outputs:
-            raise ValueError(f"Policy has no {_ACTION_FEATURE!r} output feature")
-
-        state_shape = tuple(inputs[_STATE_FEATURE].shape)
-        action_shape = tuple(outputs[_ACTION_FEATURE].shape)
-        if not state_shape or state_shape[0] != joint_count:
-            raise ValueError(
-                f"Policy state dimension {state_shape} does not match {joint_count} configured joints"
-            )
-        if not action_shape or action_shape[0] != joint_count:
-            raise ValueError(
-                f"Policy action dimension {action_shape} does not match {joint_count} configured joints"
-            )
-
-    def reset(self) -> None:
-        self._policy.reset()
-        self._preprocessor.reset()
-        self._postprocessor.reset()
-
-    def predict(
-        self,
-        image: NDArray[np.uint8],
-        state: NDArray[np.float32],
-        *,
-        task: str,
-        robot_type: str,
-    ) -> NDArray[np.float32]:
-        observation: dict[str, NDArray[Any]] = {
-            _IMAGE_FEATURE: image,
-            _STATE_FEATURE: state,
-        }
-        torch = self._torch
-        with (
-            torch.inference_mode(),
-            torch.autocast(device_type="cuda")
-            if self._device.type == "cuda" and self._use_amp
-            else nullcontext(),
-        ):
-            prepared = self._prepare_observation(
-                copy(observation),
-                self._device,
-                task=task,
-                robot_type=robot_type,
-            )
-            prepared = self._preprocessor(prepared)
-            action = self._policy.select_action(prepared)
-            action = self._postprocessor(action)
-        return np.asarray(action.squeeze(0).to("cpu").numpy(), dtype=np.float32)
+    @field_validator("joint_names")
+    @classmethod
+    def joint_names_must_be_unique(cls, joint_names: list[str]) -> list[str]:
+        if len(set(joint_names)) != len(joint_names):
+            raise ValueError("joint_names must not contain duplicates")
+        return joint_names
 
 
-def _load_policy_backend(
-    config: LeRobotPolicyModuleConfig,
-    policy: LeRobotPolicyConfig,
-) -> PolicyBackend:
-    return _LeRobotBackend(config, policy)
+@dataclass(frozen=True)
+class _LoadedPolicy:
+    policy: PreTrainedPolicy
+    device: torch.device
+    preprocessor: PolicyProcessorPipeline[PreparedObservation, PreparedObservation]
+    postprocessor: PolicyProcessorPipeline[Tensor, Tensor]
+    use_amp: bool
 
 
 class LeRobotPolicyModule(Module):
@@ -206,27 +133,32 @@ class LeRobotPolicyModule(Module):
     coordinator_joint_state: In[JointState]
     joint_command: Out[JointState]
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        if len(set(self.config.joint_names)) != len(self.config.joint_names):
-            raise ValueError("joint_names must not contain duplicates")
-        if any(not name.strip() for name in self.config.policies):
-            raise ValueError("policy names must not be empty")
-        self._lock = RLock()
-        self._backends: dict[str, PolicyBackend] = {}
-        self._latest_image: tuple[NDArray[np.uint8], float] | None = None
-        self._latest_joint_state: JointState | None = None
-        self._stop_event = Event()
-        self._thread: Thread | None = None
-        self._commands_sent = 0
-        self._last_error: str | None = None
-        self._active_policy_name: str | None = None
-        self._active_task = ""
-        self._active_tool_name: str | None = None
+    _lock: RLock
+    _loaded_policies: dict[str, _LoadedPolicy]
+    _latest_image: tuple[NDArray[np.uint8], float] | None
+    _latest_joint_state: JointState | None
+    _stop_event: Event
+    _thread: Thread | None
+    _commands_sent: int
+    _last_error: str | None
+    _active_policy_name: str | None
+    _active_task: str
+    _active_tool_name: str | None
 
     @rpc
     def build(self) -> None:
-        """Build the module; checkpoints are loaded when first invoked."""
+        """Initialize runtime state; checkpoints are loaded when first invoked."""
+        self._lock = RLock()
+        self._loaded_policies = {}
+        self._latest_image = None
+        self._latest_joint_state = None
+        self._stop_event = Event()
+        self._thread = None
+        self._commands_sent = 0
+        self._last_error = None
+        self._active_policy_name = None
+        self._active_task = ""
+        self._active_tool_name = None
 
     @rpc
     def start(self) -> None:
@@ -288,14 +220,16 @@ class LeRobotPolicyModule(Module):
                         background_launched = True
                     return f"Learned policy {self._active_policy_name!r} is already running."
                 self._snapshot_observation(time.time())
-                backend = self._backends.get(policy_name)
+                loaded_policy = self._loaded_policies.get(policy_name)
 
             # Loading can take seconds. Keep observation callbacks flowing so
             # inference starts from a fresh camera frame and joint state.
-            if backend is None:
-                loaded_backend = _load_policy_backend(self.config, policy)
+            if loaded_policy is None:
+                newly_loaded_policy = self._load_policy(policy)
                 with self._lock:
-                    backend = self._backends.setdefault(policy_name, loaded_backend)
+                    loaded_policy = self._loaded_policies.setdefault(
+                        policy_name, newly_loaded_policy
+                    )
                 logger.info("Loaded LeRobot policy %s from %s", policy_name, policy.policy_path)
 
             with self._lock:
@@ -306,7 +240,9 @@ class LeRobotPolicyModule(Module):
                         background_launched = True
                     return f"Learned policy {self._active_policy_name!r} is already running."
                 self._snapshot_observation(time.time())
-                backend.reset()
+                cast("_Resettable", loaded_policy.policy).reset()
+                cast("_Resettable", loaded_policy.preprocessor).reset()
+                cast("_Resettable", loaded_policy.postprocessor).reset()
                 self._stop_event.clear()
                 self._commands_sent = 0
                 self._last_error = None
@@ -315,7 +251,7 @@ class LeRobotPolicyModule(Module):
                 self._active_tool_name = tool_name
                 self._thread = Thread(
                     target=self._run_policy,
-                    args=(backend, execution_duration, policy.task, tool_name),
+                    args=(loaded_policy, execution_duration, policy.task, tool_name),
                     name=f"lerobot-policy-{policy_name}",
                     daemon=True,
                 )
@@ -340,7 +276,7 @@ class LeRobotPolicyModule(Module):
         return "Learned policy stopped." if was_running else "Learned policy was not running."
 
     @rpc
-    def policy_status(self) -> dict[str, Any]:
+    def policy_status(self) -> PolicyStatus:
         """Return live execution status for CLIs and monitoring."""
         with self._lock:
             running = self._thread is not None and self._thread.is_alive()
@@ -406,9 +342,103 @@ class LeRobotPolicyModule(Module):
             raise RuntimeError("joint state contains non-finite positions")
         return image.copy(), vector
 
+    def _load_policy(self, policy: LeRobotPolicyConfig) -> _LoadedPolicy:
+        register_third_party_plugins()
+        policy_config = PreTrainedConfig.from_pretrained(policy.policy_path)
+        if policy.device is not None:
+            policy_config.device = policy.device
+        if policy_config.device is None:
+            raise RuntimeError("LeRobot did not resolve an inference device")
+
+        self._validate_features(policy_config)
+        device = torch.device(policy_config.device)
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(
+                f"Policy requested device {policy_config.device!r}, but CUDA is not available"
+            )
+
+        policy_class = get_policy_class(policy_config.type)
+        loaded_policy = policy_class.from_pretrained(policy.policy_path, config=policy_config)
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_cfg=policy_config,
+            pretrained_path=policy.policy_path,
+            preprocessor_overrides={"device_processor": {"device": str(device)}},
+        )
+        return _LoadedPolicy(
+            policy=loaded_policy,
+            device=device,
+            # LeRobot 0.4.4 exposes these pipelines as dict[str, Any]. Narrow
+            # them at this boundary to the values its inference helper creates.
+            preprocessor=cast(
+                "PolicyProcessorPipeline[PreparedObservation, PreparedObservation]", preprocessor
+            ),
+            postprocessor=postprocessor,
+            use_amp=bool(policy_config.use_amp),
+        )
+
+    def _validate_features(self, policy_config: PreTrainedConfig) -> None:
+        inputs = policy_config.input_features or {}
+        outputs = policy_config.output_features or {}
+        missing = {_IMAGE_FEATURE, _STATE_FEATURE} - set(inputs)
+        if missing:
+            raise ValueError(
+                "Policy is incompatible with the DimOS single-camera runtime; "
+                f"missing input features: {sorted(missing)}"
+            )
+        if _ACTION_FEATURE not in outputs:
+            raise ValueError(f"Policy has no {_ACTION_FEATURE!r} output feature")
+
+        state_shape = tuple(inputs[_STATE_FEATURE].shape)
+        action_shape = tuple(outputs[_ACTION_FEATURE].shape)
+        joint_count = len(self.config.joint_names)
+        if not state_shape or state_shape[0] != joint_count:
+            raise ValueError(
+                f"Policy state dimension {state_shape} does not match {joint_count} configured joints"
+            )
+        if not action_shape or action_shape[0] != joint_count:
+            raise ValueError(
+                f"Policy action dimension {action_shape} does not match {joint_count} configured joints"
+            )
+
+    def _predict(
+        self,
+        loaded_policy: _LoadedPolicy,
+        image: NDArray[np.uint8],
+        state: NDArray[np.float32],
+        *,
+        task: str,
+    ) -> NDArray[np.float32]:
+        observation: RawObservation = {
+            _IMAGE_FEATURE: image,
+            _STATE_FEATURE: state,
+        }
+        with (
+            torch.inference_mode(),
+            torch.autocast(device_type="cuda")
+            if loaded_policy.device.type == "cuda" and loaded_policy.use_amp
+            else nullcontext(),
+        ):
+            # LeRobot declares this result as dict[str, Any], although the
+            # helper returns tensors plus the task and robot-type strings.
+            prepared = cast(
+                "PreparedObservation",
+                prepare_observation_for_inference(
+                    observation,
+                    loaded_policy.device,
+                    task=task,
+                    robot_type=self.config.robot_type,
+                ),
+            )
+            prepared = loaded_policy.preprocessor(prepared)
+            # PreTrainedPolicy's annotation omits the two string metadata
+            # values accepted by policy implementations.
+            action = loaded_policy.policy.select_action(cast("PolicyBatch", prepared))
+            action = loaded_policy.postprocessor(action)
+        return np.asarray(action.squeeze(0).to("cpu").numpy(), dtype=np.float32)
+
     def _run_policy(
         self,
-        backend: PolicyBackend,
+        loaded_policy: _LoadedPolicy,
         duration: float,
         task: str,
         tool_name: str,
@@ -422,11 +452,11 @@ class LeRobotPolicyModule(Module):
                 with self._lock:
                     image, state = self._snapshot_observation(time.time())
                 action = np.asarray(
-                    backend.predict(
+                    self._predict(
+                        loaded_policy,
                         image,
                         state,
                         task=task,
-                        robot_type=self.config.robot_type,
                     ),
                     dtype=np.float32,
                 ).reshape(-1)

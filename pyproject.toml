@@ -463,6 +463,7 @@ lint = [
     # Lint / format / type-check
     "ruff==0.14.3",
     "mypy==1.19.0",
+    "lerobot==0.4.4",
 
     "aiortc>=1.14.0",
     "ipython",
@@ -588,6 +589,20 @@ warn_unused_ignores = false
 untyped_calls_exclude = ["zenoh"]
 explicit_package_bases = true
 exclude = "^dimos/models/Detic(/|$)|.*/test_.|.*/tool_.|.*/conftest.py*"
+
+[[tool.mypy.overrides]]
+module = [
+    "lerobot.configs.policies",
+    "lerobot.configs.types",
+    "lerobot.policies.factory",
+    "lerobot.policies.pretrained",
+    "lerobot.policies.utils",
+    "lerobot.processor",
+    "lerobot.processor.core",
+    "lerobot.processor.pipeline",
+    "lerobot.utils.import_utils",
+]
+follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = [
