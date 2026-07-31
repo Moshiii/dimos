@@ -151,7 +151,7 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     layer = module._visualization.set_visualization_layer.call_args.args[0]
     assert layer.id == "picknplace/selection"
     assert layer.elements[0].points.shape[1] == 3
-    assert layer.elements[1].line_width == 0.5
+    assert layer.elements[1].line_width is None
     selected_goal = module.select_grasp_candidate(1)
     assert selected_goal is not None
     assert selected_goal.position == second_candidate.pose.position

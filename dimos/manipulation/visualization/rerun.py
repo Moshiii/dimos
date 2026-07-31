@@ -137,7 +137,7 @@ def _graspgenx_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
                             [[-0.0425, 0.0, 0.095], [0.0425, 0.0, 0.095]],
                         ],
                         colors=[gripper_color] * 3,
-                        radii=[0.003] * 3,
+                        radii=[0.0015] * 3,
                     ),
                 ),
             ]

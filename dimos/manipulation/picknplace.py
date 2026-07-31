@@ -238,7 +238,6 @@ class PickNPlaceModule(Module):
                         np.asarray(vertices),
                         np.asarray(edges),
                         np.asarray(colors),
-                        line_width=0.5,
                     ),
                 ),
             )
