@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event
 from typing import Protocol
 
@@ -64,6 +65,21 @@ class GraspVisualizationDemoResult:
     displayed_count: int
     frame_id: str
     visualization_url: str | None
+
+
+def load_object_cloud_file(
+    path: Path,
+    *,
+    frame_id: str = "world",
+) -> tuple[PointCloud2, PointCloud2]:
+    """Load a segmented object cloud from a PLY or PCD file."""
+    import open3d as o3d  # type: ignore[import-untyped]
+
+    pointcloud = o3d.io.read_point_cloud(str(path))
+    if pointcloud.is_empty():
+        raise ValueError(f"object point cloud is empty or unreadable: {path}")
+    cloud = PointCloud2(pointcloud, frame_id=frame_id, ts=0.0)
+    return cloud, cloud
 
 
 def run_demo(
@@ -117,6 +133,8 @@ def run_contributor_demo(
     *,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     config: GraspGenXConfig | None = None,
+    object_cloud_path: Path | None = None,
+    object_frame_id: str = "world",
     waiter: Waiter = wait_until_interrupted,
 ) -> GraspVisualizationDemoResult:
     """Run real GraspGenX, publish layers, and own all interactive resources."""
@@ -129,12 +147,18 @@ def run_contributor_demo(
     try:
         proposer.start()
         proposer_started = True
+        cloud_loader = (
+            load_demo_clouds
+            if object_cloud_path is None
+            else lambda: load_object_cloud_file(object_cloud_path, frame_id=object_frame_id)
+        )
         result = run_demo(
             proposer,
             visualizer,
             gripper=active_config.gripper,
             grasp_frame_to_tcp=active_config.grasp_frame_to_tcp,
             max_candidates=max_candidates,
+            cloud_loader=cloud_loader,
         )
         print(
             "grasp-visualization-demo "

@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import open3d as o3d
 import pytest
@@ -25,6 +27,7 @@ from dimos.manipulation.demo_grasp_visualization import __main__
 import dimos.manipulation.demo_grasp_visualization.demo as demo_module
 from dimos.manipulation.demo_grasp_visualization.demo import (
     GraspVisualizationDemoResult,
+    load_object_cloud_file,
     run_contributor_demo,
     run_demo,
 )
@@ -153,6 +156,47 @@ def test_demo_rejects_non_positive_candidate_limit() -> None:
         )
 
 
+def test_demo_preserves_an_external_cloud_frame() -> None:
+    scene, object_cloud = clouds()
+    scene.frame_id = object_cloud.frame_id = "xarm/base"
+
+    result = run_demo(
+        Proposer([candidate(1.0, 0.9)]),
+        Visualizer(),
+        gripper=deployment_config().gripper,
+        grasp_frame_to_tcp=deployment_config().grasp_frame_to_tcp,
+        cloud_loader=lambda: (scene, object_cloud),
+    )
+
+    assert result.frame_id == "xarm/base"
+
+
+def test_load_object_cloud_file_preserves_points_colors_and_frame(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "object.ply"
+    source = o3d.geometry.PointCloud()
+    source.points = o3d.utility.Vector3dVector(
+        np.asarray([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype=np.float64)
+    )
+    source.colors = o3d.utility.Vector3dVector(
+        np.asarray([[1.0, 0.0, 0.5], [0.0, 1.0, 0.25]], dtype=np.float64)
+    )
+    assert o3d.io.write_point_cloud(str(path), source)
+
+    scene, object_cloud = load_object_cloud_file(path, frame_id="xarm/base")
+
+    assert scene is object_cloud
+    assert object_cloud.frame_id == "xarm/base"
+    assert object_cloud.ts == 0.0
+    np.testing.assert_allclose(np.asarray(object_cloud.pointcloud.points), source.points)
+    np.testing.assert_allclose(
+        np.asarray(object_cloud.pointcloud.colors),
+        np.asarray(source.colors),
+        atol=1 / 255,
+    )
+
+
 def test_contributor_closes_resources_when_waiter_fails(
     mocker: MockerFixture,
 ) -> None:
@@ -184,6 +228,33 @@ def test_entrypoint_passes_limit_and_handles_interrupt(
     assert __main__.main(["--max-candidates", "7"]) == 0
     run.assert_called_once_with(max_candidates=7)
     assert "stopped" in capsys.readouterr().out
+
+
+def test_entrypoint_passes_external_object_cloud(
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    run = mocker.patch.object(__main__, "run_contributor_demo")
+    path = tmp_path / "object.ply"
+
+    assert (
+        __main__.main(
+            [
+                "--max-candidates",
+                "4",
+                "--object-cloud",
+                str(path),
+                "--frame-id",
+                "xarm/base",
+            ]
+        )
+        == 0
+    )
+    run.assert_called_once_with(
+        max_candidates=4,
+        object_cloud_path=path,
+        object_frame_id="xarm/base",
+    )
 
 
 def test_entrypoint_reports_optional_dependency_hint(

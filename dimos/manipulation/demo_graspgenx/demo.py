@@ -72,8 +72,6 @@ def _cuda_context() -> dict[str, object]:
 def _validate(result: GraspCandidateArray, object_cloud: PointCloud2) -> None:
     if not result.candidates:
         raise ValueError("proposer returned no grasp candidates")
-    if result.header.frame_id != "world":
-        raise ValueError("proposer returned a result outside world frame")
     if (
         result.header.frame_id != object_cloud.frame_id
         or result.header.timestamp != object_cloud.ts

@@ -30,6 +30,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.spatial import cKDTree
 import trimesh
 from yourdfpy import URDF  # type: ignore[import-untyped]
 
@@ -114,6 +115,9 @@ VISUALIZATION_DEFAULT_POINT_SIZE = 0.005
 VISUALIZATION_DEFAULT_POINT_COLOR = (0, 204, 204)
 VISUALIZATION_DEFAULT_LINE_COLOR = (255, 255, 255)
 VISUALIZATION_DEFAULT_LINE_WIDTH = 1.0
+VISUALIZATION_POINT_SPACING_SCALE = 1.5
+VISUALIZATION_POINT_SIZE_MIN_EXTENT_RATIO = 1e-4
+VISUALIZATION_POINT_SIZE_MAX_EXTENT_RATIO = 0.02
 
 
 class RobotDisplayMode(StrEnum):
@@ -123,6 +127,36 @@ class RobotDisplayMode(StrEnum):
 
 
 SceneHandle: TypeAlias = ViserUrdf | TransformControlsHandle | GridHandle | MeshHandle | FrameHandle
+
+
+def _adaptive_point_size(points: NDArray[np.generic]) -> float:
+    """Estimate a readable world-space point size from local cloud spacing."""
+    if len(points) < 2:
+        return VISUALIZATION_DEFAULT_POINT_SIZE
+
+    extent = float(np.linalg.norm(np.ptp(points, axis=0)))
+    if not math.isfinite(extent) or extent <= 0.0:
+        return VISUALIZATION_DEFAULT_POINT_SIZE
+
+    neighbor_count = min(8, len(points))
+    distances = np.asarray(cKDTree(points).query(points, k=neighbor_count)[0], dtype=float)
+    if distances.ndim == 1:
+        distances = distances[:, np.newaxis]
+    duplicate_tolerance = np.finfo(np.float32).eps * max(1.0, extent)
+    positive = np.where(distances > duplicate_tolerance, distances, np.inf)
+    nearest = np.min(positive, axis=1)
+    nearest = nearest[np.isfinite(nearest)]
+    if len(nearest) == 0:
+        return VISUALIZATION_DEFAULT_POINT_SIZE
+
+    spacing = float(np.median(nearest))
+    return float(
+        np.clip(
+            spacing * VISUALIZATION_POINT_SPACING_SCALE,
+            extent * VISUALIZATION_POINT_SIZE_MIN_EXTENT_RATIO,
+            extent * VISUALIZATION_POINT_SIZE_MAX_EXTENT_RATIO,
+        )
+    )
 
 
 class _ColorHandle(Protocol):
@@ -258,7 +292,11 @@ class ViserManipulationScene:
             path,
             points=points,
             colors=colors,
-            point_size=element.point_size or VISUALIZATION_DEFAULT_POINT_SIZE,
+            point_size=(
+                element.point_size
+                if element.point_size is not None
+                else _adaptive_point_size(points)
+            ),
             point_shape="circle",
             visible=False,
         )

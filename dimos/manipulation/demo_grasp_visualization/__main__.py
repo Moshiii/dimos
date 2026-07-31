@@ -16,6 +16,7 @@
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 
 from .demo import DEFAULT_MAX_CANDIDATES, run_contributor_demo
 
@@ -35,6 +36,16 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_CANDIDATES,
         help="Maximum score-ranked grasp wireframes to display.",
     )
+    parser.add_argument(
+        "--object-cloud",
+        type=Path,
+        help="Segmented object point cloud in PLY or PCD format. Defaults to the banana fixture.",
+    )
+    parser.add_argument(
+        "--frame-id",
+        default="world",
+        help="Coordinate frame of --object-cloud (default: world).",
+    )
     return parser
 
 
@@ -53,7 +64,14 @@ def _install_hint(error: BaseException) -> str | None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        run_contributor_demo(max_candidates=args.max_candidates)
+        if args.object_cloud is None:
+            run_contributor_demo(max_candidates=args.max_candidates)
+        else:
+            run_contributor_demo(
+                max_candidates=args.max_candidates,
+                object_cloud_path=args.object_cloud,
+                object_frame_id=args.frame_id,
+            )
     except KeyboardInterrupt:
         print("grasp-visualization-demo stopped", flush=True)
         return 0

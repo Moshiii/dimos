@@ -201,6 +201,39 @@ def test_scene_renders_cloud_with_paired_cap_and_fallback_color(
     assert fallback["colors"] == (0, 204, 204)
 
 
+def test_scene_adapts_default_point_size_to_cloud_spacing(
+    scene: ViserManipulationScene,
+) -> None:
+    spacing = 0.001
+    coordinates = np.arange(64, dtype=np.float32) * spacing
+    x, y = np.meshgrid(coordinates, coordinates)
+    points = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size, dtype=np.float32)))
+    layer = VisualizationLayer(
+        "adaptive",
+        "world",
+        (PointCloudElement("object", points),),
+    )
+
+    scene.replace_visualization_layer(layer, generation=1, visible=True)
+
+    cloud_call = next(call for call in scene.server.scene.calls if call[0] == "point_cloud")
+    assert cloud_call[2]["point_size"] == pytest.approx(0.0015, rel=1e-5)
+
+
+def test_scene_preserves_explicit_point_size(scene: ViserManipulationScene) -> None:
+    points = np.asarray([[0.0, 0.0, 0.0], [0.001, 0.0, 0.0]], dtype=np.float32)
+    layer = VisualizationLayer(
+        "explicit",
+        "world",
+        (PointCloudElement("object", points, point_size=0.004),),
+    )
+
+    scene.replace_visualization_layer(layer, generation=1, visible=True)
+
+    cloud_call = next(call for call in scene.server.scene.calls if call[0] == "point_cloud")
+    assert cloud_call[2]["point_size"] == pytest.approx(0.004)
+
+
 def test_scene_renders_indexed_line_set_and_encodes_logical_ids(
     scene: ViserManipulationScene,
 ) -> None:
