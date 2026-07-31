@@ -84,6 +84,7 @@ xarm_grasp_sim = autoconnect(
             "pick_suppress_all_object_obstacles": True,
             "grasp_viz_gripper": _XARM_GRASPGENX.gripper,
             "grasp_viz_frame_to_tcp": _XARM_GRASPGENX.grasp_frame_to_tcp,
+            "use_mesh_obstacles": True,
         },
     ),
     GraspGenXModule.blueprint(

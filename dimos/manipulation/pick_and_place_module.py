@@ -124,6 +124,10 @@ class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     # draw correct-looking grasps while the robot goes elsewhere.
     grasp_viz_gripper: SweepVolumeGripperConfig | None = None
     grasp_viz_frame_to_tcp: RigidTransform = IDENTITY_TRANSFORM
+    # Convex hulls of the detected clouds instead of bounding boxes. A box
+    # envelops the object at every height, so a gripper reaching in from the
+    # side collides with empty space.
+    use_mesh_obstacles: bool = False
 
     @model_validator(mode="after")
     def _validate_grasp_pipeline(self) -> PickAndPlaceModuleConfig:
@@ -227,7 +231,7 @@ class PickAndPlaceModule(ManipulationModule):
 
         # Start obstacle monitor for perception integration
         if self._world_monitor is not None:
-            self._world_monitor.start_obstacle_monitor()
+            self._world_monitor.start_obstacle_monitor(self.config.use_mesh_obstacles)
 
         logger.info("PickAndPlaceModule started")
 

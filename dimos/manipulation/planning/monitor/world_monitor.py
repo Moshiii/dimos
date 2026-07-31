@@ -234,7 +234,7 @@ class WorldMonitor:
             self._state_monitors[robot_id] = monitor
             logger.info(f"State monitor started for '{robot_id}'")
 
-    def start_obstacle_monitor(self) -> None:
+    def start_obstacle_monitor(self, use_mesh_obstacles: bool = False) -> None:
         """Start monitoring obstacle updates."""
         with self._lock:
             if self._obstacle_monitor is not None:
@@ -243,6 +243,7 @@ class WorldMonitor:
 
             self._obstacle_monitor = WorldObstacleMonitor(
                 parent=self,
+                use_mesh_obstacles=use_mesh_obstacles,
             )
             self._obstacle_monitor.start()
             logger.info("Obstacle monitor started")
