@@ -279,7 +279,11 @@ class LeRobotPolicyModule(Module):
     def policy_status(self) -> PolicyStatus:
         """Return live execution status for CLIs and monitoring."""
         with self._lock:
-            running = self._thread is not None and self._thread.is_alive()
+            running = (
+                self._thread is not None
+                and self._thread.is_alive()
+                and not self._stop_event.is_set()
+            )
             observation_error: str | None = None
             try:
                 self._snapshot_observation(time.time())
