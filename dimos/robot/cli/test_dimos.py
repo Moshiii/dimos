@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
@@ -35,6 +37,101 @@ from dimos.core.runtime_prepare import (
 )
 from dimos.robot.cli.dimos import _normalize_simulation_argv, arg_help, main
 import dimos.robot.get_all_blueprints as registry
+
+
+def test_code_policy_watch_cli_wires_selected_host_and_closes_client(
+    mocker, tmp_path: Path
+) -> None:
+    class FakeApp:
+        CodePolicyModule = SimpleNamespace()
+        stopped = False
+
+        def __dir__(self) -> list[str]:
+            return ["CodePolicyModule"]
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    app = FakeApp()
+    mocker.patch(
+        "dimos.robot.cli.dimos.get_most_recent",
+        return_value=SimpleNamespace(run_id="run-1"),
+    )
+    connect = mocker.patch(
+        "dimos.porcelain.dimos.Dimos.connect",
+        return_value=app,
+    )
+    watch = mocker.patch(
+        "dimos.agents.code_policy_observer.watch_code_policy",
+        return_value=tmp_path / "recording",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "code-policy-watch",
+            "--run",
+            "run-1",
+            "--output",
+            str(tmp_path),
+            "--startup-timeout",
+            "2",
+            "--poll-interval",
+            "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    connect.assert_called_once_with(timeout=2.0)
+    watch.assert_called_once_with(
+        app.CodePolicyModule,
+        output_parent=tmp_path,
+        startup_timeout_s=2.0,
+        poll_interval_s=0.1,
+    )
+    assert app.stopped
+
+
+def test_code_policy_watch_web_wires_read_only_view(mocker, tmp_path: Path) -> None:
+    app = SimpleNamespace(CodePolicyModule=SimpleNamespace(), stop=mocker.Mock())
+    mocker.patch(
+        "dimos.robot.cli.dimos.get_most_recent",
+        return_value=SimpleNamespace(run_id="run-1"),
+    )
+    mocker.patch("dimos.porcelain.dimos.Dimos.connect", return_value=app)
+    watch = mocker.patch(
+        "dimos.agents.code_policy_observer.watch_code_policy",
+        return_value=tmp_path / "recording",
+    )
+    view = mocker.Mock()
+    web_view = mocker.patch(
+        "dimos.agents.code_policy_observer_web.WebObserverView",
+        return_value=view,
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "code-policy-watch",
+            "--web",
+            "--web-port",
+            "0",
+            "--no-open",
+            "--output",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    web_view.assert_called_once_with(port=0, open_browser=False)
+    watch.assert_called_once_with(
+        app.CodePolicyModule,
+        output_parent=tmp_path,
+        startup_timeout_s=10.0,
+        poll_interval_s=0.25,
+        view=view,
+    )
+    app.stop.assert_called_once_with()
 
 
 @pytest.mark.parametrize(

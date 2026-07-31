@@ -15,11 +15,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import Iterator
 
 import pytest
 
-from dimos.agents.code_policy import CodePolicyModule, _BoundedTextOutput
+from dimos.agents.code_policy import (
+    CodePolicyModule,
+    CodePolicyObserverDescriptor,
+    CodePolicyObserverState,
+    _BoundedTextOutput,
+)
 from dimos.agents.mcp.mcp_server import handle_request
 from dimos.benchmark.agent_eval.pi_adapter import inspect_python_exec_inventory
 
@@ -117,6 +123,127 @@ def test_mcp_lists_python_exec(code_policy: CodePolicyModule) -> None:
     assert [tool["name"] for tool in response["result"]["tools"]] == ["python_exec"]
 
 
+def test_observation_operations_are_rpc_only() -> None:
+    for method_name in (
+        "prepare_observer",
+        "get_observer_state",
+        "issue_observer_probe",
+    ):
+        method = getattr(CodePolicyModule, method_name)
+        assert method.__rpc__ is True
+        assert not getattr(method, "__skill__", False)
+
+
+def test_prepare_observer_returns_minimized_descriptor(
+    code_policy: CodePolicyModule,
+) -> None:
+    state = code_policy.prepare_observer()
+
+    assert state.availability == "ready"
+    assert state.descriptor is not None
+    descriptor = state.descriptor
+    assert descriptor.kernel_generation == 1
+    assert descriptor.code_policy_session_id == code_policy.get_session_receipt().session_id
+    assert descriptor.jupyter_client_session_id
+    assert base64.b64decode(descriptor.key_base64)
+
+    serialized = descriptor.model_dump()
+    assert set(serialized) == {
+        "transport",
+        "ip",
+        "iopub_port",
+        "signature_scheme",
+        "key_base64",
+        "code_policy_session_id",
+        "jupyter_client_session_id",
+        "kernel_generation",
+    }
+    serialized_text = descriptor.model_dump_json()
+    for forbidden in (
+        "connection_file",
+        "shell",
+        "control",
+        "stdin",
+        "heartbeat",
+        "hb_port",
+    ):
+        assert forbidden not in serialized_text
+
+
+def test_observer_descriptor_and_state_are_strict_and_immutable() -> None:
+    descriptor = CodePolicyObserverDescriptor(
+        transport="tcp",
+        ip="127.0.0.1",
+        iopub_port=1234,
+        signature_scheme="hmac-sha256",
+        key_base64=base64.b64encode(b"secret").decode("ascii"),
+        code_policy_session_id="code_policy_session_" + "a" * 32,
+        jupyter_client_session_id="jupyter-client",
+        kernel_generation=1,
+    )
+    state = CodePolicyObserverState(
+        availability="ready",
+        code_policy_session_id=descriptor.code_policy_session_id,
+        kernel_generation=1,
+        descriptor=descriptor,
+    )
+
+    with pytest.raises(ValueError):
+        descriptor.kernel_generation = 2
+    with pytest.raises(ValueError):
+        CodePolicyObserverDescriptor.model_validate({**descriptor.model_dump(), "shell_port": 1235})
+    assert state.descriptor is descriptor
+
+
+def test_observer_state_is_unavailable_before_prepare_and_stopped_after_stop(
+    code_policy: CodePolicyModule,
+) -> None:
+    unavailable = code_policy.get_observer_state()
+    assert unavailable.availability == "unavailable"
+    assert unavailable.descriptor is None
+    assert unavailable.kernel_generation == 0
+
+    code_policy.prepare_observer()
+    code_policy.stop()
+
+    stopped = code_policy.get_observer_state()
+    assert stopped.availability == "stopped"
+    assert stopped.descriptor is None
+
+
+def test_observer_probe_is_fixed_silent_and_history_free(
+    mocker, code_policy: CodePolicyModule
+) -> None:
+    client = mocker.Mock()
+    client.session.session = "policy-client"
+    client.execute.return_value = "probe-message"
+    manager = mocker.Mock()
+    manager.is_alive.return_value = True
+    manager.get_connection_info.return_value = {
+        "transport": "tcp",
+        "ip": "127.0.0.1",
+        "iopub_port": 1234,
+        "signature_scheme": "hmac-sha256",
+        "key": b"secret",
+    }
+    code_policy._kernel_manager = manager
+    code_policy._kernel_client = client
+    code_policy._kernel_generation = 7
+
+    receipt = code_policy.issue_observer_probe(7)
+
+    assert receipt.message_id == "probe-message"
+    assert receipt.kernel_generation == 7
+    client.execute.assert_called_once_with(
+        "None",
+        silent=True,
+        store_history=False,
+        allow_stdin=False,
+    )
+    with pytest.raises(TypeError):
+        code_policy.issue_observer_probe(7, "print('not allowed')")  # type: ignore[call-arg]
+
+
 def test_python_exec_schema_is_compatible_with_pi_facade(
     code_policy: CodePolicyModule,
 ) -> None:
@@ -186,6 +313,33 @@ def test_reset_session_clears_namespace_and_changes_identity(
     assert len(code_policy.get_execution_records(after.session_id)) == 1
 
 
+def test_kernel_generation_advances_across_reset_and_recreation(
+    code_policy: CodePolicyModule,
+) -> None:
+    first = code_policy.prepare_observer()
+    code_policy.reset_session()
+    unavailable = code_policy.get_observer_state(first.kernel_generation)
+    second = code_policy.prepare_observer()
+
+    assert first.kernel_generation == 1
+    assert unavailable.availability == "unavailable"
+    assert unavailable.kernel_generation == 1
+    assert second.kernel_generation == 2
+    assert second.code_policy_session_id != first.code_policy_session_id
+
+
+def test_observer_reports_replaced_generation(
+    code_policy: CodePolicyModule,
+) -> None:
+    first = code_policy.prepare_observer()
+
+    state = code_policy.get_observer_state(first.kernel_generation - 1)
+
+    assert state.availability == "replaced"
+    assert state.descriptor is not None
+    assert state.descriptor.kernel_generation == first.kernel_generation
+
+
 def test_interrupt_active_is_false_when_no_cell_is_running(
     code_policy: CodePolicyModule,
 ) -> None:
@@ -251,6 +405,25 @@ def test_timeout_restarts_kernel_when_interrupt_does_not_recover(
     assert record.status == "timed-out"
     assert record.kernel_restarted
     assert not record.namespace_preserved
+    assert code_policy._kernel_generation == 1
+
+
+def test_failed_kernel_restart_does_not_advance_generation(
+    mocker, code_policy: CodePolicyModule
+) -> None:
+    manager = mocker.Mock()
+    manager.is_alive.return_value = True
+    manager.restart_kernel.side_effect = RuntimeError("restart failed")
+    client = mocker.Mock()
+    client.execute_interactive.side_effect = TimeoutError
+    client.wait_for_ready.side_effect = TimeoutError
+    code_policy._kernel_manager = manager
+    code_policy._kernel_client = client
+    code_policy._kernel_generation = 5
+
+    code_policy.python_exec("while True: pass", timeout_s=0.1)
+
+    assert code_policy.get_observer_state().kernel_generation == 5
 
 
 def test_python_exec_rejects_invalid_timeout_without_starting_kernel(

@@ -195,7 +195,53 @@ Playwright page. Open the scene URL once: that browser tab becomes the
 authoritative simulator client. Do not open multiple copies of the DimSim page.
 The Rerun page is a separate passive DimOS visualization.
 
-In another terminal, start Pi's native TUI:
+In a second terminal, attach the read-only code-policy observer before asking
+Pi to act:
+
+```bash
+dimos code-policy-watch
+```
+
+For a notebook-style browser view, run:
+
+```bash
+dimos code-policy-watch --web
+```
+
+The web view binds only to `127.0.0.1:8766` and opens after the readiness
+probe succeeds. Use `--no-open` on a headless machine, or `--web-port 0` to
+select an available loopback port. The command prints the exact URL.
+
+Wait for `ready`. The command prepares the lazy policy kernel, attaches only
+to its Jupyter IOPub stream, verifies that subscription with a fixed silent
+probe, and then prints each subsequent policy cell and its output. It cannot
+execute code, inspect the live namespace, answer stdin, interrupt, restart, or
+shut down the kernel. Ctrl+C detaches only the observer.
+
+The browser receives the same bounded, credential-free observation events as
+the terminal. It replays the current recording when the page reloads and then
+streams new cells. It renders text and raster images, but never executes
+observed HTML, SVG, or JavaScript. The page has no input or control endpoint.
+
+Each invocation reserves a new private recording beneath
+`~/.local/state/dimos/code-policy-watch/` (or beneath the parent supplied with
+`--output`). The recording contains:
+
+```text
+observation-<UTC timestamp>/
+├── iopub-events.jsonl
+├── code-policy-transcript.ipynb
+└── blobs/
+```
+
+The JSONL file is append-only and the notebook is materialized atomically on
+detach. If the observer is interrupted during finalization, rerunning notebook
+materialization from the valid JSONL prefix produces an explicitly incomplete
+notebook. Content is bounded but deliberately not heuristically redacted, so
+it can contain agent code, environment values, perception, map, and robot
+data.
+
+In a third terminal, start Pi's native TUI:
 
 ```bash
 cd packages/pi-spatial-adapter
@@ -216,12 +262,16 @@ Go to the bathtub and stop within 1 meter of its outer edge.
 ```
 
 Watch DimSim for physical motion and Rerun for the robot pose, map, and sensor
-updates. In the Pi TUI, `/tools` should show only `python_exec`. Exit Pi with
-Ctrl+D. When finished with the simulator:
+updates. Watch the observer terminal for the exact code-policy cells. In the Pi
+TUI, `/tools` should show only `python_exec`. Exit Pi with Ctrl+D and detach
+the observer with Ctrl+C. When finished with the simulator:
 
 ```bash
 dimos stop
 ```
 
 For a native pass/fail result and retained evidence, run the scored command in
-the preceding section instead of relying on visual judgment.
+the preceding section instead of relying on visual judgment. The observer is a
+standalone local debugging aid: there is intentionally no runner `--observe`
+flag, browser/Jupyter frontend, interactive notebook attachment, remote
+observer mode, or effect on benchmark scoring and evaluator cleanup.

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime
 import os
 import re
@@ -53,6 +54,7 @@ ExecutionStatus = Literal[
     "python-error",
     "timed-out",
 ]
+ObserverAvailability = Literal["ready", "replaced", "stopped", "unavailable"]
 
 
 class _EvidenceModel(BaseModel):
@@ -87,6 +89,36 @@ class CodePolicyExecutionRecord(_EvidenceModel):
     kernel_restarted: bool
     namespace_preserved: bool
     remote_work_may_continue: bool
+
+
+class CodePolicyObserverDescriptor(_EvidenceModel):
+    """Minimal credentials required to verify and read one IOPub generation."""
+
+    transport: Literal["tcp", "ipc"]
+    ip: str
+    iopub_port: Annotated[int, Field(gt=0)]
+    signature_scheme: str
+    key_base64: str
+    code_policy_session_id: SessionId
+    jupyter_client_session_id: str
+    kernel_generation: Annotated[int, Field(gt=0)]
+
+
+class CodePolicyObserverState(_EvidenceModel):
+    """Current host-side observation lifecycle without stale credentials."""
+
+    availability: ObserverAvailability
+    code_policy_session_id: SessionId
+    kernel_generation: Annotated[int, Field(ge=0)]
+    descriptor: CodePolicyObserverDescriptor | None
+
+
+class CodePolicyObserverProbeReceipt(_EvidenceModel):
+    """Identity of the fixed silent IOPub readiness probe."""
+
+    message_id: str
+    code_policy_session_id: SessionId
+    kernel_generation: Annotated[int, Field(gt=0)]
 
 
 class CodePolicyConfig(ModuleConfig):
@@ -174,8 +206,10 @@ class CodePolicyModule(Module):
         super().__init__(**kwargs)
         self._execution_lock: threading.Lock | None = None
         self._records_lock = threading.Lock()
+        self._kernel_lock = threading.RLock()
         self._kernel_manager: Any = None
         self._kernel_client: Any = None
+        self._kernel_generation = 0
         self._session_id: str = _new_session_id()
         self._session_reset_at = _utc_now()
         self._stopped = True
@@ -379,6 +413,64 @@ class CodePolicyModule(Module):
         return tuple(record for record in records if record.session_id == session_id)
 
     @rpc
+    def prepare_observer(self) -> CodePolicyObserverState:
+        """Prepare the policy kernel and return its minimized read-only descriptor."""
+        if self._stopped:
+            return self._observer_state("stopped")
+        self._ensure_kernel()
+        return self._observer_state("ready")
+
+    @rpc
+    def get_observer_state(self, known_generation: int | None = None) -> CodePolicyObserverState:
+        """Return current observation state without creating a kernel."""
+        if self._stopped:
+            return self._observer_state("stopped")
+        with self._kernel_lock:
+            manager = self._kernel_manager
+            client = self._kernel_client
+            generation = self._kernel_generation
+            is_ready = manager is not None and client is not None and bool(manager.is_alive())
+        if not is_ready:
+            return self._observer_state("unavailable")
+        availability: ObserverAvailability = (
+            "replaced"
+            if known_generation is not None and known_generation != generation
+            else "ready"
+        )
+        return self._observer_state(availability)
+
+    @rpc
+    def issue_observer_probe(self, kernel_generation: int) -> CodePolicyObserverProbeReceipt:
+        """Emit the fixed silent, history-free readiness probe for one generation."""
+        if self._stopped:
+            raise RuntimeError("code policy module is stopped")
+        lock = self._execution_lock
+        if lock is None:
+            lock = self._execution_lock = threading.Lock()
+        if not lock.acquire(blocking=False):
+            raise RuntimeError("cannot probe while python_exec is active")
+        try:
+            client = self._ensure_kernel()
+            with self._kernel_lock:
+                if kernel_generation != self._kernel_generation:
+                    raise RuntimeError(
+                        "code policy kernel generation changed before readiness probe"
+                    )
+                message_id = client.execute(
+                    "None",
+                    silent=True,
+                    store_history=False,
+                    allow_stdin=False,
+                )
+                return CodePolicyObserverProbeReceipt(
+                    message_id=message_id,
+                    code_policy_session_id=self._session_id,
+                    kernel_generation=self._kernel_generation,
+                )
+        finally:
+            lock.release()
+
+    @rpc
     def interrupt_active(self) -> bool:
         """Best-effort interrupt of the currently executing policy cell."""
         lock = self._execution_lock
@@ -440,34 +532,36 @@ class CodePolicyModule(Module):
             self._execution_records.append(record)
 
     def _ensure_kernel(self) -> Any:
-        manager = self._kernel_manager
-        client = self._kernel_client
-        if manager is not None and client is not None and manager.is_alive():
-            return client
-        self._shutdown_kernel(reason="kernel unavailable")
+        with self._kernel_lock:
+            manager = self._kernel_manager
+            client = self._kernel_client
+            if manager is not None and client is not None and manager.is_alive():
+                return client
+            self._shutdown_kernel(reason="kernel unavailable")
 
-        manager_type = _load_kernel_manager()
-        manager = manager_type(kernel_name="python3")
-        client = None
-        try:
-            env = os.environ.copy()
-            env[_RECORDING_PATH_ENV] = self.config.recording_path
-            manager.start_kernel(env=env)
-            client = manager.client()
-            client.start_channels()
-            client.wait_for_ready(timeout=self.config.startup_timeout_s)
-            self._bootstrap(client)
-        except Exception:
-            if client is not None:
-                client.stop_channels()
+            manager_type = _load_kernel_manager()
+            manager = manager_type(kernel_name="python3")
+            client = None
             try:
-                manager.shutdown_kernel(now=True)
+                env = os.environ.copy()
+                env[_RECORDING_PATH_ENV] = self.config.recording_path
+                manager.start_kernel(env=env)
+                client = manager.client()
+                client.start_channels()
+                client.wait_for_ready(timeout=self.config.startup_timeout_s)
+                self._bootstrap(client)
             except Exception:
-                logger.exception("Failed to stop an uninitialized code policy kernel")
-            raise
+                if client is not None:
+                    client.stop_channels()
+                try:
+                    manager.shutdown_kernel(now=True)
+                except Exception:
+                    logger.exception("Failed to stop an uninitialized code policy kernel")
+                raise
 
-        self._kernel_manager = manager
-        self._kernel_client = client
+            self._kernel_manager = manager
+            self._kernel_client = client
+            self._kernel_generation += 1
         logger.info("Code policy kernel started", recording_path=self.config.recording_path)
         return client
 
@@ -503,6 +597,8 @@ class CodePolicyModule(Module):
             manager.restart_kernel(now=True)
             client.wait_for_ready(timeout=self.config.startup_timeout_s)
             self._bootstrap(client)
+            with self._kernel_lock:
+                self._kernel_generation += 1
             logger.info("Code policy kernel restarted after failed interrupt")
             return False, True
         except Exception:
@@ -511,10 +607,11 @@ class CodePolicyModule(Module):
             return False, True
 
     def _shutdown_kernel(self, *, reason: str) -> None:
-        manager = self._kernel_manager
-        client = self._kernel_client
-        self._kernel_manager = None
-        self._kernel_client = None
+        with self._kernel_lock:
+            manager = self._kernel_manager
+            client = self._kernel_client
+            self._kernel_manager = None
+            self._kernel_client = None
         if manager is None and client is None:
             return
         try:
@@ -526,6 +623,37 @@ class CodePolicyModule(Module):
             if client is not None:
                 client.stop_channels()
         logger.info("Code policy kernel stopped", reason=reason)
+
+    def _observer_state(self, availability: ObserverAvailability) -> CodePolicyObserverState:
+        descriptor: CodePolicyObserverDescriptor | None = None
+        with self._kernel_lock:
+            generation = self._kernel_generation
+            manager = self._kernel_manager
+            client = self._kernel_client
+            if availability in {"ready", "replaced"}:
+                if manager is None or client is None or not manager.is_alive():
+                    availability = "unavailable"
+                else:
+                    connection = manager.get_connection_info()
+                    key = connection["key"]
+                    if isinstance(key, str):
+                        key = key.encode()
+                    descriptor = CodePolicyObserverDescriptor(
+                        transport=connection["transport"],
+                        ip=connection["ip"],
+                        iopub_port=connection["iopub_port"],
+                        signature_scheme=connection["signature_scheme"],
+                        key_base64=base64.b64encode(key).decode("ascii"),
+                        code_policy_session_id=self._session_id,
+                        jupyter_client_session_id=client.session.session,
+                        kernel_generation=generation,
+                    )
+        return CodePolicyObserverState(
+            availability=availability,
+            code_policy_session_id=self._session_id,
+            kernel_generation=generation,
+            descriptor=descriptor,
+        )
 
 
 def _new_session_id() -> str:

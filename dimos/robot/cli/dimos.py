@@ -618,6 +618,101 @@ def agent_send_cmd(
     typer.echo(text)
 
 
+@main.command("code-policy-watch")
+def code_policy_watch_cmd(
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="Parent directory in which to reserve a new private recording.",
+    ),
+    startup_timeout: float = typer.Option(
+        10.0,
+        "--startup-timeout",
+        min=0.1,
+        help="Seconds allowed for kernel preparation and verified IOPub readiness.",
+    ),
+    poll_interval: float = typer.Option(
+        0.25,
+        "--poll-interval",
+        min=0.05,
+        help="Seconds between code-policy lifecycle checks.",
+    ),
+    module: str | None = typer.Option(
+        None,
+        "--module",
+        help="Explicit CodePolicyModule identity when discovery is ambiguous.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run",
+        help="Require the current running DimOS instance to have this run ID.",
+    ),
+    web: bool = typer.Option(
+        False,
+        "--web",
+        help="Render observed cells in a local read-only browser page.",
+    ),
+    web_port: int = typer.Option(
+        8766,
+        "--web-port",
+        min=0,
+        max=65535,
+        help="Loopback web port; use 0 to select an available port.",
+    ),
+    open_browser: bool = typer.Option(
+        True,
+        "--open/--no-open",
+        help="Open the browser automatically after verified observer readiness.",
+    ),
+) -> None:
+    """Observe a running code-policy kernel through read-only Jupyter IOPub."""
+    # Imported only for this agents-extra command; the base CLI stays usable without
+    # Jupyter dependencies.
+    from dimos.agents.code_policy_observer import (
+        select_code_policy_module,
+        watch_code_policy,
+    )
+    from dimos.porcelain.dimos import Dimos
+
+    entry = get_most_recent(alive_only=True)
+    if entry is None:
+        typer.echo("Error: no running DimOS instance", err=True)
+        raise typer.Exit(1)
+    if run_id is not None and entry.run_id != run_id:
+        typer.echo(
+            f"Error: current run is {entry.run_id!r}, not requested {run_id!r}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    app = None
+    try:
+        app = Dimos.connect(timeout=startup_timeout)
+        selected = select_code_policy_module(dir(app), module)
+        host = getattr(app, selected)
+        watch_kwargs: dict[str, Any] = {}
+        if web:
+            from dimos.agents.code_policy_observer_web import WebObserverView
+
+            watch_kwargs["view"] = WebObserverView(
+                port=web_port,
+                open_browser=open_browser,
+            )
+        watch_code_policy(
+            host,
+            output_parent=output,
+            startup_timeout_s=startup_timeout,
+            poll_interval_s=poll_interval,
+            **watch_kwargs,
+        )
+    except (LookupError, RuntimeError, TimeoutError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        if app is not None:
+            app.stop()
+
+
 @main.command()
 def restart(
     force: bool = typer.Option(False, "--force", "-f", help="Force kill before restarting"),
