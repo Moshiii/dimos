@@ -157,17 +157,9 @@ class MarkerDetectionStreamModule(StreamModule[Image, Detection3DArray]):
     def start(self) -> None:
         Module.start(self)
 
-        # Inputs are wired by name; only the single Out is load-bearing here.
-        # tf is a plain In, and H264InputMixin adds a compressed-video In that
-        # feeds color_image from inside.
-        if len(self.outputs) != 1:
-            raise TypeError(
-                f"{self.__class__.__name__} must have exactly one Out port, "
-                f"found {len(self.outputs)}"
-            )
-
         store = self.register_disposable(NullStore())
         store.start()
+
         stream: Stream[Image] = store.stream("color_image", Image)
 
         if self.config.camera_info is not None:
