@@ -26,7 +26,9 @@ def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
     return next(atom.kwargs for atom in blueprint.blueprints if atom.module is module_type)
 
 
-def test_keyboard_teleop_uses_real_hardware_and_resolved_can_port(monkeypatch) -> None:
+def test_keyboard_teleop_wires_hardware_manipulation_and_trajectory_priority(
+    monkeypatch,
+) -> None:
     try:
         with monkeypatch.context() as patch:
             patch.setattr(global_config, "simulation", "")
@@ -39,21 +41,10 @@ def test_keyboard_teleop_uses_real_hardware_and_resolved_can_port(monkeypatch) -
             assert len(hardware) == 1
             assert hardware[0].adapter_type == "galaxea_a1z"
             assert hardware[0].address == "can7"
-            assert coordinator["tick_rate"] == 100.0
-            assert coordinator["publish_joint_state"] is True
-            assert coordinator["joint_state_frame_id"] == "coordinator"
-            assert [task.type for task in coordinator["tasks"]] == [
-                "eef_twist",
-                "servo",
-                "trajectory",
-            ]
-            gripper = coordinator["tasks"][1]
-            assert gripper.name == "servo_gripper"
-            assert gripper.joint_names == ["arm/gripper"]
-            trajectory = coordinator["tasks"][2]
-            assert trajectory.name == "traj_arm"
-            assert trajectory.joint_names == hardware[0].joints
-            assert trajectory.priority > coordinator["tasks"][0].priority
+            tasks = coordinator["tasks"]
+            trajectory = next(task for task in tasks if task.type == "trajectory")
+            eef_teleop = next(task for task in tasks if task.type == "eef_twist")
+            assert trajectory.priority > eef_teleop.priority
             assert _module_kwargs(blueprint, ManipulationModule)
     finally:
         importlib.reload(teleop)

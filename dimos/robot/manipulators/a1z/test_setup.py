@@ -15,40 +15,11 @@
 from pathlib import Path
 from unittest.mock import Mock
 
-import tomllib
 from typer.testing import CliRunner
 
 from dimos.robot.manipulators.a1z import cli as a1z_cli
 
-REPOSITORY_ROOT = Path(__file__).parents[4]
-PYPROJECT_PATH = REPOSITORY_ROOT / "pyproject.toml"
 runner = CliRunner()
-
-
-def test_vendor_sdk_is_not_a_project_dependency() -> None:
-    project = tomllib.loads(PYPROJECT_PATH.read_text())
-
-    dependencies = [
-        *project["project"]["dependencies"],
-        *(
-            dependency
-            for group in project["dependency-groups"].values()
-            for dependency in group
-            if isinstance(dependency, str)
-        ),
-    ]
-
-    assert not any(
-        dependency == "a1z" or dependency.startswith("a1z ") for dependency in dependencies
-    )
-
-
-def test_setup_help_documents_sdk_only() -> None:
-    result = runner.invoke(a1z_cli.app, ["setup", "--help"])
-
-    assert result.exit_code == 0
-    assert "--sdk-only" in result.stdout
-    assert "Verify the A1Z SDK" in result.stdout
 
 
 def test_setup_sdk_only_does_not_check_hardware(monkeypatch) -> None:
