@@ -213,7 +213,7 @@ all_modules = {
     "gps-nav-skill-container": "dimos.agents.skills.gps_nav_skill.GpsNavSkillContainer",
     "grasping-module": "dimos.manipulation.grasping.grasping.GraspingModule",
     "gstreamer-camera-module": "dimos.hardware.sensors.camera.gstreamer.gstreamer_camera.GstreamerCameraModule",
-    "h264-decoder-module": "dimos.perception.video.h264.H264DecoderModule",
+    "h264-decoder-module": "dimos.stream.video.h264.H264DecoderModule",
     "hosted-stats-module": "dimos.teleop.hosted.hosted_stats.HostedStatsModule",
     "joint-trajectory-controller": "dimos.manipulation.control.trajectory_controller.joint_trajectory_controller.JointTrajectoryController",
     "joystick-module": "dimos.robot.unitree.b1.joystick_module.JoystickModule",

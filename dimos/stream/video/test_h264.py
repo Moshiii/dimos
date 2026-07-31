@@ -25,7 +25,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
-from dimos.perception.video.h264 import (
+from dimos.stream.video.h264 import (
     H264DecoderModule,
     H264InputMixin,
     h264_decode,
