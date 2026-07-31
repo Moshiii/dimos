@@ -18,10 +18,11 @@ from typing import Any
 
 import numpy as np
 
+from dimos.core.module import Module
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.perception.fiducial.marker_detection_stream_module import VideoMarkerDetectionModule
-from dimos.perception.video.h264 import H264DecoderModule
+from dimos.perception.video.h264 import H264DecoderModule, H264InputMixin
 
 PACKET = CompressedVideo(data=b"\x00\x00\x00\x01\x65payload", format="h264", frame_id="cam", ts=1.0)
 
@@ -66,6 +67,17 @@ def test_mixin_port_merges_across_the_mro_onto_an_existing_consumer() -> None:
         assert set(module.outputs) == {"detections"}
     finally:
         module.stop()
+
+
+def test_the_decoder_asks_for_a_dedicated_worker_through_the_mixin() -> None:
+    """Set on the mixin, not the decoder: a retrofitted host must inherit it too."""
+    assert H264DecoderModule.dedicated_worker is True
+    assert VideoMarkerDetectionModule.dedicated_worker is True
+
+
+def test_the_mixin_is_not_itself_a_module() -> None:
+    """It types as one, but subclassing Module would register it as a module."""
+    assert not issubclass(H264InputMixin, Module)
 
 
 def test_decoded_frame_is_published_on_the_image_port() -> None:

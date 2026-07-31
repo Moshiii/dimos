@@ -24,18 +24,17 @@ merge across the MRO), so the whole adaptation is::
     class VideoMarkerDetectionModule(H264InputMixin, MarkerDetectionStreamModule):
         config: VideoMarkerDetectionModuleConfig
 
-Trade-off vs a standalone :class:`~dimos.perception.video.h264_decoder_module.
-H264DecoderModule`: the mixin is one module less in the graph, but each
-video-capable module owns its own decoder — two of them watching the same
-stream decode it twice. Share the standalone module when pixels have several
-consumers. Don't wire both ``video`` and the image topic: the input would
-see both streams.
+Trade-off vs the standalone :class:`H264DecoderModule` below: the mixin is one
+module less in the graph, but each video-capable module owns its own decoder —
+two of them watching the same stream decode it twice. Share the standalone
+module when pixels have several consumers. Don't wire both ``video`` and the
+image topic: the input would see both streams.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -43,6 +42,16 @@ from dimos.core.stream import In, Out
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.utils.logging_config import setup_logger
+
+if TYPE_CHECKING:
+    from av.video.codeccontext import VideoCodecContext
+
+    # The mixin only ever runs inside a Module, so type it as one — `start`,
+    # `register_disposable` and `config` are the host's. At runtime it stays a
+    # plain object, or it would be collected as a module in its own right.
+    _MixinHost = Module
+else:
+    _MixinHost = object
 
 logger = setup_logger()
 
@@ -53,32 +62,41 @@ class H264InputConfig(ModuleConfig):
     decode_hz: float = 5.0
 
 
-class H264InputMixin:
+class H264InputMixin(_MixinHost):
     """Mixin: an H.264 ``video`` In decoded into the host's image In."""
 
     video: In[CompressedVideo]
 
-    # Name of the host module's In[Image] to feed.
-    image_port: str = "color_image"
+    # Decode is CPU-bound and runs in the host's process, so sharing a worker
+    # stalls every module on it. The mixin leads the MRO, so a host that wants
+    # otherwise still wins by setting this on itself.
+    dedicated_worker: ClassVar[bool] = True
 
+    # Name of the host module's In[Image] to feed.
+    image_port: ClassVar[str] = "color_image"
+
+    # Untyped here on purpose: class annotations are resolved at runtime to
+    # collect ports, so an `av` type would make this optional dep a hard
+    # import. It is narrowed at the one place it is used.
     _decoder: Any = None
     _last_fed: float = 0.0
 
     @rpc
     def start(self) -> None:
-        super().start()  # type: ignore[misc]
+        super().start()
         import av
 
         self._decoder = av.codec.CodecContext.create("h264", "r")
-        self.register_disposable(  # type: ignore[attr-defined]
-            self.video.observable().subscribe(self._decode_into_image)  # type: ignore[no-untyped-call]
-        )
+        self.register_disposable(self.video.observable().subscribe(self._decode_into_image))
 
     def _decode_into_image(self, msg: CompressedVideo) -> None:
         import av
 
+        decoder: VideoCodecContext | None = self._decoder
+        if decoder is None:
+            return  # packet raced ahead of start()
         try:
-            frames = self._decoder.decode(av.packet.Packet(msg.data.tobytes()))
+            frames = decoder.decode(av.packet.Packet(msg.data.tobytes()))
         except av.error.FFmpegError:
             return  # P-frame with no reference yet (joined mid-GOP)
         except Exception:
@@ -86,7 +104,9 @@ class H264InputMixin:
             return
         if not frames:
             return
-        decode_hz = getattr(self.config, "decode_hz", 5.0)  # type: ignore[attr-defined]
+        # The host owns the config; only H264InputConfig subclasses carry the
+        # knob, so read it off the instance rather than narrowing config here.
+        decode_hz: float = getattr(self.config, "decode_hz", 5.0)
         now = time.monotonic()
         if decode_hz > 0 and now - self._last_fed < 1.0 / decode_hz:
             return
@@ -109,7 +129,6 @@ class H264DecoderModule(H264InputMixin, Module):
     directly and skip this hop.
     """
 
-    dedicated_worker = True
     config: H264InputConfig
 
     color_image: Out[Image]
