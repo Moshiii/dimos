@@ -14,11 +14,12 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 from dimos.core.global_config import global_config
 from dimos.core.transport_factory import rpc_backend
-from dimos.protocol.rpc.pubsubrpc import ZenohRPC
+from dimos.protocol.rpc.zenohrpc import ZenohRPC
 from dimos.protocol.service.zenohservice import ZENOH_LOCAL_ROUTER_ENDPOINT
 from dimos.utils.logging_config import setup_logger
 
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
     from dimos.protocol.rpc.spec import RPCInspectable, RPCSpec
 
 logger = setup_logger()
+
+_CONNECT_ATTEMPT_TIMEOUT = 0.25
 
 
 class CoordinatorRPC:
@@ -58,8 +61,23 @@ class CoordinatorRPC:
         )
         rpc.start()
         client = cls(rpc)
+        deadline = time.monotonic() + timeout
+        last_timeout: TimeoutError | None = None
         try:
-            client.call("ping", rpc_timeout=timeout)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Coordinator did not respond within {timeout} seconds"
+                    ) from last_timeout
+                try:
+                    client.call(
+                        "ping",
+                        rpc_timeout=min(_CONNECT_ATTEMPT_TIMEOUT, remaining),
+                    )
+                    break
+                except TimeoutError as exc:
+                    last_timeout = exc
         except BaseException:
             rpc.stop()
             raise

@@ -41,6 +41,7 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
 )
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
+from dimos.core.stream import Out
 from dimos.core.transport import LCMTransport
 from dimos.hardware.whole_body.spec import WholeBodyConfig
 from dimos.mapping.costmapper import CostMapper
@@ -78,6 +79,15 @@ _NOMINAL_PELVIS_Z = 0.74
 _pelvis_mid360_cache: list[Any] = []
 
 assert G1.height_clearance is not None and G1.width_clearance is not None
+
+
+class _G1GrootCoordinator(ControlCoordinator):
+    g1_joints: Out[JointState]
+
+
+_G1_JOINTS_TOPIC = "/g1/joints"
+_G1_JOINTS_ENTITY = f"world{_G1_JOINTS_TOPIC}"
+
 
 _platform = resolve_g1_groot_platform()
 
@@ -184,14 +194,14 @@ _rerun_config: dict[str, Any] = {
         "world/pimsim/pointlio_odometry": None,
         "world/localization_anchor": None,
         "world/lidar": _lidar_scan,
-        "world/coordinator_joint_state": g1_urdf_joint_state(root_path=_RERUN_ROOT),
+        _G1_JOINTS_ENTITY: g1_urdf_joint_state(root_path=_RERUN_ROOT),
         "world/odometry": _real_odometry_root,
         "world/global_costmap": g1_costmap,
         "world/navigation_costmap": g1_costmap,
         "world/path": _nav_path,
     },
     "max_hz": {
-        "world/coordinator_joint_state": 20.0,
+        _G1_JOINTS_ENTITY: 20.0,
         "world/g1/imu": 10.0,
         "world/g1/motor_states": 10.0,
         "world/g1/motor_command": 10.0,
@@ -232,7 +242,9 @@ def _viewer() -> Any:
     return vis_module(viewer_backend=global_config.viewer, rerun_config=_rerun_config)
 
 
-_coordinator = ControlCoordinator.blueprint(
+_coordinator = _G1GrootCoordinator.blueprint(
+    instance_name="ControlCoordinator",
+    publish_robot_joint_states=True,
     tick_rate=_platform.tick_rate,
     hardware=[
         HardwareComponent(
@@ -272,6 +284,7 @@ _coordinator = ControlCoordinator.blueprint(
 ).transports(
     {
         ("joint_command", JointState): LCMTransport("/g1/joint_command", JointState),
+        ("g1_joints", JointState): LCMTransport(_G1_JOINTS_TOPIC, JointState),
         ("cmd_vel", Twist): LCMTransport("/g1/cmd_vel", Twist),
         ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
         ("imu", Imu): LCMTransport("/g1/imu", Imu),
@@ -284,6 +297,6 @@ _coordinator = ControlCoordinator.blueprint(
 
 unitree_g1_groot_wbc = (
     autoconnect(_platform.backend, _coordinator, _navigation, _viewer())
-    .remappings(cast("Any", [(ControlCoordinator, "twist_command", "cmd_vel")]))
+    .remappings(cast("Any", [(_G1GrootCoordinator, "twist_command", "cmd_vel")]))
     .global_config(robot_model="unitree_g1", n_workers=_platform.n_workers)
 )
