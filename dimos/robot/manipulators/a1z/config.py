@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from dimos.control.components import HardwareComponent, HardwareType, make_joints
+from dimos.core.global_config import global_config
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.robot.manipulators._modeling import (
@@ -51,11 +52,16 @@ def make_a1z_hardware(
     address: str | None = None,
     has_gripper: bool = True,
     auto_enable: bool = True,
+    adapter_kwargs: dict[str, object] | None = None,
     home_joints: list[float] | None = None,
 ) -> HardwareComponent:
-    adapter_kwargs: dict[str, object] = {}
+    kwargs: dict[str, object] = {}
     if home_joints is not None:
-        adapter_kwargs["initial_positions"] = home_joints
+        kwargs["initial_positions"] = home_joints
+    if adapter_type == "galaxea_a1z":
+        kwargs["gripper"] = has_gripper
+    if adapter_kwargs:
+        kwargs.update(adapter_kwargs)
     return HardwareComponent(
         hardware_id=hw_id,
         hardware_type=HardwareType.MANIPULATOR,
@@ -64,7 +70,35 @@ def make_a1z_hardware(
         address=address,
         auto_enable=auto_enable,
         gripper_joints=[f"{hw_id}/gripper"] if has_gripper else [],
-        adapter_kwargs=adapter_kwargs,
+        gripper_open_position=0.1 if has_gripper else None,
+        gripper_closed_position=0.0 if has_gripper else None,
+        adapter_kwargs=kwargs,
+    )
+
+
+def a1z_hardware(
+    hw_id: str = "arm",
+    *,
+    has_gripper: bool = True,
+    mock_without_address: bool = False,
+    dynamics_urdf_path: Path | None = None,
+    adapter_kwargs: dict[str, object] | None = None,
+) -> HardwareComponent:
+    """Configure mock or real A1Z hardware from the resolved global settings."""
+    if global_config.simulation or (mock_without_address and not global_config.can_port):
+        return make_a1z_hardware(hw_id, has_gripper=has_gripper)
+
+    resolved_adapter_kwargs = dict(adapter_kwargs or {})
+    if dynamics_urdf_path is not None:
+        # Preserve LfsPath laziness: the adapter resolves the model only when
+        # connect() constructs the vendor robot.
+        resolved_adapter_kwargs["urdf_path"] = dynamics_urdf_path
+    return make_a1z_hardware(
+        hw_id,
+        adapter_type="galaxea_a1z",
+        address=global_config.can_port or "a1zcan",
+        has_gripper=has_gripper,
+        adapter_kwargs=resolved_adapter_kwargs,
     )
 
 
