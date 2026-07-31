@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uv venv --clear --python 3.12 .graspgenx-venv
-PYTHON=.graspgenx-venv/bin/python
+PYTHON=.venv/bin/python
 uv pip install --python "$PYTHON" --extra-index-url https://download.pytorch.org/whl/cu128 \
   --index-strategy unsafe-best-match \
   torch==2.7.1+cu128 torchvision==0.22.1+cu128
