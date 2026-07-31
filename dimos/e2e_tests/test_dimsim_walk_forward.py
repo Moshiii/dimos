@@ -16,7 +16,14 @@ import pytest
 
 
 @pytest.mark.self_hosted_large
-def test_walk_forward(lcm_spy, start_blueprint, human_input, scene_control, simulator_name) -> None:
+def test_walk_forward(
+    lcm_spy,
+    start_blueprint,
+    wait_for_agent_ready,
+    human_input,
+    scene_control,
+    simulator_name,
+) -> None:
     scene_args = ("--dimsim-scene=empty",) if simulator_name == "dimsim" else ()
     start_blueprint(
         *scene_args,
@@ -29,8 +36,7 @@ def test_walk_forward(lcm_spy, start_blueprint, human_input, scene_control, simu
         simulator=simulator_name,
         scene_package="none",
     )
-    lcm_spy.save_topic("/rpc/McpClient/on_system_modules/res")
-    lcm_spy.wait_for_saved_topic("/rpc/McpClient/on_system_modules/res", timeout=1200.0)
+    wait_for_agent_ready(timeout=1200.0)
 
     origin_x, origin_y = 1, 2
     scene_control.set_agent_position(origin_x, origin_y)

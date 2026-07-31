@@ -71,6 +71,17 @@ def lcm_spy(transport_runtime: None) -> Iterator[LcmSpy]:
 
 
 @pytest.fixture
+def wait_for_agent_ready(lcm_spy: LcmSpy) -> Callable[[float], None]:
+    topic = "/agent_idle"
+    lcm_spy.save_topic(topic)
+
+    def wait(timeout: float = 120.0) -> None:
+        lcm_spy.wait_for_saved_topic(topic, timeout=timeout)
+
+    return wait
+
+
+@pytest.fixture
 def follow_points(lcm_spy: LcmSpy):
     def fun(*, points: list[tuple[float, float, float]], fail_message: str) -> None:
         topic = "/goal_reached#std_msgs.Bool"

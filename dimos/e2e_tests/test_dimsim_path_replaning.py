@@ -21,6 +21,7 @@ from dimos.msgs.std_msgs.Bool import Bool
 def test_path_replanning(
     lcm_spy,
     start_blueprint,
+    wait_for_agent_ready,
     scene_control,
     simulator_name,
     direct_cmd_vel_explorer,
@@ -32,8 +33,7 @@ def test_path_replanning(
         else ("run", "unitree-go2-agentic")
     )
     start_blueprint(*args, simulator=simulator_name, scene_package="none")
-    lcm_spy.save_topic("/rpc/McpClient/on_system_modules/res")
-    lcm_spy.wait_for_saved_topic("/rpc/McpClient/on_system_modules/res", timeout=1200.0)
+    wait_for_agent_ready(timeout=1200.0)
 
     scene_control.set_agent_position(3, 2)
 
