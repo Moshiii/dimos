@@ -88,13 +88,13 @@ pose, the point-cloud/overlay visualization, and the collision-free preview.
 the TCP goal in the candidate point cloud's frame. Its pre-grasp is computed as:
 
 ```text
-pre_grasp_position = grasp_position + grasp_orientation * (0, 0, 0.100 m)
+pre_grasp_position = grasp_position - grasp_orientation * (0, 0, 0.100 m)
 ```
 
-The offset is the grasp frame's local `+Z` approach direction. It is not a
-world-Z lift: an angled or side grasp receives an equally angled or sideward
-pre-grasp. Descent and ascent use Cartesian paths between the current TCP pose
-and the selected grasp or pre-grasp target.
+GraspGenX local `+Z` is the final approach direction, so the pre-grasp retreats
+along local `-Z`. It is not a world-Z lift: an angled or side grasp receives an
+equally angled or sideward pre-grasp. Descent and ascent use Cartesian paths
+between the current TCP pose and the selected grasp or pre-grasp target.
 
 The `picknplace-graspgenx` blueprint uses the xArm 85 mm gripper sweep-volume
 and calibrated base-to-TCP transform. The TCP is rolled 90 degrees around the

@@ -170,12 +170,14 @@ class PickNPlaceModule(Module):
 
     @rpc
     def get_pre_grasp_pose(self) -> PoseStamped | None:
-        """Return the selected goal offset 100 mm along its approach direction."""
+        """Return the selected goal offset 100 mm opposite its final approach direction."""
         if self._goal_pose is None:
             return None
         if self.config.grasp_strategy == "graspgenx":
             offset = self._goal_pose.orientation.rotate_vector(
-                Vector3(0.0, 0.0, self.config.graspgenx_pregrasp_offset)
+                # GraspGenX local +Z points in the direction of the final
+                # approach. A pre-grasp retreats along the opposite axis.
+                Vector3(0.0, 0.0, -self.config.graspgenx_pregrasp_offset)
             )
         else:
             offset = Vector3(0.0, 0.0, 0.100)

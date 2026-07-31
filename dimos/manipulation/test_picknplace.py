@@ -144,7 +144,7 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     module.graspgenx_candidates.publish.assert_called_once_with(module.get_grasp_candidates())
     pre_grasp = module.get_pre_grasp_pose()
     assert pre_grasp is not None
-    assert pre_grasp.position.x == pytest.approx(goal.position.x + 0.1)
+    assert pre_grasp.position.x == pytest.approx(goal.position.x - 0.1)
     assert pre_grasp.position.z == pytest.approx(goal.position.z)
     selected_goal = module.select_grasp_candidate(1)
     assert selected_goal is not None
@@ -153,7 +153,7 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     pre_grasp = module.get_pre_grasp_pose()
     assert pre_grasp is not None
     assert pre_grasp.position.x == pytest.approx(selected_goal.position.x)
-    assert pre_grasp.position.z == pytest.approx(selected_goal.position.z + 0.1)
+    assert pre_grasp.position.z == pytest.approx(selected_goal.position.z - 0.1)
 
 
 def test_picknplace_returns_empty_candidates_for_obb_grasps() -> None:
