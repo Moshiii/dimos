@@ -1,11 +1,18 @@
 ## Why
 
-DimSim scenes contain authoritative object identity, transforms, and state, but DimOS has no typed private interface for consuming the complete semantics needed to generate objective embodied tasks. Without that boundary, benchmark questions would depend on asset-title heuristics, duplicated benchmark annotations, or manually supplied answers that can drift from the simulated scene.
+DimSim scenes contain authoritative object identity, transforms, and state, but
+the pinned apartment revision does not carry the semantic taxonomy needed to
+generate objective embodied tasks. Without a versioned integration profile,
+benchmark questions would depend on asset-title heuristics or manually supplied
+answers that can drift from the simulated scene.
 
 ## What Changes
 
-- Extend the DimSim integration contract with a private, typed, read-only `SceneOracleView` for one coherently reset scene.
-- Require DimSim-owned semantic identity, classes, aliases, state, geometry, regions, and provenance for facts used by benchmark generators.
+- Add a private, typed, read-only `SceneOracleView` assembled from one coherent
+  DimSim runtime snapshot and a versioned DimOS apartment semantic profile.
+- Bind authored semantic classes, aliases, state mappings, navigation policy,
+  and provenance to exact stable asset IDs and a pinned DimSim revision; never
+  infer them from display titles.
 - Add deterministic offline generation of one validated smoke task in each category:
   - destination navigation;
   - targeted state QA;
@@ -29,7 +36,9 @@ None.
 
 ## Impact
 
-- Affects the DimSim scene/integration boundary under `dimos/simulation/dimsim/` and requires a compatible DimSim scene-schema/oracle revision.
+- Affects the DimSim scene/integration boundary under
+  `dimos/simulation/dimsim/` and pins the compatible external apartment
+  revision without modifying or forking DimSim.
 - Adds a benchmark-generation package under `dimos/benchmark/` with strict models, generators, canonical bundle writing, validation, and smoke fixtures.
 - Reuses established static spatial-corpus conventions where applicable: strict immutable records, stable opaque IDs, canonical JSON/JSONL, deterministic templates, and physically separable public/oracle roots.
 - Does not change simulator runtime modules, benchmark runners, Pi SDK execution, submission protocols, or score ledgers.

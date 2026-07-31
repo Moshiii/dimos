@@ -15,6 +15,7 @@
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import threading
 import time
 from typing import IO
@@ -22,14 +23,13 @@ from typing import IO
 from dimos.constants import STATE_DIR
 from dimos.core.global_config import GlobalConfig
 from dimos.simulation.dimsim.deno_utils import ensure_deno, ensure_playwright_chromium
+from dimos.simulation.dimsim.revision import DIMSIM_REPO_COMMIT, DIMSIM_REPO_URL
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
 _VIDEO_RATE = 50
 _LIDAR_RATE = 1000
-_DIMSIM_REPO_URL = "https://github.com/paul-nechifor/DimSim.git"
-_DIMSIM_REPO_BRANCH = "run-from-repo"
 
 
 class DimSimProcess:
@@ -129,23 +129,69 @@ def _kill_port_holder(port: int) -> None:
 def _ensure_repo() -> Path:
     repo_dir = STATE_DIR / "dimsim_repo"
     if (repo_dir / ".git").exists():
+        _validate_repo(repo_dir)
         return repo_dir
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(f"Cloning DimSim into {repo_dir}")
-    subprocess.run(
+    with tempfile.TemporaryDirectory(prefix="dimsim_repo.", dir=STATE_DIR) as temp:
+        checkout = Path(temp)
+        subprocess.run(["git", "init", str(checkout)], check=True)
+        subprocess.run(
+            ["git", "-C", str(checkout), "remote", "add", "origin", DIMSIM_REPO_URL],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "fetch",
+                "--depth",
+                "1",
+                "origin",
+                DIMSIM_REPO_COMMIT,
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"],
+            check=True,
+        )
+        checkout.rename(repo_dir)
+    _validate_repo(repo_dir)
+    return repo_dir
+
+
+def _validate_repo(repo_dir: Path) -> None:
+    head = subprocess.run(
+        ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if head != DIMSIM_REPO_COMMIT:
+        raise RuntimeError(
+            f"DimSim checkout {repo_dir} is at {head}; expected pinned revision "
+            f"{DIMSIM_REPO_COMMIT}. Move the checkout aside and launch again."
+        )
+    tracked_changes = subprocess.run(
         [
             "git",
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            _DIMSIM_REPO_BRANCH,
-            _DIMSIM_REPO_URL,
+            "-C",
             str(repo_dir),
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
         ],
         check=True,
-    )
-    return repo_dir
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if tracked_changes:
+        raise RuntimeError(
+            f"DimSim checkout {repo_dir} has modified tracked files; refusing to "
+            "run an unverifiable simulator revision."
+        )
 
 
 def _deno_cmd(deno_path: str, repo_dir: Path) -> list[str]:

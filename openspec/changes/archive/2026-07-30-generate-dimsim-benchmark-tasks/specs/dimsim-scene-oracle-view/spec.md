@@ -1,29 +1,47 @@
 ## ADDED Requirements
 
 ### Requirement: Versioned typed scene oracle view
-DimSim SHALL expose a private, read-only, versioned `SceneOracleView` for benchmark generation. The view SHALL identify the scene and semantic-schema revision and SHALL use strict typed records that reject unknown or malformed fields.
+The DimOS integration SHALL assemble a private, read-only, versioned
+`SceneOracleView` for benchmark generation from one synchronous DimSim runtime
+snapshot and one compatible semantic profile. The view SHALL identify the
+scene, upstream, profile, and semantic-schema revisions and SHALL use strict
+typed records that reject unknown or malformed fields.
 
 #### Scenario: Export a supported scene
-- **WHEN** benchmark generation requests the oracle view for a coherently reset supported scene
-- **THEN** DimSim returns a typed view containing the scene identity, semantic-schema revision, frame contract, entities, regions, and provenance
+- **WHEN** benchmark generation requests the oracle view for a coherently reset
+  supported scene
+- **THEN** the integration joins the live snapshot to the compatible profile
+  and returns a typed view containing the scene identity, revisions, frame
+  contract, entities, regions, and provenance
 
 #### Scenario: Reject an unsupported semantic schema
 - **WHEN** the DimSim integration receives an oracle view with an unsupported schema version or malformed required record
 - **THEN** it fails with an actionable compatibility error instead of silently omitting or coercing semantic facts
 
 ### Requirement: Authoritative entity semantics
-Each entity exposed for benchmark generation SHALL have a stable simulator-owned identifier, one explicit semantic class, agent-facing names or aliases, transform, query geometry, current semantic state where applicable, and provenance for every authored or policy-derived semantic field. The oracle view MUST NOT infer semantic class, state, orientation, or region membership from display-title substring matching.
+Each entity exposed for benchmark generation SHALL join an exact stable
+simulator-owned identifier to one profile-authored semantic class and approved
+aliases, plus live transform, query geometry, and current state where
+applicable. The oracle view MUST NOT infer semantic class, state, orientation,
+or region membership from display-title substring matching.
 
 #### Scenario: Export a stateful television
-- **WHEN** the loaded scene contains the benchmark television
-- **THEN** its oracle entity record exposes a stable identifier, semantic class `television`, approved names, query geometry, and an explicit canonical power state such as `ON` or `OFF`
+- **WHEN** the loaded scene contains the exact profiled television ID in a
+  supported state
+- **THEN** its oracle entity record exposes that stable identifier, semantic
+  class `television`, approved names, live query geometry, and the mapped
+  canonical power state `ON` or `OFF`
 
 #### Scenario: Required semantics are absent
-- **WHEN** an entity has geometry or a display title but lacks an authoritative semantic class needed by a generator
+- **WHEN** an entity has geometry or a display title but lacks an exact
+  compatible profile binding needed by a generator
 - **THEN** the oracle view does not fabricate that class and the dependent task candidate is rejected
 
 ### Requirement: Coherent scene state
-One `SceneOracleView` SHALL represent one coherent scene reset. Entity transforms, current states, region membership, and derived relationships in the view SHALL refer to the same reset state, and the view SHALL identify the reset or state revision used to produce it.
+One `SceneOracleView` SHALL represent one synchronous browser snapshot. Entity
+transforms, current states, and world-space bounds in the view SHALL be captured
+in one non-awaiting script execution, and the integration SHALL derive a stable
+reset revision from that content.
 
 #### Scenario: Read canonical reset state
 - **WHEN** the apartment is reset to its canonical state and its oracle view is exported
@@ -45,7 +63,11 @@ The oracle view SHALL declare its coordinate frame, handedness, units, gravity a
 - **THEN** the oracle view does not claim that a canonical left, right, front, or rear relation is available
 
 ### Requirement: Semantic regions and membership
-The oracle view SHALL represent semantic regions with stable identifiers, geometry, semantic class, and provenance, and SHALL expose authoritative entity-region membership where such membership is declared. A generator MUST reject region-dependent candidates whose membership is missing, multiple, or boundary-sensitive under the configured tolerance.
+The oracle view SHALL represent profiled semantic regions with stable
+identifiers, geometry, semantic class, and provenance, and SHALL expose
+profile-authored entity-region membership where declared. A generator MUST
+reject region-dependent candidates whose membership is missing, multiple, or
+boundary-sensitive under the configured tolerance.
 
 #### Scenario: Resolve an entity to one region
 - **WHEN** a future region-dependent task examines an entity with one stable authoritative region membership

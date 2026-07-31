@@ -10,7 +10,10 @@ The smoke target is intentionally narrow: one canonical apartment scene and exac
 
 **Goals:**
 
-- Make DimSim the sole authority for scene semantics used by benchmark generation.
+- Make the pinned DimSim runtime authoritative for stable object identity,
+  transforms, geometry, and current state, with a versioned DimOS integration
+  profile supplying the apartment taxonomy and state vocabulary absent from the
+  external scene format.
 - Define a strict private `SceneOracleView` for one coherent DimSim reset.
 - Compile exactly one objective smoke task for destination, targeted QA, broad count QA, and multi-hop comparison.
 - Reject unsupported or ambiguous candidates instead of guessing labels.
@@ -29,25 +32,39 @@ The smoke target is intentionally narrow: one canonical apartment scene and exac
 
 ## Decisions
 
-### 1. DimSim owns semantics; DimOS consumes a normalized private view
+### 1. A pinned DimSim snapshot and versioned DimOS profile jointly define truth
 
-DimSim's scene representation remains the source of truth. Its private integration surface will return a versioned semantic payload for the current coherent reset. DimOS will validate and normalize that payload into frozen `SceneOracleView` models; it will not maintain benchmark-local object annotations.
+The unmodified DimSim runtime remains the source of stable asset identity,
+current state, transforms, and world-space rendered bounds. A versioned DimOS
+apartment profile supplies the semantic classes, approved aliases, state-ID
+mapping, navigation sampling bounds, and provenance that the external scene
+format does not expose. The live provider derives conservative free space by
+querying every enabled non-sensor collider in DimSim's Rapier world. The profile
+binds only by exact asset ID at one pinned DimSim commit and never by
+display-title substring.
 
-The DimSim-side payload must expose:
+The private provider must assemble:
 
-- scene, reset-state, and semantic-schema revisions;
+- scene, reset-state, profile, and semantic-schema revisions;
 - a complete frame and unit convention;
 - the configured embodiment footprint and canonical spawn used for generation gates;
 - navigable and blocked geometry sufficient for stopping-region and reachability checks;
-- stable entities with semantic class, approved names, transform, world-space 2-D footprint or bounds, semantic properties, and optional region membership;
+- stable runtime entities joined to profile semantics by exact asset ID, with
+  transform, world-space 2-D bounds, semantic properties, and optional region
+  membership;
 - semantic regions and their geometry;
 - field-level authored or policy-derived provenance.
 
 Provenance records will group semantic field paths by source kind and policy version rather than copying a provenance object into every scalar field.
 
-Alternative considered: parse asset titles and current scene JSON directly in the generator. Rejected because display titles are not a semantic taxonomy, do not declare canonical object fronts or rooms, and would make the benchmark—not DimSim—the de facto semantic authority.
+Alternative considered: parse asset titles directly in the generator. Rejected
+because display titles are not a semantic taxonomy and can change independently
+of stable asset identity.
 
-Alternative considered: store a benchmark-owned semantic sidecar. Rejected because it can drift from asset state and cannot be reused by other DimSim consumers.
+Alternative considered: fork DimSim to add a semantic scene schema. Deferred to
+avoid taking ownership of an external simulator fork. The integration profile
+therefore fails closed on revision, ID, state-vocabulary, or geometry mismatch
+and is intentionally limited to the apartment smoke corpus.
 
 ### 2. `SceneOracleView` is an in-memory generation boundary
 
@@ -55,7 +72,8 @@ The generator will normally receive `SceneOracleView` in memory through a provid
 
 The provider boundary will allow:
 
-- a live `SceneClient` implementation backed by the DimSim private oracle command;
+- a live `SceneClient` implementation backed by one synchronous private runtime
+  snapshot plus the versioned apartment profile;
 - an in-memory fixture provider for unit and golden tests.
 
 Alternative considered: require every corpus release to include the complete oracle view. Rejected because it duplicates scene truth, increases leakage risk, and is unnecessary for normal distribution. Debug tooling may persist a view only in an explicitly private, non-release workspace.
@@ -134,7 +152,15 @@ All distance calculations use world-space 2-D footprints under the declared fram
 - destination distance is the minimum distance from robot stopping footprint to the bathtub outer footprint;
 - comparison distance is minimum polygon-to-polygon surface distance, not center distance.
 
-The destination generator builds the one-metre stopping band, subtracts blocked space using the configured embodiment footprint and clearance policy, and verifies that at least one feasible component is connected to the canonical generation spawn through declared navigable geometry.
+The live provider samples the profiled apartment bounds at a versioned grid
+resolution. For every cell it requires ground support and checks a conservative
+square prism enclosing the embodiment footprint, configured clearance, and
+half-cell sampling error against every enabled non-sensor Rapier collider.
+Four-neighbor flood fill retains only cells connected to the canonical spawn.
+The destination generator intersects that collision-cleared reachable geometry
+with the one-metre stopping band and requires a non-empty feasible region. The
+fixture path exercises the same generator using authored navigable and blocked
+polygons.
 
 The comparison policy requires the winning distance to exceed a versioned non-zero stability margin. The margin is generator configuration, recorded with the contract and covered by boundary tests; the smoke fixture must pass it without an override.
 
@@ -161,15 +187,25 @@ Any failure produces a deterministic private report and leaves the manifest inco
 
 ### 10. Upstream DimSim compatibility is explicit
 
-The current DimOS integration clones an older DimSim branch, while the official project now publishes releases from `Antim-Labs/DimSim`. This change will not silently scrape whichever scene format happens to be present. The provider will require the declared oracle schema and fail clearly when the installed DimSim revision does not support it.
+The current DimOS integration clones an older DimSim branch, while the official
+project now publishes releases from `Antim-Labs/DimSim`. DimOS will pin the
+existing compatible `run-from-repo` commit rather than silently using whichever
+checkout happens to be cached. The provider will require the profile revision,
+exact stable IDs, supported state IDs, and valid live bounds and will fail
+clearly on incompatibility.
 
-Landing the live apartment smoke path requires a compatible DimSim revision that owns the required semantics. Unit and bundle work can proceed against a contract fixture, but the change is not complete until the live provider and canonical apartment export pass the same tests.
+Landing the live apartment smoke path requires the pinned unmodified DimSim
+revision and matching DimOS apartment profile. Unit and bundle work can proceed
+against a contract fixture, but the change is not complete until the live
+provider passes the same generation and release gates.
 
 Updating all DimSim installation and packaging behavior beyond what is necessary to select that compatible revision is outside this change.
 
 ## Risks / Trade-offs
 
-- **[Risk] The current apartment scene lacks some required authoritative semantics.** → Add them at the DimSim source and version the semantic schema; never patch them into benchmark fixtures as production truth.
+- **[Risk] The profile can drift from the external apartment scene.** → Pin the
+  DimSim commit, bind by exact stable IDs and state IDs, validate live bounds,
+  and fail closed on every mismatch.
 - **[Risk] The external DimSim revision and DimOS integration evolve independently.** → Negotiate an explicit oracle schema version and fail fast on incompatibility.
 - **[Risk] A full semantic payload could leak answers if routed through normal agent APIs.** → Keep the provider private, store detailed diagnostics under `oracle/`, and recursively scan public output.
 - **[Risk] Geometry or reachability policies may reject the only desired smoke candidate.** → Emit gate-specific diagnostics and fix authoritative geometry or the versioned policy instead of adding a manual expected answer.
@@ -181,7 +217,9 @@ Updating all DimSim installation and packaging behavior beyond what is necessary
 
 1. Add strict oracle-view and corpus models plus fixture-only providers without changing the current DimSim runtime path.
 2. Add four pure generators, canonical bundle writing, and release validation against a minimal synthetic fixture.
-3. Extend the DimSim private scene contract and canonical apartment semantics, then add the live `SceneClient` provider.
+3. Pin the DimSim revision, add the versioned apartment integration profile,
+   and assemble the private oracle view from one synchronous `SceneClient`
+   snapshot.
 4. Run the same contract and golden smoke tests against the compatible live DimSim revision.
 5. Expose a generation entrypoint that writes only validated frozen artifacts.
 
@@ -189,5 +227,5 @@ Rollback removes the new benchmark-generation package and private provider metho
 
 ## Open Questions
 
-- The compatible upstream DimSim revision or release carrying the oracle schema must be selected during implementation and recorded in source provenance.
-- The initial non-zero comparison stability margin and embodiment-clearance policy must be pinned in generator configuration before the golden apartment artifact is accepted.
+- Whether the DimOS apartment profile should migrate into a future upstream
+  DimSim semantic scene schema remains a follow-up decision.
