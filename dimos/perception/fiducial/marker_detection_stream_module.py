@@ -41,7 +41,7 @@ from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.perception.detection.type.detection3d.marker import Detection3DMarker
 from dimos.perception.fiducial.marker_pose import camera_optical_frame_id, is_fisheye_model
 from dimos.perception.fiducial.marker_transformer import DetectMarkers, MarkersPerFrame
-from dimos.perception.video.h264 import H264InputConfig, H264InputMixin
+from dimos.perception.video.h264 import H264InputMixin
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -186,11 +186,5 @@ class MarkerDetectionStreamModule(StreamModule[Image, Detection3DArray]):
         super().stop()
 
 
-class VideoMarkerDetectionModuleConfig(MarkerDetectionStreamModuleConfig, H264InputConfig):
-    pass
-
-
 class VideoMarkerDetectionModule(H264InputMixin, MarkerDetectionStreamModule):
     """The recognizer fed by compressed video — the mixin decodes."""
-
-    config: VideoMarkerDetectionModuleConfig

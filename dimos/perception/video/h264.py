@@ -23,10 +23,15 @@ one decoder per subscription. The rest is wiring:
   crossing a transport::
 
       class VideoMarkerDetectionModule(H264InputMixin, MarkerDetectionStreamModule):
-          config: VideoMarkerDetectionModuleConfig
+          pass
 
 * :class:`H264DecoderModule` publishes on an Out instead, for graphs where
   several consumers should share one decode.
+
+Every decoded frame is emitted. Rate is the consumer's business — subscribe
+through ``observable()`` for latest-wins backpressure, or thin the stream with
+a memory2 transform. An Image over a decoded frame costs 0.6 us and shares the
+buffer, so the frames a consumer ignores are close to free.
 
 Longer term this belongs beside ``jpeg_lcm``/``jpeg_shm`` as a transport codec
 (:mod:`dimos.protocol.pubsub.encoders`), so consumers keep a plain ``In[Image]``
@@ -39,13 +44,12 @@ same decode, as a memory2 transform.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 import reactivex as rx
-from reactivex import operators as ops
 
 from dimos.core.core import rpc
-from dimos.core.module import Module, ModuleConfig
+from dimos.core.module import Module
 from dimos.core.stream import In, Out
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
@@ -54,9 +58,9 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from reactivex import Observable
 
-    # The mixin only ever runs inside a Module, so type it as one — `start`,
-    # `register_disposable` and `config` are the host's. At runtime it stays a
-    # plain object, or it would be collected as a module in its own right.
+    # The mixin only ever runs inside a Module, so type it as one — `start` and
+    # `register_disposable` are the host's. At runtime it stays a plain object,
+    # or it would be collected as a module in its own right.
     _MixinHost = Module
 else:
     _MixinHost = object
@@ -103,23 +107,14 @@ def h264_decode() -> Callable[[Observable[CompressedVideo]], Observable[Image]]:
     return _operator
 
 
-def _decoded(video: In[CompressedVideo], publish_hz: float) -> Observable[Image]:
-    """``video`` decoded, thinned to ``publish_hz``.
+def _decoded(video: In[CompressedVideo]) -> Observable[Image]:
+    """``video`` decoded.
 
     ``pure_observable`` on purpose: the default is latest-wins backpressured, and
-    a dropped packet costs every frame until the next keyframe. Decode every
-    packet, throttle the frames that come out.
+    a dropped packet costs every frame until the next keyframe. Whatever thins
+    the stream has to sit downstream of the decoder, never in front of it.
     """
-    stages: list[Any] = [h264_decode()]
-    if publish_hz > 0:
-        stages.append(ops.throttle_first(1.0 / publish_hz))
-    return video.pure_observable().pipe(*stages)
-
-
-class H264InputConfig(ModuleConfig):
-    # Every packet is decoded — reference frames don't survive skipping — but
-    # frames reach the consumer at most this often. 0 = every frame.
-    publish_hz: float = 5.0
+    return video.pure_observable().pipe(h264_decode())
 
 
 class H264InputMixin(_MixinHost):
@@ -130,25 +125,17 @@ class H264InputMixin(_MixinHost):
     # the MRO, so this is the consumer's own input, fed from inside.
     color_image: In[Image]
 
-    # Only H264InputConfig subclasses carry the knob; the host owns config.
-    _default_publish_hz: ClassVar[float] = 5.0
-
     @rpc
     def start(self) -> None:
         super().start()
-        hz: float = getattr(self.config, "publish_hz", self._default_publish_hz)
-        self.register_disposable(
-            _decoded(self.video, hz).subscribe(self.color_image.transport.publish)
-        )
+        self.register_disposable(_decoded(self.video).subscribe(self.color_image.transport.publish))
 
 
 class H264DecoderModule(Module):
-    """``video`` (H.264 CompressedVideo) in, throttled BGR ``color_image`` out.
+    """``video`` (H.264 CompressedVideo) in, BGR ``color_image`` out.
 
     One decode shared by every subscriber, for graphs with several consumers.
     """
-
-    config: H264InputConfig
 
     video: In[CompressedVideo]
     color_image: Out[Image]
@@ -156,6 +143,4 @@ class H264DecoderModule(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self.register_disposable(
-            _decoded(self.video, self.config.publish_hz).subscribe(self.color_image.publish)
-        )
+        self.register_disposable(_decoded(self.video).subscribe(self.color_image.publish))
