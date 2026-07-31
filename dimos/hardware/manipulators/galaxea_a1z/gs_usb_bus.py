@@ -36,14 +36,14 @@ Device quirks handled here:
   becomes a queue pop that always meets the SDK's budget.
 
 Requires the locked ``galaxea-a1z`` dependency group plus system libusb; run
-``dimos/robot/manipulators/a1z/scripts/setup_a1z.sh`` from the repo.
+``dimos a1z setup`` before connecting.
 Lives in galaxea_a1z/ because it is the only user today; promote to a shared
 location when a second CAN arm needs it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 import contextlib
 import queue
 import threading
@@ -66,6 +66,25 @@ _GS_CAN_MODE_LISTEN_ONLY = 1 << 0
 _RX_QUEUE_MAX_FRAMES = 8192
 _RX_READ_TIMEOUT_MS = 20
 _UsbInitialization = TypeVar("_UsbInitialization")
+
+
+@contextlib.contextmanager
+def gs_usb_can_bus() -> Iterator[None]:
+    """Route the A1Z SDK's SocketCAN construction through ``GsUsbMacBus``.
+
+    The vendor factory hardcodes ``can.interface.Bus(..., bustype="socketcan")``.
+    On macOS, replace that factory only for the duration of robot construction.
+    """
+    original_bus = can.interface.Bus
+
+    def _bus_factory(*args: Any, **kwargs: Any) -> GsUsbMacBus:
+        return GsUsbMacBus(bitrate=kwargs.get("bitrate", 1_000_000))
+
+    can.interface.Bus = _bus_factory  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        can.interface.Bus = original_bus  # type: ignore[assignment]
 
 
 def _initialize_ready_usb_device(

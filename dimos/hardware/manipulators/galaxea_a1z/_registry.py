@@ -13,5 +13,5 @@
 # limitations under the License.
 
 ADAPTER_FACTORIES = {
-    "galaxea_a1z": "dimos.hardware.manipulators.galaxea_a1z.adapter:GalaxeaA1ZAdapter",
+    "galaxea_a1z": ("dimos.hardware.manipulators.galaxea_a1z.adapter:create_galaxea_a1z_adapter"),
 }

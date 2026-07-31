@@ -17,30 +17,66 @@ rejects unsafe position, velocity, or error states before enabling control.
 
 ## Host setup
 
-Run the setup wrapper as your normal user:
+From a DimOS source checkout, install the pinned, gripper-capable vendor SDK:
 
 ```bash
-./dimos/robot/manipulators/a1z/scripts/setup_a1z.sh
+uv sync --locked --inexact --group galaxea-a1z
 ```
 
-It installs the locked, gripper-capable vendor SDK and validates the platform
-CAN transport. On Linux it requests `sudo` only for SocketCAN setup. To install
-and verify Python dependencies without touching attached hardware:
+Then verify the SDK and configure the platform transport:
 
 ```bash
-./dimos/robot/manipulators/a1z/scripts/setup_a1z.sh --sdk-only
+dimos a1z setup
 ```
 
-Linux hosts can rerun only the CAN setup after boot or reconnecting the
-adapter:
+The CLI does not install or modify Python packages. To verify only the
+already-installed SDK without checking attached hardware:
 
 ```bash
-sudo ./dimos/robot/manipulators/a1z/scripts/setup_a1z_can.sh
+dimos a1z setup --sdk-only
 ```
 
-Do not start the robot unless the script reports that A1Z CAN setup passed.
-The script configures the stable interface name `a1zcan` at 1 Mbit/s and checks
-that the USB transmit path works.
+Linux hosts can rerun SocketCAN setup after boot or reconnecting the adapter:
+
+```bash
+dimos a1z can-setup
+```
+
+Run these commands as your normal user. The CLI asks for confirmation and
+requests `sudo` only for `modprobe`, driver binding, and `ip link` operations.
+Do not start the robot unless it reports that A1Z CAN setup passed. The default
+stable interface is `a1zcan` at 1 Mbit/s.
+
+On macOS, install system libusb first (`brew install libusb`). The setup command
+opens the adapter in listen-only mode, verifies that userspace USB-CAN works,
+and closes it without transmitting.
+
+## Linux HHS adapter compatibility
+
+The HHS USB-CANFD adapter shipped with the A1Z uses USB ID `a8fa:8598`. Some
+Linux `gs_usb` drivers create a normal-looking, UP SocketCAN interface but
+cannot transmit because they hardcode bulk endpoint `0x02`; this adapter may
+use endpoint `0x01`. `dimos a1z can-setup` detects this by sending an empty
+extended-ID probe that cannot match an A1Z motor command and checking the
+kernel transmit/drop counters.
+
+If the CLI reports that the driver rejected the transmission:
+
+- On an ordinary x86-64 Ubuntu host, update to a distribution kernel containing
+  the corrected `gs_usb` endpoint discovery, reboot, and rerun the command.
+  Galaxea currently recommends Ubuntu kernel `6.8.0-124` or newer.
+- On an NVIDIA Jetson or another pinned-kernel system, do not install a generic
+  desktop kernel and do not copy a module from another machine. Patch and build
+  `gs_usb` for the exact running kernel and architecture, install it under
+  `/lib/modules/$(uname -r)`, run `sudo depmod -a`, and reboot.
+
+References:
+
+- [Galaxea HHS driver patch guide](https://galaxea-ai.feishu.cn/docx/XF2ed4pmhoervNxODlfc11Gvnbb)
+- [Upstream Linux endpoint-discovery fix](https://github.com/torvalds/linux/commit/889b2ae9139a87b3390f7003cb1bb3d65bf90a26)
+
+If transmission does not increment either counter, check arm power, CAN
+cabling, termination, and whether another process is resetting the adapter.
 
 ## Run
 

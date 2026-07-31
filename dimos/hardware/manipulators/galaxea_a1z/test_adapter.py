@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import importlib
+import inspect
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -23,6 +24,12 @@ from typing import Any, ClassVar
 
 import numpy as np
 import pytest
+
+from dimos.hardware.manipulators.galaxea_a1z.config import (
+    A1ZConfig,
+    A1ZGripperConfig,
+    A1ZTeachingConfig,
+)
 
 
 class _FakeBus:
@@ -157,6 +164,14 @@ class _FakeArmRobot:
         self.actions.append(("set_gripper_free_drive", enabled))
 
 
+class _FakeKinematics:
+    def __init__(self, urdf_path: str) -> None:
+        self.urdf_path = urdf_path
+
+    def fk(self, _positions: np.ndarray) -> np.ndarray:
+        return np.eye(4)
+
+
 @pytest.fixture
 def a1z_adapter_module(
     monkeypatch: pytest.MonkeyPatch,
@@ -165,13 +180,20 @@ def a1z_adapter_module(
     _FakeArmRobot.instances.clear()
 
     a1z_pkg = ModuleType("a1z")
+    a1z_pkg.__file__ = str(tmp_path / "a1z" / "__init__.py")
     a1z_robots = ModuleType("a1z.robots")
+    a1z_arm_robot = ModuleType("a1z.robots.arm_robot")
     a1z_get_robot = ModuleType("a1z.robots.get_robot")
+    a1z_kinematics = ModuleType("a1z.robots.kinematics")
+    a1z_arm_robot.ArmRobot = _FakeArmRobot  # type: ignore[attr-defined]
     a1z_get_robot.get_a1z_robot = _FakeArmRobot  # type: ignore[attr-defined]
+    a1z_kinematics.Kinematics = _FakeKinematics  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "a1z", a1z_pkg)
     monkeypatch.setitem(sys.modules, "a1z.robots", a1z_robots)
+    monkeypatch.setitem(sys.modules, "a1z.robots.arm_robot", a1z_arm_robot)
     monkeypatch.setitem(sys.modules, "a1z.robots.get_robot", a1z_get_robot)
+    monkeypatch.setitem(sys.modules, "a1z.robots.kinematics", a1z_kinematics)
     sys.modules.pop("dimos.hardware.manipulators.galaxea_a1z.adapter", None)
     module = importlib.import_module("dimos.hardware.manipulators.galaxea_a1z.adapter")
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
@@ -188,7 +210,29 @@ def a1z_adapter_module(
 
 
 def _connected_adapter(module: ModuleType, **kwargs: Any) -> Any:
-    adapter = module.GalaxeaA1ZAdapter(address="can0", **kwargs)
+    gripper_enabled = bool(kwargs.pop("gripper", False))
+    gripper_free_drive = bool(kwargs.pop("gripper_free_drive", False))
+    teaching_enabled = bool(kwargs.pop("zero_gravity", False))
+    gripper = (
+        A1ZGripperConfig(
+            max_torque=kwargs.pop("gripper_max_torque", 0.5),
+            max_opening_m=kwargs.pop("gripper_max_opening_m", 0.1),
+        )
+        if gripper_enabled
+        else None
+    )
+    teaching = (
+        A1ZTeachingConfig(gripper_free_drive=gripper_free_drive) if teaching_enabled else None
+    )
+    config = A1ZConfig(
+        gravity_comp_factor=kwargs.pop("gravity_comp_factor", 1.0),
+        control_freq_hz=kwargs.pop("control_freq_hz", 250),
+        urdf_path=kwargs.pop("urdf_path", None),
+        gripper=gripper,
+        teaching=teaching,
+    )
+    assert not kwargs
+    adapter = module.GalaxeaA1ZAdapter(address="can0", config=config)
     assert adapter.connect()
     return adapter
 
@@ -354,19 +398,6 @@ def test_safe_start_rejects_dead_sdk_control_loop(
     assert "SDK control loop stopped during gravity ramp 1/50" in output
     assert robot.gravity_comp_factor == 0.0
     assert robot.actions[-2:] == ["estop", "stop"]
-
-
-def test_safe_start_false_uses_vendor_stock_startup(
-    a1z_adapter_module: ModuleType,
-) -> None:
-    adapter = _connected_adapter(a1z_adapter_module, safe_start=False)
-    robot = _FakeArmRobot.instances[-1]
-
-    assert adapter.activate()
-
-    start_call = next(a for a in robot.actions if isinstance(a, tuple) and a[0] == "start")
-    assert start_call[1] is None  # vendor defaults, no gain override
-    assert not any(isinstance(a, tuple) and a[0] == "command_joint_state" for a in robot.actions)
 
 
 def test_safe_start_refuses_out_of_limit_pose(
@@ -605,7 +636,16 @@ def test_get_limits_match_sdk_joint_limits(
     assert len(limits.velocity_max) == 6
 
 
-def test_connect_fails_gracefully_without_sdk(
+def test_a1z_factory_does_not_expose_configurable_dof(
+    a1z_adapter_module: ModuleType,
+) -> None:
+    parameters = inspect.signature(a1z_adapter_module.create_galaxea_a1z_adapter).parameters
+
+    assert "dof" not in parameters
+    assert a1z_adapter_module.GalaxeaA1ZAdapter(address="can0").get_dof() == 6
+
+
+def test_adapter_import_fails_clearly_without_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for name in list(sys.modules):
@@ -613,12 +653,8 @@ def test_connect_fails_gracefully_without_sdk(
             monkeypatch.delitem(sys.modules, name)
     monkeypatch.setitem(sys.modules, "a1z", None)  # force ImportError
     sys.modules.pop("dimos.hardware.manipulators.galaxea_a1z.adapter", None)
-    module = importlib.import_module("dimos.hardware.manipulators.galaxea_a1z.adapter")
-    monkeypatch.setattr(module, "_socketcan_channel_error", lambda _channel: None)
-
-    adapter = module.GalaxeaA1ZAdapter(address="can0")
-    assert not adapter.connect()
-    assert not adapter.is_connected()
+    with pytest.raises(ModuleNotFoundError, match="a1z"):
+        importlib.import_module("dimos.hardware.manipulators.galaxea_a1z.adapter")
 
 
 def test_gs_usb_transport_swaps_bus_during_factory_call(
@@ -643,11 +679,14 @@ def test_gs_usb_transport_swaps_bus_during_factory_call(
         seen["bus"] = can.interface.Bus(channel="can0", bustype="socketcan", bitrate=1_000_000)
         return _FakeArmRobot(**kwargs)
 
-    fake_get_robot = sys.modules["a1z.robots.get_robot"]
-    monkeypatch.setattr(fake_get_robot, "get_a1z_robot", _factory_calling_can_bus)
+    monkeypatch.setattr(
+        a1z_adapter_module,
+        "get_a1z_robot",
+        _factory_calling_can_bus,
+    )
 
     original_bus = can.interface.Bus
-    adapter = a1z_adapter_module.GalaxeaA1ZAdapter(address="can0", transport="gs_usb")
+    adapter = a1z_adapter_module.GalaxeaA1ZAdapter(address="can0")
     assert adapter.connect()
 
     assert isinstance(seen["bus"], _FakeGsBus)
@@ -660,7 +699,7 @@ def test_socketcan_transport_leaves_can_bus_untouched(
     import can
 
     original_bus = can.interface.Bus
-    adapter = a1z_adapter_module.GalaxeaA1ZAdapter(address="can0", transport="socketcan")
+    adapter = a1z_adapter_module.GalaxeaA1ZAdapter(address="can0")
     assert adapter.connect()
     assert can.interface.Bus is original_bus
 
@@ -683,16 +722,6 @@ def test_auto_transport_is_socketcan_on_linux_without_usb_detection(
 
     adapter = a1z_adapter_module.GalaxeaA1ZAdapter(address="can0")
     assert adapter._transport == "socketcan"
-
-
-def test_explicit_gs_usb_transport_is_rejected_on_linux(
-    a1z_adapter_module: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(a1z_adapter_module.platform, "system", lambda: "Linux")
-
-    with pytest.raises(ValueError, match="macOS-only"):
-        a1z_adapter_module.GalaxeaA1ZAdapter(address="can0", transport="gs_usb")
 
 
 def test_socketcan_connect_fails_closed_before_sdk_construction(
@@ -747,22 +776,7 @@ def test_socketcan_channel_validation_requires_up_gs_usb_interface(
         assert expected_error in error
 
 
-def test_explicit_transport_bypasses_auto_detection(
-    a1z_adapter_module: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _boom(*args: Any) -> str:
-        raise AssertionError("auto detection must not run for explicit transports")
-
-    monkeypatch.setattr(a1z_adapter_module, "_resolve_auto_transport", _boom)
-
-    adapter = a1z_adapter_module.GalaxeaA1ZAdapter(address="can0", transport="socketcan")
-    assert adapter._transport == "socketcan"
-
-
 def test_registry_entry_resolves() -> None:
     from dimos.hardware.manipulators.galaxea_a1z._registry import ADAPTER_FACTORIES
 
-    module_path, _, class_name = ADAPTER_FACTORIES["galaxea_a1z"].partition(":")
-    module = importlib.import_module(module_path)
-    assert hasattr(module, class_name)
+    assert ADAPTER_FACTORIES["galaxea_a1z"].endswith(".adapter:create_galaxea_a1z_adapter")
