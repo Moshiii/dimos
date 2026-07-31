@@ -40,6 +40,7 @@ from dimos.manipulation.planning.spec.models import (
     Obstacle,
 )
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -786,10 +787,18 @@ class WorldObstacleMonitor:
                 if points is not None and points.shape[0] >= 4:
                     mesh_path = pointcloud_to_convex_hull_obj(points)
                     if mesh_path is not None:
+                        # The hull is centered on the cloud mean, so it must be
+                        # placed there: obj.pose carries the bbox center, which
+                        # differs by ~1.5cm on tall asymmetric objects.
+                        centroid = points.mean(axis=0)
                         return Obstacle(
                             name=name,
                             obstacle_type=ObstacleType.MESH,
-                            pose=obj.pose,
+                            pose=PoseStamped(
+                                position=Vector3(
+                                    float(centroid[0]), float(centroid[1]), float(centroid[2])
+                                )
+                            ),
                             color=(0.2, 0.8, 0.2, 0.6),
                             mesh_path=mesh_path,
                         )
