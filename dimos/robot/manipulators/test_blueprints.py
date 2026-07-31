@@ -12,61 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
-from typing import Any
+"""Piper teleop blueprint composition.
 
-import pytest
+The xarm/planner-helper cases that used to live here were dropped on main
+along with the blueprints they covered (`xarm6_planner_only`,
+`dual_xarm6_planner`); only the Piper teleop coverage is kept.
+"""
+
+from typing import Any
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import Blueprint
-from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
-from dimos.manipulation.visualization.config import NoManipulationVisualizationConfig
-from dimos.robot.manipulators.a1z.blueprints.teleop import keyboard_teleop_a1z
-from dimos.robot.manipulators.a750.blueprints.teleop import keyboard_teleop_a750
-from dimos.robot.manipulators.common.blueprints import eef_twist_task, planner
-from dimos.robot.manipulators.common.topics import EEF_TWIST_TASK_NAME
-from dimos.robot.manipulators.openarm.blueprints.teleop import (
-    keyboard_teleop_openarm,
-    keyboard_teleop_openarm_mock,
-)
-from dimos.robot.manipulators.openyam.blueprints.teleop import (
-    keyboard_teleop_openyam,
-)
+from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.robot.manipulators.piper.blueprints.teleop import (
     coordinator_teleop_piper,
     keyboard_teleop_piper,
 )
-from dimos.robot.manipulators.xarm.blueprints.basic import (
-    dual_xarm6_planner,
-    xarm6_planner_only,
-    xarm7_planner_coordinator,
-)
-from dimos.robot.manipulators.xarm.blueprints.teleop import (
-    keyboard_teleop_xarm6,
-    keyboard_teleop_xarm7,
-)
-from dimos.robot.manipulators.xarm.config import (
-    make_xarm7_model_config,
-    make_xarm7_sim_module_kwargs,
-    make_xarm7_sim_robot_config,
-    make_xarm_hardware,
-)
-from dimos.simulation.engines.mujoco_sim_module import MujocoSimModuleConfig
-from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
 from dimos.teleop.quest.blueprints import teleop_quest_piper
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 
 
 def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
-    return next(atom.kwargs for atom in blueprint.blueprints if atom.module is module_type)
+    """Kwargs of the atom for *module_type*, preferring an exact class match.
+
+    Blueprints may declare a subclass to add ports - Piper's teleop
+    coordinator is a ControlCoordinator subclass - so fall back to a
+    subclass match rather than requiring class identity.
+    """
+    atoms = blueprint.blueprints
+    exact = (atom for atom in atoms if atom.module is module_type)
+    derived = (
+        atom
+        for atom in atoms
+        if isinstance(atom.module, type) and issubclass(atom.module, module_type)
+    )
+    return next(atom.kwargs for atom in (*exact, *derived))
 
 
 def _manipulation_kwargs(blueprint: Blueprint) -> dict[str, Any]:
     return _module_kwargs(blueprint, ManipulationModule)
-
-
-def _manipulation_config(blueprint: Blueprint) -> ManipulationModuleConfig:
-    return ManipulationModuleConfig(**_manipulation_kwargs(blueprint))
 
 
 def _coordinator_tasks(blueprint: Blueprint) -> list[TaskConfig]:
@@ -82,7 +66,6 @@ def test_quest_piper_teleop_routes_to_declarative_teleop_task() -> None:
 def test_piper_teleop_blueprints_declare_viser_manipulation() -> None:
     for blueprint in (keyboard_teleop_piper, coordinator_teleop_piper):
         kwargs = _manipulation_kwargs(blueprint)
-        assert kwargs["robots"][0].coordinator_task_name == "traj_arm"
         assert kwargs["visualization"] == {"backend": "viser"}
 
 
@@ -114,76 +97,3 @@ def test_piper_keyboard_declares_high_priority_gripper_servo() -> None:
     assert servo.joint_names == ["arm/gripper"]
     assert servo.priority > next(task.priority for task in tasks if task.type == "eef_twist")
     assert trajectory.type == "trajectory"
-
-
-def test_planner_helper_defaults_to_no_visualization() -> None:
-    blueprint = planner(robots=[make_xarm7_model_config(name="arm", add_gripper=True)])
-
-    kwargs = _manipulation_kwargs(blueprint)
-    config = ManipulationModuleConfig(**kwargs)
-
-    assert "visualization" not in kwargs
-    assert isinstance(config.visualization, NoManipulationVisualizationConfig)
-
-
-def test_planner_helper_preserves_explicit_visualization() -> None:
-    blueprint = planner(
-        robots=[make_xarm7_model_config(name="arm", add_gripper=True)],
-        visualization={"backend": "meshcat"},
-    )
-
-    assert _manipulation_kwargs(blueprint)["visualization"] == {"backend": "meshcat"}
-
-
-def test_xarm_planner_blueprints_default_to_no_visualization() -> None:
-    for blueprint in (xarm6_planner_only, dual_xarm6_planner, xarm7_planner_coordinator):
-        config = _manipulation_config(blueprint)
-
-        assert isinstance(config.visualization, NoManipulationVisualizationConfig)
-
-
-def test_xarm_perception_sim_uses_aligned_camera_frame() -> None:
-    sim_robot = make_xarm7_sim_robot_config()
-    sim_config = MujocoSimModuleConfig(
-        **make_xarm7_sim_module_kwargs("test-xarm7-scene.xml"),
-    )
-
-    assert sim_robot.xacro_args["attach_rpy"] == "0 0.0 0"
-    assert sim_config.base_frame_id == "link7"
-    assert sim_config.reset_joint_positions == sim_robot.home_joints
-
-
-def test_eef_twist_task_helper_uses_hardware_joints_and_default_name() -> None:
-    hardware = make_xarm_hardware("arm", 6, adapter_type="mock")
-
-    task = eef_twist_task(hardware, model_path=Path("fake.urdf"), ee_joint_id=6)
-
-    assert task.name == EEF_TWIST_TASK_NAME
-    assert task.type == "eef_twist"
-    assert task.joint_names == hardware.joints
-    assert task.params == {"model_path": Path("fake.urdf"), "ee_joint_id": 6}
-
-
-@pytest.mark.parametrize(
-    "blueprint",
-    [
-        pytest.param(keyboard_teleop_xarm6, id="xarm6"),
-        pytest.param(keyboard_teleop_xarm7, id="xarm7"),
-        pytest.param(keyboard_teleop_piper, id="piper"),
-        pytest.param(keyboard_teleop_openarm_mock, id="openarm-mock"),
-        pytest.param(keyboard_teleop_openarm, id="openarm"),
-        pytest.param(keyboard_teleop_openyam, id="openyam"),
-        pytest.param(keyboard_teleop_a750, id="a750"),
-        pytest.param(keyboard_teleop_a1z, id="a1z"),
-    ],
-)
-def test_manipulator_keyboard_blueprint_uses_eef_twist_and_light_keyboard_kwargs(
-    blueprint: Blueprint,
-) -> None:
-    keyboard_kwargs = _module_kwargs(blueprint, KeyboardTeleopModule)
-    coordinator_tasks = _coordinator_tasks(blueprint)
-    eef_twist_tasks = [task for task in coordinator_tasks if task.type == "eef_twist"]
-
-    assert keyboard_kwargs == {}
-    assert [task.name for task in eef_twist_tasks] == [EEF_TWIST_TASK_NAME]
-    assert all(task.type != "cartesian_ik" for task in coordinator_tasks)

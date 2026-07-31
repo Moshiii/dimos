@@ -604,11 +604,10 @@ class GalaxeaA1ZAdapter:
         """Not supported - no F/T sensor (per-joint efforts via read_joint_efforts)."""
         return None
 
-    # --- A1Z-specific extensions (beyond ManipulatorAdapter protocol) ---
-
     def set_gripper_free_drive(self, enabled: bool) -> bool:
         """Toggle gripper free-drive (zero-torque) mode for hand teaching.
 
+        An A1Z-specific extension, beyond the ManipulatorAdapter protocol.
         Requires gripper=True and the SDK's 'gripper' branch.
         """
         robot = self._require_robot()
@@ -616,8 +615,6 @@ class GalaxeaA1ZAdapter:
             return False
         robot.set_gripper_free_drive(enabled)
         return True
-
-    # --- internals ---
 
     def _ensure_motors_disabled(self) -> None:
         """Re-send disable frames to every motor, gripper included.

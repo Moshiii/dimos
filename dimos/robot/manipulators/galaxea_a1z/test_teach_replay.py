@@ -22,10 +22,10 @@ import pytest
 from dimos.control.coordinator import ControlCoordinator
 from dimos.hardware.sensors.camera.module import CameraModule
 from dimos.hardware.sensors.camera.webcam import Webcam
-from dimos.learning.collection.episode_monitor import EpisodeStatus
-from dimos.learning.collection.recorder import CollectionRecorder
-from dimos.learning.dataprep.core import Episode
-from dimos.learning.lerobot_policy import LeRobotPolicyConfig, LeRobotPolicyModule
+from dimos.imitation.collection.episode_monitor import EpisodeStatus
+from dimos.imitation.collection.recorder import CollectionRecorder
+from dimos.imitation.dataprep.core import Episode
+from dimos.imitation.lerobot_policy import LeRobotPolicyConfig, LeRobotPolicyModule
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.galaxea_a1z.blueprints.basic import (

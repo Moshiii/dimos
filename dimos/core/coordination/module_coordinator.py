@@ -85,6 +85,7 @@ class ModuleCoordinator(Resource):
         self._module_transports: dict[str, dict[str, Transport[Any]]] = {}
         self._started = False
         self._modules_lock = threading.RLock()
+        self._rpc_lock = threading.RLock()
         self._coordinator_rpc: CoordinatorRPC | None = None
 
     def start(self) -> None:
@@ -96,9 +97,10 @@ class ModuleCoordinator(Resource):
         self._started = True
 
     def stop(self) -> None:
-        if self._coordinator_rpc is not None:
-            self._coordinator_rpc.stop()
-            self._coordinator_rpc = None
+        with self._rpc_lock:
+            if self._coordinator_rpc is not None:
+                self._coordinator_rpc.stop()
+                self._coordinator_rpc = None
 
         for name, module in reversed(self._deployed_modules.items()):
             logger.info("Stopping module...", module=name)
@@ -118,9 +120,10 @@ class ModuleCoordinator(Resource):
 
     def start_rpc_service(self) -> None:
         """Expose the coordinator's API as @rpc methods over LCM."""
-        if self._coordinator_rpc is not None:
-            return
-        self._coordinator_rpc = CoordinatorRPC.serve(self)
+        with self._rpc_lock:
+            if self._coordinator_rpc is not None:
+                return
+            self._coordinator_rpc = CoordinatorRPC.serve(self)
 
     @property
     def rpcs(self) -> dict[str, Callable[..., Any]]:
@@ -632,9 +635,14 @@ class ModuleCoordinator(Resource):
         return new_proxy
 
     def loop(self) -> None:
-        stop = threading.Event()
+        """Serve coordinator RPC and block until the process is interrupted.
+
+        Owning service startup here gives CLI and direct Python ``build().loop()``
+        launches the same attachment behavior.
+        """
+        self.start_rpc_service()
         try:
-            stop.wait()
+            threading.Event().wait()
         except KeyboardInterrupt:
             return
         finally:
@@ -713,8 +721,10 @@ def _materialize_transports(
         config = None
         config_cls = spec.config_cls
         if config_cls is not None:
+            # Config-field kwargs pinned on the spec
+            spec_fields = {k: v for k, v in spec.kwargs.items() if k in config_cls.model_fields}
             sub = overrides.get(transport_config_name(config_cls), {})
-            config = config_cls(**sub)
+            config = config_cls(**{**spec_fields, **sub})
         materialized[key] = _coerce_transport_to_backend(spec.build(config=config))
     return materialized
 
@@ -783,9 +793,11 @@ def _verify_no_conflicts_with_existing(
 def _run_configurators(blueprint: Blueprint) -> None:
     from dimos.protocol.service.system_configurator.base import configure_system
     from dimos.protocol.service.system_configurator.lcm_config import lcm_configurators
+    from dimos.protocol.service.system_configurator.zenoh_config import zenoh_configurators
 
     lcm_checks = lcm_configurators() if global_config.transport == "lcm" else []
-    configurators = [*lcm_checks, *blueprint.configurator_checks]
+    zenoh_checks = zenoh_configurators() if global_config.transport == "zenoh" else []
+    configurators = [*lcm_checks, *zenoh_checks, *blueprint.configurator_checks]
 
     try:
         configure_system(configurators)

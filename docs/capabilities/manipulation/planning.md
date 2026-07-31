@@ -61,19 +61,19 @@ Three independent choices, set on `ManipulationModuleConfig` or with `-o` overri
 ```bash
 dimos run xarm7-planner-coordinator \
   -o manipulationmodule.world_backend=drake \
-  -o manipulationmodule.planner_name=rrt_connect \
+  -o manipulationmodule.planner.backend=rrt_connect \
   -o manipulationmodule.kinematics.backend=pink
 ```
 
 | Choice | Options | Default |
 |--------|---------|---------|
-| `world_backend` — collision & FK | `drake`, `roboplan` | `drake` |
-| `planner_name` — path search | `rrt_connect`, `roboplan` | `rrt_connect` |
+| `world_backend` — collision & FK | `roboplan`, `drake` | `roboplan` |
+| `planner.backend` — path search | `roboplan`, `rrt_connect` | `roboplan` |
 | `kinematics.backend` — IK | `pink`, `jacobian`, `drake_optimization` | `pink` |
 
 Two rules, enforced at startup rather than at your first plan: the `roboplan` planner needs the `roboplan` world, and `drake_optimization` IK needs the `drake` world. Everything else combines freely.
 
-If you are not sure, the defaults are right: Drake world, RRT-Connect, Pink IK.
+If you are not sure, the defaults are right: RoboPlan world, RoboPlan native planner, Pink IK. The Drake world with RRT-Connect remains available as the legacy path.
 
 ## Plugging in your own
 

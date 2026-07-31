@@ -23,9 +23,9 @@ from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.hardware.sensors.camera.module import CameraModule
 from dimos.hardware.sensors.camera.webcam import Webcam
-from dimos.learning.collection.episode_monitor import EpisodeMonitorModule
-from dimos.learning.collection.recorder import CollectionRecorder
-from dimos.learning.lerobot_policy import LeRobotPolicyConfig, LeRobotPolicyModule
+from dimos.imitation.collection.episode_monitor import EpisodeMonitorModule
+from dimos.imitation.collection.recorder import CollectionRecorder
+from dimos.imitation.lerobot_policy import LeRobotPolicyConfig, LeRobotPolicyModule
 from dimos.memory2.module import OnExisting
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.robot.manipulators.a1z.config import A1Z_G1Z_MODEL_PATH

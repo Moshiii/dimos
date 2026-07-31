@@ -97,7 +97,7 @@ def teach(
     """Hand-teach episodes into one Memory2 recording."""
     from dimos.control.coordinator import ControlCoordinator
     from dimos.core.coordination.module_coordinator import ModuleCoordinator
-    from dimos.learning.collection.episode_monitor import EpisodeMonitorModule
+    from dimos.imitation.collection.episode_monitor import EpisodeMonitorModule
     from dimos.robot.manipulators.galaxea_a1z.blueprints.basic import (
         make_a1z_teach_blueprint,
     )
@@ -369,7 +369,7 @@ def run_policy(
 ) -> None:
     """Execute a trained LeRobot policy on the live A1Z."""
     from dimos.core.coordination.module_coordinator import ModuleCoordinator
-    from dimos.learning.lerobot_policy import LeRobotPolicyModule
+    from dimos.imitation.lerobot_policy import LeRobotPolicyModule
     from dimos.robot.manipulators.galaxea_a1z.blueprints.basic import (
         make_a1z_policy_blueprint,
     )

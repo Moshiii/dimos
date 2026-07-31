@@ -74,7 +74,7 @@ DataPrep reads the session database, aligns camera and joint streams onto one cl
 ```bash
 dimos dataprep build \
   --source ~/.local/state/dimos/recordings/session_xarm7_20260622_120000.db \
-  --config dimos/learning/dataprep/example_config.json
+  --config dimos/imitation/dataprep/example_config.json
 ```
 
 The config maps recorded streams to dataset features — which stream is the observation image, which is the state, what rate to resample at. Copy `example_config.json` and adjust; the A1Z ships its own at `dataprep/galaxea_a1z_state_config.json`. By default the **action** for each frame is the *next* frame's measured joint state, which is what next-state behavioral cloning expects.

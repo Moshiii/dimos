@@ -102,7 +102,7 @@ uv run dimos dataprep build \
   --source ~/.local/state/dimos/recordings/a1z_teach_<timestamp>.db \
   --output ./a1z_lerobot_dataset \
   --format lerobot \
-  --config dimos/learning/dataprep/galaxea_a1z_state_config.json
+  --config dimos/imitation/dataprep/galaxea_a1z_state_config.json
 
 uv run dimos dataprep inspect ./a1z_lerobot_dataset
 ```
@@ -172,7 +172,7 @@ from dimos.agents.capabilities import CAP_MOVEMENT
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.learning.lerobot_policy import LeRobotPolicyConfig, LeRobotPolicyModule
+from dimos.imitation.lerobot_policy import LeRobotPolicyConfig, LeRobotPolicyModule
 from dimos.robot.manipulators.galaxea_a1z.blueprints.basic import (
     make_a1z_learned_policy_blueprint,
 )

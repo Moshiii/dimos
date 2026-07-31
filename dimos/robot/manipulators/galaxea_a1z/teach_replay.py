@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.learning.dataprep.core import Episode, EpisodeExtractor, extract_episodes
+from dimos.imitation.dataprep.core import Episode, EpisodeExtractor, extract_episodes
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory

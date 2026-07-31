@@ -26,6 +26,7 @@ from dimos.control.components import (
     make_joints,
 )
 from dimos.core.global_config import global_config
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.robot.manipulators._modeling import (
     base_pose,
@@ -230,7 +231,6 @@ def make_xarm_model_config(
     z_offset: float = 0.0,
     pitch: float = 0.0,
     joint_prefix: str | None = None,
-    coordinator_task_name: str | None = None,
     tf_extra_links: list[str] | None = None,
     home_joints: list[float] | None = None,
     pre_grasp_offset: float = 0.10,
@@ -238,19 +238,28 @@ def make_xarm_model_config(
     xacro_args = {
         "dof": str(dof),
         "limited": "true",
-        "attach_xyz": f"{x_offset} {y_offset} {z_offset}",
-        "attach_rpy": f"0 {pitch} 0",
+        "attach_xyz": "0 0 0",
+        "attach_rpy": "0 0 0",
     }
     if add_gripper:
         xacro_args["add_gripper"] = "true"
 
+    local_joint_names = joint_names(dof)
+    tip_link = "link_tcp" if add_gripper else f"link{dof}"
     return RobotModelConfig(
         name=name,
         model_path=XARM_MODEL_PATH,
-        base_pose=base_pose(x_offset, y_offset, z_offset),
-        joint_names=joint_names(dof),
-        end_effector_link="link_tcp" if add_gripper else f"link{dof}",
+        base_pose=base_pose(x_offset, y_offset, z_offset, pitch),
+        joint_names=local_joint_names,
         base_link="link_base",
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator",
+                joint_names=tuple(local_joint_names),
+                base_link="link_base",
+                tip_link=tip_link,
+            )
+        ],
         package_paths=XARM_PACKAGE_PATHS,
         xacro_args=xacro_args,
         auto_convert_meshes=True,
@@ -260,7 +269,6 @@ def make_xarm_model_config(
             dof,
             joint_prefix=joint_prefix,
         ),
-        coordinator_task_name=coordinator_task_name or f"traj_{name}",
         gripper_hardware_id=name if add_gripper else None,
         tf_extra_links=tf_extra_links or [],
         home_joints=home_joints or [0.0] * dof,
