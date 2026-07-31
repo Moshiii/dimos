@@ -81,6 +81,7 @@ xarm_grasp_sim = autoconnect(
         pick_and_place_kwargs={
             "max_grasp_candidates_to_check": 30,
             "pick_suppress_all_object_obstacles": True,
+            "use_mesh_obstacles": True,
         },
     ),
     GraspGenXModule.blueprint(
