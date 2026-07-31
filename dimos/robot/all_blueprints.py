@@ -248,6 +248,7 @@ all_modules = {
     "osm-skill": "dimos.agents.skills.osm.OsmSkill",
     "path-follower": "dimos.navigation.cmu_nav.modules.path_follower.path_follower.PathFollower",
     "path-following-coordinator": "dimos.control.path_following_coordinator.PathFollowingCoordinator",
+    "path-heading": "dimos.navigation.path_heading.module.PathHeading",
     "patrolling-module": "dimos.navigation.patrolling.module.PatrollingModule",
     "perceive-loop-skill": "dimos.perception.experimental.perceive_loop_skill.PerceiveLoopSkill",
     "person-follow-skill-container": "dimos.agents.skills.person_follow.PersonFollowSkillContainer",

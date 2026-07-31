@@ -58,13 +58,6 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from reactivex import Observable
 
-    # The mixin only ever runs inside a Module, so type it as one — `start` and
-    # `register_disposable` are the host's. At runtime it stays a plain object,
-    # or it would be collected as a module in its own right.
-    _MixinHost = Module
-else:
-    _MixinHost = object
-
 logger = setup_logger()
 
 
@@ -107,17 +100,11 @@ def h264_decode() -> Callable[[Observable[CompressedVideo]], Observable[Image]]:
     return _operator
 
 
-def _decoded(video: In[CompressedVideo]) -> Observable[Image]:
-    """``video`` decoded.
-
-    ``pure_observable`` on purpose: the default is latest-wins backpressured, and
-    a dropped packet costs every frame until the next keyframe. Whatever thins
-    the stream has to sit downstream of the decoder, never in front of it.
-    """
+def _decoder(video: In[CompressedVideo]) -> Observable[Image]:
     return video.pure_observable().pipe(h264_decode())
 
 
-class H264InputMixin(_MixinHost):
+class H264InputMixin(Module):
     """Mixin: an H.264 ``video`` In decoded into the host's image In."""
 
     video: In[CompressedVideo]
@@ -136,7 +123,7 @@ class H264InputMixin(_MixinHost):
     @rpc
     def start(self) -> None:
         super().start()
-        self.register_disposable(_decoded(self.video).subscribe(self.image_in.transport.publish))
+        self.register_disposable(_decoder(self.video).subscribe(self.image_in.transport.publish))
 
 
 class H264DecoderModule(Module):
@@ -151,4 +138,4 @@ class H264DecoderModule(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self.register_disposable(_decoded(self.video).subscribe(self.color_image.publish))
+        self.register_disposable(_decoder(self.video).subscribe(self.color_image.publish))

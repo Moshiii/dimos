@@ -151,6 +151,10 @@ def test_a_host_can_point_the_mixin_at_a_differently_named_port() -> None:
         module.stop()
 
 
-def test_the_mixin_is_not_itself_a_module() -> None:
-    """It types as one, but subclassing Module would register it as a module."""
-    assert not issubclass(H264InputMixin, Module)
+def test_the_mixin_is_not_offered_as_a_deployable_module() -> None:
+    """It subclasses Module to reach its host's attributes, but has no graph of
+    its own to run in, so the registry must not list it."""
+    from dimos.robot.all_blueprints import all_modules
+
+    assert "h264-input-mixin" not in all_modules
+    assert "h264-decoder-module" in all_modules
