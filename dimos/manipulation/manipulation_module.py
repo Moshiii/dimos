@@ -159,6 +159,10 @@ class ManipulationModuleConfig(ModuleConfig):
     # to prevent the planner from routing trajectories below this height.
     # Set to None to disable.
     floor_z: float | None = None
+    # Joint drift (rad) tolerated between planning and executing a stored plan.
+    # A PD-held arm sags under gravity while the preview animation runs, which
+    # is not the stale-plan case this guards against. 0 disables the check.
+    execution_start_tolerance: float = 0.05
     # Static box obstacles added at startup, for scene furniture the planner
     # must always respect (e.g. a table). Center and size are world-frame,
     # axis-aligned, full extents.
@@ -1686,9 +1690,13 @@ class ManipulationModule(Module):
                 self._error_message = msg
 
     def _stored_plan_freshness_error(
-        self, plan: GeneratedPlan, tolerance: float = 0.01
+        self, plan: GeneratedPlan, tolerance: float | None = None
     ) -> str | None:
         """Return why current selected joints no longer match the plan start."""
+        if tolerance is None:
+            tolerance = self.config.execution_start_tolerance
+        if tolerance <= 0.0:
+            return None
         if self._world_monitor is None:
             return "Planning not initialized"
         if not plan.trajectory.points:
@@ -1728,8 +1736,12 @@ class ManipulationModule(Module):
                 return "Current planned joints are not in stored plan order"
             if not math.isfinite(actual) or not math.isfinite(float(expected)):
                 return f"Current planned joint '{name}' is malformed"
-            if abs(actual - float(expected)) > tolerance:
-                return f"Current planned joint '{name}' no longer matches the stored plan start"
+            drift = actual - float(expected)
+            if abs(drift) > tolerance:
+                return (
+                    f"Current planned joint '{name}' no longer matches the stored plan start "
+                    f"(drift {drift:+.4f} rad > tolerance {tolerance:.4f})"
+                )
         return None
 
     def _prepare_execution(
