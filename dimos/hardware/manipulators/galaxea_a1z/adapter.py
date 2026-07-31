@@ -43,7 +43,7 @@ from pathlib import Path
 import platform
 import threading
 import time
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import a1z
 from a1z.robots.arm_robot import ArmRobot
@@ -144,7 +144,9 @@ class GalaxeaA1ZAdapter:
             raise ValueError("A1Z CAN interface must not be empty")
         self._config = config or A1ZConfig()
         self._can_channel = address
-        self._transport = "gs_usb" if platform.system() == "Darwin" else "socketcan"
+        self._transport: Literal["gs_usb", "socketcan"] = (
+            "gs_usb" if platform.system() == "Darwin" else "socketcan"
+        )
         self._robot: ArmRobot
         self._connected: bool = False
         self._control_mode: ControlMode = ControlMode.POSITION
