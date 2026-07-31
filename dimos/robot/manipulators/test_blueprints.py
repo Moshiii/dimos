@@ -218,7 +218,12 @@ def test_xarm_graspgenx_geometry_is_explicit_and_import_safe() -> None:
     assert config.gripper.extents_open == (0.085, 0.032, 0.067)
     assert config.gripper.extents_half_open == (0.0425, 0.032, 0.067)
     assert config.gripper.fingertip_depth == 0.162
-    assert config.grasp_frame_to_tcp[2][3] == 0.172
+    assert config.grasp_frame_to_tcp == (
+        (0.0, -1.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0, 0.172),
+        (0.0, 0.0, 0.0, 1.0),
+    )
 
 
 def test_existing_xarm_perception_keeps_explicit_heuristic_fallback() -> None:
