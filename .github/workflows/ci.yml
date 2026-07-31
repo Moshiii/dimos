@@ -668,15 +668,6 @@ jobs:
       - name: Fetch cmu_nav native modules from Cachix
         if: contains(matrix.markers, 'skipif_no_ros')
         run: uv run bin/build-cmu-nav-natives
-      - name: Enable zenoh network scouting
-        # Stopgap: loopback-pinned multicast scouting (the zenoh_scouting=off
-        # default since f85870726) never delivers on Darwin lo0, so the
-        # coordinator and workers can't discover each other and every RPC
-        # times out. Scout on the default interface until the pin is fixed.
-        # NB: GlobalConfig has no env_prefix; fields bind to bare env names
-        # (only `transport` aliases DIMOS_TRANSPORT).
-        if: matrix.os == 'macOS'
-        run: echo "ZENOH_SCOUTING=1" >> "$GITHUB_ENV"
       - name: Run tests
         run: uv run pytest --cov=dimos/ --junitxml=junit.xml -m '(${{ matrix.markers }}) and not mujoco'
       - name: Re-run the failing tests with maximum verbosity
