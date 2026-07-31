@@ -32,6 +32,10 @@ _VIDEO_RATE = 50
 _LIDAR_RATE = 1000
 
 
+def _launch_hidden_browser(value: str) -> bool:
+    return value.strip().lower() not in {"0", "false", "no"}
+
+
 class DimSimProcess:
     def __init__(self, global_config: GlobalConfig) -> None:
         self.global_config = global_config
@@ -45,12 +49,16 @@ class DimSimProcess:
         scene = self.global_config.dimsim_scene
         port = self.global_config.dimsim_port
 
-        ensure_playwright_chromium(deno_path)
         _kill_port_holder(port)
 
         render = os.environ.get("DIMSIM_RENDER", "").strip()
         if not render:
             render = "cpu" if os.environ.get("CI") else "gpu"
+        launch_hidden_browser = _launch_hidden_browser(
+            os.environ.get("DIMSIM_HEADLESS", "true")
+        )
+        if launch_hidden_browser:
+            ensure_playwright_chromium(deno_path)
 
         cmd = [
             *base_cmd,
@@ -60,7 +68,6 @@ class DimSimProcess:
             "--port",
             str(port),
             "--no-depth",
-            "--headless",
             "--render",
             render,
             "--image-rate",
@@ -68,6 +75,12 @@ class DimSimProcess:
             "--lidar-rate",
             str(_LIDAR_RATE),
         ]
+        if launch_hidden_browser:
+            cmd.append("--headless")
+        else:
+            logger.info(
+                f"DimSim hidden browser disabled; open http://localhost:{port}"
+            )
 
         self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 

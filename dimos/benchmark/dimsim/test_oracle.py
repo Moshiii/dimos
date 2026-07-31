@@ -26,6 +26,7 @@ from dimos.benchmark.dimsim.oracle import (
     OracleCompatibilityError,
     SceneClientOracleProvider,
     apartment_oracle_view_from_snapshot,
+    get_stable_scene_oracle_view,
 )
 from dimos.simulation.dimsim.revision import DIMSIM_REPO_COMMIT
 from dimos.simulation.dimsim.scene_client import SceneClient
@@ -120,6 +121,33 @@ def test_scene_client_provider_joins_snapshot_to_profile(mocker) -> None:
     assert result.navigation.blocked == ()
     client.get_scene_oracle_snapshot.assert_called_once()
     assert client.get_scene_oracle_snapshot.call_args.args == (APARTMENT_ENTITY_IDS,)
+
+
+def test_stable_oracle_view_requires_two_identical_snapshots(mocker) -> None:
+    view = apartment_oracle_fixture()
+    provider = mocker.Mock()
+    provider.get_scene_oracle_view.side_effect = [view, view]
+    pause = mocker.Mock()
+
+    result = get_stable_scene_oracle_view(
+        provider,
+        stability_delay_s=0.25,
+        pause=pause,
+    )
+
+    assert result is view
+    assert provider.get_scene_oracle_view.call_count == 2
+    pause.assert_called_once_with(0.25)
+
+
+def test_stable_oracle_view_rejects_physics_drift(mocker) -> None:
+    first = apartment_oracle_fixture()
+    second = first.model_copy(update={"reset_revision": "runtime-snapshot-settled"})
+    provider = mocker.Mock()
+    provider.get_scene_oracle_view.side_effect = [first, second]
+
+    with pytest.raises(OracleCompatibilityError, match="changed between oracle snapshots"):
+        get_stable_scene_oracle_view(provider, stability_delay_s=0, pause=mocker.Mock())
 
 
 def test_scene_client_private_command_requests_exact_ids(mocker) -> None:

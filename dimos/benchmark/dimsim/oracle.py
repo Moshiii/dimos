@@ -14,8 +14,10 @@
 
 """Private providers for coherent DimSim oracle views."""
 
+from collections.abc import Callable
 import hashlib
 import json
+import time
 from typing import Protocol
 
 from dimos.benchmark.dimsim.apartment_profile import (
@@ -107,6 +109,26 @@ class SceneClientOracleProvider:
         return apartment_oracle_view_from_snapshot(snapshot)
 
 
+def get_stable_scene_oracle_view(
+    provider: SceneOracleProvider,
+    *,
+    stability_delay_s: float = 1.0,
+    pause: Callable[[float], None] = time.sleep,
+) -> SceneOracleView:
+    """Require two identical live views before freezing benchmark identity."""
+    if stability_delay_s < 0:
+        raise ValueError("stability delay must be non-negative")
+    first = provider.get_scene_oracle_view()
+    pause(stability_delay_s)
+    second = provider.get_scene_oracle_view()
+    if second != first:
+        raise OracleCompatibilityError(
+            "DimSim scene changed between oracle snapshots; wait for physics to settle "
+            "and generate again"
+        )
+    return second
+
+
 def apartment_oracle_view_from_snapshot(snapshot: RuntimeSceneSnapshot) -> SceneOracleView:
     """Join one validated runtime snapshot to the pinned apartment profile."""
 
@@ -186,6 +208,7 @@ def apartment_oracle_view_from_snapshot(snapshot: RuntimeSceneSnapshot) -> Scene
         scene_revision=APARTMENT_SCENE_REVISION,
         reset_revision=f"runtime-snapshot-{reset_digest}",
         upstream_revision=DIMSIM_REPO_COMMIT,
+        profile_revision=APARTMENT_PROFILE_REVISION,
         frame=FrameContract(
             frame_id="dimsim-world",
             handedness="right",

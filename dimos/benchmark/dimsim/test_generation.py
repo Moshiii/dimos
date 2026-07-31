@@ -15,7 +15,13 @@
 from pydantic import ValidationError
 import pytest
 
-from dimos.benchmark.dimsim.config import CATEGORY_ORDER, PUBLIC_TEMPLATES
+from dimos.benchmark.dimsim.config import (
+    CATEGORY_ORDER,
+    DESTINATION_ANGULAR_SPEED_TOLERANCE_RAD_S,
+    DESTINATION_LINEAR_SPEED_TOLERANCE_M_S,
+    DESTINATION_STATIONARY_DWELL_S,
+    PUBLIC_TEMPLATES,
+)
 from dimos.benchmark.dimsim.fixture import apartment_oracle_fixture
 from dimos.benchmark.dimsim.generation import (
     GenerationError,
@@ -48,7 +54,21 @@ def test_destination_question_smoke() -> None:
 
     assert task.public.text == PUBLIC_TEMPLATES["destination"]
     assert task.contract.contract.kind == "navigate-within-outer-footprint"
+    assert (
+        task.contract.contract.linear_speed_tolerance_m_s == DESTINATION_LINEAR_SPEED_TOLERANCE_M_S
+    )
+    assert (
+        task.contract.contract.angular_speed_tolerance_rad_s
+        == DESTINATION_ANGULAR_SPEED_TOLERANCE_RAD_S
+    )
+    assert task.contract.contract.stationary_dwell_s == DESTINATION_STATIONARY_DWELL_S
     assert task.outcome.expected == TerminalOutcome()
+
+
+def test_generated_source_carries_explicit_profile_revision() -> None:
+    task = generate_destination(apartment_oracle_fixture())
+
+    assert task.contract.source.profile_revision == "dimsim-apartment-profile-v1"
 
 
 def test_television_question_smoke() -> None:
@@ -181,7 +201,7 @@ def test_predicate_policy_change_updates_semantic_id_but_not_source_digest(
     before = compile_smoke_tasks(view)
     monkeypatch.setattr(
         "dimos.benchmark.dimsim.generation.PREDICATE_POLICY_VERSION",
-        "dimsim-smoke-predicates-v2",
+        "dimsim-smoke-predicates-v3",
     )
 
     after = compile_smoke_tasks(view)
@@ -193,7 +213,7 @@ def test_predicate_policy_change_updates_semantic_id_but_not_source_digest(
         task.contract.source.oracle_view_digest for task in after
     }
     assert {task.contract.source.predicate_policy_version for task in after} == {
-        "dimsim-smoke-predicates-v2"
+        "dimsim-smoke-predicates-v3"
     }
 
 

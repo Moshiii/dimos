@@ -18,12 +18,15 @@ from typing import Final
 
 SCHEMA_VERSION: Final = "1.0"
 SEMANTIC_SCHEMA_VERSION: Final = "1.0"
-GENERATOR_REVISION: Final = "dimsim-smoke-generator-v1"
+GENERATOR_REVISION: Final = "dimsim-smoke-generator-v2"
 FRAME_POLICY_VERSION: Final = "threejs-y-up-xz-v1"
 CLEARANCE_POLICY_VERSION: Final = "rapier-grid-clearance-v1"
-PREDICATE_POLICY_VERSION: Final = "dimsim-smoke-predicates-v1"
+PREDICATE_POLICY_VERSION: Final = "dimsim-smoke-predicates-v2"
 TEMPLATE_VERSION: Final = "dimsim-smoke-en-v1"
 DESTINATION_THRESHOLD_M: Final = 1.0
+DESTINATION_LINEAR_SPEED_TOLERANCE_M_S: Final = 0.05
+DESTINATION_ANGULAR_SPEED_TOLERANCE_RAD_S: Final = 0.1
+DESTINATION_STATIONARY_DWELL_S: Final = 1.0
 EMBODIMENT_CLEARANCE_M: Final = 0.05
 NAVIGATION_GRID_RESOLUTION_M: Final = 0.1
 NAVIGATION_GROUND_TOLERANCE_M: Final = 0.08

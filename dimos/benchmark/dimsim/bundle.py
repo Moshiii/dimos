@@ -21,21 +21,36 @@ from typing import cast
 
 from pydantic import BaseModel
 
-from dimos.benchmark.dimsim.config import CATEGORY_ORDER, GENERATOR_REVISION
+from dimos.benchmark.dimsim.apartment_profile import APARTMENT_PROFILE_REVISION
+from dimos.benchmark.dimsim.config import (
+    CATEGORY_ORDER,
+    GENERATOR_REVISION,
+    PREDICATE_POLICY_VERSION,
+    SEMANTIC_SCHEMA_VERSION,
+    TEMPLATE_VERSION,
+)
 from dimos.benchmark.dimsim.generation import GenerationError, compile_smoke_tasks
 from dimos.benchmark.dimsim.models import (
     PERSISTED_MODELS,
+    ArgminDistanceContract,
     CompiledTask,
+    CountClassContract,
     Diagnostic,
+    EntityChoiceOutcome,
+    EntityStateContract,
+    EnumOutcome,
     ExpectedOutcome,
     GenerationCheck,
     GenerationReport,
+    IntegerOutcome,
     Manifest,
+    NavigateContract,
     PublicTask,
     SceneOracleView,
     TaskContract,
+    TerminalOutcome,
 )
-from dimos.benchmark.dimsim.utilities import model_bytes, task_id
+from dimos.benchmark.dimsim.utilities import model_bytes, outcome_id, task_id
 from dimos.benchmark.spatial.utilities import JsonValue, canonical_json, stable_opaque_id
 
 _PRIVATE_KEYS = {
@@ -101,12 +116,21 @@ def validate_compiled_tasks(tasks: tuple[CompiledTask, ...]) -> tuple[Generation
         reconstructed = task_id(cast("dict[str, JsonValue]", task.contract.identity_payload))
         if reconstructed != task.public.task_id:
             raise GenerationError(f"task ID reconstruction failed for {task.public.task_id}")
+        _validate_record_compatibility(task)
         leaked = _private_key_paths(cast("JsonValue", task.public.model_dump(mode="json")))
         if leaked:
             raise GenerationError(f"public task contains private fields: {leaked!r}")
         source = task.contract.source
         if source.oracle_view_digest != task.outcome.oracle_view_digest:
             raise GenerationError(f"source digest mismatch for {task.public.task_id}")
+        expected_payload = cast("JsonValue", task.outcome.expected.model_dump(mode="json"))
+        expected_outcome_id = outcome_id(
+            task.public.task_id,
+            task.outcome.oracle_view_digest,
+            expected_payload,
+        )
+        if task.outcome.outcome_id != expected_outcome_id:
+            raise GenerationError(f"outcome ID reconstruction failed for {task.public.task_id}")
 
     regenerated = tuple(compile_smoke_tasks_from_sources(tasks))
     if tuple(model_bytes(item) for item in tasks) != tuple(
@@ -162,6 +186,51 @@ def validate_compiled_tasks(tasks: tuple[CompiledTask, ...]) -> tuple[Generation
             detail="source revisions and oracle digests are present and consistent",
         ),
     )
+
+
+def _validate_record_compatibility(task: CompiledTask) -> None:
+    public = task.public
+    contract = task.contract.contract
+    expected = task.outcome.expected
+    compatible = False
+    if public.category == "destination":
+        compatible = (
+            public.response_type == "terminal"
+            and public.enum_values is None
+            and isinstance(contract, NavigateContract)
+            and isinstance(expected, TerminalOutcome)
+            and expected.predicate == contract.kind
+        )
+    elif public.category == "targeted-qa":
+        compatible = (
+            public.response_type == "enum"
+            and isinstance(contract, EntityStateContract)
+            and isinstance(expected, EnumOutcome)
+            and public.enum_values == contract.vocabulary
+            and expected.value in contract.vocabulary
+        )
+    elif public.category == "broad-exploration-qa":
+        compatible = (
+            public.response_type == "integer"
+            and public.enum_values is None
+            and isinstance(contract, CountClassContract)
+            and isinstance(expected, IntegerOutcome)
+        )
+    elif public.category == "multi-hop-qa":
+        compatible = (
+            public.response_type == "entity-choice"
+            and public.enum_values is not None
+            and isinstance(contract, ArgminDistanceContract)
+            and isinstance(expected, EntityChoiceOutcome)
+            and len(public.enum_values) == len(contract.candidate_entity_ids)
+            and expected.entity_id in contract.candidate_entity_ids
+        )
+    if not compatible:
+        raise GenerationError(
+            f"incompatible public, contract, and expected outcome for {public.task_id}"
+        )
+    if public.template_version != task.contract.source.template_version:
+        raise GenerationError(f"template version mismatch for {public.task_id}")
 
 
 def compile_smoke_tasks_from_sources(
@@ -267,6 +336,10 @@ def load_full_release(
     """Load and reference-check a complete public/private release."""
 
     manifest = Manifest.model_validate_json((root / "manifest.json").read_bytes())
+    if not manifest.complete:
+        raise ValueError("release manifest must be complete")
+    if manifest.generator_revision != GENERATOR_REVISION:
+        raise ValueError(f"unsupported generator revision {manifest.generator_revision!r}")
     public = load_public_tasks(root / "public")
     contracts = tuple(
         TaskContract.model_validate_json(line)
@@ -276,11 +349,65 @@ def load_full_release(
         ExpectedOutcome.model_validate_json(line)
         for line in _load_jsonl_lines(root / "oracle" / "expected_outcomes.jsonl")
     )
+    report = GenerationReport.model_validate_json(
+        (root / "oracle" / "generation_report.json").read_bytes()
+    )
+    if (
+        not report.complete
+        or report.retained_task_count != manifest.task_count
+        or not report.checks
+        or any(not check.passed for check in report.checks)
+    ):
+        raise ValueError("release generation report is incomplete or inconsistent")
+    if manifest.task_count != len(public):
+        raise ValueError(
+            f"release manifest task count {manifest.task_count} does not match "
+            f"{len(public)} public records"
+        )
+    record_groups = (public, contracts, outcomes)
+    for records in record_groups:
+        record_ids = [record.task_id for record in records]
+        if len(record_ids) != len(set(record_ids)):
+            raise ValueError("release contains duplicate task records")
     identifiers = {task.task_id for task in public}
-    if identifiers != {item.task_id for item in contracts} or identifiers != {
-        item.task_id for item in outcomes
-    }:
+    if (
+        identifiers != {item.task_id for item in contracts}
+        or identifiers != {item.task_id for item in outcomes}
+        or any(len(records) != manifest.task_count for records in record_groups)
+    ):
         raise ValueError("release records do not join one-to-one by opaque task ID")
+    contracts_by_id = {item.task_id: item for item in contracts}
+    outcomes_by_id = {item.task_id: item for item in outcomes}
+    compiled = tuple(
+        CompiledTask(
+            public=item,
+            contract=contracts_by_id[item.task_id],
+            outcome=outcomes_by_id[item.task_id],
+        )
+        for item in public
+    )
+    try:
+        validate_compiled_tasks(compiled)
+    except GenerationError as error:
+        raise ValueError(f"release records are incompatible: {error}") from error
+    supported_source_revisions = (
+        SEMANTIC_SCHEMA_VERSION,
+        APARTMENT_PROFILE_REVISION,
+        GENERATOR_REVISION,
+        PREDICATE_POLICY_VERSION,
+        TEMPLATE_VERSION,
+    )
+    for item in compiled:
+        source = item.contract.source
+        source_revisions = (
+            source.semantic_schema_version,
+            source.profile_revision,
+            source.generator_revision,
+            source.predicate_policy_version,
+            source.template_version,
+        )
+        if source_revisions != supported_source_revisions:
+            raise ValueError(f"unsupported source revision for task {item.public.task_id}")
     return manifest, public, contracts, outcomes
 
 

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+from shapely.geometry import Point
 
 from dimos.benchmark.dimsim.geometry import (
     GeometryGateError,
@@ -75,3 +76,22 @@ def test_precleared_navigation_is_not_shrunk_twice() -> None:
     )
 
     assert not result.is_empty
+
+
+def test_stopping_region_measures_from_robot_footprint() -> None:
+    navigation = NavigationGeometry(
+        navigable=(_box(-2, -2, 4, 3),),
+        clearance_radius_m=0.2,
+        collision_source_count=10,
+    )
+
+    result = feasible_stopping_region(
+        _box(0, 0, 1, 1),
+        navigation,
+        (-1, 0.5),
+        threshold_m=1.0,
+        footprint_radius_m=0.2,
+        clearance_m=0.0,
+    )
+
+    assert result.covers(Point(2.15, 0.5))

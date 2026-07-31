@@ -125,6 +125,7 @@ all_blueprints = {
     "unitree-go2-basic": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic:unitree_go2_basic",
     "unitree-go2-coordinator": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_coordinator:unitree_go2_coordinator",
     "unitree-go2-detection": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_detection:unitree_go2_detection",
+    "unitree-go2-dimsim-external-pi-eval": "dimos.benchmark.agent_eval.blueprint:unitree_go2_dimsim_external_pi_eval",
     "unitree-go2-fleet": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_fleet:unitree_go2_fleet",
     "unitree-go2-keyboard-teleop": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_keyboard_teleop:unitree_go2_keyboard_teleop",
     "unitree-go2-markers": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2:unitree_go2_markers",
@@ -153,6 +154,7 @@ all_blueprints = {
 
 
 all_modules = {
+    "agent-eval-observation-recorder": "dimos.benchmark.agent_eval.observation_recorder.AgentEvalObservationRecorder",
     "agentic-grasp-manipulation-module": "dimos.manipulation.agentic_manipulation_module.AgenticGraspManipulationModule",
     "agentic-manipulation-module": "dimos.manipulation.agentic_manipulation_module.AgenticManipulationModule",
     "alfred-high-level": "dimos.robot.diy.alfred.effector_high_level.AlfredHighLevel",
@@ -163,6 +165,7 @@ all_modules = {
     "camera-module": "dimos.hardware.sensors.camera.module.CameraModule",
     "cartesian-motion-controller": "dimos.manipulation.control.servo_control.cartesian_motion_controller.CartesianMotionController",
     "click-start-goal-router": "dimos.navigation.cmu_nav.modules.click_start_goal_router.click_start_goal_router.ClickStartGoalRouter",
+    "code-policy-module": "dimos.agents.code_policy.CodePolicyModule",
     "collection-recorder": "dimos.learning.collection.recorder.CollectionRecorder",
     "control-coordinator": "dimos.control.coordinator.ControlCoordinator",
     "cost-mapper": "dimos.mapping.costmapper.CostMapper",

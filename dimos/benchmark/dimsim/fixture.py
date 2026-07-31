@@ -110,6 +110,7 @@ def apartment_oracle_fixture(*, television_power: str = "OFF") -> SceneOracleVie
         scene_revision="apartment-contract-fixture-v1",
         reset_revision=f"canonical-reset-power-{television_power.lower()}-v1",
         upstream_revision="fixture-mirrors-dimsim-oracle-schema-v1",
+        profile_revision="dimsim-apartment-profile-v1",
         frame=FrameContract(
             frame_id="dimsim-world",
             handedness="right",

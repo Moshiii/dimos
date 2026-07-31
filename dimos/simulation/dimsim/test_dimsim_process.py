@@ -18,7 +18,10 @@ import subprocess
 import pytest
 from pytest_mock import MockerFixture
 
-from dimos.simulation.dimsim.dimsim_process import _validate_repo
+from dimos.simulation.dimsim.dimsim_process import (
+    _launch_hidden_browser,
+    _validate_repo,
+)
 from dimos.simulation.dimsim.revision import DIMSIM_REPO_COMMIT
 
 
@@ -66,3 +69,13 @@ def test_validate_repo_rejects_tracked_modifications(
 
     with pytest.raises(RuntimeError, match="modified tracked files"):
         _validate_repo(tmp_path)
+
+
+@pytest.mark.parametrize("value", ["0", "false", "FALSE", "no", " No "])
+def test_explicit_false_disables_hidden_dimsim_browser(value: str) -> None:
+    assert not _launch_hidden_browser(value)
+
+
+@pytest.mark.parametrize("value", ["", "1", "true", "yes", "unexpected"])
+def test_hidden_dimsim_browser_remains_default(value: str) -> None:
+    assert _launch_hidden_browser(value)

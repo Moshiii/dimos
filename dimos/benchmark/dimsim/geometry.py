@@ -43,11 +43,17 @@ def outer_edge_distance(point: Point2, target: Polygon2) -> float:
     return float(Point(point).distance(target_polygon.boundary))
 
 
-def stopping_band(target: Polygon2, threshold_m: float) -> BaseGeometry:
+def stopping_band(
+    target: Polygon2,
+    threshold_m: float,
+    footprint_radius_m: float = 0.0,
+) -> BaseGeometry:
     if threshold_m <= 0:
         raise GeometryGateError("stopping threshold must be positive")
+    if footprint_radius_m < 0:
+        raise GeometryGateError("footprint radius must be non-negative")
     shape = polygon(target)
-    return shape.buffer(threshold_m).difference(shape)
+    return shape.buffer(threshold_m + footprint_radius_m).difference(shape)
 
 
 def feasible_stopping_region(
@@ -65,7 +71,7 @@ def feasible_stopping_region(
         navigable = navigable.buffer(-remaining_clearance)
     blocked = unary_union([polygon(item).buffer(required_clearance) for item in navigation.blocked])
     free = navigable.difference(blocked)
-    feasible = stopping_band(target, threshold_m).intersection(free)
+    feasible = stopping_band(target, threshold_m, footprint_radius_m).intersection(free)
     if feasible.is_empty:
         raise GeometryGateError("no collision-free stopping region")
 

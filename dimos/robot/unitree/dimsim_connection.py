@@ -51,32 +51,57 @@ class DimSimConnection:
     def __init__(self, global_config: GlobalConfig) -> None:
         self._dimsim_process: DimSimProcess = DimSimProcess(global_config)
         self._odom_transport: LCMTransport[PoseStamped] = LCMTransport("/odom", PoseStamped)
-        self._unsubscribe_odom: Callable[[], None] | None = None
+        self._lidar_transport: LCMTransport[PointCloud2] = LCMTransport("/lidar", PointCloud2)
+        self._video_transport: LCMTransport[Image] = LCMTransport("/color_image", Image)
+        self._cmd_vel_transport: LCMTransport[Twist] = LCMTransport("/cmd_vel", Twist)
+        self._unsubscribes: list[Callable[[], None]] = []
+        self._latest_sensor_ts = {
+            "odom": float("-inf"),
+            "lidar": float("-inf"),
+            "video": float("-inf"),
+        }
         self._tf = LCMTF()
 
     def start(self) -> None:
         self._dimsim_process.start()
-        self._odom_transport.start()
-        self._unsubscribe_odom = self._odom_transport.subscribe(self._handle_odom)
+        for transport in (
+            self._odom_transport,
+            self._lidar_transport,
+            self._video_transport,
+            self._cmd_vel_transport,
+        ):
+            transport.start()
+        self._unsubscribes = [
+            self._odom_transport.subscribe(self._handle_odom),
+            self._lidar_transport.subscribe(self._handle_lidar),
+            self._video_transport.subscribe(self._handle_video),
+        ]
         self._tf.start()
 
     def stop(self) -> None:
         self._tf.stop()
-        if self._unsubscribe_odom is not None:
-            self._unsubscribe_odom()
-        self._odom_transport.stop()
+        for unsubscribe in self._unsubscribes:
+            unsubscribe()
+        self._unsubscribes.clear()
+        for transport in (
+            self._cmd_vel_transport,
+            self._video_transport,
+            self._lidar_transport,
+            self._odom_transport,
+        ):
+            transport.stop()
         self._dimsim_process.stop()
 
     @functools.cache
-    def lidar_stream(self) -> Observable[PointCloud2]:
+    def lidar_stream(self) -> Subject[PointCloud2]:
         return Subject()
 
     @functools.cache
-    def odom_stream(self) -> Observable[PoseStamped]:
+    def odom_stream(self) -> Subject[PoseStamped]:
         return Subject()
 
     @functools.cache
-    def video_stream(self) -> Observable[Image]:
+    def video_stream(self) -> Subject[Image]:
         return Subject()
 
     @functools.cache
@@ -84,6 +109,7 @@ class DimSimConnection:
         return Subject()
 
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
+        self._cmd_vel_transport.publish(twist)
         return True
 
     def standup(self) -> bool:
@@ -105,7 +131,24 @@ class DimSimConnection:
         return {}
 
     def _handle_odom(self, msg: PoseStamped) -> None:
+        if not self._is_new_sensor_sample("odom", msg.ts):
+            return
         self._tf.publish(*_odom_to_tf(msg))
+        self.odom_stream().on_next(msg)
+
+    def _handle_lidar(self, msg: PointCloud2) -> None:
+        if self._is_new_sensor_sample("lidar", msg.ts):
+            self.lidar_stream().on_next(msg)
+
+    def _handle_video(self, msg: Image) -> None:
+        if self._is_new_sensor_sample("video", msg.ts):
+            self.video_stream().on_next(msg)
+
+    def _is_new_sensor_sample(self, stream: str, timestamp: float) -> bool:
+        if timestamp <= self._latest_sensor_ts[stream]:
+            return False
+        self._latest_sensor_ts[stream] = timestamp
+        return True
 
 
 def _odom_to_tf(odom: PoseStamped) -> list[Transform]:

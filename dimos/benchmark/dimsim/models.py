@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from itertools import pairwise
-from typing import Annotated, Literal, Protocol, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -201,6 +201,7 @@ class SceneOracleView(StrictModel):
     scene_revision: NonEmpty
     reset_revision: NonEmpty
     upstream_revision: NonEmpty
+    profile_revision: NonEmpty
     frame: FrameContract
     embodiment: Embodiment
     navigation: NavigationGeometry
@@ -248,6 +249,9 @@ class NavigateContract(StrictModel):
     threshold_m: Annotated[float, Field(gt=0)]
     metric: Literal["outer-footprint"] = "outer-footprint"
     clearance_policy_version: NonEmpty
+    linear_speed_tolerance_m_s: Annotated[float, Field(gt=0)]
+    angular_speed_tolerance_rad_s: Annotated[float, Field(gt=0)]
+    stationary_dwell_s: Annotated[float, Field(gt=0)]
 
 
 class EntityStateContract(StrictModel):
@@ -282,6 +286,7 @@ class SourceProvenance(StrictModel):
     scene_revision: NonEmpty
     reset_revision: NonEmpty
     semantic_schema_version: NonEmpty
+    profile_revision: NonEmpty
     upstream_revision: NonEmpty
     oracle_view_digest: Sha256
     generator_revision: NonEmpty
@@ -370,11 +375,6 @@ class CompiledTask(StrictModel):
     public: PublicTask
     contract: TaskContract
     outcome: ExpectedOutcome
-
-
-class ModelType(Protocol):
-    @classmethod
-    def model_json_schema(cls) -> dict[str, object]: ...
 
 
 PERSISTED_MODELS: tuple[type[BaseModel], ...] = (

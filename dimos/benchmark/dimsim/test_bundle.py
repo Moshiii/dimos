@@ -113,3 +113,90 @@ def test_failed_generation_writes_only_private_diagnostics(tmp_path: Path) -> No
     assert not (root / "public").exists()
     report = json.loads((root / "oracle" / "generation_report.json").read_text())
     assert report["complete"] is False
+
+
+def test_full_release_rejects_incomplete_or_count_mismatched_manifest(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "release"
+    generate_smoke_release(apartment_oracle_fixture(), root)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["complete"] = False
+    manifest["task_count"] = 3
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="complete"):
+        load_full_release(root)
+
+
+def test_full_release_rejects_duplicate_task_records(tmp_path: Path) -> None:
+    root = tmp_path / "release"
+    generate_smoke_release(apartment_oracle_fixture(), root)
+    public_path = root / "public" / "tasks.jsonl"
+    lines = public_path.read_text().splitlines()
+    public_path.write_text("\n".join((lines[0], lines[0], *lines[2:])) + "\n")
+
+    with pytest.raises(ValueError, match="duplicate"):
+        load_full_release(root)
+
+
+def test_full_release_rejects_incompatible_joined_record_shapes(tmp_path: Path) -> None:
+    root = tmp_path / "release"
+    generate_smoke_release(apartment_oracle_fixture(), root)
+    public_path = root / "public" / "tasks.jsonl"
+    records = [json.loads(line) for line in public_path.read_text().splitlines()]
+    records[0]["response_type"] = "integer"
+    public_path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    with pytest.raises(ValueError, match="incompatible"):
+        load_full_release(root)
+
+
+def test_full_release_rejects_identity_payload_mismatch(tmp_path: Path) -> None:
+    root = tmp_path / "release"
+    generate_smoke_release(apartment_oracle_fixture(), root)
+    contract_path = root / "oracle" / "task_contracts.jsonl"
+    records = [json.loads(line) for line in contract_path.read_text().splitlines()]
+    records[0]["identity_payload"]["threshold_m"] = 99.0
+    contract_path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    with pytest.raises(ValueError, match="task ID reconstruction"):
+        load_full_release(root)
+
+
+def test_full_release_rejects_source_digest_mismatch(tmp_path: Path) -> None:
+    root = tmp_path / "release"
+    generate_smoke_release(apartment_oracle_fixture(), root)
+    outcome_path = root / "oracle" / "expected_outcomes.jsonl"
+    records = [json.loads(line) for line in outcome_path.read_text().splitlines()]
+    records[0]["oracle_view_digest"] = "0" * 64
+    outcome_path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    with pytest.raises(ValueError, match="source digest mismatch"):
+        load_full_release(root)
+
+
+def test_full_release_rejects_unsupported_generator_revision(tmp_path: Path) -> None:
+    root = tmp_path / "release"
+    generate_smoke_release(apartment_oracle_fixture(), root)
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["generator_revision"] = "future-generator-v99"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="unsupported generator revision"):
+        load_full_release(root)
+
+
+def test_full_release_rejects_unsupported_profile_revision(tmp_path: Path) -> None:
+    root = tmp_path / "release"
+    generate_smoke_release(apartment_oracle_fixture(), root)
+    contract_path = root / "oracle" / "task_contracts.jsonl"
+    records = [json.loads(line) for line in contract_path.read_text().splitlines()]
+    for record in records:
+        record["source"]["profile_revision"] = "future-apartment-profile-v99"
+    contract_path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    with pytest.raises(ValueError, match="unsupported source revision"):
+        load_full_release(root)

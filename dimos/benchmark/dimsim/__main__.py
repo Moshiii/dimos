@@ -19,7 +19,10 @@ from pathlib import Path
 
 from dimos.benchmark.dimsim.bundle import generate_smoke_release
 from dimos.benchmark.dimsim.fixture import apartment_oracle_fixture
-from dimos.benchmark.dimsim.oracle import SceneClientOracleProvider
+from dimos.benchmark.dimsim.oracle import (
+    SceneClientOracleProvider,
+    get_stable_scene_oracle_view,
+)
 from dimos.simulation.dimsim.scene_client import SceneClient
 
 
@@ -33,15 +36,28 @@ def main() -> None:
     )
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=8090)
+    parser.add_argument("--snapshot-timeout-s", type=float, default=300.0)
+    parser.add_argument("--stability-delay-s", type=float, default=1.0)
     args = parser.parse_args()
 
     if args.fixture:
         view = apartment_oracle_fixture()
     else:
-        client = SceneClient(host=args.host, port=args.port)
+        if args.snapshot_timeout_s <= 0:
+            parser.error("--snapshot-timeout-s must be positive")
+        if args.stability_delay_s < 0:
+            parser.error("--stability-delay-s must be non-negative")
+        client = SceneClient(
+            host=args.host,
+            port=args.port,
+            timeout=args.snapshot_timeout_s,
+        )
         client.start()
         try:
-            view = SceneClientOracleProvider(client).get_scene_oracle_view()
+            view = get_stable_scene_oracle_view(
+                SceneClientOracleProvider(client),
+                stability_delay_s=args.stability_delay_s,
+            )
         finally:
             client.stop()
     manifest = generate_smoke_release(view, args.output)

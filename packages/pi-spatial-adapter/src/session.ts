@@ -260,7 +260,33 @@ export function validateSessionConfig(config: SessionConfig): void {
 }
 
 export async function createFreshSession(tools: readonly ToolDefinition[], options: StoredAuthOptions, config: SessionConfig, initialPrompt: string) {
+  const session = await createFreshSessionWithTools(
+    tools,
+    options,
+    config,
+    initialPrompt,
+    ["sandbox_exec", "read_generated_image", "submit_answer"],
+  );
+  assertToolInventory(session.activeToolNames);
+  return session.handle;
+}
+
+export async function createFreshSessionWithTools(
+  tools: readonly ToolDefinition[],
+  options: StoredAuthOptions,
+  config: SessionConfig,
+  initialPrompt: string,
+  expectedToolNames: readonly string[],
+): Promise<{ handle: SessionAdapterHandle; activeToolNames: readonly string[] }> {
   validateSessionConfig(config);
+  if (
+    expectedToolNames.length === 0 ||
+    new Set(expectedToolNames).size !== expectedToolNames.length ||
+    tools.length !== expectedToolNames.length ||
+    tools.some((tool, index) => tool.name !== expectedToolNames[index])
+  ) {
+    throw new Error("custom tools do not match the expected ordered inventory");
+  }
   const manager = createSessionManager();
   const initialPromptEvidence = retainInitialPromptEvidence(initialPrompt);
   let runtime: ModelRuntime;
@@ -292,10 +318,13 @@ export async function createFreshSession(tools: readonly ToolDefinition[], optio
       throw new Error("configured model is not using an OpenAI API key");
     }
   }
-  const custom = customTools(tools);
+  const custom = [...tools];
   const available = custom.map((tool) => tool.name);
-  assertNoBuiltinTools(available);
-  if (available.length !== 3) throw new Error("exactly three custom tools are required");
+  if (expectedToolNames.length === 3) {
+    // Preserve the stricter historical spatial-adapter checks.
+    customTools(custom);
+    assertNoBuiltinTools(available);
+  }
   const result = await createAgentSession({
     cwd: AGENT_CWD,
     model,
@@ -307,7 +336,13 @@ export async function createFreshSession(tools: readonly ToolDefinition[], optio
     customTools: custom,
   });
   const active = result.session.getActiveToolNames();
-  assertToolInventory(active);
+  if (
+    active.length !== expectedToolNames.length ||
+    active.some((name, index) => name !== expectedToolNames[index])
+  ) {
+    result.session.dispose();
+    throw new Error("Pi activated an unexpected tool inventory");
+  }
   let systemPrompt: SystemPromptEvidenceMetadata;
   try {
     systemPrompt = retainSystemPromptEvidence(result.session.systemPrompt);
@@ -316,7 +351,7 @@ export async function createFreshSession(tools: readonly ToolDefinition[], optio
     throw error;
   }
   let disposed = false;
-  return {
+  const handle = {
     prompt: (prompt: string) => result.session.prompt(prompt),
     subscribe: (listener: (event: unknown) => void) => { result.session.subscribe((event) => listener(event)); },
     abort: () => result.session.abort(),
@@ -331,4 +366,5 @@ export async function createFreshSession(tools: readonly ToolDefinition[], optio
       return evidence.state === "unavailable" ? evidence : { ...evidence, systemPrompt, initialPrompt: initialPromptEvidence };
     },
   } satisfies SessionAdapterHandle;
+  return { handle, activeToolNames: active };
 }
