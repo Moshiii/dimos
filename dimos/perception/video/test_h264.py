@@ -14,145 +14,121 @@
 
 from __future__ import annotations
 
-from typing import Any
+import io
 
 import numpy as np
+import pytest
+import reactivex as rx
 
-from dimos.core.module import Module
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
-from dimos.perception.fiducial.marker_detection_stream_module import VideoMarkerDetectionModule
-from dimos.perception.video.h264 import H264DecoderModule, H264InputMixin
+from dimos.perception.video.h264 import (
+    H264DecoderModule,
+    H264InputMixin,
+    h264_decode,
+)
 
-PACKET = CompressedVideo(data=b"\x00\x00\x00\x01\x65payload", format="h264", frame_id="cam", ts=1.0)
-
-
-class _Frame:
-    """Stands in for an ``av`` frame; only ``to_ndarray`` is reached."""
-
-    def __init__(self, bgr: np.ndarray) -> None:
-        self._bgr = bgr
-
-    def to_ndarray(self, format: str) -> np.ndarray:
-        assert format == "bgr24"
-        return self._bgr
+WIDTH, HEIGHT, FRAMES = 64, 64, 8
 
 
-class _Decoder:
-    def __init__(self, *frames: Any) -> None:
-        self._frames = list(frames)
+@pytest.fixture(scope="module")
+def packets() -> list[CompressedVideo]:
+    """A real, short H.264 stream — one keyframe then P-frames."""
+    import av
 
-    def decode(self, packet: Any) -> list[Any]:
-        return self._frames
+    buf = io.BytesIO()
+    container = av.open(buf, mode="w", format="h264")
+    stream = container.add_stream("libx264", rate=30)
+    stream.width, stream.height, stream.pix_fmt = WIDTH, HEIGHT, "yuv420p"
+    rng = np.random.default_rng(0)
+    base = rng.integers(0, 255, (HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    out: list[CompressedVideo] = []
+    ts = 0.0
+    for i in range(FRAMES):
+        frame = av.VideoFrame.from_ndarray(np.roll(base, i * 4, axis=1), format="rgb24")
+        for pkt in stream.encode(frame):
+            out.append(CompressedVideo(data=bytes(pkt), format="h264", frame_id="cam", ts=ts))
+            ts += 1.0
+    for pkt in stream.encode(None):
+        out.append(CompressedVideo(data=bytes(pkt), format="h264", frame_id="cam", ts=ts))
+        ts += 1.0
+    container.close()
+    return out
 
 
-def _bgr(value: int = 0) -> np.ndarray:
-    return np.full((4, 4, 3), value, dtype=np.uint8)
+def _decode_all(source: list[CompressedVideo]) -> list[Image]:
+    seen: list[Image] = []
+    rx.from_iterable(source).pipe(h264_decode()).subscribe(seen.append)
+    return seen
 
 
-def test_mixin_port_merges_into_the_host_module() -> None:
-    """The whole point: a video In appears on the host without touching it."""
+def test_operator_decodes_a_real_stream_to_bgr(packets: list[CompressedVideo]) -> None:
+    images = _decode_all(packets)
+
+    assert images, "no frames decoded"
+    assert all(img.format is ImageFormat.BGR for img in images)
+    assert images[0].as_numpy().shape == (HEIGHT, WIDTH, 3)
+
+
+def test_operator_carries_frame_id_and_timestamp(packets: list[CompressedVideo]) -> None:
+    images = _decode_all(packets)
+
+    assert {img.frame_id for img in images} == {"cam"}
+    # Stamps come from the packets, so they advance with the stream.
+    stamps = [img.ts for img in images]
+    assert stamps == sorted(stamps)
+
+
+def test_operator_survives_joining_mid_gop(packets: list[CompressedVideo]) -> None:
+    """P-frames before the first keyframe resolve to nothing, not an exception."""
+    tail = packets[len(packets) // 2 :]
+
+    images = _decode_all(tail)
+
+    assert len(images) < len(tail)  # some packets produced no picture
+
+
+def test_operator_state_is_per_subscription(packets: list[CompressedVideo]) -> None:
+    """A second subscription starts its own decoder rather than inheriting one."""
+    first = _decode_all(packets)
+    second = _decode_all(packets)
+
+    assert len(first) == len(second)
+
+
+def test_garbage_packets_do_not_raise() -> None:
+    junk = [CompressedVideo(data=b"\x00\x00\x00\x01\x65nonsense", format="h264", ts=1.0)]
+
+    assert _decode_all(junk) == []
+
+
+def test_decoder_module_exposes_video_in_and_image_out() -> None:
     module = H264DecoderModule()
     try:
-        assert "video" in module.inputs
+        assert set(module.inputs) == {"video"}
         assert set(module.outputs) == {"color_image"}
     finally:
         module.stop()
 
 
-def test_mixin_port_merges_across_the_mro_onto_an_existing_consumer() -> None:
+def test_mixin_feeds_the_hosts_own_image_port() -> None:
+    """The decoded frames land on the consumer's existing In, not a new port."""
+    from dimos.perception.fiducial.marker_detection_stream_module import (
+        VideoMarkerDetectionModule,
+    )
+
     module = VideoMarkerDetectionModule(marker_length_m=0.18)
     try:
         assert {"video", "color_image"} <= set(module.inputs)
+        assert module.color_image is module.inputs["color_image"]
         assert set(module.outputs) == {"detections"}
     finally:
         module.stop()
 
 
-def test_the_mixin_does_not_claim_a_worker_of_its_own() -> None:
-    """Decode is ~1-8% of a core and drops the GIL; it does not earn a process."""
-    assert H264DecoderModule.dedicated_worker is False
-    assert VideoMarkerDetectionModule.dedicated_worker is False
-
-
 def test_the_mixin_is_not_itself_a_module() -> None:
     """It types as one, but subclassing Module would register it as a module."""
+    from dimos.core.module import Module
+
     assert not issubclass(H264InputMixin, Module)
-
-
-def test_decoded_frame_is_published_on_the_image_port() -> None:
-    module = H264DecoderModule()
-    try:
-        seen: list[Image] = []
-        module.color_image.subscribe(seen.append)
-        module._decoder = _Decoder(_Frame(_bgr(7)))
-
-        module._decode_into_image(PACKET)
-
-        assert len(seen) == 1
-        assert seen[0].format is ImageFormat.BGR
-        assert seen[0].frame_id == "cam"
-        assert seen[0].ts == PACKET.ts
-    finally:
-        module.stop()
-
-
-def test_only_the_latest_frame_of_a_packet_is_fed() -> None:
-    """Decoding never skips, but only the newest picture reaches the consumer."""
-    module = H264DecoderModule()
-    try:
-        seen: list[Image] = []
-        module.color_image.subscribe(seen.append)
-        module._decoder = _Decoder(_Frame(_bgr(1)), _Frame(_bgr(9)))
-
-        module._decode_into_image(PACKET)
-
-        assert len(seen) == 1
-        assert seen[0].as_numpy()[0, 0, 0] == 9
-    finally:
-        module.stop()
-
-
-def test_decode_hz_throttles_the_feed() -> None:
-    module = H264DecoderModule(decode_hz=1.0)
-    try:
-        seen: list[Image] = []
-        module.color_image.subscribe(seen.append)
-        module._decoder = _Decoder(_Frame(_bgr()))
-
-        module._decode_into_image(PACKET)
-        module._decode_into_image(PACKET)
-
-        assert len(seen) == 1
-    finally:
-        module.stop()
-
-
-def test_decode_hz_zero_feeds_every_decoded_frame() -> None:
-    module = H264DecoderModule(decode_hz=0.0)
-    try:
-        seen: list[Image] = []
-        module.color_image.subscribe(seen.append)
-        module._decoder = _Decoder(_Frame(_bgr()))
-
-        module._decode_into_image(PACKET)
-        module._decode_into_image(PACKET)
-
-        assert len(seen) == 2
-    finally:
-        module.stop()
-
-
-def test_a_packet_that_decodes_to_nothing_is_not_published() -> None:
-    """Joining mid-GOP: P-frames arrive before any reference picture."""
-    module = H264DecoderModule()
-    try:
-        seen: list[Image] = []
-        module.color_image.subscribe(seen.append)
-        module._decoder = _Decoder()
-
-        module._decode_into_image(PACKET)
-
-        assert seen == []
-    finally:
-        module.stop()

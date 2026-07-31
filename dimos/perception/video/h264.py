@@ -13,28 +13,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""H.264 into modules: the input mixin, and the standalone decoder.
+"""H.264 as a reactive operator, plus the two ways to attach it to a module.
 
-``H264InputMixin`` adds a ``video`` In (H.264 ``CompressedVideo``) to a module
-that has an ``In[Image]``, decodes internally, and feeds the frames into that
-image input's own transport — downstream code cannot tell them from wire
-traffic. Ports declared in a mixin are collected like any other (annotations
-merge across the MRO), so the whole adaptation is::
+:func:`h264_decode` is the whole implementation — packets in, BGR frames out,
+one decoder per subscription. The rest is wiring:
 
-    class VideoMarkerDetectionModule(H264InputMixin, MarkerDetectionStreamModule):
-        config: VideoMarkerDetectionModuleConfig
+* :class:`H264InputMixin` decodes into the host's *own* ``color_image`` In, so
+  a consumer takes compressed video off the wire and never sees raw frames
+  crossing a transport::
 
-Trade-off vs the standalone :class:`H264DecoderModule` below: the mixin is one
-module less in the graph, but each video-capable module owns its own decoder —
-two of them watching the same stream decode it twice. Share the standalone
-module when pixels have several consumers. Don't wire both ``video`` and the
-image topic: the input would see both streams.
+      class VideoMarkerDetectionModule(H264InputMixin, MarkerDetectionStreamModule):
+          config: VideoMarkerDetectionModuleConfig
+
+* :class:`H264DecoderModule` publishes on an Out instead, for graphs where
+  several consumers should share one decode.
+
+Longer term this belongs beside ``jpeg_lcm``/``jpeg_shm`` as a transport codec
+(:mod:`dimos.protocol.pubsub.encoders`), so consumers keep a plain ``In[Image]``
+and nothing in the graph knows the wire was compressed. That needs
+per-subscription decoder state, which the per-message encoder contract lacks.
+:class:`~dimos.robot.unitree.go2.dds.video.H264Decoder` is a third copy of the
+same decode, as a memory2 transform.
 """
 
 from __future__ import annotations
 
-import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
+
+import reactivex as rx
+from reactivex import operators as ops
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -44,7 +52,7 @@ from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from av.video.codeccontext import VideoCodecContext
+    from reactivex import Observable
 
     # The mixin only ever runs inside a Module, so type it as one — `start`,
     # `register_disposable` and `config` are the host's. At runtime it stays a
@@ -56,79 +64,98 @@ else:
 logger = setup_logger()
 
 
+def h264_decode() -> Callable[[Observable[CompressedVideo]], Observable[Image]]:
+    """Decode an ordered H.264 packet stream into BGR frames, latest frame per packet.
+
+    State lives per subscription: reference frames only make sense against the
+    stream that produced them. Packets that resolve to nothing — P-frames before
+    the first keyframe — are dropped until the decoder re-syncs.
+    """
+
+    def _operator(source: Observable[CompressedVideo]) -> Observable[Image]:
+        def _subscribe(observer: Any, scheduler: Any = None) -> Any:
+            import av
+
+            decoder = av.codec.CodecContext.create("h264", "r")
+
+            def on_next(msg: CompressedVideo) -> None:
+                try:
+                    frames = decoder.decode(av.packet.Packet(msg.data.tobytes()))
+                except av.error.FFmpegError:
+                    return  # no reference frame yet (joined mid-GOP)
+                except Exception:
+                    logger.exception("h264 decode failed, skipping packet")
+                    return
+                if not frames:
+                    return
+                bgr = frames[-1].to_ndarray(format="bgr24")
+                observer.on_next(Image.from_numpy(bgr, ImageFormat.BGR, msg.frame_id, msg.ts))
+
+            return source.subscribe(
+                on_next,
+                observer.on_error,
+                observer.on_completed,
+                scheduler=scheduler,
+            )
+
+        return rx.create(_subscribe)
+
+    return _operator
+
+
+def _decoded(video: In[CompressedVideo], publish_hz: float) -> Observable[Image]:
+    """``video`` decoded, thinned to ``publish_hz``.
+
+    ``pure_observable`` on purpose: the default is latest-wins backpressured, and
+    a dropped packet costs every frame until the next keyframe. Decode every
+    packet, throttle the frames that come out.
+    """
+    stages: list[Any] = [h264_decode()]
+    if publish_hz > 0:
+        stages.append(ops.throttle_first(1.0 / publish_hz))
+    return video.pure_observable().pipe(*stages)
+
+
 class H264InputConfig(ModuleConfig):
-    # Decode everything (H.264 reference frames don't survive skipping), feed
-    # the image input at most this often. 0 = every decoded frame.
-    decode_hz: float = 5.0
+    # Every packet is decoded — reference frames don't survive skipping — but
+    # frames reach the consumer at most this often. 0 = every frame.
+    publish_hz: float = 5.0
 
 
 class H264InputMixin(_MixinHost):
-    """Mixin: an H.264 ``video`` In decoded into the host's image In."""
+    """Mixin: an H.264 ``video`` In decoded into the host's own ``color_image`` In."""
 
     video: In[CompressedVideo]
+    # Merged with the host's identically-named port: annotations collect across
+    # the MRO, so this is the consumer's own input, fed from inside.
+    color_image: In[Image]
 
-    # No dedicated_worker: H.264 decode is far cheaper than it looks. Measured
-    # ~0.34 ms/frame at 720p and ~2.5 ms at 1080p, so a 30 fps stream costs 1-8%
-    # of a core, and PyAV drops the GIL for both the decode and the bgr24
-    # conversion. A host that is heavy for its own reasons can still set it.
-
-    # Name of the host module's In[Image] to feed.
-    image_port: ClassVar[str] = "color_image"
-
-    # Untyped here on purpose: class annotations are resolved at runtime to
-    # collect ports, so an `av` type would make this optional dep a hard
-    # import. It is narrowed at the one place it is used.
-    _decoder: Any = None
-    _last_fed: float = 0.0
+    # Only H264InputConfig subclasses carry the knob; the host owns config.
+    _default_publish_hz: ClassVar[float] = 5.0
 
     @rpc
     def start(self) -> None:
         super().start()
-        import av
-
-        self._decoder = av.codec.CodecContext.create("h264", "r")
-        self.register_disposable(self.video.observable().subscribe(self._decode_into_image))
-
-    def _decode_into_image(self, msg: CompressedVideo) -> None:
-        import av
-
-        decoder: VideoCodecContext | None = self._decoder
-        if decoder is None:
-            return  # packet raced ahead of start()
-        try:
-            frames = decoder.decode(av.packet.Packet(msg.data.tobytes()))
-        except av.error.FFmpegError:
-            return  # P-frame with no reference yet (joined mid-GOP)
-        except Exception:
-            logger.exception("video mixin decode failed, skipping packet")
-            return
-        if not frames:
-            return
-        # The host owns the config; only H264InputConfig subclasses carry the
-        # knob, so read it off the instance rather than narrowing config here.
-        decode_hz: float = getattr(self.config, "decode_hz", 5.0)
-        now = time.monotonic()
-        if decode_hz > 0 and now - self._last_fed < 1.0 / decode_hz:
-            return
-        self._last_fed = now
-        bgr = frames[-1].to_ndarray(format="bgr24")
-        image = Image.from_numpy(bgr, ImageFormat.BGR, msg.frame_id, msg.ts)
-        # The image port may be an In (inject into its transport — downstream
-        # subscribers see wire traffic) or an Out (plain publish): the mixin
-        # serves both the retrofit case and a standalone decoder module.
-        port = getattr(self, self.image_port)
-        publish = getattr(port, "publish", None) or port.transport.publish
-        publish(image)
+        hz: float = getattr(self.config, "publish_hz", self._default_publish_hz)
+        self.register_disposable(
+            _decoded(self.video, hz).subscribe(self.color_image.transport.publish)
+        )
 
 
-class H264DecoderModule(H264InputMixin, Module):
+class H264DecoderModule(Module):
     """``video`` (H.264 CompressedVideo) in, throttled BGR ``color_image`` out.
 
-    The mixin publishing on an Out: one shared decode for graphs where
-    several consumers want pixels. A single consumer can take the mixin
-    directly and skip this hop.
+    One decode shared by every subscriber, for graphs with several consumers.
     """
 
     config: H264InputConfig
 
+    video: In[CompressedVideo]
     color_image: Out[Image]
+
+    @rpc
+    def start(self) -> None:
+        super().start()
+        self.register_disposable(
+            _decoded(self.video, self.config.publish_hz).subscribe(self.color_image.publish)
+        )
