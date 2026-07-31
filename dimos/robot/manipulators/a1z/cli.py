@@ -191,7 +191,7 @@ def _verify_macos_can() -> None:
     except Exception as exc:
         raise RuntimeError(
             "macOS A1Z support requires pyusb, gs-usb, and system libusb. "
-            "Run `uv sync --group galaxea-a1z` and `brew install libusb`. "
+            "Run `uv sync --group a1z-macos` and `brew install libusb`. "
             f"Original error: {exc}"
         ) from exc
 

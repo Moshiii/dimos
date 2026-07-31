@@ -1860,15 +1860,15 @@ webrtc = [
 ]
 
 [package.dev-dependencies]
+a1z-macos = [
+    { name = "gs-usb", marker = "sys_platform == 'darwin'" },
+    { name = "pyusb", marker = "sys_platform == 'darwin'" },
+]
 autofix = [
     { name = "ruff" },
 ]
 browser-tests = [
     { name = "playwright" },
-]
-galaxea-a1z = [
-    { name = "gs-usb", marker = "sys_platform == 'darwin'" },
-    { name = "pyusb", marker = "sys_platform == 'darwin'" },
 ]
 lint = [
     { name = "aiortc" },
@@ -2159,12 +2159,12 @@ requires-dist = [
 provides-extras = ["misc", "visualization", "learning", "agents", "web", "perception", "unitree", "unitree-dds", "manipulation", "cpu", "cuda", "sim", "mapping", "drone", "dds", "webrtc", "base", "apriltag", "scene", "all"]
 
 [package.metadata.requires-dev]
-autofix = [{ name = "ruff", specifier = "==0.14.3" }]
-browser-tests = [{ name = "playwright", specifier = ">=1.55" }]
-galaxea-a1z = [
+a1z-macos = [
     { name = "gs-usb", marker = "sys_platform == 'darwin'", specifier = "==0.3.1" },
     { name = "pyusb", marker = "sys_platform == 'darwin'", specifier = "==1.3.1" },
 ]
+autofix = [{ name = "ruff", specifier = "==0.14.3" }]
+browser-tests = [{ name = "playwright", specifier = ">=1.55" }]
 lint = [
     { name = "aiortc", specifier = ">=1.14.0" },
     { name = "chromadb", specifier = ">=1.0.0" },
