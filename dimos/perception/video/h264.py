@@ -70,7 +70,7 @@ class H264InputMixin(_MixinHost):
     # Decode is CPU-bound and runs in the host's process, so sharing a worker
     # stalls every module on it. The mixin leads the MRO, so a host that wants
     # otherwise still wins by setting this on itself.
-    dedicated_worker: ClassVar[bool] = True
+    dedicated_worker = True
 
     # Name of the host module's In[Image] to feed.
     image_port: ClassVar[str] = "color_image"
