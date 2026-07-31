@@ -39,7 +39,8 @@ try:
 except ImportError as exc:
     raise ImportError(
         "LeRobot policy inference is not installed. Install the `lerobot` extra with "
-        "`pip install 'dimos[lerobot]'` or run `uv sync --extra lerobot`."
+        "`pip install 'dimos[lerobot]'` or run "
+        "`uv sync --extra lerobot --no-default-groups`."
     ) from exc
 
 from dimos.agents.annotation import skill
@@ -371,8 +372,8 @@ class LeRobotPolicyModule(Module):
         return _LoadedPolicy(
             policy=loaded_policy,
             device=device,
-            # LeRobot 0.4.4 exposes these pipelines as dict[str, Any]. Narrow
-            # them at this boundary to the values its inference helper creates.
+            # LeRobot exposes these pipelines as dict[str, Any]. Narrow them at
+            # this boundary to the values its inference helper creates.
             preprocessor=cast(
                 "PolicyProcessorPipeline[PreparedObservation, PreparedObservation]", preprocessor
             ),

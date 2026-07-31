@@ -6,8 +6,11 @@ still experimental. Recording and dataset preparation remain in `dimos.imitation
 Install the optional LeRobot runtime with:
 
 ```bash
-uv sync --extra lerobot
+uv sync --extra lerobot --no-default-groups
 ```
+
+LeRobot 0.6 requires Python 3.12 or newer and Transformers 5. Its environment is intentionally
+separate from the `perception` extra and development groups, which currently use Transformers 4.
 
 `LeRobotPolicyModule` loads named checkpoints lazily and converts live observations into joint
 targets. Compose it with modules that publish:
