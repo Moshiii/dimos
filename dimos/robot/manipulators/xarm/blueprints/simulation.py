@@ -67,6 +67,7 @@ _XARM_GRASP_TABLE = {"name": "table", "center": (0.47, 0.0, 0.065), "size": (0.3
 
 # Ground-truth detections from sim state instead of the camera: perception is
 # the weak link in this scene, and grasping is what we are testing.
+_XARM_GRASPGENX = make_xarm_graspgenx_config()
 _XARM_GRASP_MESH_DIR = LfsPath("xarm_grasp_sim") / "assets" / "manip"
 _XARM_GRASP_OBJECTS = {
     name: str(_XARM_GRASP_MESH_DIR / f"{name}.obj")
@@ -81,9 +82,11 @@ xarm_grasp_sim = autoconnect(
         pick_and_place_kwargs={
             "max_grasp_candidates_to_check": 30,
             "pick_suppress_all_object_obstacles": True,
+            "grasp_viz_gripper": _XARM_GRASPGENX.gripper,
+            "grasp_viz_frame_to_tcp": _XARM_GRASPGENX.grasp_frame_to_tcp,
         },
     ),
     GraspGenXModule.blueprint(
-        **make_xarm_graspgenx_config().model_dump(exclude={"rpc_transport", "tf_transport", "g"})
+        **_XARM_GRASPGENX.model_dump(exclude={"rpc_transport", "tf_transport", "g"})
     ),
 )
