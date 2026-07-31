@@ -233,7 +233,13 @@ class PickNPlaceModule(Module):
                 "world",
                 (
                     PointCloudElement("object", points, cloud_colors, point_size=0.003),
-                    LineSetElement("tcp-targets", np.asarray(vertices), np.asarray(edges), np.asarray(colors)),
+                    LineSetElement(
+                        "tcp-targets",
+                        np.asarray(vertices),
+                        np.asarray(edges),
+                        np.asarray(colors),
+                        line_width=0.5,
+                    ),
                 ),
             )
         )

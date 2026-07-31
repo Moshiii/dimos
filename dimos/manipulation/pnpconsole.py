@@ -118,8 +118,8 @@ def main() -> None:
 
     while True:
         print("\n1) Scan  2) Info  3) Select target  4) Plan/preview approach")
-        print("5) Execute approach  6) Plan/preview/execute descent  7) Close")
-        print("8) Plan/preview/execute ascent  9) Open  10) Current EE  11) Go home  q) Quit")
+        print("5) Execute approach  6) Plan/preview descent  7) Execute descent  8) Close")
+        print("9) Plan/preview ascent  10) Execute ascent  11) Open  12) Current EE  13) Go home  q) Quit")
         choice = input("Select: ").strip().lower()
         try:
             if choice == "q":
@@ -181,15 +181,19 @@ def main() -> None:
                     print(descent_planned)
                     if descent_planned:
                         _preview(manipulation)
-                        descent_executed = manipulation.execute_and_wait()
-                        print(descent_executed)
             elif choice == "7":
+                if not descent_planned:
+                    print("Plan the descent first.")
+                else:
+                    descent_executed = manipulation.execute_and_wait()
+                    print(descent_executed)
+            elif choice == "8":
                 if not descent_executed:
                     print("Execute the descent first.")
                 else:
                     gripper_closed = manipulation.close_gripper("arm").is_success()
                     print(gripper_closed)
-            elif choice == "8":
+            elif choice == "9":
                 if pre_grasp is None or not gripper_closed:
                     print("Close the gripper before planning ascent.")
                 else:
@@ -202,26 +206,30 @@ def main() -> None:
                     print(ascent_planned)
                     if ascent_planned:
                         _preview(manipulation)
-                        # Gripper commands are asynchronous on xArm. Reassert close before
-                        # lift and let that command settle before dispatching the trajectory.
-                        gripper_closed = manipulation.close_gripper("arm").is_success()
-                        if not gripper_closed:
-                            print("Failed to keep the gripper closed; ascent was not executed.")
-                        else:
-                            time.sleep(1.5)
-                            ascent_executed = manipulation.execute_and_wait()
-                            print(ascent_executed)
-            elif choice == "9":
+            elif choice == "10":
+                if not ascent_planned:
+                    print("Plan the ascent first.")
+                else:
+                    # Gripper commands are asynchronous on xArm. Reassert close before
+                    # lift and let that command settle before dispatching the trajectory.
+                    gripper_closed = manipulation.close_gripper("arm").is_success()
+                    if not gripper_closed:
+                        print("Failed to keep the gripper closed; ascent was not executed.")
+                    else:
+                        time.sleep(1.5)
+                        ascent_executed = manipulation.execute_and_wait()
+                        print(ascent_executed)
+            elif choice == "11":
                 if not ascent_executed:
                     print("Execute the ascent before opening the gripper.")
                 else:
                     print(manipulation.open_gripper("arm"))
-            elif choice == "10":
+            elif choice == "12":
                 _print_pose(manipulation.get_ee_pose("arm"))
-            elif choice == "11":
+            elif choice == "13":
                 print(manipulation.go_home("arm"))
             else:
-                print("Choose 1-11 or q.")
+                print("Choose 1-13 or q.")
         except Exception as exc:
             print(f"RPC failed: {exc}")
 

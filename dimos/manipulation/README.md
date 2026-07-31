@@ -76,9 +76,9 @@ The console intentionally keeps planning and execution separate:
 4. Select `4` to plan and preview the approach. Each Viser preview plays once
    at a slow two-second duration.
 5. Execute the approach only after inspecting the proposal and preview.
-6. Select `6` to plan, preview, and execute descent in one action.
-7. Close the gripper, then select `8` to plan, preview, and execute ascent.
-8. Use `11` to return the arm to its configured xArm lifecycle home.
+6. Select `6` to plan and preview descent, then select `7` to execute it.
+7. Close the gripper with `8`, then select `9` to plan and preview ascent.
+8. Select `10` to execute the ascent, `11` to open, and `13` to return home.
 
 Do not execute a learned grasp without checking its pose, the 100 mm pre-grasp
 pose, the point-cloud/overlay visualization, and the collision-free preview.
