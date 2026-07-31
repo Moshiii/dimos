@@ -79,7 +79,7 @@ def make_xarm7_sim_robot_config() -> RobotModelConfig:
         add_gripper=True,
         tf_extra_links=["link7"],
         home_joints=XARM7_SIM_HOME,
-        pre_grasp_offset=0.05,
+        pre_grasp_offset=0.10,
     )
 
 
