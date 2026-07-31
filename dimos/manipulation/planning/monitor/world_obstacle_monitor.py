@@ -780,12 +780,17 @@ class WorldObstacleMonitor:
         if self._use_mesh_obstacles and obj.pointcloud is not None:
             try:
                 from dimos.manipulation.planning.utils.mesh_utils import (
+                    _CACHE_DIR,
                     pointcloud_to_convex_hull_obj,
                 )
 
                 points, _ = obj.pointcloud.as_numpy()
                 if points is not None and points.shape[0] >= 4:
-                    mesh_path = pointcloud_to_convex_hull_obj(points)
+                    # One stable file per object: a fresh name each refresh
+                    # would grow the cache without bound.
+                    mesh_path = pointcloud_to_convex_hull_obj(
+                        points, _CACHE_DIR / "convex_hulls" / f"{name}.obj"
+                    )
                     if mesh_path is not None:
                         # The hull is centered on the cloud mean, so it must be
                         # placed there: obj.pose carries the bbox center, which
