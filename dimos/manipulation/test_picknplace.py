@@ -83,6 +83,7 @@ def test_picknplace_home_matches_xarm_lifecycle_home() -> None:
 
 def test_picknplace_graspgenx_uses_xarm_tcp_calibration() -> None:
     assert _xarm_graspgenx.grasp_frame_to_tcp[2][3] == pytest.approx(0.172)
+    assert _xarm_graspgenx.grasp_frame_to_tcp[:2] == ((0.0, -1.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
 
 
 def test_picknplace_yaw_alignment_defaults_to_disabled() -> None:

@@ -84,11 +84,14 @@ pre_grasp_position = grasp_position + grasp_orientation * (0, 0, 0.100 m)
 
 The offset is the grasp frame's local `+Z` approach direction. It is not a
 world-Z lift: an angled or side grasp receives an equally angled or sideward
-pre-grasp. Descent and ascent use Cartesian paths between the current TCP pose,
+pre-grasp. Descent and ascent use Cartesian paths between the current TCP pose
+and the selected grasp or pre-grasp target.
 
 The `picknplace-graspgenx` blueprint uses the xArm 85 mm gripper sweep-volume
-and calibrated base-to-TCP transform. Candidate score order comes from
-GraspGenX; no additional ranking is applied by the operator pipeline.
+and calibrated base-to-TCP transform. The TCP is rolled 90 degrees around the
+GraspGenX approach axis so its closing jaws are perpendicular to a bottle's
+length. Candidate score order comes from GraspGenX; no additional ranking is
+applied by the operator pipeline.
 
 ## Implementation Guide
 
