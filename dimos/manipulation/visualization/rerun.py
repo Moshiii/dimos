@@ -19,6 +19,8 @@ from typing import Any, cast
 
 import rerun.blueprint as rrb
 
+from dimos.robot.manipulators.xarm.grasp_config import XARM_TCP_TO_GRASP_FRAME
+
 
 def picknplace_rerun_config() -> dict[str, Any]:
     """Return the Rerun layout and message conversions for pick and place."""
@@ -82,7 +84,7 @@ def _pointcloud_to_rerun(msg: Any) -> Any:
 
 
 def _graspgenx_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
-    """Render the highest-ranked learned grasps as frames and approach arrows."""
+    """Render calibrated xArm TCP grasp candidates and their gripper geometry."""
     import rerun as rr
 
     root = "world/graspgenx_candidates"
@@ -105,7 +107,7 @@ def _graspgenx_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
                     ),
                 ),
                 (
-                    f"{path}/axes",
+                    f"{path}/tcp_axes",
                     rr.Arrows3D(
                         origins=[[0.0, 0.0, 0.0]] * 3,
                         vectors=[
@@ -118,13 +120,21 @@ def _graspgenx_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
                     ),
                 ),
                 (
-                    f"{path}/gripper",
-                    # GraspGenX uses local X for jaw closure and local +Z for approach.
+                    f"{path}/gripper_base",
+                    rr.Transform3D(
+                        translation=[0.0, 0.0, XARM_TCP_TO_GRASP_FRAME[2][3]],
+                        rotation=rr.Quaternion(xyzw=[0.0, 0.0, -0.70710678, 0.70710678]),
+                    ),
+                ),
+                (
+                    f"{path}/gripper_base/jaws",
+                    # The model sweep geometry is in the gripper-base frame:
+                    # local X closes the jaws and local +Z approaches the object.
                     rr.LineStrips3D(
                         strips=[
-                            [[-0.021, 0.0, -0.02], [-0.021, 0.0, 0.08]],
-                            [[0.021, 0.0, -0.02], [0.021, 0.0, 0.08]],
-                            [[-0.021, 0.0, -0.02], [0.021, 0.0, -0.02]],
+                            [[-0.0425, 0.0, 0.095], [-0.0425, 0.0, 0.162]],
+                            [[0.0425, 0.0, 0.095], [0.0425, 0.0, 0.162]],
+                            [[-0.0425, 0.0, 0.095], [0.0425, 0.0, 0.095]],
                         ],
                         colors=[gripper_color] * 3,
                         radii=[0.003] * 3,

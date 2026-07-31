@@ -15,6 +15,7 @@
 import math
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from dimos.core.module import ModuleBase
@@ -26,6 +27,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
 from dimos.msgs.std_msgs.Header import Header
+from dimos.robot.manipulators.xarm.grasp_config import XARM_TCP_TO_GRASP_FRAME
 
 
 def test_picknplace_scans_and_selects_target() -> None:
@@ -87,6 +89,10 @@ def test_picknplace_home_matches_xarm_lifecycle_home() -> None:
 def test_picknplace_graspgenx_uses_xarm_tcp_calibration() -> None:
     assert _xarm_graspgenx.grasp_frame_to_tcp[2][3] == pytest.approx(0.172)
     assert _xarm_graspgenx.grasp_frame_to_tcp[:2] == ((0.0, -1.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+    assert np.allclose(
+        np.asarray(_xarm_graspgenx.grasp_frame_to_tcp) @ np.asarray(XARM_TCP_TO_GRASP_FRAME),
+        np.eye(4),
+    )
 
 
 def test_picknplace_yaw_alignment_defaults_to_disabled() -> None:

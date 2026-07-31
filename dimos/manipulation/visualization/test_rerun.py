@@ -44,3 +44,5 @@ def test_top_grasp_candidate_has_selected_rerun_marker() -> None:
 
     assert "world/graspgenx_candidates/00/selected" not in paths
     assert "world/graspgenx_candidates/01/selected" in paths
+    assert "world/graspgenx_candidates/01/gripper_base" in paths
+    assert "world/graspgenx_candidates/01/gripper_base/jaws" in paths
