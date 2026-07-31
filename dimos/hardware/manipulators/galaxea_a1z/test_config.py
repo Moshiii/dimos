@@ -19,6 +19,7 @@ from dimos.hardware.manipulators.galaxea_a1z.config import (
     A1ZGripperConfig,
     A1ZTeachingConfig,
 )
+from dimos.utils.data import LfsPath
 
 
 @pytest.mark.parametrize("gravity_comp_factor", [-0.1, 1.1])
@@ -42,3 +43,17 @@ def test_teaching_with_gripper_free_drive_is_valid() -> None:
 
     assert config.teaching is not None
     assert config.teaching.gripper_free_drive
+
+
+def test_lazy_urdf_path_is_validated_without_resolving() -> None:
+    lazy_path = LfsPath("a1z_description/A1Z_G1Z.urdf")
+
+    config = A1ZConfig(urdf_path=lazy_path)
+
+    assert config.urdf_path is lazy_path
+    assert object.__getattribute__(lazy_path, "_lfs_resolved_cache") is None
+
+
+def test_urdf_path_rejects_other_types() -> None:
+    with pytest.raises(TypeError, match="urdf_path.*str, Path, or None"):
+        A1ZConfig(urdf_path=42)  # type: ignore[arg-type]

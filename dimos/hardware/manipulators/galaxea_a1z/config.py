@@ -21,6 +21,18 @@ from pathlib import Path
 import attrs
 
 
+def _validate_optional_path(
+    _instance: object,
+    attribute: attrs.Attribute[str | Path | None],
+    value: str | Path | None,
+) -> None:
+    """Validate path config without resolving lazy Path subclasses."""
+    if value is not None and not issubclass(type(value), (str, Path)):
+        raise TypeError(
+            f"'{attribute.name}' must be str, Path, or None (got {type(value).__name__})"
+        )
+
+
 @attrs.frozen(slots=False)
 class A1ZGripperConfig:
     """G1Z gripper configuration."""
@@ -59,16 +71,9 @@ class A1ZConfig:
             attrs.validators.le(1.0),
         ),
     )
-    control_freq_hz: int = attrs.field(
-        default=250,
-        converter=int,
-        validator=attrs.validators.gt(0),
-    )
     urdf_path: str | Path | None = attrs.field(
         default=None,
-        validator=attrs.validators.optional(
-            attrs.validators.instance_of((str, Path)),
-        ),
+        validator=_validate_optional_path,
     )
     gripper: A1ZGripperConfig | None = attrs.field(
         default=None,

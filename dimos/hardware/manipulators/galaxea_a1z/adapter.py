@@ -38,6 +38,7 @@ zero-gravity startup and can optionally place the gripper in free-drive.
 
 from __future__ import annotations
 
+from functools import cached_property
 from pathlib import Path
 import platform
 import threading
@@ -73,6 +74,7 @@ _PLANNED_SPEED_MAX_RAD_S = 2.0
 # else is a fault (matches ArmRobot._check_motor_errors).
 _HEALTHY_MOTOR_CODES = (0, 1)
 _A1Z_DOF = 6
+_SDK_CONTROL_FREQ_HZ = 250
 
 _STARTUP_FEEDBACK_TIMEOUT_S = 0.5
 _STARTUP_RAMP_DURATION_S = 1.0
@@ -80,7 +82,7 @@ _STARTUP_SAMPLE_PERIOD_S = 0.02
 _STARTUP_MAX_VELOCITY_RAD_S = 0.5
 _STARTUP_SETTLED_VELOCITY_RAD_S = 0.1
 _STARTUP_SETTLING_TIMEOUT_S = 1.0
-_STARTUP_HOLD_SAMPLES = 5
+_STARTUP_STAGED_SAMPLES = 5
 _STARTUP_SETTLED_SAMPLES = 5
 
 _SYS_CLASS_NET = Path("/sys/class/net")
@@ -144,7 +146,6 @@ class GalaxeaA1ZAdapter:
         self._can_channel = address
         self._transport = "gs_usb" if platform.system() == "Darwin" else "socketcan"
         self._robot: ArmRobot
-        self._kinematics: Kinematics
         self._connected: bool = False
         self._control_mode: ControlMode = ControlMode.POSITION
         self._move_thread: threading.Thread | None = None
@@ -186,7 +187,7 @@ class GalaxeaA1ZAdapter:
             can_channel=self._can_channel,
             gravity_comp_factor=self._config.gravity_comp_factor,
             zero_gravity_mode=self._config.teaching is not None,
-            control_freq_hz=self._config.control_freq_hz,
+            control_freq_hz=_SDK_CONTROL_FREQ_HZ,
             urdf_path=self._config.urdf_path,
             with_gripper=gripper is not None,
             gripper_max_torque=gripper.max_torque if gripper else 0.5,
@@ -445,7 +446,7 @@ class GalaxeaA1ZAdapter:
             return None
 
         try:
-            kin = self._get_kinematics()
+            kin = self._kinematics
             q = np.asarray(self.read_joint_positions())
             T = kin.fk(q)  # 4x4 homogeneous transform
             R = T[:3, :3]
@@ -471,35 +472,17 @@ class GalaxeaA1ZAdapter:
     def read_gripper_position(self) -> float | None:
         """Read gripper opening (meters). None if no gripper attached.
 
-        Prefers the SDK gripper's motor-feedback position, then falls back to
-        its commanded position for compatibility. Converts the normalized
-        value (0.0=closed, 1.0=open) to meters. Requires the adapter constructed
-        with gripper=True and the SDK's 'gripper' branch.
+        Uses the SDK gripper's normalized motor-feedback position
+        (0.0=closed, 1.0=open). Requires a configured gripper.
         """
         gripper = self._config.gripper
         if not self._connected or gripper is None:
             return None
 
-        fraction: float | None = None
         try:
-            gripper_state = self._robot.get_joint_state().get("gripper_pos")
-            if gripper_state is not None:
-                fraction = float(np.asarray(gripper_state).reshape(-1)[0])
+            fraction = self._robot.gripper.get_feedback_norm()
         except Exception:
-            pass
-        if fraction is None:
-            sdk_gripper = getattr(self._robot, "gripper", None)
-            feedback_reader = getattr(sdk_gripper, "get_feedback_norm", None)
-            if callable(feedback_reader):
-                try:
-                    fraction = feedback_reader()
-                except Exception:
-                    pass
-        if fraction is None:
-            try:
-                fraction = self._robot.get_gripper_pos()
-            except Exception:
-                return None
+            return None
         if fraction is None:
             return None
         return float(fraction) * gripper.max_opening_m
@@ -527,10 +510,14 @@ class GalaxeaA1ZAdapter:
         Requires gripper=True and the SDK's 'gripper' branch.
         """
         robot = self._require_robot()
-        if self._config.gripper is None or not hasattr(robot, "set_gripper_free_drive"):
+        if self._config.gripper is None:
             return False
         robot.set_gripper_free_drive(enabled)
         return True
+
+    def _arm_motors(self) -> list[Any]:
+        chain = self._robot._motor_chain
+        return [*chain._motor_a_list, *chain._motor_b_list]
 
     def _ensure_motors_disabled(self) -> None:
         """Re-send disable frames to every motor, gripper included.
@@ -543,15 +530,9 @@ class GalaxeaA1ZAdapter:
         """
         if not self._connected:
             return
-        robot = self._robot
-        motors: list[Any] = []
-        chain = getattr(robot, "_motor_chain", None)
-        if chain is not None:
-            motors += list(getattr(chain, "_motor_a_list", []))
-            motors += list(getattr(chain, "_motor_b_list", []))
-        gripper = getattr(robot, "gripper", None)
-        if gripper is not None:
-            motors.append(gripper._motor)
+        motors = self._arm_motors()
+        if self._config.gripper is not None:
+            motors.append(self._robot.gripper._motor)
         for _ in range(2):
             for motor in motors:
                 try:
@@ -579,21 +560,15 @@ class GalaxeaA1ZAdapter:
         gain and model feedforward.
         """
         robot = self._robot
-        dof = _A1Z_DOF
-        default_kp = np.asarray(
-            getattr(robot, "_default_kp", np.array([30.0, 30.0, 30.0, 20.0, 5.0, 5.0])),
-            dtype=float,
-        )
-        default_kd = np.asarray(
-            getattr(robot, "_default_kd", np.array([1.0, 1.0, 1.0, 0.5, 0.5, 0.5])),
-            dtype=float,
-        )
+        robot_info = robot.get_robot_info()
+        default_kp = np.asarray(robot_info["default_kp"], dtype=float)
+        default_kd = np.asarray(robot_info["default_kd"], dtype=float)
 
         configured_gravity_factor = float(robot.gravity_comp_factor)
         robot.gravity_comp_factor = 0.0
 
         try:
-            robot.start(initial_kp=np.zeros(dof), initial_kd=default_kd * 0.5)
+            robot.start(initial_kp=np.zeros(_A1Z_DOF), initial_kd=default_kd * 0.5)
 
             deadline = time.monotonic() + _STARTUP_FEEDBACK_TIMEOUT_S
             while time.monotonic() < deadline and not self._all_motors_reported():
@@ -606,7 +581,6 @@ class GalaxeaA1ZAdapter:
             hold_pos, _ = self._validated_startup_state(
                 robot.get_joint_state(),
                 phase="initial feedback",
-                max_velocity=_STARTUP_MAX_VELOCITY_RAD_S,
             )
 
             # The measured target has zero position error at this instant,
@@ -615,32 +589,21 @@ class GalaxeaA1ZAdapter:
             robot.command_joint_state(
                 {
                     "pos": hold_pos.copy(),
-                    "vel": np.zeros(dof),
+                    "vel": np.zeros(_A1Z_DOF),
                     "kp": default_kp,
                     "kd": default_kd,
                 }
             )
-            for sample in range(1, _STARTUP_HOLD_SAMPLES + 1):
-                time.sleep(_STARTUP_SAMPLE_PERIOD_S)
-                self._validated_startup_state(
-                    robot.get_joint_state(),
-                    phase=f"position hold {sample}/{_STARTUP_HOLD_SAMPLES}",
-                    max_velocity=_STARTUP_MAX_VELOCITY_RAD_S,
-                )
-
             ramp_steps = max(
                 1,
                 round(_STARTUP_RAMP_DURATION_S / _STARTUP_SAMPLE_PERIOD_S),
             )
-            for step in range(1, ramp_steps + 1):
-                alpha = step / ramp_steps
-                robot.gravity_comp_factor = configured_gravity_factor * alpha
-                time.sleep(_STARTUP_SAMPLE_PERIOD_S)
-                self._validated_startup_state(
-                    robot.get_joint_state(),
-                    phase=f"gravity ramp {step}/{ramp_steps}",
-                    max_velocity=_STARTUP_MAX_VELOCITY_RAD_S,
-                )
+            gravity_schedule = [0.0] * _STARTUP_STAGED_SAMPLES + [
+                configured_gravity_factor * step / ramp_steps for step in range(1, ramp_steps + 1)
+            ]
+            for sample, gravity_factor in enumerate(gravity_schedule, start=1):
+                robot.gravity_comp_factor = gravity_factor
+                self._sample_startup_state(phase=f"staged gravity {sample}/{len(gravity_schedule)}")
 
             self._wait_for_startup_settling()
         except Exception:
@@ -663,11 +626,8 @@ class GalaxeaA1ZAdapter:
         last_pos = np.zeros(_A1Z_DOF)
         last_vel = np.zeros(_A1Z_DOF)
         for sample in range(1, max_samples + 1):
-            time.sleep(_STARTUP_SAMPLE_PERIOD_S)
-            last_pos, last_vel = self._validated_startup_state(
-                self._robot.get_joint_state(),
-                phase=f"settling {sample}/{max_samples}",
-                max_velocity=_STARTUP_MAX_VELOCITY_RAD_S,
+            last_pos, last_vel = self._sample_startup_state(
+                phase=f"settling {sample}/{max_samples}"
             )
             if np.all(np.abs(last_vel) <= _STARTUP_SETTLED_VELOCITY_RAD_S):
                 stable_samples += 1
@@ -689,7 +649,6 @@ class GalaxeaA1ZAdapter:
         state: dict[str, Any],
         *,
         phase: str,
-        max_velocity: float,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Validate one startup sample and return position and velocity."""
         if not self._connected or not self._robot.is_running:
@@ -717,18 +676,23 @@ class GalaxeaA1ZAdapter:
                 f"positions={np.round(pos, 3).tolist()}"
             )
 
-        too_fast = np.abs(vel) > max_velocity
+        too_fast = np.abs(vel) > _STARTUP_MAX_VELOCITY_RAD_S
         if np.any(too_fast):
             offenders = ", ".join(
                 f"joint{i + 1}={vel[i]:.3f} rad/s" for i in np.flatnonzero(too_fast)
             )
             raise RuntimeError(
                 f"arm moving during {phase}: {offenders} "
-                f"(limit {max_velocity:.3f} rad/s); "
+                f"(limit {_STARTUP_MAX_VELOCITY_RAD_S:.3f} rad/s); "
                 f"positions={np.round(pos, 3).tolist()}, "
                 f"velocities={np.round(vel, 3).tolist()}"
             )
         return pos, vel
+
+    def _sample_startup_state(self, *, phase: str) -> tuple[np.ndarray, np.ndarray]:
+        """Sleep for one SDK sample, then read and validate the arm state."""
+        time.sleep(_STARTUP_SAMPLE_PERIOD_S)
+        return self._validated_startup_state(self._robot.get_joint_state(), phase=phase)
 
     def _quiesce_and_stop_after_failed_start(self) -> None:
         """Remove commanded force before disabling after activation failure."""
@@ -747,15 +711,7 @@ class GalaxeaA1ZAdapter:
 
     def _all_motors_reported(self) -> bool:
         """True once every motor in the SDK chain has sent real feedback."""
-        chain = getattr(self._robot, "_motor_chain", None)
-        if chain is None:
-            return True  # can't verify on this SDK version; rely on limit checks
-        motors = list(getattr(chain, "_motor_a_list", [])) + list(
-            getattr(chain, "_motor_b_list", [])
-        )
-        if not motors:
-            return True
-        return all(m.last_feedback is not None for m in motors)
+        return all(motor.last_feedback is not None for motor in self._arm_motors())
 
     def _require_robot(self) -> ArmRobot:
         if not self._connected:
@@ -765,15 +721,13 @@ class GalaxeaA1ZAdapter:
     def _joint_state(self) -> dict[str, np.ndarray]:
         return cast("dict[str, np.ndarray]", self._require_robot().get_joint_state())
 
-    def _get_kinematics(self) -> Kinematics:
+    @cached_property
+    def _kinematics(self) -> Kinematics:
         """Lazily build and cache the FK solver from the SDK's bundled URDF."""
-        if hasattr(self, "_kinematics"):
-            return self._kinematics
         urdf = self._config.urdf_path or str(
             Path(a1z.__file__).parent / "robot_models" / "a1z" / "A1Z_Flange.urdf"
         )
-        self._kinematics = Kinematics(str(urdf))
-        return self._kinematics
+        return Kinematics(str(urdf))
 
 
 def create_galaxea_a1z_adapter(

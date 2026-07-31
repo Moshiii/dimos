@@ -44,6 +44,18 @@ class _FakeMotor:
     def __init__(self) -> None:
         self.last_feedback = object()  # motor has reported
 
+    def disable(self) -> None:
+        pass
+
+
+class _FakeGripper:
+    def __init__(self) -> None:
+        self._motor = _FakeMotor()
+        self.feedback_fraction = 0.0
+
+    def get_feedback_norm(self) -> float:
+        return self.feedback_fraction
+
 
 class _FakeMotorChain:
     def __init__(self) -> None:
@@ -83,6 +95,8 @@ class _FakeArmRobot:
             "temp_mos": np.full(6, 35.0),
             "temp_rotor": np.full(6, 40.0),
         }
+        if factory_kwargs["with_gripper"]:
+            self.gripper = _FakeGripper()
 
     @property
     def gravity_comp_factor(self) -> float:
@@ -92,7 +106,7 @@ class _FakeArmRobot:
     def gravity_comp_factor(self, value: float) -> None:
         self._gravity_comp_factor = value
         self.gravity_factor_history.append(value)
-        if value <= 0 or not hasattr(self, "state"):
+        if value <= 0 or "state" not in self.__dict__:
             return
         if self.move_during_gravity_ramp:
             self.state["vel"][2] = 0.75
@@ -141,6 +155,12 @@ class _FakeArmRobot:
             state["vel"] = self.full_gravity_velocity_samples.pop(0).copy()
         return state
 
+    def get_robot_info(self) -> dict[str, Any]:
+        return {
+            "default_kp": self._default_kp.copy(),
+            "default_kd": self._default_kd.copy(),
+        }
+
     def command_joint_pos(self, pos: np.ndarray) -> None:
         self.actions.append(("command_joint_pos", pos.tolist()))
 
@@ -151,12 +171,13 @@ class _FakeArmRobot:
         if not self.factory_kwargs.get("with_gripper"):
             raise RuntimeError("No gripper attached. Pass gripper= to get_a1z_robot().")
         self.gripper_fraction = value
+        self.gripper.feedback_fraction = value
         self.actions.append(("command_gripper", value))
 
     def get_gripper_pos(self) -> float | None:
         if not self.factory_kwargs.get("with_gripper"):
             return None
-        return getattr(self, "gripper_fraction", 0.0)
+        return self.gripper.feedback_fraction
 
     def set_gripper_free_drive(self, enabled: bool) -> None:
         if not self.factory_kwargs.get("with_gripper"):
@@ -226,7 +247,6 @@ def _connected_adapter(module: ModuleType, **kwargs: Any) -> Any:
     )
     config = A1ZConfig(
         gravity_comp_factor=kwargs.pop("gravity_comp_factor", 1.0),
-        control_freq_hz=kwargs.pop("control_freq_hz", 250),
         urdf_path=kwargs.pop("urdf_path", None),
         gripper=gripper,
         teaching=teaching,
@@ -246,6 +266,7 @@ def test_connect_constructs_robot_without_powering_motors(
     assert adapter.is_connected()
     assert robot.factory_kwargs["can_channel"] == "can0"
     assert robot.factory_kwargs["gravity_comp_factor"] == 0.7
+    assert robot.factory_kwargs["control_freq_hz"] == 250
     assert "start" not in robot.actions
     assert not adapter.read_enabled()
 
@@ -282,8 +303,28 @@ def test_safe_start_stages_measured_hold_before_gravity_feedforward(
     assert hold[0][2] == 0.0
     zero_index = robot.gravity_factor_history.index(0.0)
     gravity_ramp = robot.gravity_factor_history[zero_index:]
+    assert gravity_ramp[:6] == [0.0] * 6
     assert gravity_ramp == sorted(gravity_ramp)
     assert robot.gravity_comp_factor == 1.0
+
+
+def test_safe_start_requires_feedback_from_all_six_motors(
+    a1z_adapter_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    adapter = _connected_adapter(a1z_adapter_module)
+    robot = _FakeArmRobot.instances[-1]
+    robot._motor_chain._motor_b_list[-1].last_feedback = None
+    monkeypatch.setattr(a1z_adapter_module, "_STARTUP_FEEDBACK_TIMEOUT_S", 0.0)
+
+    assert not adapter.activate()
+
+    assert "no feedback from all motors" in capsys.readouterr().out
+    assert not any(
+        isinstance(action, tuple) and action[0] == "command_joint_state" for action in robot.actions
+    )
+    assert robot.actions[-2:] == ["estop", "stop"]
 
 
 def test_safe_start_tolerates_one_noisy_settling_velocity_sample(
@@ -378,7 +419,7 @@ def test_safe_start_aborts_motion_during_gravity_ramp(
     assert not adapter.activate()
 
     output = capsys.readouterr().out
-    assert "arm moving during gravity ramp 1/50" in output
+    assert "arm moving during" in output
     assert "joint3=0.750 rad/s" in output
     assert robot.gravity_comp_factor == 0.0
     assert robot.actions[-2:] == ["estop", "stop"]
@@ -395,7 +436,7 @@ def test_safe_start_rejects_dead_sdk_control_loop(
     assert not adapter.activate()
 
     output = capsys.readouterr().out
-    assert "SDK control loop stopped during gravity ramp 1/50" in output
+    assert "SDK control loop stopped during" in output
     assert robot.gravity_comp_factor == 0.0
     assert robot.actions[-2:] == ["estop", "stop"]
 
@@ -599,8 +640,7 @@ def test_gripper_read_prefers_motor_feedback(
 ) -> None:
     adapter = _connected_adapter(a1z_adapter_module, gripper=True, gripper_max_opening_m=0.1)
     robot = _FakeArmRobot.instances[-1]
-    robot.gripper_fraction = 0.8
-    robot.state["gripper_pos"] = np.array([0.35])
+    robot.gripper.feedback_fraction = 0.35
 
     assert adapter.read_gripper_position() == pytest.approx(0.035)
 
