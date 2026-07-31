@@ -27,18 +27,6 @@ one decoder per subscription. The rest is wiring:
 
 * :class:`H264DecoderModule` publishes on an Out instead, for graphs where
   several consumers should share one decode.
-
-Every decoded frame is emitted. Rate is the consumer's business — subscribe
-through ``observable()`` for latest-wins backpressure, or thin the stream with
-a memory2 transform. An Image over a decoded frame costs 0.6 us and shares the
-buffer, so the frames a consumer ignores are close to free.
-
-Longer term this belongs beside ``jpeg_lcm``/``jpeg_shm`` as a transport codec
-(:mod:`dimos.protocol.pubsub.encoders`), so consumers keep a plain ``In[Image]``
-and nothing in the graph knows the wire was compressed. That needs
-per-subscription decoder state, which the per-message encoder contract lacks.
-:class:`~dimos.robot.unitree.go2.dds.video.H264Decoder` is a third copy of the
-same decode, as a memory2 transform.
 """
 
 from __future__ import annotations
