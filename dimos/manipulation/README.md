@@ -1,12 +1,13 @@
 # Pick And Place
 
-This directory contains the xArm6 pick-and-place operator pipeline. It has two
+This directory contains the xArm6 pick-and-place operator pipeline. It has three
 runnable blueprints:
 
 | Blueprint | Grasp source |
 | --- | --- |
 | `picknplace` | Filtered-object OBB center, with optional principal-axis yaw |
 | `picknplace-graspgenx` | GraspGenX proposals from the selected object's point cloud |
+| `picknplace-graspgenx-edgetam` | Text-prompted YOLO-E boxes refined by EdgeTAM, then GraspGenX |
 
 Both use the wrist-mounted RealSense, object-scene registration in `link_base`,
 
@@ -28,6 +29,8 @@ GraspGenX.
 
 The first GraspGenX startup downloads the pinned model checkpoint to the
 Hugging Face cache and loads it onto the GPU. Later starts reuse that cache.
+The setup also installs `edgetam-dimos`, which provides the `sam2` runtime used
+by the EdgeTAM blueprint.
 
 ## Run
 
@@ -35,6 +38,12 @@ Start one blueprint in the background:
 
 ```bash
 uv run --no-sync dimos run picknplace-graspgenx --daemon
+```
+
+For text-prompted EdgeTAM segmentation before GraspGenX:
+
+```bash
+uv run --no-sync dimos run picknplace-graspgenx-edgetam --daemon
 ```
 
 For the OBB fallback instead:
