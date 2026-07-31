@@ -146,6 +146,15 @@ class ConnectedPoseSequenceResult:
     paths: tuple[tuple[JointState, ...], ...]
 
 
+@dataclass(frozen=True)
+class ConnectedPoseIKResult:
+    """Sequential IK result for an ordered pose sequence."""
+
+    failed_index: int | None
+    start: JointState | None
+    joint_states: tuple[JointState, ...]
+
+
 class ManipulationModuleConfig(ModuleConfig):
     """Configuration for ManipulationModule."""
 
@@ -1146,6 +1155,125 @@ class ManipulationModule(Module):
         """
         result = self._plan_connected_pose_sequence(poses, robot_name, start)
         return result.failed_index, result.endpoint
+
+    def _solve_connected_pose_sequence_ik(
+        self,
+        poses: Sequence[Pose],
+        robot_name: RobotName,
+        start: JointState | None = None,
+    ) -> ConnectedPoseIKResult:
+        """Solve collision-aware IK sequentially, seeding each pose from the last."""
+        if not poses:
+            return ConnectedPoseIKResult(None, start, ())
+        if self._world_monitor is None or self._kinematics is None:
+            logger.warning("Connected pose IK is unavailable")
+            return ConnectedPoseIKResult(0, None, ())
+        try:
+            group_id = self._require_unique_pose_group_id_for_robot(robot_name)
+            selection = self._world_monitor.planning_groups.select((group_id,))
+            if start is None:
+                current = self._world_monitor.current_global_joint_state()
+                start = filter_joint_state_to_selected_joints(current, selection.joint_names)
+            else:
+                start = filter_joint_state_to_selected_joints(start, selection.joint_names)
+        except (KeyError, ValueError) as exc:
+            logger.warning("Failed to initialize connected pose IK: %s", exc)
+            return ConnectedPoseIKResult(0, None, ())
+
+        seed = start
+        joint_states: list[JointState] = []
+        for index, pose in enumerate(poses):
+            target = PoseStamped(
+                frame_id="world",
+                position=pose.position,
+                orientation=pose.orientation,
+            )
+            ik = self.inverse_kinematics(
+                pose_targets={group_id: target},
+                seed=seed,
+                check_collision=True,
+            )
+            if not ik.is_success() or ik.joint_state is None:
+                logger.info(
+                    "Connected pose IK failed at index %d: %s%s",
+                    index,
+                    ik.status.name,
+                    f": {ik.message}" if ik.message else "",
+                )
+                return ConnectedPoseIKResult(index, start, tuple(joint_states))
+            try:
+                seed = filter_joint_state_to_selected_joints(ik.joint_state, selection.joint_names)
+            except ValueError as exc:
+                logger.info(
+                    "Connected pose IK returned an invalid state at index %d: %s", index, exc
+                )
+                return ConnectedPoseIKResult(index, start, tuple(joint_states))
+            joint_states.append(seed)
+        return ConnectedPoseIKResult(None, start, tuple(joint_states))
+
+    def _plan_connected_joint_sequence(
+        self,
+        joint_states: Sequence[JointState],
+        robot_name: RobotName,
+        start: JointState | None = None,
+    ) -> ConnectedPoseSequenceResult:
+        """Plan a connected sequence through previously solved joint targets."""
+        if not joint_states:
+            return ConnectedPoseSequenceResult(None, start, ())
+        if self._world_monitor is None or self._planner is None:
+            logger.warning("Connected joint planning is unavailable")
+            return ConnectedPoseSequenceResult(0, None, ())
+        try:
+            group_id = self._require_unique_pose_group_id_for_robot(robot_name)
+            selection = self._world_monitor.planning_groups.select((group_id,))
+            if start is None:
+                current = self._world_monitor.current_global_joint_state()
+                start = filter_joint_state_to_selected_joints(current, selection.joint_names)
+            else:
+                start = filter_joint_state_to_selected_joints(start, selection.joint_names)
+        except (KeyError, ValueError) as exc:
+            logger.warning("Failed to initialize connected joint planning: %s", exc)
+            return ConnectedPoseSequenceResult(0, None, ())
+
+        paths: list[tuple[JointState, ...]] = []
+        for index, joint_state in enumerate(joint_states):
+            try:
+                goal = filter_joint_state_to_selected_joints(joint_state, selection.joint_names)
+            except ValueError as exc:
+                logger.info(
+                    "Connected joint target is invalid at index %d: %s",
+                    index,
+                    exc,
+                )
+                return ConnectedPoseSequenceResult(index, None, tuple(paths))
+            result = self._planner.plan_selected_joint_path(
+                world=self._world_monitor.world,
+                selection=selection,
+                start=start,
+                goal=goal,
+                timeout=self.config.planning_timeout,
+            )
+            if not result.is_success() or not result.path:
+                logger.info(
+                    "Connected joint planning failed at index %d: %s%s",
+                    index,
+                    result.status.name,
+                    f": {result.message}" if result.message else "",
+                )
+                return ConnectedPoseSequenceResult(index, None, tuple(paths))
+            try:
+                start = filter_joint_state_to_selected_joints(
+                    result.path[-1], selection.joint_names
+                )
+            except ValueError as exc:
+                logger.info(
+                    "Connected joint planning returned an invalid endpoint at index %d: %s",
+                    index,
+                    exc,
+                )
+                return ConnectedPoseSequenceResult(index, None, tuple(paths))
+            paths.append(tuple(result.path))
+        return ConnectedPoseSequenceResult(None, start, tuple(paths))
 
     def _plan_connected_pose_sequence(
         self,

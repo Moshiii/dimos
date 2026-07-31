@@ -33,6 +33,10 @@ from dimos.core.coordination.module_coordinator import _resolve_single_ref
 from dimos.core.module import ModuleBase
 from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
 from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
+from dimos.manipulation.manipulation_module import (
+    ConnectedPoseIKResult,
+    ConnectedPoseSequenceResult,
+)
 from dimos.manipulation.pick_and_place_module import (
     GraspVerificationConfig,
     GraspVisualizationConfig,
@@ -79,6 +83,29 @@ def _make_det_object(
         confidence=1.0,
         ts=0.0,
         image=Image(),
+    )
+
+
+def _ik_result(
+    *positions: float,
+    failed_index: int | None = None,
+    start: float = 0.0,
+) -> ConnectedPoseIKResult:
+    return ConnectedPoseIKResult(
+        failed_index=failed_index,
+        start=JointState(name=["arm/joint1"], position=[start]),
+        joint_states=tuple(
+            JointState(name=["arm/joint1"], position=[position]) for position in positions
+        ),
+    )
+
+
+def _plan_result(*positions: float, failed_index: int | None = None) -> ConnectedPoseSequenceResult:
+    path = tuple(JointState(name=["arm/joint1"], position=[position]) for position in positions)
+    return ConnectedPoseSequenceResult(
+        failed_index=failed_index,
+        endpoint=path[-1] if failed_index is None and path else None,
+        paths=(path,) if path else (),
     )
 
 
@@ -401,11 +428,16 @@ class TestProposalSelection:
     def test_selection_skips_higher_scored_infeasible_candidate(
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
-        endpoint = JointState(name=["arm/joint1"], position=[0.1])
-        plan_sequence = mocker.patch.object(
+        solve_ik = mocker.patch.object(
             module,
-            "_check_connected_pose_sequence",
-            side_effect=[(0, None), (None, endpoint)],
+            "_solve_connected_pose_sequence_ik",
+            side_effect=[
+                _ik_result(failed_index=0),
+                _ik_result(0.1, 0.2, 0.3),
+            ],
+        )
+        plan_sequence = mocker.patch.object(
+            module, "_plan_connected_joint_sequence", return_value=_plan_result(0.0, 0.3)
         )
         plan_motion = mocker.patch.object(module, "plan_to_pose")
         command_gripper = mocker.patch.object(module, "_set_gripper_position")
@@ -420,20 +452,21 @@ class TestProposalSelection:
 
         assert selected.rank == 2
         assert selected.candidate.score == 0.8
-        assert plan_sequence.call_count == 2
-        assert transaction.rejections == {"pre_grasp_infeasible": 1}
+        assert solve_ik.call_count == 2
+        assert plan_sequence.call_count == 1
+        assert transaction.rejections == {"pre_grasp_ik_infeasible": 1}
         plan_motion.assert_not_called()
         command_gripper.assert_not_called()
 
     @pytest.mark.parametrize(
         ("failed_index", "expected_rejection"),
         [
-            (0, "pre_grasp_infeasible"),
-            (1, "grasp_infeasible"),
-            (2, "retreat_infeasible"),
+            (0, "pre_grasp_ik_infeasible"),
+            (1, "grasp_ik_infeasible"),
+            (2, "retreat_ik_infeasible"),
         ],
     )
-    def test_selection_reports_failed_connected_segment(
+    def test_selection_reports_failed_ik_waypoint(
         self,
         module: PickAndPlaceModule,
         mocker: MockerFixture,
@@ -442,8 +475,42 @@ class TestProposalSelection:
     ) -> None:
         mocker.patch.object(
             module,
-            "_check_connected_pose_sequence",
-            return_value=(failed_index, None),
+            "_solve_connected_pose_sequence_ik",
+            return_value=_ik_result(failed_index=failed_index),
+        )
+        plan_sequence = mocker.patch.object(module, "_plan_connected_joint_sequence")
+        transaction = SimpleNamespace(rejections=Counter())
+
+        with pytest.raises(RuntimeError, match="No feasible grasp among 1"):
+            module._select_feasible_grasp([_candidate(0.4, 0.9)], "arm", 0.1, transaction)
+
+        assert transaction.rejections == {expected_rejection: 1}
+        plan_sequence.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("failed_index", "expected_rejection"),
+        [
+            (0, "pre_grasp_planning_infeasible"),
+            (1, "grasp_planning_infeasible"),
+            (2, "retreat_planning_infeasible"),
+        ],
+    )
+    def test_selection_reports_failed_planning_segment(
+        self,
+        module: PickAndPlaceModule,
+        mocker: MockerFixture,
+        failed_index: int,
+        expected_rejection: str,
+    ) -> None:
+        mocker.patch.object(
+            module,
+            "_solve_connected_pose_sequence_ik",
+            return_value=_ik_result(0.1, 0.2, 0.3),
+        )
+        mocker.patch.object(
+            module,
+            "_plan_connected_joint_sequence",
+            return_value=_plan_result(failed_index=failed_index),
         )
         transaction = SimpleNamespace(rejections=Counter())
 
@@ -458,12 +525,14 @@ class TestProposalSelection:
         module.config.max_grasp_candidates_to_check = 1
         invalid = _candidate(0.4, 0.9)
         invalid.pose.orientation.w = 0.0
-        plan_sequence = mocker.patch.object(module, "_check_connected_pose_sequence")
+        solve_ik = mocker.patch.object(module, "_solve_connected_pose_sequence_ik")
+        plan_sequence = mocker.patch.object(module, "_plan_connected_joint_sequence")
         transaction = SimpleNamespace(rejections=Counter())
 
         with pytest.raises(RuntimeError, match="No feasible grasp among 1"):
             module._select_feasible_grasp([invalid, _candidate(0.5, 0.8)], "arm", 0.1, transaction)
 
+        solve_ik.assert_not_called()
         plan_sequence.assert_not_called()
         assert transaction.rejections == {"invalid": 1}
 
@@ -475,8 +544,16 @@ class TestProposalSelection:
         module.config.grasp_visualization = _grasp_visualization_config()
         mocker.patch.object(
             module,
-            "_check_connected_pose_sequence",
-            side_effect=[(0, None), (None, JointState())],
+            "_solve_connected_pose_sequence_ik",
+            side_effect=[
+                _ik_result(failed_index=0),
+                _ik_result(0.1, 0.2, 0.3),
+            ],
+        )
+        mocker.patch.object(
+            module,
+            "_plan_connected_joint_sequence",
+            return_value=_plan_result(0.0, 0.3),
         )
 
         selected = module._select_feasible_grasp(
@@ -492,7 +569,12 @@ class TestProposalSelection:
         selected_element = proposal_layers[-1].elements[0]
         assert isinstance(selected_element, LineSetElement)
         np.testing.assert_array_equal(selected_element.colors, [0, 220, 80])
-        rejected_current = proposal_layers[-2].elements
+        rejected_current = next(
+            layer.elements
+            for layer in proposal_layers
+            if np.array_equal(layer.elements[0].colors, [230, 50, 50])
+            and np.array_equal(layer.elements[1].colors, [255, 220, 0])
+        )
         np.testing.assert_array_equal(rejected_current[0].colors, [230, 50, 50])
         np.testing.assert_array_equal(rejected_current[1].colors, [255, 220, 0])
 
@@ -504,8 +586,11 @@ class TestProposalSelection:
         module.config.grasp_visualization = _grasp_visualization_config()
         mocker.patch.object(
             module,
-            "_check_connected_pose_sequence",
-            side_effect=[(0, None), (1, None)],
+            "_solve_connected_pose_sequence_ik",
+            side_effect=[
+                _ik_result(failed_index=0),
+                _ik_result(failed_index=1),
+            ],
         )
 
         with pytest.raises(RuntimeError, match="No feasible grasp"):
@@ -531,12 +616,80 @@ class TestProposalSelection:
         module.config.grasp_visualization = _grasp_visualization_config()
         mocker.patch.object(
             module,
-            "_check_connected_pose_sequence",
-            return_value=(None, JointState()),
+            "_solve_connected_pose_sequence_ik",
+            return_value=_ik_result(0.1, 0.2, 0.3),
+        )
+        mocker.patch.object(
+            module,
+            "_plan_connected_joint_sequence",
+            return_value=_plan_result(0.0, 0.3),
         )
 
         selected = module._select_feasible_grasp(
             [_candidate(0.4, 0.9)],
+            "arm",
+            0.1,
+            SimpleNamespace(rejections=Counter()),
+        )
+
+        assert selected.rank == 1
+
+    def test_selection_plans_all_ik_survivors_in_estimated_cost_order(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        mocker.patch.object(
+            module,
+            "_solve_connected_pose_sequence_ik",
+            side_effect=[
+                _ik_result(1.0, 2.0, 3.0),
+                _ik_result(0.1, 0.2, 0.3),
+            ],
+        )
+        plan_sequence = mocker.patch.object(
+            module,
+            "_plan_connected_joint_sequence",
+            side_effect=[
+                _plan_result(0.0, 0.6),
+                _plan_result(0.0, 0.2),
+            ],
+        )
+
+        selected = module._select_feasible_grasp(
+            [_candidate(0.4, 0.90), _candidate(0.5, 0.88)],
+            "arm",
+            0.1,
+            SimpleNamespace(rejections=Counter()),
+        )
+
+        assert selected.rank == 1
+        assert plan_sequence.call_count == 2
+        first_planned_targets = plan_sequence.call_args_list[0].args[0]
+        second_planned_targets = plan_sequence.call_args_list[1].args[0]
+        assert [state.position[0] for state in first_planned_targets] == [0.1, 0.2, 0.3]
+        assert [state.position[0] for state in second_planned_targets] == [1.0, 2.0, 3.0]
+
+    def test_selection_quality_band_rejects_easier_low_score_plan(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        mocker.patch.object(
+            module,
+            "_solve_connected_pose_sequence_ik",
+            side_effect=[
+                _ik_result(0.1, 0.2, 0.3),
+                _ik_result(0.4, 0.5, 0.6),
+            ],
+        )
+        mocker.patch.object(
+            module,
+            "_plan_connected_joint_sequence",
+            side_effect=[
+                _plan_result(0.0, 2.0),
+                _plan_result(0.0, 0.1),
+            ],
+        )
+
+        selected = module._select_feasible_grasp(
+            [_candidate(0.4, 0.90), _candidate(0.5, 0.80)],
             "arm",
             0.1,
             SimpleNamespace(rejections=Counter()),
@@ -788,10 +941,18 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     module._grasp_generator = generator
     robot_config = SimpleNamespace(pre_grasp_offset=0.1)
     mocker.patch.object(module, "_get_robot", return_value=("arm", "robot-id", robot_config, None))
+    solve_ik = mocker.patch.object(
+        module,
+        "_solve_connected_pose_sequence_ik",
+        side_effect=[
+            _ik_result(failed_index=0),
+            _ik_result(0.1, 0.2, 0.3),
+        ],
+    )
     plan_sequence = mocker.patch.object(
         module,
-        "_check_connected_pose_sequence",
-        side_effect=[(0, None), (None, JointState())],
+        "_plan_connected_joint_sequence",
+        return_value=_plan_result(0.0, 0.3),
     )
     mocker.patch.object(module, "_safety_lift_pose", return_value=None)
     mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
@@ -810,14 +971,15 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     assert result.is_success()
     assert result.metadata["candidate_rank"] == 2
     assert result.metadata["candidate_score"] == 0.8
-    assert result.metadata["rejections"] == {"pre_grasp_infeasible": 1}
+    assert result.metadata["rejections"] == {"pre_grasp_ik_infeasible": 1}
     scene.get_object_pointcloud_by_object_id.assert_called_once_with("abc12345")
     proposal_input = generator.propose_grasps.call_args.args[0]
     assert isinstance(proposal_input, GraspProposalInput)
     assert proposal_input.object_pointcloud is scene.get_object_pointcloud_by_object_id()
     world.suppress_object_obstacle.assert_called_once_with("abc12345")
     assert world.method_calls == [mocker.call.suppress_object_obstacle("abc12345")]
-    assert plan_sequence.call_count == 2
+    assert solve_ik.call_count == 2
+    assert plan_sequence.call_count == 1
     assert plan.call_count == 3
     assert execute.call_count == 3
     assert gripper.call_args_list == [mocker.call(0.85, "arm"), mocker.call(0.0, "arm")]
