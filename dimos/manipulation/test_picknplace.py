@@ -63,6 +63,9 @@ def test_picknplace_scans_and_selects_target() -> None:
     assert pre_grasp is not None
     assert pre_grasp.position == Vector3(0.1, 0.2, 0.200)
 
+    module.scan_scene("water bottle")
+    scene.set_prompts.assert_called_once_with(["water bottle"])
+
     module.config = PickNPlaceConfig(align_grasp_yaw=True)
     yaw_aligned_goal = module.get_goal_pose(1)
     assert yaw_aligned_goal is not None

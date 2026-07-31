@@ -83,10 +83,12 @@ class PickNPlaceModule(Module):
             self._camera_info = camera_info
 
     @rpc
-    def scan_scene(self) -> Detection3DArray:
-        """Run one RGB-D detection pass and return the current 3D detections."""
+    def scan_scene(self, prompt: str | None = None) -> Detection3DArray:
+        """Run one RGB-D detection pass, optionally targeting one text prompt."""
         with self._objects_condition:
             objects_version = self._objects_version
+        if prompt:
+            self._scene.set_prompts([prompt])
         detections = self._scene.scan_scene()
         with self._objects_condition:
             received_result = self._objects_condition.wait_for(

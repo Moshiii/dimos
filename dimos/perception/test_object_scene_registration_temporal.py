@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 import sys
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import numpy as np
 import pytest
@@ -85,6 +85,41 @@ def test_detector_confidence_is_configurable() -> None:
         assert module._detector_confidence == 0.4
     finally:
         module.stop()
+
+
+def test_segmentation_backend_defaults_to_yolo() -> None:
+    module = ObjectSceneRegistrationModule()
+    try:
+        assert module._segmentation_backend == "yolo"
+    finally:
+        module.stop()
+
+    with pytest.raises(ValueError, match="segmentation_backend"):
+        ObjectSceneRegistrationModule(segmentation_backend="invalid")  # type: ignore[arg-type]
+
+
+def test_edgetam_backend_refines_yolo_detections(monkeypatch: Any, module: ObjectSceneRegistrationModule) -> None:
+    color = Image(
+        data=np.zeros((2, 2, 3), dtype=np.uint8),
+        format=ImageFormat.BGR,
+        frame_id="camera",
+        ts=4.0,
+    )
+    raw_detections = ImageDetections2D(color, [])
+    segmented_detections = ImageDetections2D(color, [])
+    module._detector = MagicMock()
+    module._detector.process_image.return_value = raw_detections
+    module._segmenter = MagicMock()
+    module._segmenter.segment.return_value = segmented_detections
+    module.detections_2d = MagicMock()
+    module.annotated_image = MagicMock()
+    process_3d = MagicMock()
+    monkeypatch.setattr(module, "_process_3d_detections", process_3d)
+
+    module._process_images(color, _image(4.0))
+
+    module._segmenter.segment.assert_called_once_with(raw_detections)
+    process_3d.assert_called_once_with(segmented_detections, color, ANY)
 
 
 def test_failed_lookup_does_not_retry_without_time_or_replace_coherent_cache(

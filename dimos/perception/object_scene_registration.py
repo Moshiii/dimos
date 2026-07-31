@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import time
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -61,6 +61,7 @@ class ObjectSceneRegistrationModule(Module):
     pointcloud: Out[PointCloud2]
 
     _detector: Yoloe2DDetector | None = None
+    _segmenter: Any | None = None
     _camera_info: CameraInfo | None = None
     _object_db: ObjectDB
     _latest_objects: list[Object]
@@ -82,6 +83,7 @@ class ObjectSceneRegistrationModule(Module):
         # Cache camera frames and run inference only through scan_scene().
         detect_on_request: bool = False,
         detector_confidence: float = 0.6,
+        segmentation_backend: Literal["yolo", "edgetam"] = "yolo",
         # Object 3D reconstruction tuning
         object_voxel_downsample: float = 0.005,
         max_distance: float = 0.0,
@@ -89,12 +91,15 @@ class ObjectSceneRegistrationModule(Module):
         max_obstacle_width: float = 0.0,
         **kwargs: Any,
     ) -> None:
+        if segmentation_backend not in ("yolo", "edgetam"):
+            raise ValueError("segmentation_backend must be 'yolo' or 'edgetam'")
         super().__init__(**kwargs)
         self._target_frame = target_frame
         self._prompt_mode = prompt_mode
         self._register_objects = register_objects
         self._detect_on_request = detect_on_request
         self._detector_confidence = detector_confidence
+        self._segmentation_backend = segmentation_backend
         self._object_db = ObjectDB(
             distance_threshold=distance_threshold,
             min_detections_for_permanent=min_detections_for_permanent,
@@ -120,6 +125,10 @@ class ObjectSceneRegistrationModule(Module):
             prompt_mode=self._prompt_mode,
             conf=self._detector_confidence,
         )
+        if self._segmentation_backend == "edgetam":
+            from dimos.models.segmentation.edge_tam import EdgeTAMImageSegmenter
+
+            self._segmenter = EdgeTAMImageSegmenter()
 
         self.camera_info.subscribe(lambda msg: setattr(self, "_camera_info", msg))
 
@@ -138,6 +147,7 @@ class ObjectSceneRegistrationModule(Module):
         if self._detector:
             self._detector.stop()
             self._detector = None
+        self._segmenter = None
 
         self._object_db.clear()
         self._latest_objects = []
@@ -356,6 +366,8 @@ class ObjectSceneRegistrationModule(Module):
 
         # Run 2D detection
         detections_2d: ImageDetections2D[Any] = self._detector.process_image(color_image)
+        if self._segmenter is not None:
+            detections_2d = self._segmenter.segment(detections_2d)
 
         detections_2d_msg = Detection2DArray(
             detections_length=len(detections_2d.detections),

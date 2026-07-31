@@ -22,12 +22,25 @@ def test_client_scans_scene_and_quits(monkeypatch) -> None:  # type: ignore[no-u
     pnp.scan_scene.return_value = MagicMock(detections_length=3)
     app = MagicMock(PickNPlaceModule=pnp)
     monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
-    choices = iter(["1", "q"])
+    choices = iter(["1", "", "q"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
 
     pnpconsole.main()
 
-    pnp.scan_scene.assert_called_once_with()
+    pnp.scan_scene.assert_called_once_with(None)
+
+
+def test_client_scans_scene_with_text_prompt(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    pnp = MagicMock()
+    pnp.scan_scene.return_value = MagicMock(detections_length=1)
+    app = MagicMock(PickNPlaceModule=pnp)
+    monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
+    choices = iter(["1", "water bottle", "q"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
+
+    pnpconsole.main()
+
+    pnp.scan_scene.assert_called_once_with("water bottle")
 
 
 def test_client_does_not_execute_without_a_plan(monkeypatch) -> None:  # type: ignore[no-untyped-def]

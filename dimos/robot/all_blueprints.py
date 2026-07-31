@@ -92,6 +92,7 @@ all_blueprints = {
     "path-planner-eval": "dimos.navigation.nav_3d.evaluator.blueprints:path_planner_eval",
     "picknplace": "dimos.manipulation.blueprints:picknplace",
     "picknplace-graspgenx": "dimos.manipulation.blueprints:picknplace_graspgenx",
+    "picknplace-graspgenx-edgetam": "dimos.manipulation.blueprints:picknplace_graspgenx_edgetam",
     "teleop-hosted-go2-multicam": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_go2_multicam",
     "teleop-hosted-go2-transport": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_go2_transport",
     "teleop-hosted-xarm6": "dimos.teleop.hosted.blueprints.cloudflare:teleop_hosted_xarm6",
