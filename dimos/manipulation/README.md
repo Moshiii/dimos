@@ -71,7 +71,8 @@ The console intentionally keeps planning and execution separate:
 1. Select `1` to scan the current scene.
 2. Select `2` to inspect object number, name, and confidence.
 3. Select `3` and choose an object. The GraspGenX blueprint prints its top
-   proposals and displays the selected grasp.
+   proposals and displays the selected grasp. Viser shows the selected object
+   cloud in amber, the grasp TCP axes in red, and the pre-grasp TCP axes in green.
 4. Select `4` to plan and preview the approach. Each Viser preview plays once
    at a slow two-second duration.
 5. Execute the approach only after inspecting the proposal and preview.

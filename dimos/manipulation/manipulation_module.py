@@ -91,6 +91,7 @@ from dimos.manipulation.visualization.config import (
     NoManipulationVisualizationConfig,
 )
 from dimos.manipulation.visualization.factory import create_manipulation_visualization
+from dimos.manipulation.visualization.layers import VisualizationLayer
 from dimos.manipulation.visualization.operator import ManipulationOperator
 from dimos.manipulation.visualization.types import TargetEvaluation
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -1007,6 +1008,14 @@ class ManipulationModule(Module):
             self._record_error(str(exc))
             return False
         return self.plan_to_pose_targets({group_id: pose})
+
+    @rpc
+    def set_visualization_layer(self, layer: VisualizationLayer) -> bool:
+        """Replace one display-only layer in the active manipulation visualizer."""
+        if self._world_monitor is None or self._world_monitor.visualization is None:
+            return False
+        self._world_monitor.visualization.set_layer(layer)
+        return True
 
     @rpc
     def plan_to_pose_targets(

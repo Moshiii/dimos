@@ -112,6 +112,7 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     obj.camera_transform = None
     obj.image = None
     obj.pose.orientation = Quaternion(0.0, 0.0, 0.0, 1.0)
+    obj.pointcloud.points_f32.return_value = np.asarray([[0.4, 0.5, 0.6]], dtype=np.float32)
     module._latest_objects = (obj,)
     candidate = GraspCandidate(
         Pose(
@@ -132,6 +133,7 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
         )
     )
     module.graspgenx_candidates = MagicMock()
+    module._visualization = MagicMock()
 
     goal = module.get_goal_pose(1)
 
@@ -146,6 +148,9 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     assert pre_grasp is not None
     assert pre_grasp.position.x == pytest.approx(goal.position.x - 0.1)
     assert pre_grasp.position.z == pytest.approx(goal.position.z)
+    layer = module._visualization.set_visualization_layer.call_args.args[0]
+    assert layer.id == "picknplace/selection"
+    assert layer.elements[0].points.shape[1] == 3
     selected_goal = module.select_grasp_candidate(1)
     assert selected_goal is not None
     assert selected_goal.position == second_candidate.pose.position

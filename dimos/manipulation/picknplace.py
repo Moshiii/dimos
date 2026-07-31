@@ -18,11 +18,19 @@ import math
 import threading
 from typing import Literal
 
+import numpy as np
+
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
+from dimos.manipulation.visualization.layers import (
+    LineSetElement,
+    PointCloudElement,
+    VisualizationLayer,
+)
 from dimos.manipulation.visualization.pose_overlay import draw_pose_axes
+from dimos.manipulation.visualization_spec import ManipulationVisualizationSpec
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -51,6 +59,7 @@ class PickNPlaceModule(Module):
     config: PickNPlaceConfig
     _scene: ObjectSceneRegistrationSpec
     _grasp_generator: GraspGenSpec | None
+    _visualization: ManipulationVisualizationSpec
     objects: In[list[DetObject]]
     camera_info: In[CameraInfo]
     basic_grasp_overlay: Out[Image]
@@ -65,6 +74,7 @@ class PickNPlaceModule(Module):
         self._goal_pose: PoseStamped | None = None
         self._pre_grasp_pose: PoseStamped | None = None
         self._grasp_candidates: GraspCandidateArray | None = None
+        self._selected_object: DetObject | None = None
 
     @rpc
     def start(self) -> None:
@@ -131,12 +141,14 @@ class PickNPlaceModule(Module):
             if self._grasp_generator is None:
                 raise RuntimeError("GraspGenX is not configured for this pick-and-place blueprint")
             candidates = self._grasp_generator.propose_grasps(obj.pointcloud)
+            self._selected_object = obj
             self._grasp_candidates = candidates
             if not candidates.candidates:
                 return None
             return self._select_graspgenx_candidate(0)
         yaw = self._grasp_yaw(obj) if self.config.align_grasp_yaw else 0.0
         self._grasp_candidates = None
+        self._selected_object = None
         self.graspgenx_candidates.publish(GraspCandidateArray())
         self._goal_pose = PoseStamped(
             ts=grasp.ts,
@@ -191,7 +203,40 @@ class PickNPlaceModule(Module):
             ),
             orientation=self._goal_pose.orientation,
         )
+        self._publish_viser_selection()
         return self._pre_grasp_pose
+
+    def _publish_viser_selection(self) -> None:
+        """Show the selected object and TCP targets without mutating the planning scene."""
+        obj = self._selected_object
+        goal = self._goal_pose
+        pre_grasp = self._pre_grasp_pose
+        if obj is None or goal is None or pre_grasp is None:
+            return
+        points = obj.pointcloud.points_f32()
+        if len(points) == 0:
+            return
+        cloud_colors = np.repeat(np.array([[255, 190, 70]], dtype=np.uint8), len(points), axis=0)
+        vertices: list[np.ndarray] = []
+        edges: list[list[int]] = []
+        colors: list[list[int]] = []
+        for pose, color in ((goal, [255, 70, 70]), (pre_grasp, [70, 255, 120])):
+            start = len(vertices)
+            origin = np.asarray(pose.position.as_tuple, dtype=np.float32)
+            axes = pose.orientation.to_rotation_matrix().astype(np.float32) * 0.06
+            vertices.extend((origin, origin + axes[:, 0], origin + axes[:, 1], origin + axes[:, 2]))
+            edges.extend(((start, start + 1), (start, start + 2), (start, start + 3)))
+            colors.extend((color, color, color))
+        self._visualization.set_visualization_layer(
+            VisualizationLayer(
+                "picknplace/selection",
+                "world",
+                (
+                    PointCloudElement("object", points, cloud_colors, point_size=0.003),
+                    LineSetElement("tcp-targets", np.asarray(vertices), np.asarray(edges), np.asarray(colors)),
+                ),
+            )
+        )
 
     @rpc
     def get_grasp_candidates(self) -> GraspCandidateArray:
