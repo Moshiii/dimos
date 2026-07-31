@@ -19,7 +19,8 @@ import time
 
 import pytest
 
-from dimos.core.transport import pLCMTransport
+from dimos.core.global_config import global_config
+from dimos.core.transport_factory import make_transport
 from dimos.e2e_tests.conf_types import StartPersonTrack
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
@@ -28,6 +29,11 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 from dimos.msgs.std_msgs.Bool import Bool
+from dimos.protocol.service.zenohservice import (
+    ZENOH_LOCAL_ROUTER_ENDPOINT,
+    ZENOH_ROUTER_ENDPOINT_ENV,
+    ZenohRouter,
+)
 from dimos.simulation.mujoco.direct_cmd_vel_explorer import DirectCmdVelExplorer
 from dimos.simulation.mujoco.person_on_track import PersonTrackPublisher
 
@@ -41,7 +47,23 @@ def _pose(x: float, y: float, theta: float) -> PoseStamped:
 
 
 @pytest.fixture
-def lcm_spy() -> Iterator[LcmSpy]:
+def transport_runtime(monkeypatch) -> Iterator[None]:
+    if global_config.transport != "zenoh":
+        yield
+        return
+
+    router = ZenohRouter()
+    router.start()
+    monkeypatch.setenv(ZENOH_ROUTER_ENDPOINT_ENV, ZENOH_LOCAL_ROUTER_ENDPOINT)
+    try:
+        yield
+    finally:
+        router.stop()
+
+
+@pytest.fixture
+def lcm_spy(transport_runtime: None) -> Iterator[LcmSpy]:
+    del transport_runtime
     lcm_spy = LcmSpy()
     lcm_spy.start()
     yield lcm_spy
@@ -68,7 +90,11 @@ def follow_points(lcm_spy: LcmSpy):
 
 
 @pytest.fixture
-def start_blueprint(mcp_port: int) -> Iterator[Callable[..., DimosCliCall]]:
+def start_blueprint(
+    mcp_port: int,
+    transport_runtime: None,
+) -> Iterator[Callable[..., DimosCliCall]]:
+    del transport_runtime
     dimos_robot_call = DimosCliCall()
     dimos_robot_call.mcp_port = mcp_port
 
@@ -90,16 +116,17 @@ def start_blueprint(mcp_port: int) -> Iterator[Callable[..., DimosCliCall]]:
 
 
 @pytest.fixture
-def human_input():
-    transport = pLCMTransport("/human_input")
-    transport.lcm.start()
+def human_input(transport_runtime: None):
+    del transport_runtime
+    transport = make_transport("/human_input")
+    transport.start()
 
     def send_human_input(message: str) -> None:
-        transport.publish(message)
+        transport.broadcast(None, message)
 
     yield send_human_input
 
-    transport.lcm.stop()
+    transport.stop()
 
 
 @pytest.fixture
@@ -130,7 +157,10 @@ def start_person_track() -> Generator[StartPersonTrack, None, None]:
 
 
 @pytest.fixture
-def direct_cmd_vel_explorer() -> Generator[PersonTrackPublisher, None, None]:
+def direct_cmd_vel_explorer(
+    transport_runtime: None,
+) -> Generator[DirectCmdVelExplorer, None, None]:
+    del transport_runtime
     explorer = DirectCmdVelExplorer()
     explorer.start()
     yield explorer
@@ -170,7 +200,11 @@ def simulator_name() -> str:
 
 
 @pytest.fixture
-def scene_control(simulator_name: str) -> Iterator[SceneControl]:
+def scene_control(
+    simulator_name: str,
+    transport_runtime: None,
+) -> Iterator[SceneControl]:
+    del transport_runtime
     client = load_scene_control(simulator_name)
     client.start()
     yield client

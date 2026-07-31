@@ -52,7 +52,8 @@ class DimosCliCall:
             global_overrides += ["--mcp-port", str(self.mcp_port)]
             env["MCPCLIENT__MCP_SERVER_URL"] = f"http://localhost:{self.mcp_port}/mcp"
 
-        simulation_args = ["--simulation", self.simulator]
+        viewer = os.environ.get("DIMOS_E2E_VIEWER", "none")
+        simulation_args = ["--simulation", self.simulator, "--viewer", viewer]
         if self.simulator == "pimsim":
             simulation_args = [
                 "--simulation",
@@ -62,7 +63,7 @@ class DimosCliCall:
                 "--scene-package",
                 self.scene_package or "dimsim-apartment",
                 "--viewer",
-                "none",
+                viewer,
             ]
 
         self.process = subprocess.Popen(

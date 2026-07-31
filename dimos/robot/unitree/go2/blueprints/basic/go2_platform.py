@@ -25,13 +25,13 @@ from dimos.simulation.providers import (
 
 
 def resolve_go2_platform() -> Blueprint:
-    if not global_config.simulation:
+    if global_config.simulation in ("", "dimsim"):
         return GO2Connection.blueprint()
     return _resolve_simulation_binding().backend
 
 
 def resolve_go2_rerun_config() -> dict[str, object]:
-    if not global_config.simulation:
+    if global_config.simulation in ("", "dimsim"):
         return {}
     return _resolve_simulation_binding().rerun_config
 

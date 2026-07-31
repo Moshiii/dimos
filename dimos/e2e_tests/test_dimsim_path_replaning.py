@@ -14,6 +14,8 @@
 
 import pytest
 
+from dimos.msgs.std_msgs.Bool import Bool
+
 
 @pytest.mark.self_hosted_large
 def test_path_replanning(
@@ -62,4 +64,10 @@ def test_path_replanning(
 
     scene_control.publish_goal(10.913, 0.588)
 
-    lcm_spy.wait_until_odom_position(10.913, 0.588, threshold=1, timeout=120)
+    lcm_spy.wait_for_message_result(
+        "/goal_reached#std_msgs.Bool",
+        Bool,
+        predicate=bool,
+        fail_message="Planner did not complete the replanned route",
+        timeout=120,
+    )
