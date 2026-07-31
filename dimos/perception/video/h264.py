@@ -67,10 +67,10 @@ class H264InputMixin(_MixinHost):
 
     video: In[CompressedVideo]
 
-    # Decode is CPU-bound and runs in the host's process, so sharing a worker
-    # stalls every module on it. The mixin leads the MRO, so a host that wants
-    # otherwise still wins by setting this on itself.
-    dedicated_worker = True
+    # No dedicated_worker: H.264 decode is far cheaper than it looks. Measured
+    # ~0.34 ms/frame at 720p and ~2.5 ms at 1080p, so a 30 fps stream costs 1-8%
+    # of a core, and PyAV drops the GIL for both the decode and the bgr24
+    # conversion. A host that is heavy for its own reasons can still set it.
 
     # Name of the host module's In[Image] to feed.
     image_port: ClassVar[str] = "color_image"

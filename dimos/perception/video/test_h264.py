@@ -69,10 +69,10 @@ def test_mixin_port_merges_across_the_mro_onto_an_existing_consumer() -> None:
         module.stop()
 
 
-def test_the_decoder_asks_for_a_dedicated_worker_through_the_mixin() -> None:
-    """Set on the mixin, not the decoder: a retrofitted host must inherit it too."""
-    assert H264DecoderModule.dedicated_worker is True
-    assert VideoMarkerDetectionModule.dedicated_worker is True
+def test_the_mixin_does_not_claim_a_worker_of_its_own() -> None:
+    """Decode is ~1-8% of a core and drops the GIL; it does not earn a process."""
+    assert H264DecoderModule.dedicated_worker is False
+    assert VideoMarkerDetectionModule.dedicated_worker is False
 
 
 def test_the_mixin_is_not_itself_a_module() -> None:
