@@ -498,7 +498,7 @@ tests-self-hosted = [
 ]
 
 [tool.uv]
-required-version = ">=0.9.17"
+required-version = ">=0.12.1"
 default-groups = ["tests"]
 conflicts = [
     [{ extra = "lerobot" }, { extra = "all" }],
