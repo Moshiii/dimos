@@ -153,7 +153,7 @@ class PickNPlaceModule(Module):
 
     @rpc
     def get_pre_grasp_pose(self) -> PoseStamped | None:
-        """Return the selected goal raised by 100 mm for the approach stage."""
+        """Return the selected goal offset 100 mm along its approach direction."""
         if self._goal_pose is None:
             return None
         if self.config.grasp_strategy == "graspgenx":

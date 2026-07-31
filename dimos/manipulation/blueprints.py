@@ -78,7 +78,7 @@ _robotiq_2f_85_graspgenx = GraspGenXConfig(
 )
 
 
-picknplace_perception = autoconnect(
+picknplace = autoconnect(
     coordinator(
         hardware=[_picknplace_xarm6_hardware],
         tasks=[trajectory_task(_picknplace_xarm6_hardware)],
@@ -116,7 +116,7 @@ picknplace_perception = autoconnect(
 ).global_config(rerun_open="web")
 
 
-picknplace_perception_graspgenx = autoconnect(
+picknplace_graspgenx = autoconnect(
     coordinator(
         hardware=[_picknplace_xarm6_hardware],
         tasks=[trajectory_task(_picknplace_xarm6_hardware)],

@@ -100,7 +100,10 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     obj.pose.orientation = Quaternion(0.0, 0.0, 0.0, 1.0)
     module._latest_objects = (obj,)
     candidate = GraspCandidate(
-        Pose(Vector3(0.4, 0.5, 0.6), Quaternion(0.1, 0.2, 0.3, 0.9)),
+        Pose(
+            Vector3(0.4, 0.5, 0.6),
+            Quaternion.from_euler(Vector3(0.0, math.pi / 2.0, 0.0)),
+        ),
         score=0.9,
     )
     module._grasp_generator = MagicMock(
@@ -119,7 +122,8 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     assert module.get_grasp_candidates().candidates == [candidate]
     pre_grasp = module.get_pre_grasp_pose()
     assert pre_grasp is not None
-    assert pre_grasp.position.z < goal.position.z
+    assert pre_grasp.position.x == pytest.approx(goal.position.x - 0.1)
+    assert pre_grasp.position.z == pytest.approx(goal.position.z)
 
 
 def test_picknplace_returns_empty_candidates_for_obb_grasps() -> None:

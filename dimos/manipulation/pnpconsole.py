@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Interactive RPC client for the stepwise ``picknplace-perception`` pipeline.
+"""Interactive RPC client for the stepwise ``picknplace`` pipeline.
 
 Start the blueprint first, then run:
 
