@@ -22,11 +22,7 @@ import math
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
-from dimos.manipulation.grasping.grasp_gen_x import (
-    GraspGenXConfig,
-    GraspGenXModule,
-    SweepVolumeGripperConfig,
-)
+from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.picknplace import PickNPlaceModule
 from dimos.manipulation.visualization.rerun import picknplace_rerun_config
@@ -50,6 +46,7 @@ from dimos.robot.manipulators.xarm.blueprints.simulation import (
     xarm_perception_sim as xarm_perception_sim,
 )
 from dimos.robot.manipulators.xarm.config import make_xarm6_model_config, xarm6_hardware
+from dimos.robot.manipulators.xarm.grasp_config import make_xarm_graspgenx_config
 from dimos.visualization.vis_module import vis_module
 
 PICKNPLACE_CAMERA_TRANSFORM = Transform(
@@ -66,16 +63,7 @@ _picknplace_xarm6_model = make_xarm6_model_config(
 )
 _picknplace_xarm6_model.max_velocity = 0.25
 _picknplace_xarm6_model.max_acceleration = 0.5
-_robotiq_2f_85_graspgenx = GraspGenXConfig(
-    gripper=SweepVolumeGripperConfig(
-        extents_open=(0.085, 0.032, 0.036),
-        offset_open=(0.0, 0.0, 0.130),
-        extents_half_open=(0.046, 0.032, 0.036),
-        offset_half_open=(0.0, 0.0, 0.143),
-        fingertip_depth=0.136,
-        family="revolute_2f",
-    )
-)
+_xarm_graspgenx = make_xarm_graspgenx_config()
 
 
 picknplace = autoconnect(
@@ -148,7 +136,7 @@ picknplace_graspgenx = autoconnect(
     ),
     PickNPlaceModule.blueprint(align_grasp_yaw=True, grasp_strategy="graspgenx"),
     GraspGenXModule.blueprint(
-        **_robotiq_2f_85_graspgenx.model_dump(exclude={"rpc_transport", "tf_transport", "g"})
+        **_xarm_graspgenx.model_dump(exclude={"rpc_transport", "tf_transport", "g"})
     ),
     vis_module(
         global_config.viewer,

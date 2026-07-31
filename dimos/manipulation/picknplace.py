@@ -54,6 +54,7 @@ class PickNPlaceModule(Module):
     objects: In[list[DetObject]]
     camera_info: In[CameraInfo]
     basic_grasp_overlay: Out[Image]
+    graspgenx_candidates: Out[GraspCandidateArray]
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -131,22 +132,36 @@ class PickNPlaceModule(Module):
             self._grasp_candidates = candidates
             if not candidates.candidates:
                 return None
-            candidate = candidates.candidates[0]
-            self._goal_pose = PoseStamped(
-                ts=candidates.header.timestamp,
-                frame_id=candidates.header.frame_id,
-                position=candidate.pose.position,
-                orientation=candidate.pose.orientation,
-            )
-            self._pre_grasp_pose = None
-            return self._goal_pose
+            return self._select_graspgenx_candidate(0)
         yaw = self._grasp_yaw(obj) if self.config.align_grasp_yaw else 0.0
         self._grasp_candidates = None
+        self.graspgenx_candidates.publish(GraspCandidateArray())
         self._goal_pose = PoseStamped(
             ts=grasp.ts,
             frame_id=grasp.frame_id,
             position=Vector3(grasp.position.x, grasp.position.y, max(grasp.position.z, 0.100)),
             orientation=Quaternion.from_euler(Vector3(-math.pi, 0.0, yaw)),
+        )
+        self._pre_grasp_pose = None
+        return self._goal_pose
+
+    @rpc
+    def select_grasp_candidate(self, rank: int) -> PoseStamped | None:
+        """Select one ranked GraspGenX proposal as the goal and Rerun highlight."""
+        return self._select_graspgenx_candidate(rank)
+
+    def _select_graspgenx_candidate(self, rank: int) -> PoseStamped | None:
+        candidates = self._grasp_candidates
+        if candidates is None or rank < 0 or rank >= len(candidates.candidates):
+            return None
+        candidates.selected_index = rank
+        self.graspgenx_candidates.publish(candidates)
+        candidate = candidates.candidates[rank]
+        self._goal_pose = PoseStamped(
+            ts=candidates.header.timestamp,
+            frame_id=candidates.header.frame_id,
+            position=candidate.pose.position,
+            orientation=candidate.pose.orientation,
         )
         self._pre_grasp_pose = None
         return self._goal_pose
@@ -158,7 +173,7 @@ class PickNPlaceModule(Module):
             return None
         if self.config.grasp_strategy == "graspgenx":
             offset = self._goal_pose.orientation.rotate_vector(
-                Vector3(0.0, 0.0, -self.config.graspgenx_pregrasp_offset)
+                Vector3(0.0, 0.0, self.config.graspgenx_pregrasp_offset)
             )
         else:
             offset = Vector3(0.0, 0.0, 0.100)

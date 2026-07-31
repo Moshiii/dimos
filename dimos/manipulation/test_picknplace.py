@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dimos.core.module import ModuleBase
-from dimos.manipulation.blueprints import _picknplace_xarm6_model
+from dimos.manipulation.blueprints import _picknplace_xarm6_model, _xarm_graspgenx
 from dimos.manipulation.picknplace import PickNPlaceConfig, PickNPlaceModule
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -81,6 +81,10 @@ def test_picknplace_home_matches_xarm_lifecycle_home() -> None:
     ]
 
 
+def test_picknplace_graspgenx_uses_xarm_tcp_calibration() -> None:
+    assert _xarm_graspgenx.grasp_frame_to_tcp[2][3] == pytest.approx(0.172)
+
+
 def test_picknplace_yaw_alignment_defaults_to_disabled() -> None:
     assert not PickNPlaceConfig().align_grasp_yaw
 
@@ -106,11 +110,18 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
         ),
         score=0.9,
     )
+    second_candidate = GraspCandidate(
+        Pose(Vector3(0.2, 0.3, 0.4), Quaternion()),
+        score=0.8,
+    )
     module._grasp_generator = MagicMock(
         propose_grasps=MagicMock(
-            return_value=GraspCandidateArray(Header(2.0, "link_base"), [candidate])
+            return_value=GraspCandidateArray(
+                Header(2.0, "link_base"), [candidate, second_candidate]
+            )
         )
     )
+    module.graspgenx_candidates = MagicMock()
 
     goal = module.get_goal_pose(1)
 
@@ -119,11 +130,20 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     assert goal.frame_id == "link_base"
     assert goal.position == candidate.pose.position
     assert goal.orientation == candidate.pose.orientation
-    assert module.get_grasp_candidates().candidates == [candidate]
+    assert module.get_grasp_candidates().candidates == [candidate, second_candidate]
+    module.graspgenx_candidates.publish.assert_called_once_with(module.get_grasp_candidates())
     pre_grasp = module.get_pre_grasp_pose()
     assert pre_grasp is not None
-    assert pre_grasp.position.x == pytest.approx(goal.position.x - 0.1)
+    assert pre_grasp.position.x == pytest.approx(goal.position.x + 0.1)
     assert pre_grasp.position.z == pytest.approx(goal.position.z)
+    selected_goal = module.select_grasp_candidate(1)
+    assert selected_goal is not None
+    assert selected_goal.position == second_candidate.pose.position
+    assert module.get_grasp_candidates().selected_index == 1
+    pre_grasp = module.get_pre_grasp_pose()
+    assert pre_grasp is not None
+    assert pre_grasp.position.x == pytest.approx(selected_goal.position.x)
+    assert pre_grasp.position.z == pytest.approx(selected_goal.position.z + 0.1)
 
 
 def test_picknplace_returns_empty_candidates_for_obb_grasps() -> None:

@@ -31,6 +31,7 @@ def picknplace_rerun_config() -> dict[str, Any]:
                 image_topic="world/color_camera/color_image",
             ),
             "world/pointcloud": _pointcloud_to_rerun,
+            "world/graspgenx_candidates": _graspgenx_candidates_to_rerun,
             "world/detections_3d": None,
             "world/depth_camera": None,
             "world/depth_camera/depth_image": None,
@@ -53,15 +54,20 @@ def _blueprint() -> rrb.Blueprint:
 
 def _topic_to_entity(topic: Any) -> str:
     topic_name = str(getattr(topic, "name", topic)).split("#", 1)[0]
-    return {
+    entities = {
         "/color_image": "world/color_camera/color_image",
         "/camera_info": "world/color_camera",
         "/depth_image": "world/depth_camera/depth_image",
         "/depth_camera_info": "world/depth_camera",
         "/basic_grasp_overlay": "world/basic_grasp_overlay",
+        "/graspgenx_candidates": "world/graspgenx_candidates",
         "/detections_3d": "world/detections_3d",
         "/pointcloud": "world/pointcloud",
-    }.get(topic_name, f"world/{topic_name.lstrip('/')}")
+    }
+    for suffix, entity in entities.items():
+        if topic_name == suffix or topic_name.endswith(suffix):
+            return entity
+    return f"world/{topic_name.lstrip('/')}"
 
 
 def _camera_info_to_rerun(msg: Any, image_topic: str) -> list[tuple[str, Any]]:
@@ -73,3 +79,69 @@ def _camera_info_to_rerun(msg: Any, image_topic: str) -> list[tuple[str, Any]]:
 
 def _pointcloud_to_rerun(msg: Any) -> Any:
     return msg.to_rerun(voxel_size=0.001, mode="points")
+
+
+def _graspgenx_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
+    """Render the highest-ranked learned grasps as frames and approach arrows."""
+    import rerun as rr
+
+    root = "world/graspgenx_candidates"
+    data: list[tuple[str, Any]] = [(root, rr.Clear(recursive=True))]
+    frame_id = msg.header.frame_id
+    if frame_id:
+        data.append((root, rr.Transform3D(parent_frame=f"tf#/{frame_id}")))
+    for rank, candidate in enumerate(msg.candidates[:10]):
+        pose = candidate.pose
+        path = f"{root}/{rank:02d}"
+        selected = rank == msg.selected_index
+        gripper_color = [255, 255, 0] if selected else [100, 190, 255]
+        data.extend(
+            [
+                (
+                    path,
+                    rr.Transform3D(
+                        translation=pose.position.as_tuple,
+                        rotation=rr.Quaternion(xyzw=pose.orientation.to_tuple()),
+                    ),
+                ),
+                (
+                    f"{path}/axes",
+                    rr.Arrows3D(
+                        origins=[[0.0, 0.0, 0.0]] * 3,
+                        vectors=[
+                            [0.04, 0.0, 0.0],
+                            [0.0, 0.04, 0.0],
+                            [0.0, 0.0, 0.04],
+                        ],
+                        colors=[[255, 0, 0], [0, 255, 0], [0, 128, 255]],
+                        radii=[0.0015] * 3,
+                    ),
+                ),
+                (
+                    f"{path}/gripper",
+                    # GraspGenX uses local X for jaw closure and local +Z for approach.
+                    rr.LineStrips3D(
+                        strips=[
+                            [[-0.021, 0.0, -0.02], [-0.021, 0.0, 0.08]],
+                            [[0.021, 0.0, -0.02], [0.021, 0.0, 0.08]],
+                            [[-0.021, 0.0, -0.02], [0.021, 0.0, -0.02]],
+                        ],
+                        colors=[gripper_color] * 3,
+                        radii=[0.003] * 3,
+                    ),
+                ),
+            ]
+        )
+        if selected:
+            data.append(
+                (
+                    f"{path}/selected",
+                    rr.Points3D(
+                        positions=[[0.0, 0.0, 0.0]],
+                        labels=[f"SELECTED #{rank} score={candidate.score:.3f}"],
+                        colors=[[255, 255, 0]],
+                        radii=[0.008],
+                    ),
+                )
+            )
+    return data

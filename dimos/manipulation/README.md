@@ -1,0 +1,106 @@
+# Pick And Place
+
+This directory contains the xArm6 pick-and-place operator pipeline. It has two
+runnable blueprints:
+
+| Blueprint | Grasp source |
+| --- | --- |
+| `picknplace` | Filtered-object OBB center, with optional principal-axis yaw |
+| `picknplace-graspgenx` | GraspGenX proposals from the selected object's point cloud |
+
+Both use the wrist-mounted RealSense, object-scene registration in `link_base`,
+
+## Setup
+
+GraspGenX runs in the main worktree `.venv` so it shares the live DimOS
+pipeline. Its CUDA requirements differ from the repository lockfile; install
+them once from the worktree root:
+
+```bash
+bash bin/setup-graspgenx-env
+```
+
+The setup installs Torch 2.7.1 CUDA 12.8, which supports the RTX 5070's
+`sm_120` architecture, along with GraspGenX and its inference dependencies.
+Use `uv run --no-sync` afterwards. Plain `uv run` reconciles the environment to
+the lockfile's Torch 2.6 and removes the GPU architecture support required by
+GraspGenX.
+
+The first GraspGenX startup downloads the pinned model checkpoint to the
+Hugging Face cache and loads it onto the GPU. Later starts reuse that cache.
+
+## Run
+
+Start one blueprint in the background:
+
+```bash
+uv run --no-sync dimos run picknplace-graspgenx --daemon
+```
+
+For the OBB fallback instead:
+
+```bash
+uv run --no-sync dimos run picknplace --daemon
+```
+
+Then connect the console:
+
+```bash
+uv run --no-sync python -m dimos.manipulation.pnpconsole
+```
+
+Stop a running pipeline with:
+
+```bash
+uv run --no-sync dimos stop
+```
+
+## Operator Flow
+
+The console intentionally keeps planning and execution separate:
+
+1. Select `1` to scan the current scene.
+2. Select `2` to inspect object number, name, and confidence.
+3. Select `3` and choose an object. The GraspGenX blueprint prints its top
+   proposals and displays the selected grasp.
+4. Select `4` to plan and preview the approach. Each Viser preview plays once
+   at a slow two-second duration.
+5. Execute the approach only after inspecting the proposal and preview.
+6. Select `6` to plan, preview, and execute descent in one action.
+7. Close the gripper, then select `8` to plan, preview, and execute ascent.
+8. Use `11` to return the arm to its configured xArm lifecycle home.
+
+Do not execute a learned grasp without checking its pose, the 100 mm pre-grasp
+pose, the point-cloud/overlay visualization, and the collision-free preview.
+
+## Grasp Geometry
+
+`PickNPlaceModule.get_goal_pose()` stores the top ranked GraspGenX candidate as
+the TCP goal in the candidate point cloud's frame. Its pre-grasp is computed as:
+
+```text
+pre_grasp_position = grasp_position + grasp_orientation * (0, 0, 0.100 m)
+```
+
+The offset is the grasp frame's local `+Z` approach direction. It is not a
+world-Z lift: an angled or side grasp receives an equally angled or sideward
+pre-grasp. Descent and ascent use Cartesian paths between the current TCP pose,
+
+The `picknplace-graspgenx` blueprint uses the xArm 85 mm gripper sweep-volume
+and calibrated base-to-TCP transform. Candidate score order comes from
+GraspGenX; no additional ranking is applied by the operator pipeline.
+
+## Implementation Guide
+
+- `blueprints.py`: robot, camera, OBB, and GraspGenX blueprint composition.
+- `picknplace.py`: scan request, target selection, OBB fallback, learned grasp
+  selection, and tool-axis pre-grasp calculation.
+- `pnpconsole.py`: explicit operator stages and manual gripper/home controls.
+- `grasping/grasp_gen_x.py`: import-safe proposal adapter and candidate contract.
+- `grasping/grasp_gen_x_runtime.py`: in-process checkpoint load and GPU inference.
+- `visualization/pose_overlay.py` and `visualization/rerun.py`: selected-object
+  cloud, image, and grasp overlays.
+
+The current scan is a single wrist-camera view. Automatic multi-view scanning,
+EdgeTAM segmentation, and fused object clouds are planned follow-up work. Until
+then, select targets with a complete enough visible point cloud for grasping.

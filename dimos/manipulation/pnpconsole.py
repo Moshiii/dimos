@@ -16,7 +16,7 @@
 
 Start the blueprint first, then run:
 
-    uv run python -m dimos.manipulation.pnpconsole
+    uv run --no-sync python -m dimos.manipulation.pnpconsole
 """
 
 from __future__ import annotations
@@ -44,6 +44,21 @@ def _object_number() -> int | None:
     return number
 
 
+def _grasp_rank(candidate_count: int) -> int | None:
+    value = input(f"Grasp rank [0-{candidate_count - 1}, Enter=0]: ").strip()
+    if not value:
+        return 0
+    try:
+        rank = int(value)
+    except ValueError:
+        print("Enter a whole-number grasp rank.")
+        return None
+    if rank < 0 or rank >= candidate_count:
+        print(f"Choose a rank from 0 to {candidate_count - 1}.")
+        return None
+    return rank
+
+
 def _print_pose(pose: Any) -> None:
     if pose is None:
         print("No pose is available.")
@@ -69,15 +84,14 @@ def _cartesian_waypoints(manipulation: Any, target: Any) -> list[PoseStamped] | 
 
 def _preview(manipulation: Any) -> None:
     print(f"Viser preview: {manipulation.get_visualization_url()}")
-    for _ in range(3):
-        print(manipulation.preview_plan(duration=1.0))
+    print(manipulation.preview_plan(duration=2.0))
 
 
 def _print_grasp_candidates(candidates: Any) -> None:
     if not candidates.candidates:
         return
     print(f"GraspGenX proposals: {len(candidates.candidates)}")
-    for rank, candidate in enumerate(candidates.candidates[:5]):
+    for rank, candidate in enumerate(candidates.candidates[:10]):
         pose = candidate.pose
         print(
             f"{rank}: score={candidate.score:.3f} position={pose.position.as_tuple} "
@@ -104,9 +118,8 @@ def main() -> None:
 
     while True:
         print("\n1) Scan  2) Info  3) Select target  4) Plan/preview approach")
-        print("5) Execute approach  6) Plan/preview descent  7) Execute descent")
-        print("8) Close  9) Plan/preview ascent  10) Execute ascent  11) Open")
-        print("12) Current EE  13) Go home  q) Quit")
+        print("5) Execute approach  6) Plan/preview/execute descent  7) Close")
+        print("8) Plan/preview/execute ascent  9) Open  10) Current EE  11) Go home  q) Quit")
         choice = input("Select: ").strip().lower()
         try:
             if choice == "q":
@@ -119,8 +132,14 @@ def main() -> None:
             elif choice == "3":
                 if (number := _object_number()) is not None:
                     goal = pnp.get_goal_pose(number)
+                    candidates = pnp.get_grasp_candidates()
+                    _print_grasp_candidates(candidates)
+                    if candidates.candidates:
+                        rank = _grasp_rank(min(10, len(candidates.candidates)))
+                        if rank is None:
+                            continue
+                        goal = pnp.select_grasp_candidate(rank)
                     pre_grasp = pnp.get_pre_grasp_pose()
-                    _print_grasp_candidates(pnp.get_grasp_candidates())
                     approach_planned = False
                     approach_executed = False
                     descent_planned = False
@@ -161,19 +180,15 @@ def main() -> None:
                     print(descent_planned)
                     if descent_planned:
                         _preview(manipulation)
+                        descent_executed = manipulation.execute_and_wait()
+                        print(descent_executed)
             elif choice == "7":
-                if not descent_planned:
-                    print("Plan the descent first.")
-                else:
-                    descent_executed = manipulation.execute_and_wait()
-                    print(descent_executed)
-            elif choice == "8":
                 if not descent_executed:
                     print("Execute the descent first.")
                 else:
                     gripper_closed = manipulation.close_gripper("arm").is_success()
                     print(gripper_closed)
-            elif choice == "9":
+            elif choice == "8":
                 if pre_grasp is None or not gripper_closed:
                     print("Close the gripper before planning ascent.")
                 else:
@@ -186,30 +201,26 @@ def main() -> None:
                     print(ascent_planned)
                     if ascent_planned:
                         _preview(manipulation)
-            elif choice == "10":
-                if not ascent_planned:
-                    print("Plan the ascent first.")
-                else:
-                    # Gripper commands are asynchronous on xArm. Reassert close before
-                    # lift and let that command settle before dispatching the trajectory.
-                    gripper_closed = manipulation.close_gripper("arm").is_success()
-                    if not gripper_closed:
-                        print("Failed to keep the gripper closed; ascent was not executed.")
-                    else:
-                        time.sleep(1.5)
-                        ascent_executed = manipulation.execute_and_wait()
-                        print(ascent_executed)
-            elif choice == "11":
+                        # Gripper commands are asynchronous on xArm. Reassert close before
+                        # lift and let that command settle before dispatching the trajectory.
+                        gripper_closed = manipulation.close_gripper("arm").is_success()
+                        if not gripper_closed:
+                            print("Failed to keep the gripper closed; ascent was not executed.")
+                        else:
+                            time.sleep(1.5)
+                            ascent_executed = manipulation.execute_and_wait()
+                            print(ascent_executed)
+            elif choice == "9":
                 if not ascent_executed:
                     print("Execute the ascent before opening the gripper.")
                 else:
                     print(manipulation.open_gripper("arm"))
-            elif choice == "12":
+            elif choice == "10":
                 _print_pose(manipulation.get_ee_pose("arm"))
-            elif choice == "13":
+            elif choice == "11":
                 print(manipulation.go_home("arm"))
             else:
-                print("Choose 1-13 or q.")
+                print("Choose 1-11 or q.")
         except Exception as exc:
             print(f"RPC failed: {exc}")
 

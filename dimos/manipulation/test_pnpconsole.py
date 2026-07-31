@@ -46,7 +46,7 @@ def test_client_goes_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     app = MagicMock()
     manipulation = app.ManipulationModule
     monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
-    choices = iter(["13", "q"])
+    choices = iter(["11", "q"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
 
     pnpconsole.main()
@@ -54,10 +54,17 @@ def test_client_goes_home(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     manipulation.go_home.assert_called_once_with("arm")
 
 
-def test_preview_replays_three_times() -> None:
+def test_preview_plays_once_slowly() -> None:
     manipulation = MagicMock()
 
     pnpconsole._preview(manipulation)
 
-    assert manipulation.preview_plan.call_count == 3
-    manipulation.preview_plan.assert_called_with(duration=1.0)
+    manipulation.preview_plan.assert_called_once_with(duration=2.0)
+
+
+def test_grasp_rank_accepts_default_and_valid_selection(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    choices = iter(["", "7"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
+
+    assert pnpconsole._grasp_rank(10) == 0
+    assert pnpconsole._grasp_rank(10) == 7
