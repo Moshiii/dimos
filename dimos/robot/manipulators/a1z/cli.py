@@ -39,7 +39,7 @@ _CAN_PROBE_POLL_SECONDS = 0.05
 _SYS_USB_DEVICES = Path("/sys/bus/usb/devices")
 _SYS_CLASS_NET = Path("/sys/class/net")
 _GS_USB_NEW_ID = Path("/sys/bus/usb/drivers/gs_usb/new_id")
-_A1Z_README = "dimos/robot/manipulators/a1z/README.md"
+_A1Z_GUIDE = "docs/capabilities/manipulation/a1z.md"
 
 
 def _abort(message: str) -> None:
@@ -56,15 +56,13 @@ def _verify_sdk() -> str:
         parameters = inspect.signature(get_a1z_robot).parameters
     except Exception as exc:
         raise RuntimeError(
-            "the A1Z SDK is unavailable. From a DimOS source checkout run "
-            "`uv sync --locked --inexact --group galaxea-a1z`; otherwise install "
-            "the pinned GALAXEA-A1Z SDK described in "
-            f"{_A1Z_README}. Original error: {exc}"
+            "the A1Z SDK is unavailable. Install the pinned GALAXEA-A1Z SDK "
+            f"described in {_A1Z_GUIDE}. Original error: {exc}"
         ) from exc
     if "with_gripper" not in parameters:
         raise RuntimeError(
             "the installed A1Z SDK lacks get_a1z_robot(with_gripper=...). "
-            f"Install the pinned SDK described in {_A1Z_README}."
+            f"Install the pinned SDK described in {_A1Z_GUIDE}."
         )
     return str(a1z.__file__)
 
@@ -140,7 +138,7 @@ def _verify_can_transmit(interface: str, usb_device: Path) -> None:
     if dropped_after > dropped_before:
         raise RuntimeError(
             "the Linux gs_usb driver rejected transmission through the HHS adapter "
-            f"({diagnostics}). See the kernel and Jetson remediation guide in {_A1Z_README}."
+            f"({diagnostics}). See the kernel and Jetson remediation guide in {_A1Z_GUIDE}."
         )
     if tx_after <= tx_before:
         raise RuntimeError(
@@ -193,7 +191,8 @@ def _verify_macos_can() -> None:
     except Exception as exc:
         raise RuntimeError(
             "macOS A1Z support requires pyusb, gs-usb, and system libusb. "
-            f"See {_A1Z_README}. Original error: {exc}"
+            "Run `uv sync --group galaxea-a1z` and `brew install libusb`. "
+            f"Original error: {exc}"
         ) from exc
 
     backend = usb_backend.get_backend()

@@ -25,16 +25,22 @@ PYPROJECT_PATH = REPOSITORY_ROOT / "pyproject.toml"
 runner = CliRunner()
 
 
-def test_locked_a1z_group_contains_vendor_and_macos_transport() -> None:
+def test_vendor_sdk_is_not_a_project_dependency() -> None:
     project = tomllib.loads(PYPROJECT_PATH.read_text())
 
-    dependencies = set(project["dependency-groups"]["galaxea-a1z"])
+    dependencies = [
+        *project["project"]["dependencies"],
+        *(
+            dependency
+            for group in project["dependency-groups"].values()
+            for dependency in group
+            if isinstance(dependency, str)
+        ),
+    ]
 
-    assert dependencies == {
-        "a1z @ git+https://github.com/userguide-galaxea/GALAXEA-A1Z.git@e931ecd0e25ad35df251097ba42921b3d2fa7224",
-        "gs-usb==0.3.1; sys_platform == 'darwin'",
-        "pyusb==1.3.1; sys_platform == 'darwin'",
-    }
+    assert not any(
+        dependency == "a1z" or dependency.startswith("a1z ") for dependency in dependencies
+    )
 
 
 def test_setup_help_documents_sdk_only() -> None:
