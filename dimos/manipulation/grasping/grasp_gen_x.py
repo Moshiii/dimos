@@ -123,6 +123,8 @@ class GraspGenXModule(Module, GraspGenSpec):
 
     @rpc
     def stop(self) -> None:
+        if self._runtime is not None:
+            self._runtime.stop()
         self._runtime = None
         super().stop()
 

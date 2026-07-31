@@ -206,6 +206,23 @@ class TestConnectedHardware:
             ((0.07,), {}),
         ]
 
+    def test_direct_gripper_command_is_preserved_during_arm_trajectory(self, mock_adapter):
+        mock_adapter.read_gripper_position.return_value = 0.07
+        component = HardwareComponent(
+            hardware_id="arm",
+            hardware_type=HardwareType.MANIPULATOR,
+            joints=make_joints("arm", 6),
+            gripper_joints=["arm/gripper"],
+            gripper_open_position=0.07,
+            gripper_closed_position=0.0,
+        )
+        hardware = ConnectedHardware(mock_adapter, component)
+
+        assert hardware.set_gripper_position(0.0)
+        hardware.write_command({"arm/joint1": 0.1}, ControlMode.POSITION)
+
+        assert mock_adapter.write_gripper_position.call_args_list == [((0.0,), {}), ((0.0,), {})]
+
     def test_joint_names_prefixed(self, connected_hardware):
         names = connected_hardware.joint_names
         assert names == [

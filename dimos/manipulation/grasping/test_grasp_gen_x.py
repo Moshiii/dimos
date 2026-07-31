@@ -162,6 +162,7 @@ def test_start_is_synchronous_and_idempotent(runtime: Any) -> None:
         assert len(module.propose_grasps(cloud())) == 1
     finally:
         module.stop()
+    runtime.return_value.stop.assert_called_once_with()
 
 
 def test_start_failure_is_explicit(runtime: Any) -> None:

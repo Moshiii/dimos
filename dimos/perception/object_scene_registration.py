@@ -56,12 +56,16 @@ class ObjectSceneRegistrationModule(Module):
 
     detections_2d: Out[Detection2DArray]
     detections_3d: Out[Detection3DArray]
+    annotated_image: Out[Image]
     objects: Out[list[DetObject]]
     pointcloud: Out[PointCloud2]
 
     _detector: Yoloe2DDetector | None = None
     _camera_info: CameraInfo | None = None
     _object_db: ObjectDB
+    _latest_objects: list[Object]
+    _latest_output_objects: tuple[Object, ...]
+    _latest_aligned_frames: tuple[Image, Image] | None = None
     # A tuple assignment/read is atomic, so depth and its transform cannot be
     # observed from different frames by get_full_scene_pointcloud().
     _latest_scene_snapshot: tuple[Image, Transform | None] | None = None
@@ -73,7 +77,13 @@ class ObjectSceneRegistrationModule(Module):
         # ObjectDB tuning
         distance_threshold: float = 0.2,
         min_detections_for_permanent: int = 6,
+        # Disable to publish only the current frame without temporal registration.
+        register_objects: bool = True,
+        # Cache camera frames and run inference only through scan_scene().
+        detect_on_request: bool = False,
+        detector_confidence: float = 0.6,
         # Object 3D reconstruction tuning
+        object_voxel_downsample: float = 0.005,
         max_distance: float = 0.0,
         use_aabb: bool = False,
         max_obstacle_width: float = 0.0,
@@ -82,10 +92,16 @@ class ObjectSceneRegistrationModule(Module):
         super().__init__(**kwargs)
         self._target_frame = target_frame
         self._prompt_mode = prompt_mode
+        self._register_objects = register_objects
+        self._detect_on_request = detect_on_request
+        self._detector_confidence = detector_confidence
         self._object_db = ObjectDB(
             distance_threshold=distance_threshold,
             min_detections_for_permanent=min_detections_for_permanent,
         )
+        self._latest_objects = []
+        self._latest_output_objects = ()
+        self._object_voxel_downsample = object_voxel_downsample
         self._max_distance = max_distance
         self._use_aabb = use_aabb
         self._max_obstacle_width = max_obstacle_width
@@ -102,6 +118,7 @@ class ObjectSceneRegistrationModule(Module):
         self._detector = Yoloe2DDetector(
             model_name=model_name,
             prompt_mode=self._prompt_mode,
+            conf=self._detector_confidence,
         )
 
         self.camera_info.subscribe(lambda msg: setattr(self, "_camera_info", msg))
@@ -123,6 +140,9 @@ class ObjectSceneRegistrationModule(Module):
             self._detector = None
 
         self._object_db.clear()
+        self._latest_objects = []
+        self._latest_output_objects = ()
+        self._latest_aligned_frames = None
 
         logger.info("ObjectSceneRegistrationModule stopped")
         super().stop()
@@ -140,32 +160,50 @@ class ObjectSceneRegistrationModule(Module):
     @rpc
     def select_object(self, track_id: int) -> dict[str, Any] | None:
         """Get object data by track_id and promote to permanent."""
-        for obj in self._object_db.get_all_objects():
+        for obj in self._known_objects():
             if obj.track_id == track_id:
-                self._object_db.promote(obj.object_id)
+                if self._register_objects:
+                    self._object_db.promote(obj.object_id)
                 return obj.to_dict()
         return None
 
     @rpc
     def get_object_track_ids(self) -> list[int]:
         """Get track_ids of all permanent objects."""
-        return [obj.track_id for obj in self._object_db.get_all_objects()]
+        return [obj.track_id for obj in self._known_objects()]
 
     @rpc
     def get_detected_objects(self) -> list[dict[str, Any]]:
         """Get all detected objects with object_id (UUID) and name."""
-        return [obj.agent_encode() for obj in self._object_db.get_all_objects()]
+        return [obj.agent_encode() for obj in self._known_objects()]
+
+    @rpc
+    def scan_scene(self) -> Detection3DArray:
+        """Run detection on the latest aligned RGB-D frame and return its 3D detections."""
+        frames = self._latest_aligned_frames
+        if frames is None:
+            return to_detection3d_array([], frame_id=self._target_frame)
+
+        if not self._register_objects:
+            self._latest_objects = []
+            self._latest_output_objects = ()
+        self._process_images(*frames)
+        return to_detection3d_array(
+            list(self._latest_output_objects),
+            frame_id=self._target_frame,
+            ts=frames[0].ts,
+        )
 
     @rpc
     def get_object_pointcloud_by_name(self, name: str) -> PointCloud2 | None:
         """Get pointcloud for an object by class name."""
-        objects = self._object_db.find_by_name(name)
+        objects = [obj for obj in self._known_objects() if obj.name == name]
         return objects[0].pointcloud if objects else None
 
     @rpc
     def get_object_pointcloud_by_object_id(self, object_id: str) -> PointCloud2 | None:
         """Get pointcloud for an object by its stable object_id (searches all objects)."""
-        obj = self._object_db.find_by_object_id(object_id)
+        obj = next((obj for obj in self._known_objects() if obj.object_id == object_id), None)
         if obj is None:
             logger.warning(f"No object found with object_id='{object_id}'")
             return None
@@ -178,7 +216,7 @@ class ObjectSceneRegistrationModule(Module):
         """Get dilated mask for an object by ID."""
         import cv2
 
-        for obj in self._object_db.get_all_objects():
+        for obj in self._known_objects():
             if obj.object_id != object_id:
                 continue
             if obj.mask is None:
@@ -192,6 +230,11 @@ class ObjectSceneRegistrationModule(Module):
             return cv2.dilate(mask, kernel).astype(np.uint8)
 
         return None
+
+    def _known_objects(self) -> list[Object]:
+        if self._register_objects:
+            return self._object_db.get_all_objects()
+        return self._latest_objects
 
     @rpc
     def get_full_scene_pointcloud(
@@ -290,6 +333,9 @@ class ObjectSceneRegistrationModule(Module):
 
     def _on_aligned_frames(self, frames) -> None:  # type: ignore[no-untyped-def]
         color_msg, depth_msg = frames
+        if self._detect_on_request:
+            self._latest_aligned_frames = (color_msg, depth_msg)
+            return
         self._process_images(color_msg, depth_msg)
 
     def _process_images(self, color_msg: Image, depth_msg: Image) -> None:
@@ -317,6 +363,7 @@ class ObjectSceneRegistrationModule(Module):
             detections=[det.to_ros_detection2d() for det in detections_2d.detections],
         )
         self.detections_2d.publish(detections_2d_msg)
+        self.annotated_image.publish(detections_2d.annotated_image())
 
         # Process 3D detections
         self._process_3d_detections(detections_2d, color_image, depth_image)
@@ -338,7 +385,9 @@ class ObjectSceneRegistrationModule(Module):
                 self._target_frame,
                 color_image.frame_id,
                 color_image.ts,
-                0.1,
+                # Request-driven scans can use a cached camera frame while
+                # inference starts; retain temporal alignment within that cache.
+                3.0,
                 forward_tolerance=0.2,
             )
             if camera_transform is None:
@@ -354,25 +403,33 @@ class ObjectSceneRegistrationModule(Module):
             depth_image=depth_image,
             camera_info=self._camera_info,
             camera_transform=camera_transform,
+            voxel_downsample=self._object_voxel_downsample,
             max_distance=self._max_distance,
             use_aabb=self._use_aabb,
             max_obstacle_width=self._max_obstacle_width,
         )
-        if not objects:
-            return
+        if self._register_objects:
+            if not objects:
+                return
+            self._object_db.add_objects(objects)
+            # Registered mode publishes the complete confirmed scene, not just this frame.
+            output_objects = self._object_db.get_objects()
+        else:
+            self._latest_objects = objects
+            output_objects = objects
 
-        # Add objects to spatial memory database
-        self._object_db.add_objects(objects)
+        self._latest_output_objects = tuple(output_objects)
 
-        # Publish ALL permanent objects so downstream consumers get the full set,
-        # not just this frame's batch (which may be a subset of what's on the table).
-        all_permanent = self._object_db.get_objects()
-
-        detections_3d = to_detection3d_array(all_permanent)
+        detections_3d = to_detection3d_array(
+            output_objects,
+            frame_id=self._target_frame,
+            ts=color_image.ts,
+        )
         self.detections_3d.publish(detections_3d)
-        self.objects.publish(all_permanent)
+        self.objects.publish(output_objects)
 
-        objects_for_pc = all_permanent
-        aggregated_pc = aggregate_pointclouds(objects_for_pc)
+        aggregated_pc = aggregate_pointclouds(output_objects)
+        if not output_objects:
+            aggregated_pc.frame_id = self._target_frame
+            aggregated_pc.ts = color_image.ts
         self.pointcloud.publish(aggregated_pc)
-        return

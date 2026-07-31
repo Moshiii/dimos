@@ -1639,6 +1639,11 @@ class ManipulationModule(Module):
                         self._error_message = result.message
         return bool(result and result.accepted)
 
+    @rpc
+    def execute_and_wait(self, timeout: float = 60.0) -> bool:
+        """Execute the stored plan and wait for its expected trajectory duration."""
+        return self.execute_plan() and self._wait_for_trajectory_completion(timeout)
+
     @property
     def world_monitor(self) -> WorldMonitor | None:
         """Access the world monitor for advanced obstacle/world operations."""
