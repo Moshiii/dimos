@@ -14,7 +14,6 @@
 
 
 # Import LCM messages
-import cv2
 from dimos_lcm.sensor_msgs import CameraInfo
 from dimos_lcm.vision_msgs import (
     Detection3D,
@@ -33,7 +32,7 @@ from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.msgs.vision_msgs.Detection2DArray import Detection2DArray
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
-from dimos.perception.object_tracker_2d import ObjectTracker2D
+from dimos.perception.experimental.object_tracker_2d import ObjectTracker2D
 from dimos.types.timestamped import align_timestamped
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import (
@@ -120,6 +119,8 @@ class ObjectTracker3D(ObjectTracker2D):
 
     def _process_tracking(self) -> None:
         """Override to add 3D detection creation after 2D tracking."""
+        import cv2
+
         # Call parent 2D tracking
         super()._process_tracking()
 

@@ -15,10 +15,8 @@
 import time
 from typing import Any
 
-import cv2
 import numpy as np
 from numpy.typing import NDArray
-import open3d as o3d  # type: ignore[import-untyped]
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
@@ -33,14 +31,14 @@ from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.msgs.vision_msgs.Detection2DArray import Detection2DArray
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.perception.detection.detectors.yoloe import Yoloe2DDetector, YoloePromptMode
-from dimos.perception.detection.objectDB import ObjectDB
 from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
-from dimos.perception.detection.type.detection3d.object import (
+from dimos.perception.experimental.object import (
     Object,
     Object as DetObject,
     aggregate_pointclouds,
     to_detection3d_array,
 )
+from dimos.perception.experimental.objectDB import ObjectDB
 from dimos.types.timestamped import align_timestamped
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import backpressure
@@ -178,6 +176,8 @@ class ObjectSceneRegistrationModule(Module):
 
     def _get_object_mask(self, object_id: str) -> NDArray[np.uint8] | None:
         """Get dilated mask for an object by ID."""
+        import cv2
+
         for obj in self._object_db.get_all_objects():
             if obj.object_id != object_id:
                 continue
@@ -201,6 +201,8 @@ class ObjectSceneRegistrationModule(Module):
         voxel_size: float = 0.01,
     ) -> PointCloud2 | None:
         """Get full scene pointcloud from depth, including table/surfaces for collision filtering."""
+        import open3d as o3d  # type: ignore[import-untyped]
+
         scene_snapshot = self._latest_scene_snapshot
         if scene_snapshot is None or self._camera_info is None:
             return None

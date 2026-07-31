@@ -35,7 +35,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import numpy as np
-import rerun as rr
 
 from dimos.utils.logging_config import setup_logger
 
@@ -64,6 +63,8 @@ def init_world(frame: EnuFrame, root: str = WORLD) -> None:
     No blueprint here — in dimos the viewer layout is composed by the robot
     blueprint that adds the city view, not by citymesh itself.
     """
+    import rerun as rr
+
     rr.log(root, rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
     rr.log(
         f"{root}/origin",
@@ -88,6 +89,8 @@ def log_mesh(path: str, mesh: Mesh, theme: Theme = THEMES["day"], static: bool =
     an opaque material renders solid. Move the alpha to ``albedo_factor`` and
     keep the vertices fully opaque so it applies exactly once.
     """
+    import rerun as rr
+
     colors = mesh.colors
     albedo_factor = None
     if colors is not None and colors.ndim == 2 and colors.shape[1] == 4:
@@ -129,6 +132,8 @@ def log_strips(
     radii would keep every layer equally thick at every distance and turn the fine
     grids into a grey wash.
     """
+    import rerun as rr
+
     rr.log(
         path,
         rr.LineStrips3D(strips, colors=[color], radii=[radius_m]),
@@ -210,6 +215,8 @@ class MicroCarpet:
 
 def log_trail(path: str, points_enu: np.ndarray, theme: Theme = THEMES["day"]) -> None:
     """Log a travelled path as a line strip in world ENU."""
+    import rerun as rr
+
     rr.log(
         path,
         rr.LineStrips3D(
@@ -253,6 +260,8 @@ class RerunTileSink:
 
     @contextmanager
     def _backdated_to(self, at_t: float | None, now_t: float | None) -> Iterator[None]:
+        import rerun as rr
+
         if at_t is None or now_t is None:
             yield
             return
@@ -279,10 +288,14 @@ class RerunTileSink:
                 log_mesh(f"{entity}/buildings", data.buildings, self.theme, static=False)
 
     def clear(self, key: TileKey) -> None:
+        import rerun as rr
+
         rr.log(self._entity(key), rr.Clear(recursive=True))
 
     def dead(self, key: TileKey, bounds: tuple[float, float, float, float]) -> None:
         """Draw a flat outline where a tile could not be fetched."""
+        import rerun as rr
+
         e0, n0, e1, n1 = bounds
         ring = np.array(
             [[e0, n0, 0.0], [e1, n0, 0.0], [e1, n1, 0.0], [e0, n1, 0.0], [e0, n0, 0.0]],

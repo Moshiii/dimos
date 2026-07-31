@@ -52,7 +52,7 @@ def test_models_log_shape_parts_under_the_frame_attach() -> None:
     bridge = RerunBridgeModule(models={"drone/base_link": quadcopter()})
 
     try:
-        with patch("dimos.visualization.rerun.bridge.rr.log") as mock_log:
+        with patch("rerun.log") as mock_log:
             bridge._log_static()
     finally:
         bridge.stop()

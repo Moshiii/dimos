@@ -22,7 +22,6 @@ import time
 from typing import TYPE_CHECKING, Any
 import uuid
 
-import cv2
 import numpy as np
 from reactivex import Observable, interval, operators as ops
 from reactivex.disposable import Disposable
@@ -33,9 +32,9 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.perception.image_embedding import ImageEmbeddingProvider
-from dimos.perception.spatial_vector_db import SpatialVectorDB
-from dimos.perception.visual_memory import VisualMemory
+from dimos.perception.experimental.image_embedding import ImageEmbeddingProvider
+from dimos.perception.experimental.spatial_vector_db import SpatialVectorDB
+from dimos.perception.experimental.visual_memory import VisualMemory
 from dimos.types.robot_location import RobotLocation
 from dimos.utils.logging_config import setup_logger
 
@@ -184,6 +183,8 @@ class SpatialMemory(Module):
 
     @rpc
     def start(self) -> None:
+        import cv2
+
         super().start()
 
         # Subscribe to LCM streams
