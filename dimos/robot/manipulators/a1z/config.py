@@ -51,40 +51,6 @@ A1Z_PACKAGE_PATHS: dict[str, Path] = {
 }
 
 
-def make_a1z_hardware(
-    hw_id: str = "arm",
-    *,
-    adapter_type: str = "mock",
-    address: str | None = None,
-    has_gripper: bool = True,
-    auto_enable: bool = True,
-    adapter_config: A1ZConfig | None = None,
-    home_joints: list[float] | None = None,
-) -> HardwareComponent:
-    kwargs: dict[str, object] = {}
-    if home_joints is not None:
-        kwargs["initial_positions"] = home_joints
-    if adapter_type == "galaxea_a1z":
-        resolved_config = adapter_config or A1ZConfig(
-            gripper=A1ZGripperConfig() if has_gripper else None,
-        )
-        if (resolved_config.gripper is not None) != has_gripper:
-            raise ValueError("has_gripper must match adapter_config.gripper")
-        kwargs["config"] = resolved_config
-    return HardwareComponent(
-        hardware_id=hw_id,
-        hardware_type=HardwareType.MANIPULATOR,
-        joints=make_joints(hw_id, A1Z_DOF),
-        adapter_type=adapter_type,
-        address=address,
-        auto_enable=auto_enable,
-        gripper_joints=[f"{hw_id}/gripper"] if has_gripper else [],
-        gripper_open_position=0.1 if has_gripper else None,
-        gripper_closed_position=0.0 if has_gripper else None,
-        adapter_kwargs=kwargs,
-    )
-
-
 def a1z_hardware(
     hw_id: str = "arm",
     *,
@@ -93,22 +59,34 @@ def a1z_hardware(
     adapter_config: A1ZConfig | None = None,
 ) -> HardwareComponent:
     """Configure mock or real A1Z hardware from the resolved global settings."""
-    if global_config.simulation:
-        return make_a1z_hardware(hw_id, has_gripper=has_gripper)
+    adapter_type = "mock"
+    address = None
+    adapter_kwargs: dict[str, object] = {}
+    if not global_config.simulation:
+        adapter_type = "galaxea_a1z"
+        address = global_config.can_port or "a1zcan"
+        resolved_config = adapter_config or A1ZConfig(
+            gripper=A1ZGripperConfig() if has_gripper else None,
+        )
+        if (resolved_config.gripper is not None) != has_gripper:
+            raise ValueError("has_gripper must match adapter_config.gripper")
+        if dynamics_urdf_path is not None:
+            # Preserve LfsPath laziness: the adapter resolves the model only when
+            # connect() constructs the vendor robot.
+            resolved_config = attrs.evolve(resolved_config, urdf_path=dynamics_urdf_path)
+        adapter_kwargs["config"] = resolved_config
 
-    resolved_config = adapter_config or A1ZConfig(
-        gripper=A1ZGripperConfig() if has_gripper else None,
-    )
-    if dynamics_urdf_path is not None:
-        # Preserve LfsPath laziness: the adapter resolves the model only when
-        # connect() constructs the vendor robot.
-        resolved_config = attrs.evolve(resolved_config, urdf_path=dynamics_urdf_path)
-    return make_a1z_hardware(
-        hw_id,
-        adapter_type="galaxea_a1z",
-        address=global_config.can_port or "a1zcan",
-        has_gripper=has_gripper,
-        adapter_config=resolved_config,
+    return HardwareComponent(
+        hardware_id=hw_id,
+        hardware_type=HardwareType.MANIPULATOR,
+        joints=make_joints(hw_id, A1Z_DOF),
+        adapter_type=adapter_type,
+        address=address,
+        auto_enable=True,
+        gripper_joints=[f"{hw_id}/gripper"] if has_gripper else [],
+        gripper_open_position=0.1 if has_gripper else None,
+        gripper_closed_position=0.0 if has_gripper else None,
+        adapter_kwargs=adapter_kwargs,
     )
 
 
