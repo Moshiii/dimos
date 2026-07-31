@@ -42,8 +42,10 @@ from dimos.manipulation.pick_and_place_module import (
     GraspVisualizationConfig,
     PickAndPlaceModule,
     PickAndPlaceModuleConfig,
+    PromptedPickAndPlaceModule,
     _FeasibleGrasp,
     _GraspVerification,
+    _PickTransaction,
 )
 from dimos.manipulation.skill_errors import ManipulationSkillError
 from dimos.manipulation.visualization.layers import LineSetElement, VisualizationLayer
@@ -114,6 +116,15 @@ def module() -> PickAndPlaceModule:
     """Create a PickAndPlaceModule with heavy base init (RPC, config) patched out."""
     with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
         result = PickAndPlaceModule()
+    result.config = PickAndPlaceModuleConfig()
+    return result
+
+
+@pytest.fixture
+def prompted_module() -> PromptedPickAndPlaceModule:
+    """Create the prompted provider variant without initializing RPC boundaries."""
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        result = PromptedPickAndPlaceModule()
     result.config = PickAndPlaceModuleConfig()
     return result
 
@@ -252,6 +263,15 @@ def test_pick_module_declares_optional_perception_and_required_grasp_spec() -> N
 
     assert refs["_object_scene"].optional is True
     assert refs["_grasp_generator"].optional is False
+
+
+def test_prompted_pick_module_requires_localizer_spec() -> None:
+    atom = BlueprintAtom.create(PromptedPickAndPlaceModule, kwargs={})
+
+    refs = {ref.name: ref for ref in atom.module_refs}
+
+    assert refs["_prompted_localizer"].optional is False
+    assert refs["_object_scene"].optional is True
 
 
 def test_optional_object_scene_resolves_when_absent_or_present() -> None:
@@ -983,6 +1003,199 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     assert plan.call_count == 3
     assert execute.call_count == 3
     assert gripper.call_args_list == [mocker.call(0.85, "arm"), mocker.call(0.0, "arm")]
+
+
+class TestPromptedPickTransaction:
+    def test_localized_cloud_is_proposed_without_object_suppression(
+        self,
+        prompted_module: PromptedPickAndPlaceModule,
+        mocker: MockerFixture,
+    ) -> None:
+        cloud = _pointcloud(timestamp=1.0)
+        prompted_module._prompted_localizer = mocker.Mock()
+        prompted_module._prompted_localizer.localize.return_value = cloud
+        prompted_module._grasp_generator = mocker.Mock()
+        candidate = _candidate(0.4, 0.9)
+        prompted_module._grasp_generator.propose_grasps.return_value = GraspCandidateArray(
+            Header(1.0, "world"), [candidate]
+        )
+        robot_config = SimpleNamespace(pre_grasp_offset=0.1)
+        mocker.patch.object(
+            prompted_module,
+            "_get_robot",
+            return_value=("arm", "robot-id", robot_config, None),
+        )
+        run_pick = mocker.patch.object(
+            prompted_module,
+            "_run_resolved_pick",
+            return_value=SkillResult.ok("planned"),
+        )
+
+        result = prompted_module.pick("white and red marker", object_id="ignored")
+
+        assert result.is_success()
+        prompted_module._prompted_localizer.localize.assert_called_once_with("white and red marker")
+        proposal_input = prompted_module._grasp_generator.propose_grasps.call_args.args[0]
+        assert isinstance(proposal_input, GraspProposalInput)
+        assert proposal_input.object_pointcloud is cloud
+        assert proposal_input.object_center.as_tuple == pytest.approx((0.405, 0.005, 0.2))
+        run_pick.assert_called_once()
+        assert run_pick.call_args.kwargs == {"suppress_object_id": None}
+
+    @pytest.mark.parametrize("failure", [None, RuntimeError("models unavailable")])
+    def test_localization_failure_stops_before_grasp_or_motion(
+        self,
+        prompted_module: PromptedPickAndPlaceModule,
+        mocker: MockerFixture,
+        failure: Exception | None,
+    ) -> None:
+        prompted_module._prompted_localizer = mocker.Mock()
+        if failure is None:
+            prompted_module._prompted_localizer.localize.return_value = None
+        else:
+            prompted_module._prompted_localizer.localize.side_effect = failure
+        prompted_module._grasp_generator = mocker.Mock()
+        robot_config = SimpleNamespace(pre_grasp_offset=0.1)
+        mocker.patch.object(
+            prompted_module,
+            "_get_robot",
+            return_value=("arm", "robot-id", robot_config, None),
+        )
+        run_pick = mocker.patch.object(prompted_module, "_run_resolved_pick")
+        plan = mocker.patch.object(prompted_module, "plan_to_pose")
+        gripper = mocker.patch.object(prompted_module, "_set_gripper_position")
+
+        result = prompted_module.pick("marker")
+
+        assert result.error_code == "LOCALIZATION_FAILED"
+        assert result.metadata["phase"] == "RESOLVE"
+        prompted_module._grasp_generator.propose_grasps.assert_not_called()
+        run_pick.assert_not_called()
+        plan.assert_not_called()
+        gripper.assert_not_called()
+
+    def test_resolved_prompted_pick_does_not_call_obstacle_suppression(
+        self,
+        prompted_module: PromptedPickAndPlaceModule,
+        mocker: MockerFixture,
+    ) -> None:
+        candidate = _candidate(0.4, 0.9)
+        selected = _FeasibleGrasp(candidate, 1, candidate.pose, candidate.pose)
+        world = mocker.Mock()
+        prompted_module._world_monitor = world
+        mocker.patch.object(prompted_module, "_safety_lift_pose", return_value=None)
+        mocker.patch.object(prompted_module, "_select_feasible_grasp", return_value=selected)
+        mocker.patch.object(
+            prompted_module,
+            "_execute_selected_pick",
+            return_value=SkillResult.ok("picked"),
+        )
+
+        result = prompted_module._run_resolved_pick(
+            SimpleNamespace(
+                phase=None,
+                selected=None,
+                rejections=Counter(),
+                object_id="",
+                object_name="marker",
+                gripper_closed=False,
+            ),
+            [candidate],
+            "arm",
+            0.1,
+            suppress_object_id=None,
+        )
+
+        assert result.is_success()
+        world.suppress_object_obstacle.assert_not_called()
+
+    def test_prompted_cloud_uses_existing_visualization_layer(
+        self,
+        prompted_module: PromptedPickAndPlaceModule,
+        mocker: MockerFixture,
+    ) -> None:
+        cloud = _pointcloud(timestamp=1.0)
+        recorder = _LayerRecorder()
+        prompted_module._world_monitor = SimpleNamespace(visualization=recorder)
+        prompted_module._grasp_generator = mocker.Mock()
+        prompted_module._grasp_generator.propose_grasps.return_value = GraspCandidateArray(
+            Header(1.0, "world"), [_candidate(0.4, 0.9)]
+        )
+
+        prompted_module._pointcloud_candidates(
+            GraspProposalInput.from_pointcloud(cloud),
+            "marker",
+        )
+
+        assert len(recorder.layers) == 1
+
+    def test_plan_only_mode_keeps_full_planning_and_skips_execution(
+        self,
+        prompted_module: PromptedPickAndPlaceModule,
+        mocker: MockerFixture,
+    ) -> None:
+        prompted_module.config.execute_pick = False
+        prompted_module._world_monitor = SimpleNamespace(visualization=None)
+        candidate = _candidate(0.4, 0.9)
+        transaction = _PickTransaction(object_name="marker")
+        solve_ik = mocker.patch.object(
+            prompted_module,
+            "_solve_connected_pose_sequence_ik",
+            return_value=_ik_result(0.1, 0.2, 0.3),
+        )
+        plan_sequence = mocker.patch.object(
+            prompted_module,
+            "_plan_connected_joint_sequence",
+            return_value=_plan_result(0.0, 0.3),
+        )
+        mocker.patch.object(prompted_module, "_safety_lift_pose", return_value=None)
+        execute_pick = mocker.patch.object(prompted_module, "_execute_selected_pick")
+        plan_motion = mocker.patch.object(prompted_module, "plan_to_pose")
+        execute_motion = mocker.patch.object(prompted_module, "_preview_execute_wait")
+        gripper = mocker.patch.object(prompted_module, "_set_gripper_position")
+
+        result = prompted_module._run_resolved_pick(
+            transaction,
+            [candidate],
+            "arm",
+            0.1,
+            suppress_object_id=None,
+        )
+
+        assert result.is_success()
+        assert result.metadata["planning_only"] is True
+        assert result.metadata["candidate_rank"] == 1
+        assert "no motion executed" in result.message
+        assert transaction.phase.value == "DONE"
+        assert prompted_module._last_pick_pose is None
+        solve_ik.assert_called_once()
+        plan_sequence.assert_called_once()
+        execute_pick.assert_not_called()
+        plan_motion.assert_not_called()
+        execute_motion.assert_not_called()
+        gripper.assert_not_called()
+
+    def test_pick_and_place_stops_after_plan_only_pick(
+        self,
+        prompted_module: PromptedPickAndPlaceModule,
+        mocker: MockerFixture,
+    ) -> None:
+        mocker.patch.object(
+            prompted_module,
+            "pick",
+            return_value=SkillResult[ManipulationSkillError].ok(
+                "pick planned",
+                planning_only=True,
+            ),
+        )
+        place = mocker.patch.object(prompted_module, "place")
+
+        result = prompted_module.pick_and_place("marker", 0.5, 0.0, 0.2)
+
+        assert result.is_success()
+        assert result.metadata["planning_only"] is True
+        assert result.message == "pick planned; place skipped"
+        place.assert_not_called()
 
 
 class TestGraspVerification:

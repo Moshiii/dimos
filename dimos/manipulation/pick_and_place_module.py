@@ -23,6 +23,7 @@ Extends ManipulationModule with perception integration and long-horizon skills:
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
 import threading
@@ -65,6 +66,9 @@ from dimos.perception.experimental.object import (
 )
 from dimos.perception.experimental.object_scene_registration_spec import (
     ObjectSceneRegistrationSpec,
+)
+from dimos.perception.memory.prompted_object_localizer_spec import (
+    PromptedObjectLocalizerSpec,
 )
 from dimos.protocol.service.spec import BaseConfig
 from dimos.utils.logging_config import setup_logger
@@ -115,6 +119,7 @@ class GraspVisualizationConfig(BaseConfig):
 class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     """Configuration for PickAndPlaceModule."""
 
+    execute_pick: bool = True
     planning_frame: str = "world"
     max_object_pointcloud_age: FiniteFloat = Field(default=10.0, gt=0.0)
     max_grasp_candidates_to_check: int = Field(default=5, gt=0)
@@ -199,7 +204,7 @@ class _PickTransaction:
 class _PickPipelineError(RuntimeError):
     def __init__(self, code: ManipulationSkillError, message: str) -> None:
         super().__init__(message)
-        self.code = code
+        self.code: ManipulationSkillError = code
 
 
 class PickAndPlaceModule(ManipulationModule):
@@ -553,12 +558,6 @@ then refreshes perception obstacles.
                 "GRASP_INPUT_INVALID",
                 f"No point cloud is available for object '{detection.object_id}'",
             )
-        points = pointcloud.points_f32()
-        if points.ndim != 2 or points.shape[1] != 3 or len(points) == 0:
-            raise _PickPipelineError(
-                "GRASP_INPUT_INVALID",
-                f"Object '{detection.object_id}' has an empty or invalid point cloud",
-            )
         if (
             pointcloud.ts is None
             or time.time() - pointcloud.ts > self.config.max_object_pointcloud_age
@@ -574,12 +573,32 @@ then refreshes perception obstacles.
                 f"planning frame '{self.config.planning_frame}'",
             )
 
-        self._publish_grasp_object_cloud(pointcloud)
         proposal_input = GraspProposalInput(
             object_pointcloud=pointcloud,
             object_center=detection.center,
             object_size=detection.size,
         )
+        return self._pointcloud_candidates(proposal_input, detection.name)
+
+    def _pointcloud_candidates(
+        self,
+        proposal_input: GraspProposalInput,
+        object_name: str,
+    ) -> list[GraspCandidate]:
+        pointcloud = proposal_input.object_pointcloud
+        points = pointcloud.points_f32()
+        if points.ndim != 2 or points.shape[1] != 3 or len(points) == 0:
+            raise _PickPipelineError(
+                "GRASP_INPUT_INVALID",
+                f"Object '{object_name}' has an empty or invalid point cloud",
+            )
+        if pointcloud.frame_id != self.config.planning_frame:
+            raise _PickPipelineError(
+                "GRASP_FRAME_MISMATCH",
+                f"Object cloud frame '{pointcloud.frame_id}' does not match "
+                f"planning frame '{self.config.planning_frame}'",
+            )
+        self._publish_grasp_object_cloud(pointcloud)
         try:
             proposals = self._grasp_generator.propose_grasps(proposal_input)
         except Exception as exc:
@@ -595,7 +614,7 @@ then refreshes perception obstacles.
         if not proposals.candidates:
             raise _PickPipelineError(
                 "GRASP_GENERATION_FAILED",
-                f"No grasp proposals were generated for '{detection.name}'",
+                f"No grasp proposals were generated for '{object_name}'",
             )
         return sorted(proposals.candidates, key=lambda candidate: candidate.score, reverse=True)
 
@@ -909,6 +928,70 @@ then refreshes perception obstacles.
             rejections=dict(transaction.rejections),
         )
 
+    def _run_resolved_pick(
+        self,
+        transaction: _PickTransaction,
+        candidates: list[GraspCandidate],
+        robot_name: str,
+        robot_pre_grasp_offset: float,
+        *,
+        suppress_object_id: str | None,
+    ) -> SkillResult[ManipulationSkillError]:
+        """Evaluate and execute candidates for an already resolved target cloud."""
+        if self._world_monitor is None:
+            raise _PickPipelineError(
+                "WORLD_MONITOR_UNAVAILABLE", "Planning world monitor is unavailable"
+            )
+
+        suppression_context = (
+            self._world_monitor.suppress_object_obstacle(suppress_object_id)
+            if suppress_object_id is not None
+            else nullcontext(None)
+        )
+        with suppression_context as suppression:
+            sequence_start = None
+            lift_pose = self._safety_lift_pose(robot_name)
+            if lift_pose is not None:
+                transaction.phase = _PickPhase.PREPARE
+                failed_index, sequence_start = self._check_connected_pose_sequence(
+                    (lift_pose,), robot_name
+                )
+                if failed_index is not None:
+                    raise _PickPipelineError(
+                        "PLANNING_FAILED",
+                        "Required safety-lift planning failed",
+                    )
+            transaction.phase = _PickPhase.SELECT
+            transaction.selected = self._select_feasible_grasp(
+                candidates,
+                robot_name,
+                robot_pre_grasp_offset,
+                transaction,
+                sequence_start,
+            )
+            if self.config.execute_pick:
+                result = self._execute_selected_pick(transaction, robot_name)
+            else:
+                selected = transaction.selected
+                transaction.phase = _PickPhase.DONE
+                result = SkillResult[ManipulationSkillError].ok(
+                    f"Pick planning complete for '{transaction.object_name}' using candidate "
+                    f"{selected.rank} (score={selected.candidate.score:.4f}); "
+                    "plan-only mode, no motion executed",
+                    object_id=transaction.object_id,
+                    candidate_rank=selected.rank,
+                    candidate_score=selected.candidate.score,
+                    planning_only=True,
+                    rejections=dict(transaction.rejections),
+                )
+
+        cleanup_error = getattr(suppression, "cleanup_error", None)
+        if cleanup_error is not None:
+            if result.is_success():
+                return self._phase_failure(transaction, "WORLD_MONITOR_UNAVAILABLE", cleanup_error)
+            result.message = f"{result.message}; cleanup: {cleanup_error}"
+        return result
+
     @skill
     def pick(
         self,
@@ -930,8 +1013,6 @@ then refreshes perception obstacles.
             return SkillResult.fail("PICK_BUSY", "Another pick transaction is active")
 
         transaction = _PickTransaction()
-        suppression = None
-        result: SkillResult[ManipulationSkillError]
         try:
             robot = self._get_robot(robot_name)
             if robot is None:
@@ -943,41 +1024,13 @@ then refreshes perception obstacles.
             transaction.object_name = detection.name
             transaction.phase = _PickPhase.PROPOSE
             candidates = self._provider_candidates(detection)
-
-            if self._world_monitor is None:
-                raise _PickPipelineError(
-                    "WORLD_MONITOR_UNAVAILABLE", "Planning world monitor is unavailable"
-                )
-
-            with self._world_monitor.suppress_object_obstacle(detection.object_id) as suppression:
-                sequence_start = None
-                lift_pose = self._safety_lift_pose(rname)
-                if lift_pose is not None:
-                    transaction.phase = _PickPhase.PREPARE
-                    failed_index, sequence_start = self._check_connected_pose_sequence(
-                        (lift_pose,), rname
-                    )
-                    if failed_index is not None:
-                        raise _PickPipelineError(
-                            "PLANNING_FAILED",
-                            "Required safety-lift planning failed",
-                        )
-                transaction.phase = _PickPhase.SELECT
-                transaction.selected = self._select_feasible_grasp(
-                    candidates,
-                    rname,
-                    robot_config.pre_grasp_offset,
-                    transaction,
-                    sequence_start,
-                )
-                result = self._execute_selected_pick(transaction, rname)
-            if suppression.cleanup_error is not None:
-                if result.is_success():
-                    return self._phase_failure(
-                        transaction, "WORLD_MONITOR_UNAVAILABLE", suppression.cleanup_error
-                    )
-                result.message = f"{result.message}; cleanup: {suppression.cleanup_error}"
-            return result
+            return self._run_resolved_pick(
+                transaction,
+                candidates,
+                rname,
+                robot_config.pre_grasp_offset,
+                suppress_object_id=detection.object_id,
+            )
         except _PickPipelineError as exc:
             return self._phase_failure(transaction, exc.code, str(exc))
         except RuntimeError as exc:
@@ -1149,6 +1202,9 @@ then refreshes perception obstacles.
         pick_result = self.pick(object_name, object_id, robot_name)
         if not pick_result.is_success():
             return pick_result
+        if pick_result.metadata.get("planning_only") is True:
+            pick_result.message = f"{pick_result.message}; place skipped"
+            return pick_result
 
         # Place phase
         return self.place(place_x, place_y, place_z, robot_name)
@@ -1158,3 +1214,77 @@ then refreshes perception obstacles.
         """Stop the pick-and-place module."""
         logger.info("Stopping PickAndPlaceModule")
         super().stop()
+
+
+class PromptedPickAndPlaceModule(PickAndPlaceModule):
+    """Pick-and-place module whose target source is prompted localization."""
+
+    _prompted_localizer: PromptedObjectLocalizerSpec
+
+    @skill
+    def pick(
+        self,
+        object_name: str,
+        object_id: str | None = None,
+        robot_name: str | None = None,
+    ) -> SkillResult[ManipulationSkillError]:
+        """Pick an object localized from recent recorded RGB-D observations.
+
+        Generates grasp poses, plans collision-free approach/grasp/retract motions,
+        and executes them.
+
+        Args:
+            object_name: Text description of the object to localize and pick.
+            object_id: Ignored; prompted localization does not use stable object IDs.
+            robot_name: Robot to use (only needed for multi-arm setups).
+        """
+        del object_id
+        if not self._pick_guard.acquire(blocking=False):
+            return SkillResult[ManipulationSkillError].fail(
+                "PICK_BUSY", "Another pick transaction is active"
+            )
+
+        transaction = _PickTransaction(object_name=object_name)
+        try:
+            robot = self._get_robot(robot_name)
+            if robot is None:
+                return SkillResult[ManipulationSkillError].fail(
+                    "ROBOT_NOT_FOUND", "Robot not found"
+                )
+            robot_name_resolved, _, robot_config, _ = robot
+
+            try:
+                pointcloud = self._prompted_localizer.localize(object_name)
+            except Exception as exc:
+                raise _PickPipelineError(
+                    "LOCALIZATION_FAILED",
+                    f"Prompted localization failed for '{object_name}': {exc}",
+                ) from exc
+            if pointcloud is None:
+                raise _PickPipelineError(
+                    "LOCALIZATION_FAILED",
+                    f"No usable point cloud was localized for '{object_name}'",
+                )
+            try:
+                proposal_input = GraspProposalInput.from_pointcloud(pointcloud)
+            except ValueError as exc:
+                raise _PickPipelineError(
+                    "LOCALIZATION_FAILED",
+                    f"Localized point cloud for '{object_name}' is unusable: {exc}",
+                ) from exc
+
+            transaction.phase = _PickPhase.PROPOSE
+            candidates = self._pointcloud_candidates(proposal_input, object_name)
+            return self._run_resolved_pick(
+                transaction,
+                candidates,
+                robot_name_resolved,
+                robot_config.pre_grasp_offset,
+                suppress_object_id=None,
+            )
+        except _PickPipelineError as exc:
+            return self._phase_failure(transaction, exc.code, str(exc))
+        except RuntimeError as exc:
+            return self._phase_failure(transaction, "WORLD_MONITOR_UNAVAILABLE", str(exc))
+        finally:
+            self._pick_guard.release()

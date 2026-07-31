@@ -7,6 +7,53 @@ the default world and native path planner.
 
 ## Quick Start
 
+### Prompted xArm6 pick pipeline
+
+`xarm6-prompted-pick` connects the wrist RGB-D recording directly to prompted
+object localization and the GraspGenX pick pipeline. It is a real-hardware
+blueprint and exposes the existing `pick` skill through MCP without starting an
+LLM agent.
+
+Start the robot stack:
+
+```bash
+dimos --xarm6-ip <ROBOT_IP> run xarm6-prompted-pick
+```
+
+For integration testing, disable physical pick execution while retaining
+localization, grasp generation, IK, full candidate planning, selection, and
+Viser updates:
+
+```bash
+dimos --xarm6-ip <ROBOT_IP> run xarm6-prompted-pick \
+  -o promptedpickandplacemodule.execute_pick=false
+```
+
+In this mode, a successful `pick` response includes `planning_only: true` and
+states that no motion was executed. The arm and gripper are not commanded, and
+the module does not record a last physical pick pose. `pick_and_place` also
+stops after the plan-only pick instead of proceeding to its physical place
+phase. Other explicitly invoked motion skills remain live; use only `pick` or
+`pick_and_place` for this pipeline test.
+
+Wait at least 30 seconds for the active Memory2 recording window to populate,
+then call the skill from another terminal:
+
+```bash
+dimos mcp call pick --arg object_name="white and red marker"
+```
+
+Open the Viser URL printed by the stack. During the pick, **Grasp / Object
+Cloud** shows the localized target and **Grasp / Proposals** highlights the
+candidate currently being evaluated. After selection, only the selected grasp
+remains.
+
+This command can move real hardware. Confirm that the workspace is clear, the
+robot is enabled, the wrist camera is calibrated, and an operator can stop the
+robot before calling `pick`. Localization failure stops before grasp generation
+or motion. The localized target cloud drives grasp generation and visualization
+only; it is not inserted into the collision scene.
+
 Recent addition: the A-750 keyboard teleop blueprint is now available via:
 
 ```bash

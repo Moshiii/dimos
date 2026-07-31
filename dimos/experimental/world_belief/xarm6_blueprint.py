@@ -32,21 +32,16 @@ from dimos.experimental.world_belief.worldbelief_recorder import (
 )
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
 from dimos.manipulation.manipulation_module import ManipulationModule
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
+from dimos.robot.manipulators.xarm.camera_config import XARM6_WRIST_CAMERA_TRANSFORM
 from dimos.robot.manipulators.xarm.config import make_xarm6_model_config, xarm6_hardware
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 if TYPE_CHECKING:
     import rerun.blueprint as rrb
 
-XARM6_WORLDBELIEF_CAMERA_TRANSFORM = Transform(
-    translation=Vector3(x=0.06693724, y=-0.0309563, z=0.00691482),
-    rotation=Quaternion(0.70513398, 0.00535696, 0.70897578, -0.01052180),
-)
+XARM6_WORLDBELIEF_CAMERA_TRANSFORM = XARM6_WRIST_CAMERA_TRANSFORM
 
 
 def _topic_to_entity(topic: Any) -> str:
@@ -104,7 +99,7 @@ xarm6_worldbelief = autoconnect(
         height=480,
         fps=15,
         base_frame_id="link6",
-        base_transform=XARM6_WORLDBELIEF_CAMERA_TRANSFORM,
+        base_transform=XARM6_WRIST_CAMERA_TRANSFORM,
     ),
     RerunBridgeModule.blueprint(
         blueprint=_rerun_blueprint,
