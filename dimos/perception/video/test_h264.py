@@ -20,8 +20,11 @@ import numpy as np
 import pytest
 import reactivex as rx
 
+from dimos.core.module import Module
+from dimos.core.stream import In, Out
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.perception.video.h264 import (
     H264DecoderModule,
     H264InputMixin,
@@ -127,8 +130,27 @@ def test_mixin_feeds_the_hosts_own_image_port() -> None:
         module.stop()
 
 
+def test_a_host_can_point_the_mixin_at_a_differently_named_port() -> None:
+    """color_image is the default, not a requirement — and hosts that rename it
+    must not inherit a stray one."""
+
+    class ThermalConsumer(Module):
+        thermal_image: In[Image]
+        detections: Out[Detection3DArray]
+
+    class VideoThermal(H264InputMixin, ThermalConsumer):
+        @property
+        def image_in(self) -> In[Image]:
+            return self.thermal_image
+
+    module = VideoThermal()
+    try:
+        assert set(module.inputs) == {"thermal_image", "video"}
+        assert module.image_in is module.thermal_image
+    finally:
+        module.stop()
+
+
 def test_the_mixin_is_not_itself_a_module() -> None:
     """It types as one, but subclassing Module would register it as a module."""
-    from dimos.core.module import Module
-
     assert not issubclass(H264InputMixin, Module)

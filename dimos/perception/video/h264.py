@@ -118,17 +118,25 @@ def _decoded(video: In[CompressedVideo]) -> Observable[Image]:
 
 
 class H264InputMixin(_MixinHost):
-    """Mixin: an H.264 ``video`` In decoded into the host's own ``color_image`` In."""
+    """Mixin: an H.264 ``video`` In decoded into the host's image In."""
 
     video: In[CompressedVideo]
-    # Merged with the host's identically-named port: annotations collect across
-    # the MRO, so this is the consumer's own input, fed from inside.
-    color_image: In[Image]
+
+    if TYPE_CHECKING:
+        # The host's port, not one the mixin contributes — declared for type
+        # checking only, so a host that names its image In otherwise doesn't
+        # inherit a stray `color_image`. Runtime never sees this annotation.
+        color_image: In[Image]
+
+    @property
+    def image_in(self) -> In[Image]:
+        """The In decoded frames feed. Override to point at a different port."""
+        return self.color_image
 
     @rpc
     def start(self) -> None:
         super().start()
-        self.register_disposable(_decoded(self.video).subscribe(self.color_image.transport.publish))
+        self.register_disposable(_decoded(self.video).subscribe(self.image_in.transport.publish))
 
 
 class H264DecoderModule(Module):
