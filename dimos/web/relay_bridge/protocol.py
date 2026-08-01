@@ -21,9 +21,11 @@ rest of the [web] extra.
 Framing (see web/README.md for the upstream-bug rationale):
 - Control stream frame: u32-LE length | UTF-8 JSON.
 - Datagram: raw UTF-8 JSON, no length prefix.
-- Data frame (one message per stream): u32-LE headerLen | u32-LE payloadLen |
-  header JSON | payload. Receivers count bytes and must never treat stream
-  EOF as a message boundary (Deno 2.6.x delays FIN by up to ~1 s).
+- Data frame: u32-LE headerLen | u32-LE payloadLen | header JSON | payload.
+  Latest channels send one frame per stream; a reliable channel packs its
+  frames back to back on one persistent stream. Receivers count bytes and
+  must never treat stream EOF as a message boundary (Deno 2.6.x delays FIN
+  by up to ~1 s, and a persistent stream has no EOF between frames).
 
 Validation policy (mirrored in protocol.ts): decoders validate shape strictly,
 and receivers drop invalid or unknown messages -- a peer's bytes must never
@@ -32,16 +34,33 @@ ProtocolError and kills only the affected stream.
 """
 
 from dataclasses import dataclass
+import json
 import struct
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 from dimos.utils.logging_config import setup_logger
 
+# Channel/manifest domain types live in manifest.py; re-exported here (the
+# redundant aliases mark them as such for mypy) so protocol consumers keep a
+# single import surface, mirroring protocol.ts.
+from dimos.web.relay_bridge.manifest import ChannelSpec as ChannelSpec, Delivery as Delivery
+
 logger = setup_logger()
 
-PROTOCOL_VERSION = 1
+# v2: a reliable channel packs all its frames onto one persistent stream (v1
+# carried one frame per stream), which a v1 receiver would misread as a
+# single frame. Bump on any change an old peer would silently misparse.
+PROTOCOL_VERSION = 2
 
 # Reject absurd header lengths before allocating (mirrors protocol.ts).
 MAX_HEADER_LEN = 65536
@@ -51,7 +70,6 @@ MAX_HEADER_LEN = 65536
 MAX_DATA_FRAME_BYTES = 64 * 1024 * 1024
 
 Role = Literal["robot", "viewer"]
-Delivery = Literal["latest", "reliable"]
 
 
 class ProtocolError(ValueError):
@@ -71,10 +89,38 @@ class _WireModel(BaseModel):
 # seq=1 as 1.0, breaking byte-exact encoding against the golden fixtures.
 
 
+class RobotInfo(_WireModel):
+    id: str
+    name: str
+    model: str
+
+
+class RobotManifest(_WireModel):
+    channels: list[ChannelSpec]
+
+
+# Sentinel validation context passed by every wire-decode path: lets Hello
+# tell wire input apart from local construction, mirroring `robot?: RobotInfo`
+# in protocol.ts -- absent is fine, but neither encoder ever emits null, so an
+# explicit null on the wire is a protocol violation. Locally, robot=None just
+# means absent (and encoders omit None fields).
+_WIRE_CTX: dict[str, Any] = {}
+
+
 class Hello(_WireModel):
     t: Literal["hello"] = "hello"
     v: int | float
     role: Role
+    # role=robot only: identity + channel manifest, registered by the relay.
+    robot: RobotInfo | None = None
+    manifest: RobotManifest | None = None
+
+    @field_validator("robot", "manifest", mode="before")
+    @classmethod
+    def _reject_wire_null(cls, value: Any, info: ValidationInfo) -> Any:
+        if value is None and info.context is _WIRE_CTX:
+            raise ValueError("explicit null (absent optional fields are omitted)")
+        return value
 
 
 class Welcome(_WireModel):
@@ -100,6 +146,47 @@ class Error(_WireModel):
     message: str
 
 
+# Session messages (T2): robot registration, viewer watch + per-channel
+# subscriptions, and the relay->robot subscription snapshot.
+class Robots(_WireModel):
+    t: Literal["robots"] = "robots"
+    robots: list[RobotInfo]
+
+
+class Watch(_WireModel):
+    t: Literal["watch"] = "watch"
+    robotId: str
+
+
+class Manifest(_WireModel):
+    t: Literal["manifest"] = "manifest"
+    robotId: str
+    channels: list[ChannelSpec]
+
+
+class Sub(_WireModel):
+    t: Literal["sub"] = "sub"
+    ch: str
+
+
+class Unsub(_WireModel):
+    t: Literal["unsub"] = "unsub"
+    ch: str
+
+
+class Subs(_WireModel):
+    """Relay->robot: the full set of channels with >= 1 subscribed viewer.
+
+    A snapshot (not a delta) because it rides lossy datagrams: any single
+    delivery heals the state. `n` is monotonic per robot; receivers ignore
+    stale/reordered snapshots.
+    """
+
+    t: Literal["subs"] = "subs"
+    chs: list[str]
+    n: int | float
+
+
 # Teleop datagrams (carried from T6 on; declared so the wire format is pinned
 # by fixtures from day one).
 class Twist(_WireModel):
@@ -116,7 +203,21 @@ class Stop(_WireModel):
     ts: int | float
 
 
-Msg = Hello | Welcome | Ping | Pong | Error | Twist | Stop
+Msg = (
+    Hello
+    | Welcome
+    | Ping
+    | Pong
+    | Error
+    | Robots
+    | Watch
+    | Manifest
+    | Sub
+    | Unsub
+    | Subs
+    | Twist
+    | Stop
+)
 
 # One pydantic-core pass takes raw peer bytes to a validated message: UTF-8
 # decoding, JSON parsing, and shape checks together, discriminated on "t".
@@ -126,8 +227,9 @@ _MSG_TA: TypeAdapter[Msg] = TypeAdapter(Annotated[Msg, Field(discriminator="t")]
 class FrameHeader(_WireModel):
     """Data-plane frame header.
 
-    `delivery` tells the relay how to forward without a manifest (T1 only; the
-    T2+ manifest replaces it). `meta` carries encoding-specific extras.
+    `delivery` tells the relay how to forward frames on channels the robot's
+    manifest does not declare (the manifest's delivery wins when present).
+    `meta` carries encoding-specific extras.
     """
 
     ch: str
@@ -144,21 +246,26 @@ class DataFrame:
 
 
 def msg_from_dict(data: dict[str, Any]) -> Msg:
+    # Through JSON, not validate_python: strict python-mode validation wants
+    # model instances for nested fields (hello.robot), but callers hold
+    # parsed-JSON dicts.
     try:
-        return _MSG_TA.validate_python(data)
+        return _MSG_TA.validate_json(json.dumps(data), context=_WIRE_CTX)
     except ValidationError as e:
         raise ProtocolError(f"invalid message: {e}") from e
 
 
 def _msg_from_json(data: bytes) -> Msg:
     try:
-        return _MSG_TA.validate_json(data)
+        return _MSG_TA.validate_json(data, context=_WIRE_CTX)
     except ValidationError as e:
         raise ProtocolError(f"invalid message: {e}") from e
 
 
 def encode_control_frame(msg: Msg) -> bytes:
-    body = msg.model_dump_json().encode()
+    # exclude_none: absent optional fields are omitted, matching
+    # JSON.stringify dropping undefined (no field is ever null on the wire).
+    body = msg.model_dump_json(exclude_none=True).encode()
     return struct.pack("<I", len(body)) + body
 
 
@@ -191,13 +298,13 @@ class ControlFrameReader:
 
 
 def encode_datagram(msg: Msg) -> bytes:
-    return msg.model_dump_json().encode()
+    return msg.model_dump_json(exclude_none=True).encode()
 
 
 def decode_datagram(data: bytes) -> Msg | None:
     """Returns None for datagrams that are not our JSON messages."""
     try:
-        return _MSG_TA.validate_json(data)
+        return _MSG_TA.validate_json(data, context=_WIRE_CTX)
     except ValidationError:
         return None
 
@@ -207,7 +314,7 @@ def encode_data_frame(header: FrameHeader, payload: bytes) -> bytes:
     return struct.pack("<II", len(hdr), len(payload)) + hdr + payload
 
 
-def peek_data_frame_lengths(buf: bytes | bytearray) -> tuple[int, int, int] | None:
+def peek_data_frame_lengths(buf: bytes | bytearray | memoryview) -> tuple[int, int, int] | None:
     """(headerLen, payloadLen, total) or None if fewer than 8 bytes are available."""
     if len(buf) < 8:
         return None
@@ -220,7 +327,7 @@ def peek_data_frame_lengths(buf: bytes | bytearray) -> tuple[int, int, int] | No
     return header_len, payload_len, total
 
 
-def decode_data_frame(frame: bytes | bytearray) -> DataFrame:
+def decode_data_frame(frame: bytes | bytearray | memoryview) -> DataFrame:
     lens = peek_data_frame_lengths(frame)
     if lens is None or len(frame) < lens[2]:
         raise ProtocolError(f"truncated data frame: {len(frame)} bytes")
@@ -234,25 +341,57 @@ def decode_data_frame(frame: bytes | bytearray) -> DataFrame:
     return DataFrame(header=header, payload=bytes(view[8 + header_len : total]))
 
 
-class DataFrameReader:
-    """Incremental reader for a single-message stream.
+class DataFrameStreamError(ProtocolError):
+    """Framing/header corruption on a data-frame stream.
 
-    Returns the frame as soon as headerLen + payloadLen bytes have arrived;
-    never waits for EOF. Bytes past the frame are ignored.
+    `frames` carries the frames decoded before the corrupt one so the caller
+    can still deliver them before dropping the stream (framing is
+    unrecoverable mid-stream).
+    """
+
+    def __init__(self, message: str, frames: list[DataFrame]) -> None:
+        super().__init__(message)
+        self.frames = frames
+
+
+class DataFrameStreamReader:
+    """Incremental reader for a stream carrying sequential data frames.
+
+    Mirrors DataFrameStreamReader in protocol.ts: a reliable channel's
+    persistent stream packs frames back-to-back (a latest stream is the
+    one-frame case). Frames are returned as soon as their bytes have arrived;
+    EOF is never a boundary.
+
+    The buffer keeps a read cursor and is compacted once per push, so a
+    completed frame's bytes are copied out exactly once (in decode). On
+    corruption push() raises DataFrameStreamError (with the frames decoded
+    before it) and the reader rejects all further input.
     """
 
     def __init__(self) -> None:
         self._buf = bytearray()
-        self._done = False
+        self._failed: str | None = None
 
-    def push(self, chunk: bytes) -> DataFrame | None:
-        if self._done:
-            return None
+    def push(self, chunk: bytes) -> list[DataFrame]:
+        if self._failed is not None:
+            raise DataFrameStreamError(self._failed, [])
         self._buf += chunk
-        lens = peek_data_frame_lengths(self._buf)
-        if lens is None or len(self._buf) < lens[2]:
-            return None
-        self._done = True
-        frame = decode_data_frame(self._buf)
-        self._buf = bytearray()
-        return frame
+        frames: list[DataFrame] = []
+        pos = 0
+        with memoryview(self._buf) as view:
+            try:
+                while True:
+                    lens = peek_data_frame_lengths(view[pos:])
+                    if lens is None or len(view) - pos < lens[2]:
+                        break
+                    frames.append(decode_data_frame(view[pos : pos + lens[2]]))
+                    pos += lens[2]
+            except ProtocolError as e:
+                # Keep only the message: a stored exception would keep
+                # traceback frames (and their memoryview locals) alive and
+                # block the buffer resize below with a BufferError.
+                self._failed = str(e)
+        del self._buf[:pos]
+        if self._failed is not None:
+            raise DataFrameStreamError(self._failed, frames)
+        return frames
