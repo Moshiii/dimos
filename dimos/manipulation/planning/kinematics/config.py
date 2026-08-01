@@ -51,26 +51,8 @@ class PinkKinematicsConfig(BaseConfig):
     safety_break: bool = True
 
 
-class RoboPlanKinematicsConfig(BaseConfig):
-    """Configuration for RoboPlan Oink task IK."""
-
-    backend: Literal["roboplan"] = "roboplan"
-    max_iterations: int = 100
-    dt: float = 0.05
-    position_cost: float = 1.0
-    orientation_cost: float = 1.0
-    task_gain: float = 0.5
-    lm_damping: float = 1e-6
-    regularization: float = 1e-8
-    velocity_limit: float | None = None
-    collision_check: bool = True
-
-
 ManipulationKinematicsConfig = Annotated[
-    JacobianKinematicsConfig
-    | DrakeOptimizationKinematicsConfig
-    | PinkKinematicsConfig
-    | RoboPlanKinematicsConfig,
+    JacobianKinematicsConfig | DrakeOptimizationKinematicsConfig | PinkKinematicsConfig,
     Field(discriminator="backend"),
 ]
 
@@ -83,9 +65,6 @@ def kinematics_config_from_name(name: str) -> ManipulationKinematicsConfig:
         return DrakeOptimizationKinematicsConfig()
     if name == "pink":
         return PinkKinematicsConfig()
-    if name == "roboplan":
-        return RoboPlanKinematicsConfig()
     raise ValueError(
-        "Unknown kinematics solver: "
-        f"{name}. Available: ['jacobian', 'drake_optimization', 'pink', 'roboplan']"
+        f"Unknown kinematics solver: {name}. Available: ['jacobian', 'drake_optimization', 'pink']"
     )

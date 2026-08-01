@@ -20,33 +20,31 @@ Use factory functions from dimos.manipulation.planning.factory to create instanc
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from dimos.spec.utils import Spec
-
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
     from contextlib import AbstractContextManager
 
     import numpy as np
     from numpy.typing import NDArray
 
     from dimos.manipulation.planning.groups.models import PlanningGroup, PlanningGroupSelection
+    from dimos.manipulation.planning.planners.config import CartesianPathConfig
     from dimos.manipulation.planning.spec.config import RobotModelConfig
     from dimos.manipulation.planning.spec.models import (
-        CartesianDelta,
-        CartesianPathMode,
-        GeneratedPlan,
-        GeneratedTrajectory,
+        CartesianTarget,
         IKResult,
         Obstacle,
         PlanningGroupID,
         PlanningResult,
-        PlanningSceneInfo,
+        VisualizationSession,
+        VisualizationStateFrame,
         WorldRobotID,
     )
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.sensor_msgs.JointState import JointState
+    from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 
 
 @runtime_checkable
@@ -87,16 +85,20 @@ class WorldSpec(Protocol):
         ...
 
     # Obstacle Management
-    def add_obstacle(self, obstacle: Obstacle) -> str:
-        """Add an obstacle to the world. Returns unique obstacle ID."""
+    def add_obstacle(self, obstacle: Obstacle) -> str | None:
+        """Add an obstacle, returning a non-empty native ID if inserted."""
         ...
 
     def remove_obstacle(self, obstacle_id: str) -> bool:
         """Remove an obstacle. Returns True if removed."""
         ...
 
+    def update_obstacle(self, obstacle: Obstacle) -> bool:
+        """Replace the complete obstacle identified by obstacle.name."""
+        ...
+
     def update_obstacle_pose(self, obstacle_id: str, pose: PoseStamped) -> bool:
-        """Update obstacle pose. Returns True if updated."""
+        """Update only an obstacle pose. Returns True if updated."""
         ...
 
     def clear_obstacles(self) -> None:
@@ -164,19 +166,8 @@ class WorldSpec(Protocol):
         ...
 
     # Forward Kinematics (require context)
-    def get_group_ee_pose(self, ctx: Any, group_id: PlanningGroupID) -> PoseStamped:
-        """Get pose for a planning group's target frame."""
-        ...
-
-    def get_group_jacobian(self, ctx: Any, group_id: PlanningGroupID) -> NDArray[np.float64]:
-        """Get planning group target-frame Jacobian over the group's selected joints."""
-        ...
-
     def get_ee_pose(self, ctx: Any, robot_id: WorldRobotID) -> PoseStamped:
-        """Get pose for a robot's unique pose-targetable planning group.
-
-        TODO: deprecate this.
-        """
+        """Get end-effector pose."""
         ...
 
     def get_link_pose(
@@ -186,7 +177,15 @@ class WorldSpec(Protocol):
         ...
 
     def get_jacobian(self, ctx: Any, robot_id: WorldRobotID) -> NDArray[np.float64]:
-        """Get Jacobian for a robot's unique pose-targetable planning group."""
+        """Get end-effector Jacobian (6 x n_joints)."""
+        ...
+
+    def get_group_ee_pose(self, ctx: Any, group_id: PlanningGroupID) -> PoseStamped:
+        """Get planning-group tip pose."""
+        ...
+
+    def get_group_jacobian(self, ctx: Any, group_id: PlanningGroupID) -> NDArray[np.float64]:
+        """Get planning-group Jacobian (6 x n_group_joints)."""
         ...
 
 
@@ -201,28 +200,46 @@ class VisualizationSpec(Protocol):
     visualization affordances.
     """
 
-    def initialize_scene(self, scene: PlanningSceneInfo) -> None:
-        """Receive stable planning-scene metadata after world startup."""
+    def initialize(self, session: VisualizationSession) -> None:
+        """Receive one-shot visualization session metadata after world startup."""
+        ...
+
+    def add_vis_obstacle(self, obstacle_id: str, obstacle: Obstacle) -> None:
+        """Render or otherwise accept an obstacle added to the planning world."""
+        ...
+
+    def update_vis_obstacle(self, obstacle: Obstacle) -> None:
+        """Replace a complete obstacle representation."""
+        ...
+
+    def update_vis_obstacle_pose(self, obstacle_id: str, pose: PoseStamped) -> None:
+        """Update only an obstacle representation's pose."""
+        ...
+
+    def remove_vis_obstacle(self, obstacle_id: str) -> None:
+        """Remove an obstacle representation from the visualization."""
+        ...
+
+    def clear_vis_obstacles(self) -> None:
+        """Clear obstacle representations from the visualization."""
         ...
 
     def get_visualization_url(self) -> str | None:
         """Get visualization URL if enabled."""
         ...
 
-    def publish_visualization(self, ctx: Any | None = None) -> None:
-        """Publish current state to visualization."""
+    def update_state(self, frame: VisualizationStateFrame) -> None:
+        """Receive current joint states keyed by initialized world robot ID."""
         ...
 
-    def show_preview(self, group_ids: Sequence[PlanningGroupID]) -> None:
-        """Show preview representations for the selected planning groups."""
+    def animate_trajectory(
+        self, trajectory: JointTrajectory, duration: float | None = None
+    ) -> None:
+        """Animate a raw globally named trajectory."""
         ...
 
-    def hide_preview(self, group_ids: Sequence[PlanningGroupID]) -> None:
-        """Hide preview representations for the selected planning groups."""
-        ...
-
-    def animate_plan(self, plan: GeneratedPlan, duration: float = 3.0) -> None:
-        """Animate a generated plan in visualization."""
+    def cancel_preview_animation(self, robot_ids: Sequence[WorldRobotID] | None = None) -> None:
+        """Cancel an active preview animation without waiting for its renderer to finish."""
         ...
 
     def close(self) -> None:
@@ -232,7 +249,7 @@ class VisualizationSpec(Protocol):
 
 @runtime_checkable
 class KinematicsSpec(Protocol):
-    """Protocol for inverse kinematics solvers. Stateless and IK-only."""
+    """Protocol for inverse kinematics solvers. Stateless, uses WorldSpec for FK/collision."""
 
     def solve(
         self,
@@ -242,22 +259,24 @@ class KinematicsSpec(Protocol):
         seed: JointState | None = None,
         position_tolerance: float = 0.001,
         orientation_tolerance: float = 0.01,
+        check_collision: bool = True,
         max_attempts: int = 10,
     ) -> IKResult:
-        """Solve a single robot-scoped IK target."""
+        """Solve IK with optional collision checking."""
         ...
 
     def solve_pose_targets(
         self,
         world: WorldSpec,
-        pose_targets: dict[PlanningGroup, PoseStamped],
-        auxiliary_groups: list[PlanningGroup] | tuple[PlanningGroup, ...] = (),
+        pose_targets: Mapping[PlanningGroup, PoseStamped],
+        auxiliary_groups: Sequence[PlanningGroup] = (),
         seed: JointState | None = None,
         position_tolerance: float = 0.001,
         orientation_tolerance: float = 0.01,
+        check_collision: bool = True,
         max_attempts: int = 10,
     ) -> IKResult:
-        """Solve pose targets over planning groups plus request-scoped auxiliaries."""
+        """Solve planning-group-scoped pose targets."""
         ...
 
 
@@ -292,8 +311,9 @@ class PlannerSpec(Protocol):
         start: JointState,
         goal: JointState,
         timeout: float = 10.0,
+        max_iterations: int = 5000,
     ) -> PlanningResult:
-        """Plan over an explicit planning-group selection."""
+        """Plan a collision-free path for an ordered planning-group selection."""
         ...
 
     def plan_cartesian_path(
@@ -301,53 +321,14 @@ class PlannerSpec(Protocol):
         world: WorldSpec,
         selection: PlanningGroupSelection,
         start: JointState,
-        pose_targets: Mapping[PlanningGroupID, PoseStamped],
+        targets: Mapping[PlanningGroupID, CartesianTarget],
+        config: CartesianPathConfig,
         *,
         auxiliary_groups: Sequence[PlanningGroupID] = (),
-        path_mode: CartesianPathMode = "free",
-        timeout: float = 10.0,
     ) -> PlanningResult:
-        """Plan over absolute Cartesian TCP targets for a selected group set."""
-        ...
-
-    def plan_relative_cartesian_path(
-        self,
-        world: WorldSpec,
-        selection: PlanningGroupSelection,
-        start: JointState,
-        delta_targets: Mapping[PlanningGroupID, CartesianDelta],
-        *,
-        auxiliary_groups: Sequence[PlanningGroupID] = (),
-        path_mode: CartesianPathMode = "free",
-        timeout: float = 10.0,
-    ) -> PlanningResult:
-        """Plan over relative Cartesian TCP deltas for a selected group set."""
+        """Plan synchronized TCP waypoint paths for an ordered group selection."""
         ...
 
     def get_name(self) -> str:
         """Get planner name."""
-        ...
-
-
-@runtime_checkable
-class TrajectoryParametrizerSpec(Spec, Protocol):
-    """Protocol for converting a geometric plan into a timed global trajectory."""
-
-    def parametrize(
-        self,
-        plan: GeneratedPlan,
-        *,
-        speed_scale: float = 1.0,
-    ) -> GeneratedTrajectory:
-        """Parametrize a successful geometric generated plan.
-
-        Args:
-            plan: Geometric plan to time-parametrize.
-            speed_scale: Runtime speed multiplier applied to velocity and acceleration
-                policy for this parametrization only.
-        """
-        ...
-
-    def get_name(self) -> str:
-        """Get trajectory parametrizer backend name."""
         ...

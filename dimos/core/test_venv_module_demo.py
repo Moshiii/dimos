@@ -49,8 +49,8 @@ def test_demo_blueprint_imports_and_builds_without_worker_dependency_in_coordina
     try:
         assert coordinator.get_instance(VenvDemoPublisher) is not None
         assert coordinator.get_instance(VenvDemoConsumer) is not None
-        assert coordinator._module_manager_keys[VenvDemoPublisher] == "python:dimos-demo-venv"
-        assert coordinator._module_manager_keys[VenvDemoConsumer] == "python"
+        assert coordinator._module_manager_keys[VenvDemoPublisher.name] == "python:dimos-demo-venv"
+        assert coordinator._module_manager_keys[VenvDemoConsumer.name] == "python"
     finally:
         coordinator.stop()
 

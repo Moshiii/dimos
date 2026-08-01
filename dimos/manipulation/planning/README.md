@@ -5,8 +5,8 @@ Motion planning for robotic manipulators. Backend-agnostic design with Drake imp
 ## Quick Start
 
 ```bash
-# 1. Verify manipulation dependencies load correctly (standalone, no hardware):
-dimos run xarm6-planner-only
+# 1. Verify manipulation dependencies with mock hardware:
+dimos run xarm7-planner-coordinator
 
 # 2. Keyboard teleop with mock arm (single command):
 dimos run keyboard-teleop-xarm7
@@ -70,14 +70,15 @@ config = RobotModelConfig(
     joint_names=["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
     end_effector_link="link7",
     base_link="link_base",
-    coordinator_task_name="traj_arm",
+    joint_name_mapping={"arm_joint1": "joint1", ...},  # coordinator <-> URDF
 )
 
 module = ManipulationModule(
     robots=[config],
     planning_timeout=10.0,
     enable_viz=True,
-    planner_name="rrt_connect",           # Only option
+    world_backend="drake",                # RoboPlan is the default
+    planner={"backend": "rrt_connect"},    # RoboPlan is the default
     kinematics={"backend": "drake_optimization"}, # Or "jacobian" / "pink"
 )
 module.start()
@@ -92,12 +93,12 @@ module.execute()  # Sends to coordinator
 | `name` | Robot identifier |
 | `model_path` | Path to URDF/XACRO file |
 | `base_pose` | PoseStamped for robot base in world frame |
-| `joint_names` | Ordered controllable local model joint names |
+| `joint_names` | Joint names in URDF |
 | `end_effector_link` | EE link name |
 | `base_link` | Base link name |
 | `max_velocity` | Max joint velocity (rad/s) |
 | `max_acceleration` | Max acceleration (rad/s²) |
-| `coordinator_task_name` | Task name for execution RPC |
+| `joint_name_mapping` | Coordinator → URDF name mapping |
 | `package_paths` | ROS package paths for meshes |
 | `xacro_args` | Xacro arguments (e.g., `{"dof": "7"}`) |
 
@@ -137,9 +138,8 @@ accepted.
 
 | Blueprint | Description |
 |-----------|-------------|
-| `xarm6_planner_only` | XArm 6-DOF standalone (no coordinator) |
 | `xarm7-planner-coordinator` | XArm 7-DOF with coordinator |
-| `dual-xarm6-planner-coordinator` | Dual XArm 6-DOF with coordinator |
+| `dual-xarm6-planner-coordinator` | Dual XArm 6-DOF with mock coordinator hardware |
 | `xarm-perception-sim` | XArm 7-DOF simulation perception stack |
 
 ## Directory Structure

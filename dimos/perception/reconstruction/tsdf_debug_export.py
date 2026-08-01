@@ -24,7 +24,6 @@ import matplotlib  # type: ignore[import-not-found]
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # type: ignore[import-not-found]
 import numpy as np
-import open3d as o3d  # type: ignore[import-untyped]
 
 from dimos.msgs.reconstruction_msgs.TSDFGrid import TSDFGrid
 
@@ -100,6 +99,8 @@ def _points_from_mask(tsdf: TSDFGrid, mask: np.ndarray) -> np.ndarray:
 
 
 def _write_point_cloud(path: Path, points: np.ndarray) -> None:
+    import open3d as o3d  # type: ignore[import-untyped]
+
     pcd = o3d.geometry.PointCloud()
     if len(points) > 0:
         pcd.points = o3d.utility.Vector3dVector(points)

@@ -13,7 +13,7 @@ torso, without confusing that group with the robot's hardware identity.
 | Planning group ID | Stable API ID in the form `{robot_name}/{group_name}`. |
 | Local joint name | Joint name inside a robot model, such as `joint1`. |
 | Global joint name | Boundary-level joint name in the form `{robot_name}/{local_joint_name}`. |
-| Generated plan | Planning artifact containing selected group IDs and one synchronized global-joint path. |
+| Generated plan | Planning artifact containing selected group IDs, geometric waypoints, and one synchronized global-joint trajectory. |
 | Auxiliary group | A selected group that contributes free DOFs to a pose plan without receiving its own pose target. |
 
 Local URDF/SRDF joint names stay inside robot-scoped configuration, model
@@ -23,14 +23,19 @@ use global joint names so multiple robots can safely share local names such as
 
 ## Discovering planning groups
 
-DimOS discovers planning groups for each `RobotModelConfig` in this order:
+Robot configs can provide planning groups explicitly with
+`RobotModelConfig.planning_groups`. Direct `RobotModelConfig(...)` construction
+does not run discovery or synthesize groups in `model_post_init`; callers must
+pass explicit `planning_groups` there.
 
-1. Explicit `planning_groups` on the robot model config.
-2. Explicit `srdf_path` on the robot model config.
-3. Conservative SRDF auto-discovery near the model path, with a warning.
-4. Fallback generation of one `{robot_name}/manipulator` group when the
+When code uses the discovery helper instead of explicit config, DimOS discovers
+groups in this order:
+
+1. Explicit `srdf_path` provided to the helper.
+2. Conservative SRDF auto-discovery near the model path, with a warning.
+3. Fallback generation of one `{robot_name}/manipulator` group when the
    configured controllable joints form exactly one unambiguous serial chain.
-5. Error if no SRDF or fallback chain can provide a single valid group.
+4. Error if no SRDF or fallback chain can provide a single valid group.
 
 Supported SRDF group forms:
 
@@ -56,14 +61,16 @@ unique serial target frame.
 
 ## Fallback behavior
 
-When no SRDF or explicit group config is available, fallback uses
-`RobotModelConfig.joint_names` as the candidate controllable set. This field is
-the robot's ordered local model joint set, not an implicit planning group.
+When discovery runs without an SRDF, fallback uses
+`RobotModelConfig.joint_names` as the candidate controllable set.
+This field is the robot's ordered local model joint set, not an implicit
+planning group.
 
-Fallback succeeds only when those joints form one unambiguous serial chain. It
-allows prismatic joints in the middle of the chain and strips only terminal tip
-prismatic joints, which usually represent gripper fingers. The generated group
-name is always `manipulator`.
+Fallback removes terminal prismatic leaves first, including branched finger
+joints, and then requires the remaining joints to form one unambiguous serial
+chain. Internal prismatic axes remain part of the arm. The generated group name
+is always `manipulator`.
+
 
 ## Current APIs
 
@@ -76,8 +83,10 @@ pose_groups = [group for group in groups if group.has_pose_target]
 group_id = pose_groups[0].id
 ```
 
-Joint-space planning targets group IDs and uses local joint names inside each
-target `JointState`:
+Joint-space planning targets group IDs. Each target `JointState` may be
+unnamed in the group's joint order, named with all local model joint names, or
+named with all global joint names. Do not mix local and global names in one
+target.
 
 ```python skip
 ok = manip.plan_to_joint_targets(
@@ -91,7 +100,8 @@ ok = manip.plan_to_joint_targets(
 ```
 
 Pose planning targets pose-capable group IDs. Add auxiliary groups when another
-chain should participate as free DOFs but does not have its own pose target:
+chain should participate as free DOFs but does not have its own pose target.
+Pose targets are `Pose` values keyed by planning group ID:
 
 ```python skip
 ok = manip.plan_to_pose_targets(
@@ -115,36 +125,48 @@ manip.preview_plan(plan)
 manip.execute_plan(plan)
 ```
 
+A generated plan is the execution boundary: execution never filters a
+multi-robot plan. To execute one robot, first plan only that robot's planning
+group.
+
 For robot-scoped compatibility APIs, unnamed joint vectors are interpreted in
-the robot model's configured joint order. If names are provided, they must be
-local model joint names: no global names, missing joints, extra joints, or
-partial joint sets.
+the selected default planning group's joint order. If names are provided, they
+may be all local model joint names or all global joint names. Missing joints,
+extra joints, partial joint sets, and mixed local/global namespaces are rejected.
 
 ## Generated plans and execution
 
 A `GeneratedPlan` stores:
 
 - selected planning group IDs;
-- a single synchronized path of `JointState` waypoints keyed by global joint
-  names;
+- a geometric path of `JointState` waypoints keyed by global joint names;
+- one materialized synchronized `JointTrajectory` over the same selected global
+  joint names;
 - status, timing, path length, iteration count, and message metadata.
 
-Preview and execution project this path lazily. Preview sends projected joint
-paths to the world monitor. Execution splits the path by affected trajectory
-task, orders each trajectory by the robot's configured local joint order, writes
-global joint names at the coordinator boundary, and invokes each trajectory
-controller. Controllers remain planning-group agnostic.
+Preview and execution consume the stored trajectory; they do not lazily
+parameterize the geometric path. Preview forwards the raw globally named
+trajectory through the visualization boundary, where renderers project it to
+their robot-local visuals while preserving stored timestamps. Execution
+translates selected joint names at the coordinator boundary and invokes the
+coordinator's sole trajectory task once without filling omitted joints in the
+RPC trajectory. The task remains planning-group agnostic, claims its full
+configured joint set, and holds omitted joints while executing the active
+planned subset. A newly accepted trajectory replaces the task's current
+trajectory.
 
-Multi-task dispatch is not atomic: if one trajectory task accepts and a later
-task rejects, DimOS reports the rejection but does not roll back the accepted
-task.
+## Robot placement config
 
-## Compatibility config fields
+`RobotModelConfig.base_pose` and `RobotModelConfig.base_link` describe robot
+placement: `base_pose` places `base_link` in the world and current backends
+use that link for weld/placement and optional model-authored world-joint
+stripping. This is robot placement metadata, not planning-chain metadata.
 
-`RobotModelConfig.base_link`, `RobotModelConfig.base_pose`, and
-`RobotModelConfig.end_effector_link` remain compatibility fields for the current
-Drake weld/placement behavior and older robot-scoped helpers. New planning logic
-should prefer model/SRDF structure and planning group base/tip links.
+Planning-group `base_link` and `tip_link` values are the only source for chain
+bases and pose target frames. Robot-scoped end-effector config is no longer
+supported; robot-level EE helper APIs are wrappers over a unique pose-targetable
+planning group and should use explicit group APIs when multiple pose groups
+exist.
 
 Robot placement can be encoded either in model assets or in `base_pose`,
 depending on the blueprint. `joint_names` remains supported and should describe

@@ -22,6 +22,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from dimos.manipulation.planning.groups.models import PlanningGroup
+from dimos.manipulation.planning.kinematics.utils import (
+    filter_result_to_group as _filter_result_to_group,
+    resolve_single_pose_target_request as _resolve_single_pose_target_request,
+    unique_pose_target_frame_for_robot as _unique_pose_target_frame_for_robot,
+)
 from dimos.manipulation.planning.spec.enums import IKStatus
 from dimos.manipulation.planning.spec.models import IKResult, WorldRobotID
 from dimos.manipulation.planning.spec.protocols import WorldSpec
@@ -30,7 +35,6 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.logging_config import setup_logger
-from dimos.utils.transform_utils import pose_to_matrix
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -78,12 +82,20 @@ class DrakeOptimizationIK:
         seed: JointState | None = None,
         position_tolerance: float = 0.001,
         orientation_tolerance: float = 0.01,
+        check_collision: bool = True,
         max_attempts: int = 10,
     ) -> IKResult:
-        """Solve IK with multiple random restarts, returning the best solution."""
+        """Solve IK with multiple random restarts, returning the best collision-free solution."""
         error = self._validate_world(world)
         if error is not None:
             return error
+
+        target_frame_name = _unique_pose_target_frame_for_robot(world, robot_id)
+        if target_frame_name is None:
+            return _create_failure_result(
+                IKStatus.UNSUPPORTED,
+                "DrakeOptimizationIK requires exactly one pose-targetable planning group for legacy solve()",
+            )
 
         # Convert PoseStamped to 4x4 matrix via Transform
         target_matrix = Transform(
@@ -128,9 +140,15 @@ class DrakeOptimizationIK:
                 orientation_tolerance=orientation_tolerance,
                 lower_limits=lower_limits,
                 upper_limits=upper_limits,
+                target_frame_name=target_frame_name,
             )
 
             if result.is_success() and result.joint_state is not None:
+                # Check collision if requested
+                if check_collision:
+                    if not world.check_config_collision_free(robot_id, result.joint_state):
+                        continue  # Try another seed
+
                 # Check error
                 total_error = result.position_error + result.orientation_error
                 if total_error < best_error:
@@ -160,34 +178,86 @@ class DrakeOptimizationIK:
         seed: JointState | None = None,
         position_tolerance: float = 0.001,
         orientation_tolerance: float = 0.01,
+        check_collision: bool = True,
         max_attempts: int = 10,
     ) -> IKResult:
-        """Solve a single planning-group pose target for protocol compatibility."""
-        if auxiliary_groups:
+        """Solve a planning-group-scoped pose target with Drake IK."""
+        error = self._validate_world(world)
+        if error is not None:
+            return error
+        request, request_error = _resolve_single_pose_target_request(
+            world,
+            pose_targets,
+            auxiliary_groups,
+            seed,
+            "DrakeOptimizationIK",
+        )
+        if request_error is not None:
+            return request_error
+        if request is None or request.group.tip_link is None:
             return _create_failure_result(
-                IKStatus.NO_SOLUTION,
-                "DrakeOptimizationIK does not support auxiliary planning groups",
+                IKStatus.UNSUPPORTED,
+                "DrakeOptimizationIK requires a pose-targetable planning group",
             )
-        if len(pose_targets) != 1:
-            return _create_failure_result(
-                IKStatus.NO_SOLUTION,
-                "DrakeOptimizationIK supports exactly one pose target",
+
+        lower_limits, upper_limits = world.get_joint_limits(request.robot_id)
+        target_matrix = Transform(
+            translation=request.target_pose.position,
+            rotation=request.target_pose.orientation,
+        ).to_matrix()
+        target_transform = RigidTransform(target_matrix)
+        locked_positions = {
+            index: float(request.seed_positions[index])
+            for index in range(len(request.joint_names))
+            if index not in set(request.group_indices)
+        }
+
+        best_result: IKResult | None = None
+        best_error = float("inf")
+        for attempt in range(max_attempts):
+            if attempt == 0:
+                current_seed = request.seed_positions
+            else:
+                current_seed = request.seed_positions.copy()
+                random_group_positions = np.random.uniform(
+                    lower_limits[request.group_indices], upper_limits[request.group_indices]
+                )
+                current_seed[request.group_indices] = random_group_positions
+
+            result = self._solve_single(
+                world=world,
+                robot_id=request.robot_id,
+                target_transform=target_transform,
+                seed=current_seed,
+                joint_names=request.joint_names,
+                position_tolerance=position_tolerance,
+                orientation_tolerance=orientation_tolerance,
+                lower_limits=lower_limits,
+                upper_limits=upper_limits,
+                target_frame_name=request.group.tip_link,
+                locked_joint_positions=locked_positions,
             )
-        group, target_pose = next(iter(pose_targets.items()))
-        robot_id = _robot_id_for_name(world, group.robot_name)
-        if robot_id is None:
-            return _create_failure_result(
-                IKStatus.NO_SOLUTION,
-                f"No robot named '{group.robot_name}'",
-            )
-        return self.solve(
-            world=world,
-            robot_id=robot_id,
-            target_pose=target_pose,
-            seed=seed,
-            position_tolerance=position_tolerance,
-            orientation_tolerance=orientation_tolerance,
-            max_attempts=max_attempts,
+            if not result.is_success() or result.joint_state is None:
+                continue
+            if check_collision and not world.check_config_collision_free(
+                request.robot_id, result.joint_state
+            ):
+                continue
+            total_error = result.position_error + result.orientation_error
+            if total_error < best_error:
+                best_error = total_error
+                best_result = result
+            if (
+                result.position_error <= position_tolerance
+                and result.orientation_error <= orientation_tolerance
+            ):
+                return _filter_result_to_group(result, request.group)
+
+        if best_result is not None:
+            return _filter_result_to_group(best_result, request.group)
+        return _create_failure_result(
+            IKStatus.NO_SOLUTION,
+            f"IK failed after {max_attempts} attempts",
         )
 
     def _solve_single(
@@ -201,6 +271,8 @@ class DrakeOptimizationIK:
         orientation_tolerance: float,
         lower_limits: NDArray[np.float64],
         upper_limits: NDArray[np.float64],
+        target_frame_name: str,
+        locked_joint_positions: Mapping[int, float] | None = None,
     ) -> IKResult:
         # Get robot data from world internals (Drake-specific access)
         robot_data = world._robots[robot_id]  # type: ignore[attr-defined]
@@ -209,12 +281,13 @@ class DrakeOptimizationIK:
         # Create IK problem
         ik = InverseKinematics(plant)
 
-        # Get end-effector frame
-        ee_frame = robot_data.ee_frame
+        target_frame = plant.GetBodyByName(
+            target_frame_name, robot_data.model_instance
+        ).body_frame()
 
         # Add position constraint
         ik.AddPositionConstraint(
-            frameB=ee_frame,
+            frameB=target_frame,
             p_BQ=np.array([0.0, 0.0, 0.0]),  # type: ignore[arg-type]
             frameA=plant.world_frame(),
             p_AQ_lower=target_transform.translation() - np.array([position_tolerance] * 3),
@@ -225,7 +298,7 @@ class DrakeOptimizationIK:
         ik.AddOrientationConstraint(
             frameAbar=plant.world_frame(),
             R_AbarA=target_transform.rotation(),
-            frameBbar=ee_frame,
+            frameBbar=target_frame,
             R_BbarB=RotationMatrix(),
             theta_bound=orientation_tolerance,
         )
@@ -233,6 +306,10 @@ class DrakeOptimizationIK:
         # Get program and set initial guess
         prog = ik.get_mutable_prog()
         q = ik.q()
+
+        for local_index, value in (locked_joint_positions or {}).items():
+            joint_idx = robot_data.joint_indices[local_index]
+            prog.AddBoundingBoxConstraint(value, value, q[joint_idx])
 
         # Set initial guess (full positions vector)
         full_seed = np.zeros(plant.num_positions())
@@ -257,13 +334,13 @@ class DrakeOptimizationIK:
         joint_solution = np.clip(joint_solution, lower_limits, upper_limits)
 
         # Compute actual error using FK
-        solution_state = JointState(name=joint_names, position=joint_solution.tolist())
+        solution_state = JointState({"name": joint_names, "position": joint_solution.tolist()})
         with world.scratch_context() as ctx:
             world.set_joint_state(ctx, robot_id, solution_state)
-            actual_pose = world.get_ee_pose(ctx, robot_id)
+            actual_matrix = world.get_link_pose(ctx, robot_id, target_frame_name)
 
         position_error, orientation_error = compute_pose_error(
-            pose_to_matrix(actual_pose),
+            actual_matrix,
             target_transform.GetAsMatrix4(),  # type: ignore[arg-type]
         )
 
@@ -285,19 +362,12 @@ def _create_success_result(
 ) -> IKResult:
     return IKResult(
         status=IKStatus.SUCCESS,
-        joint_state=JointState(name=joint_names, position=joint_positions.tolist()),
+        joint_state=JointState({"name": joint_names, "position": joint_positions.tolist()}),
         position_error=position_error,
         orientation_error=orientation_error,
         iterations=iterations,
         message="IK solution found",
     )
-
-
-def _robot_id_for_name(world: WorldSpec, robot_name: str) -> WorldRobotID | None:
-    for robot_id in world.get_robot_ids():
-        if world.get_robot_config(robot_id).name == robot_name:
-            return robot_id
-    return None
 
 
 def _create_failure_result(

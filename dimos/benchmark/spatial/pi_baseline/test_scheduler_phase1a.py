@@ -1,3 +1,17 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from datetime import datetime, timezone
 import json
 from multiprocessing import Process
@@ -62,7 +76,9 @@ def _die_with_unfinished_attempt(root: str) -> None:
             manifest_digest=definition.manifest_digest,
         )
         store.create_attempt(context, case, condition)
-        store.write_summary(JobSummary(identity=job_identity, state="running", latest_attempt_id="attempt-1"))
+        store.write_summary(
+            JobSummary(identity=job_identity, state="running", latest_attempt_id="attempt-1")
+        )
         os._exit(0)
 
 
@@ -71,7 +87,9 @@ class BlockingExecutor(FakeExecutor):
         super().__init__()
         self.release = Event()
 
-    def run(self, case, condition, context, emit, cancel_requested, publication_lock) -> TerminalOutcome:
+    def run(
+        self, case, condition, context, emit, cancel_requested, publication_lock
+    ) -> TerminalOutcome:
         with self.lock:
             self.calls += 1
             self.active += 1
@@ -427,7 +445,9 @@ def test_mutators_require_coordinator_lock(tmp_path: Path) -> None:
 
 
 class MaliciousEventExecutor:
-    def run(self, case, condition, context, emit, cancel_requested, publication_lock) -> TerminalOutcome:
+    def run(
+        self, case, condition, context, emit, cancel_requested, publication_lock
+    ) -> TerminalOutcome:
         malicious = LifecycleEvent.model_construct(
             kind="progress",
             occurred_at=datetime.now(timezone.utc),
@@ -462,7 +482,9 @@ def test_events_append_rejects_symlink_replacement_without_following(tmp_path: P
     )
     with runtime.store.coordinator_lock():
         runtime.store.create_attempt(context, case, condition)
-        events = runtime.store.root / "attempts" / summary.identity.job_id / "attempt-1" / "events.jsonl"
+        events = (
+            runtime.store.root / "attempts" / summary.identity.job_id / "attempt-1" / "events.jsonl"
+        )
         outside = tmp_path / "outside-events.jsonl"
         outside.write_text("private\n", encoding="utf-8")
         events.unlink()
@@ -481,7 +503,9 @@ def test_events_append_rejects_symlink_replacement_without_following(tmp_path: P
 
 def test_malformed_constructed_typed_event_is_private_and_not_persisted(tmp_path: Path) -> None:
     class MalformedExecutor:
-        def run(self, case, condition, context, emit, cancel_requested, publication_lock) -> TerminalOutcome:
+        def run(
+            self, case, condition, context, emit, cancel_requested, publication_lock
+        ) -> TerminalOutcome:
             emit(ExecutorProgressEvent.model_construct(kind="progress", code="secret-code"))
             return TerminalOutcome(status="succeeded", reason="completed")
 
@@ -634,15 +658,20 @@ def test_every_cross_record_identity_field_is_quarantined(
 
 @pytest.mark.parametrize(
     "record",
-    ["context.json", "attempt-manifest.v1.json", "case.json", "condition.json", "events.jsonl", "outcome.v1.json"],
+    [
+        "context.json",
+        "attempt-manifest.v1.json",
+        "case.json",
+        "condition.json",
+        "events.jsonl",
+        "outcome.v1.json",
+    ],
 )
-def test_record_symlink_is_quarantined_without_following(
-    tmp_path: Path, record: str
-) -> None:
+def test_record_symlink_is_quarantined_without_following(tmp_path: Path, record: str) -> None:
     runtime = make_runtime(tmp_path, FakeExecutor(), workers=1)
     completed = runtime.run()[0]
     attempt = next((runtime.store.root / "attempts" / completed.identity.job_id).glob("attempt-1"))
-    outside = tmp_path / f"outside-{record.replace('.', '-') }"
+    outside = tmp_path / f"outside-{record.replace('.', '-')}"
     outside.write_text("outside\n", encoding="utf-8")
     (attempt / record).unlink()
     (attempt / record).symlink_to(outside)
@@ -694,6 +723,7 @@ def test_post_rename_quarantine_fsync_stages_propagate(
     from . import scheduler_store
 
     if stage == "inode":
+
         def fail_inode(parent_fd: int, name: str) -> None:
             raise OSError("injected inode fsync failure")
 

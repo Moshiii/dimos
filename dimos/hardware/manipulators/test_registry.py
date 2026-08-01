@@ -50,10 +50,9 @@ def _write_package(
 ) -> None:
     package = root / name
     package.mkdir()
-    _ = (package / "__init__.py").write_text("", encoding="utf-8")
-    _ = (package / "__registry__.py").write_text(registry_source, encoding="utf-8")
+    (package / "_registry.py").write_text(registry_source, encoding="utf-8")
     if adapter_source:
-        _ = (package / "adapter.py").write_text(adapter_source, encoding="utf-8")
+        (package / "adapter.py").write_text(adapter_source, encoding="utf-8")
 
 
 def _clear_fake_modules() -> None:
@@ -80,7 +79,6 @@ def test_available_does_not_import_adapter_implementation(
     monkeypatch.setattr(manipulators_pkg, "__path__", [str(tmp_path)])
 
     registry = AdapterRegistry()
-    registry.discover()
 
     assert registry.available() == ["fake"]
     assert "dimos.hardware.manipulators.fake_lazy.adapter" not in sys.modules
@@ -105,7 +103,6 @@ def test_create_imports_selected_adapter_and_passes_kwargs(
     monkeypatch.setattr(manipulators_pkg, "__path__", [str(tmp_path)])
 
     registry = AdapterRegistry()
-    registry.discover()
     adapter = registry.create("fake", address="can0", dof=7)
 
     assert adapter.__class__.__name__ == "Fake"
@@ -129,9 +126,8 @@ def test_manifest_validation_rejects_bad_mapping(
     _write_package(tmp_path, "fake_bad", "ADAPTER_FACTORIES = {'fake': 1}\n")
     monkeypatch.setattr(manipulators_pkg, "__path__", [str(tmp_path)])
 
-    registry = AdapterRegistry()
     with pytest.raises(TypeError, match="must map strings to strings"):
-        registry.discover()
+        AdapterRegistry()
 
 
 def test_register_path_rejects_duplicate_and_invalid_paths() -> None:
@@ -153,12 +149,12 @@ def test_create_reports_missing_selected_module_and_attribute() -> None:
     )
     registry.register_path("missing_attr", "dimos.hardware.manipulators.registry:MissingFactory")
 
-    with pytest.raises(ImportError, match="missing_module.*missing module"):
-        _ = registry.create("missing_module")
+    with pytest.raises(ImportError, match="missing_module.*No module named"):
+        registry.create("missing_module")
     with pytest.raises(ImportError, match="missing_attr.*missing factory"):
-        _ = registry.create("missing_attr")
+        registry.create("missing_attr")
     with pytest.raises(KeyError, match="Unknown adapter: unknown"):
-        _ = registry.create("unknown")
+        registry.create("unknown")
 
 
 def test_builtin_registry_preserves_adapter_keys() -> None:
@@ -189,6 +185,5 @@ def test_discovery_does_not_import_can_motor_control(
     monkeypatch.setattr(builtins, "__import__", fail_can_motor_control)
 
     registry = AdapterRegistry()
-    registry.discover()
 
     assert "openarm_rs" in registry.available()

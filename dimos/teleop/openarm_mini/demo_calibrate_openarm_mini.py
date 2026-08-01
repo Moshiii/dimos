@@ -49,7 +49,9 @@ DEFAULT_MOTOR_IDS = {
 }
 DEFAULT_FLIPS_BY_SIDE: dict[str, frozenset[str]] = {
     "left": frozenset(("joint_1", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7")),
-    "right": frozenset(("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6")),
+    "right": frozenset(
+        ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7")
+    ),
 }
 
 

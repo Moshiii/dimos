@@ -115,7 +115,8 @@ def test_missing_tf_drops_frame_and_publishes_status(mocker: MockerFixture) -> N
     module._set_camera_info(_camera_info(frame_id="world"))
     statuses: list[ReconstructionStatus] = []
     module.status.subscribe(statuses.append)
-    mocker.patch.object(module.tf, "get", return_value=None)
+    module._tf = mocker.Mock()
+    mocker.patch.object(module.tfbuffer, "get", return_value=None)
 
     module._process_depth_image(_depth_image())
 

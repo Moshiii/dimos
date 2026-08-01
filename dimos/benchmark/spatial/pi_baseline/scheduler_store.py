@@ -1,3 +1,17 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Host-local POSIX filesystem state for one scheduler coordinator."""
 
 from __future__ import annotations
@@ -456,9 +470,13 @@ class FilesystemExperimentStore:
                             continue
                         with _fd_handle(candidate_fd):
                             try:
-                                context = _read_model_at(candidate_fd, "context.json", AttemptContext)
+                                context = _read_model_at(
+                                    candidate_fd, "context.json", AttemptContext
+                                )
                                 snapshot = _read_model_at(
-                                    candidate_fd, "attempt-manifest.v1.json", AttemptManifestSnapshot
+                                    candidate_fd,
+                                    "attempt-manifest.v1.json",
+                                    AttemptManifestSnapshot,
                                 )
                                 case = _read_model_at(candidate_fd, "case.json", ExpandedCase)
                                 condition = _read_model_at(
@@ -470,7 +488,9 @@ class FilesystemExperimentStore:
                                 )
                                 expected_job_id = job_id(definition.plan, case, condition)
                                 expected_case = next(
-                                    item for item in definition.plan.cases if item.case_id == case.case_id
+                                    item
+                                    for item in definition.plan.cases
+                                    if item.case_id == case.case_id
                                 )
                                 expected_condition = next(
                                     item
@@ -481,7 +501,8 @@ class FilesystemExperimentStore:
                                     candidate_name != context.attempt_id
                                     or candidate_name != f"attempt-{context.attempt_number}"
                                     or context.directory_name != candidate_name
-                                    or context.identity.experiment_id != definition.manifest.experiment_id
+                                    or context.identity.experiment_id
+                                    != definition.manifest.experiment_id
                                     or context.identity.case_id != case.case_id
                                     or context.identity.condition_name != condition.name
                                     or context.identity.job_id != job_id_value
@@ -492,7 +513,8 @@ class FilesystemExperimentStore:
                                     or snapshot.identity != context.identity
                                     or snapshot.attempt_id != context.attempt_id
                                     or snapshot.manifest_digest != definition.manifest_digest
-                                    or snapshot.manifest != definition.manifest.model_dump(mode="json")
+                                    or snapshot.manifest
+                                    != definition.manifest.model_dump(mode="json")
                                 ):
                                     raise ValueError("attempt identity or manifest mismatch")
                             except Exception:
@@ -645,7 +667,9 @@ class FilesystemExperimentStore:
                                 try:
                                     metadata = _read_model_at(job_fd, name, QuarantineMetadata)
                                     target_name = name.removesuffix(".metadata.json")
-                                    original_number = _attempt_number_from_name(metadata.original_name)
+                                    original_number = _attempt_number_from_name(
+                                        metadata.original_name
+                                    )
                                     if (
                                         metadata.quarantined_name == target_name
                                         and original_number == metadata.original_attempt_number
@@ -938,7 +962,11 @@ def _observe_attempts_at(
                             raise ValueError("attempt identity or manifest mismatch")
                         result.append(
                             RecoveredAttempt(
-                                context, case, condition, outcome, Path("attempts") / identifier / name
+                                context,
+                                case,
+                                condition,
+                                outcome,
+                                Path("attempts") / identifier / name,
                             )
                         )
                     except Exception:
@@ -956,9 +984,7 @@ def _read_model_at(parent_fd: int, name: str, model: type[ModelT]) -> ModelT:
     return model.model_validate_json(_read_fd_bytes(parent_fd, name))
 
 
-def _read_optional_model_at(
-    parent_fd: int, name: str, model: type[ModelT]
-) -> ModelT | None:
+def _read_optional_model_at(parent_fd: int, name: str, model: type[ModelT]) -> ModelT | None:
     try:
         return _read_model_at(parent_fd, name, model)
     except FileNotFoundError:

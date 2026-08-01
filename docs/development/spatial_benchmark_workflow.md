@@ -4,12 +4,12 @@ This guide covers three tasks: inspect benchmark cases, run a Pi evaluation,
 and review a retained agent session. Run commands from the DimOS repository.
 
 The checked-in
-[10-case demo](spatial_benchmark_10_case_demo/authoring-spec.json) provides a
+[10-case demo](/docs/development/spatial_benchmark_10_case_demo/authoring-spec.json) provides a
 complete authoring spec and pinned
-[Pi configuration](spatial_benchmark_10_case_demo/pi-config.json). It covers
+[Pi configuration](/docs/development/spatial_benchmark_10_case_demo/pi-config.json). It covers
 all seven predicates on clean maps and stores runtime evidence under
 `~/spatial-real-pilot/benchmark-runs/spatial-10-case-demo-20260728`.
-Its [verified result](spatial_benchmark_10_case_demo/verified-result.md)
+Its [verified result](/docs/development/spatial_benchmark_10_case_demo/verified-result.md)
 records the completed run and a directly viewable, correct session with 11
 Python commands.
 
@@ -174,4 +174,4 @@ Press `Ctrl-C` to stop the server and remove its temporary review copy. The
 canonical retained session remains unchanged.
 
 For the viewer's privacy and compatibility contract, see
-[Pi session history viewer](pi_session_viewer.md).
+[Pi session history viewer](/docs/development/pi_session_viewer.md).

@@ -15,25 +15,20 @@
 import os
 from pathlib import Path
 import subprocess
-import tempfile
 import threading
-import time
 from typing import IO
 
-from dimos.constants import STATE_DIR
+from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.global_config import GlobalConfig
-from dimos.simulation.dimsim.deno_utils import ensure_deno, ensure_playwright_chromium
-from dimos.simulation.dimsim.revision import DIMSIM_REPO_COMMIT, DIMSIM_REPO_URL
+from dimos.simulation.dimsim.deno_utils import ensure_playwright_chromium
+from dimos.utils.deno import ensure_deno
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
 _VIDEO_RATE = 50
-_LIDAR_RATE = 1000
-
-
-def _launch_hidden_browser(value: str) -> bool:
-    return value.strip().lower() not in {"0", "false", "no"}
+_LIDAR_RATE = 100
+_DIMSIM_DIR = DIMOS_PROJECT_ROOT / "misc" / "DimSim"
 
 
 class DimSimProcess:
@@ -43,22 +38,18 @@ class DimSimProcess:
 
     def start(self) -> None:
         deno_path = ensure_deno()
-        repo_dir = _ensure_repo()
-        base_cmd = _deno_cmd(deno_path, repo_dir)
+        base_cmd = _deno_cmd(deno_path, _DIMSIM_DIR)
 
         scene = self.global_config.dimsim_scene
         port = self.global_config.dimsim_port
+        headless = self.global_config.dimsim_headless
 
-        _kill_port_holder(port)
+        if headless:
+            ensure_playwright_chromium(deno_path)
 
         render = os.environ.get("DIMSIM_RENDER", "").strip()
         if not render:
             render = "cpu" if os.environ.get("CI") else "gpu"
-        launch_hidden_browser = _launch_hidden_browser(
-            os.environ.get("DIMSIM_HEADLESS", "true")
-        )
-        if launch_hidden_browser:
-            ensure_playwright_chromium(deno_path)
 
         cmd = [
             *base_cmd,
@@ -68,6 +59,7 @@ class DimSimProcess:
             "--port",
             str(port),
             "--no-depth",
+            *(("--headless",) if headless else ()),
             "--render",
             render,
             "--image-rate",
@@ -75,11 +67,10 @@ class DimSimProcess:
             "--lidar-rate",
             str(_LIDAR_RATE),
         ]
-        if launch_hidden_browser:
-            cmd.append("--headless")
-        else:
+
+        if not headless:
             logger.info(
-                f"DimSim hidden browser disabled; open http://localhost:{port}"
+                f"Open http://localhost:{port} in your browser; sensors won't publish until that tab is loaded."
             )
 
         self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -120,93 +111,6 @@ class DimSimProcess:
             t.start()
 
 
-def _kill_port_holder(port: int) -> None:
-    """Kill any process listening on the given port."""
-    try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        pids = result.stdout.strip()
-        if pids:
-            for pid in pids.splitlines():
-                logger.info(f"Killing stale process {pid} on port {port}")
-                subprocess.run(["kill", pid], timeout=5)
-            time.sleep(0.5)
-    except Exception as e:
-        logger.warning(f"Failed to check/kill port {port}: {e}")
-
-
-def _ensure_repo() -> Path:
-    repo_dir = STATE_DIR / "dimsim_repo"
-    if (repo_dir / ".git").exists():
-        _validate_repo(repo_dir)
-        return repo_dir
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Cloning DimSim into {repo_dir}")
-    with tempfile.TemporaryDirectory(prefix="dimsim_repo.", dir=STATE_DIR) as temp:
-        checkout = Path(temp)
-        subprocess.run(["git", "init", str(checkout)], check=True)
-        subprocess.run(
-            ["git", "-C", str(checkout), "remote", "add", "origin", DIMSIM_REPO_URL],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(checkout),
-                "fetch",
-                "--depth",
-                "1",
-                "origin",
-                DIMSIM_REPO_COMMIT,
-            ],
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"],
-            check=True,
-        )
-        checkout.rename(repo_dir)
-    _validate_repo(repo_dir)
-    return repo_dir
-
-
-def _validate_repo(repo_dir: Path) -> None:
-    head = subprocess.run(
-        ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if head != DIMSIM_REPO_COMMIT:
-        raise RuntimeError(
-            f"DimSim checkout {repo_dir} is at {head}; expected pinned revision "
-            f"{DIMSIM_REPO_COMMIT}. Move the checkout aside and launch again."
-        )
-    tracked_changes = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo_dir),
-            "status",
-            "--porcelain",
-            "--untracked-files=no",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if tracked_changes:
-        raise RuntimeError(
-            f"DimSim checkout {repo_dir} has modified tracked files; refusing to "
-            "run an unverifiable simulator revision."
-        )
-
-
 def _deno_cmd(deno_path: str, repo_dir: Path) -> list[str]:
-    cli_ts = repo_dir / "dimos-cli" / "cli.ts"
+    cli_ts = repo_dir / "cli" / "cli.ts"
     return [deno_path, "run", "--allow-all", "--unstable-net", str(cli_ts)]

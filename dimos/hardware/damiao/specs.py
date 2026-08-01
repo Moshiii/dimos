@@ -304,13 +304,3 @@ def coerce_motor_specs(
     if len(specs) != dof:
         raise ValueError(f"motor_specs length {len(specs)} does not match dof {dof}")
     return tuple(specs)
-
-
-__all__ = [
-    "DamiaoArmSpec",
-    "DamiaoBusSpec",
-    "DamiaoJointGroupSpec",
-    "DamiaoMotorSpec",
-    "DamiaoRobotSpec",
-    "coerce_motor_specs",
-]

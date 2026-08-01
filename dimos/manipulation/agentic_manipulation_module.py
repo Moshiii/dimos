@@ -32,7 +32,9 @@ from dimos.msgs.geometry_msgs.PoseArray import PoseArray
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.grasping_msgs.GraspDebugMarkers import GraspDebugMarkers
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.perception.object_scene_registration_spec import ObjectSceneRegistrationSpec
+from dimos.perception.experimental.object_scene_registration_spec import (
+    ObjectSceneRegistrationSpec,
+)
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()

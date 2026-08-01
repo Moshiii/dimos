@@ -15,6 +15,7 @@
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import pickle
 import sys
 from types import MappingProxyType
 from typing import Protocol
@@ -27,6 +28,7 @@ from dimos.core._test_future_annotations_helper import (
     FutureModuleOut,
 )
 from dimos.core.coordination.blueprints import (
+    Blueprint,
     DisabledModuleProxy,
     autoconnect,
 )
@@ -35,6 +37,7 @@ from dimos.core.coordination.module_coordinator import (
     ModuleCoordinator,
     _all_name_types,
     _check_requirements,
+    _materialize_transports,
     _resolve_module_plans,
     _verify_no_conflicts_with_existing,
     _verify_no_name_conflicts,
@@ -51,8 +54,12 @@ from dimos.core.runtime_environment import (
     PythonVenvRuntimeEnvironment,
     RuntimeEnvironment,
 )
-from dimos.core.stream import In, Out
+from dimos.core.stream import IO, In, Out
+from dimos.core.transport import CloudflareTransport
+from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+import dimos.robot.get_all_blueprints as resolver
 from dimos.spec.utils import Spec
 
 # Disable Rerun for tests (prevents viewer spawn and gRPC flush errors)
@@ -106,6 +113,10 @@ class SourceModule(Module):
 
 class TargetModule(Module):
     remapped_data: In[Data1]
+
+
+class ExternalNameLoadModule(Module):
+    pass
 
 
 class DynamicIOConfig(ModuleConfig):
@@ -171,7 +182,7 @@ class Mod1(Module):
 
     @rpc
     def start(self) -> None:
-        _ = self.calc.compute1
+        self.calc.compute1  # noqa: B018
 
     @rpc
     def stop(self) -> None: ...
@@ -184,7 +195,7 @@ class Mod2(Module):
 
     @rpc
     def start(self) -> None:
-        _ = self.calc.compute1
+        self.calc.compute1  # noqa: B018
 
     @rpc
     def stop(self) -> None: ...
@@ -345,9 +356,9 @@ def test_remapping() -> None:
         ]
     )
 
-    # Verify remappings are stored correctly
-    assert (SourceModule, "color_image") in blueprint_set.remapping_map
-    assert blueprint_set.remapping_map[(SourceModule, "color_image")] == "remapped_data"
+    # Verify remappings are stored correctly, keyed by instance name.
+    assert (SourceModule.name, "color_image") in blueprint_set.remapping_map
+    assert blueprint_set.remapping_map[(SourceModule.name, "color_image")] == "remapped_data"
 
     # Verify that remapped names are used in name resolution
     all_names = _all_name_types(blueprint_set)
@@ -640,6 +651,23 @@ def test_optional_module_ref_without_provider(build_coordinator) -> None:
     assert mod is not None
 
 
+def test_build_with_explicit_instance_name(build_coordinator) -> None:
+    """A blueprint-supplied instance_name is used for deployment and wiring."""
+    coordinator = build_coordinator(
+        autoconnect(
+            ModuleA.blueprint(instance_name="custom/modulea"),
+            ModuleB.blueprint(),
+        )
+    )
+
+    module_a = coordinator.get_instance("custom/modulea")
+    module_b = coordinator.get_instance(ModuleB)
+    assert module_a is not None
+    assert module_b is not None
+    assert module_a.data1.transport.topic == module_b.data1.transport.topic
+    assert module_b.what_is_as_name() == "A, Module A"
+
+
 def test_load_blueprint_auto_scales_empty_pool(dynamic_coordinator) -> None:
     """A coordinator with 0 initial workers auto-adds workers on load_blueprint."""
     dynamic_coordinator.load_blueprint(ModuleA.blueprint())
@@ -674,7 +702,7 @@ def _write_fake_uv(path: Path) -> None:
 def test_unplaced_modules_use_default_pool(build_coordinator) -> None:
     coordinator = build_coordinator(ModuleA.blueprint())
 
-    assert coordinator._module_manager_keys[ModuleA] == "python"
+    assert coordinator._module_manager_keys[ModuleA.name] == "python"
     assert "python:env-a" not in coordinator._managers
 
 
@@ -688,8 +716,8 @@ def test_same_named_env_modules_share_venv_pool(build_coordinator) -> None:
 
     coordinator = build_coordinator(blueprint)
 
-    assert coordinator._module_manager_keys[ModuleA] == "python:env-a"
-    assert coordinator._module_manager_keys[ModuleB] == "python:env-a"
+    assert coordinator._module_manager_keys[ModuleA.name] == "python:env-a"
+    assert coordinator._module_manager_keys[ModuleB.name] == "python:env-a"
     manager = coordinator._managers["python:env-a"]
     assert isinstance(manager, WorkerManagerPython)
     assert len(manager.workers) == 1
@@ -775,8 +803,8 @@ def test_distinct_named_env_modules_use_distinct_venv_pools(build_coordinator) -
 
     coordinator = build_coordinator(blueprint)
 
-    assert coordinator._module_manager_keys[ModuleA] == "python:env-a"
-    assert coordinator._module_manager_keys[ModuleB] == "python:env-b"
+    assert coordinator._module_manager_keys[ModuleA.name] == "python:env-a"
+    assert coordinator._module_manager_keys[ModuleB.name] == "python:env-b"
     assert coordinator._managers["python:env-a"] is not coordinator._managers["python:env-b"]
 
 
@@ -805,10 +833,10 @@ def test_dynamic_load_unload_restart_preserves_placement(dynamic_coordinator) ->
     )
 
     dynamic_coordinator.load_blueprint(blueprint)
-    assert dynamic_coordinator._module_manager_keys[ModuleA] == "python:env-a"
+    assert dynamic_coordinator._module_manager_keys[ModuleA.name] == "python:env-a"
 
     dynamic_coordinator.restart_module(ModuleA, reload_source=False)
-    assert dynamic_coordinator._module_manager_keys[ModuleA] == "python:env-a"
+    assert dynamic_coordinator._module_manager_keys[ModuleA.name] == "python:env-a"
 
     dynamic_coordinator.unload_module(ModuleA)
     assert ModuleA not in dynamic_coordinator._module_manager_keys
@@ -822,12 +850,12 @@ def test_unload_clears_placement_for_later_unplaced_load(dynamic_coordinator) ->
     )
 
     dynamic_coordinator.load_blueprint(blueprint)
-    assert dynamic_coordinator._module_manager_keys[ModuleA] == "python:env-a"
+    assert dynamic_coordinator._module_manager_keys[ModuleA.name] == "python:env-a"
 
     dynamic_coordinator.unload_module(ModuleA)
     dynamic_coordinator.load_blueprint(ModuleA.blueprint())
 
-    assert dynamic_coordinator._module_manager_keys[ModuleA] == "python"
+    assert dynamic_coordinator._module_manager_keys[ModuleA.name] == "python"
 
 
 def test_unloading_last_venv_module_leaves_health_check_healthy(dynamic_coordinator) -> None:
@@ -877,7 +905,7 @@ def test_absent_placement_does_not_affect_later_unplaced_load(dynamic_coordinato
     dynamic_coordinator.load_blueprint(blueprint)
     dynamic_coordinator.load_blueprint(ModuleB.blueprint())
 
-    assert dynamic_coordinator._module_manager_keys[ModuleB] == "python"
+    assert dynamic_coordinator._module_manager_keys[ModuleB.name] == "python"
     assert "python:env-a" not in dynamic_coordinator._managers
 
 
@@ -892,7 +920,7 @@ def test_disabled_placement_does_not_affect_later_unplaced_load(dynamic_coordina
     dynamic_coordinator.load_blueprint(blueprint)
     dynamic_coordinator.load_blueprint(ModuleB.blueprint())
 
-    assert dynamic_coordinator._module_manager_keys[ModuleB] == "python"
+    assert dynamic_coordinator._module_manager_keys[ModuleB.name] == "python"
     assert "python:env-a" not in dynamic_coordinator._managers
 
 
@@ -1045,8 +1073,8 @@ def test_restart_module_basic(dynamic_coordinator) -> None:
     assert new_proxy is not old_proxy
     assert dynamic_coordinator.get_instance(ModuleA) is new_proxy
     assert new_proxy.get_name() == "A, Module A"
-    assert "g" in dynamic_coordinator._resolved_module_plans[ModuleA].final_kwargs
-    assert "g" not in dynamic_coordinator._deployed_atoms[ModuleA].kwargs
+    assert "g" in dynamic_coordinator._resolved_module_plans[ModuleA.name].final_kwargs
+    assert "g" not in dynamic_coordinator._deployed_atoms[ModuleA.name].kwargs
 
 
 def test_restart_module_preserves_stream_wiring(dynamic_coordinator) -> None:
@@ -1225,7 +1253,7 @@ def test_placed_reload_restart_unload_clears_old_class_placement(
 
     setattr(sys.modules[original_class.__module__], original_class.__name__, original_class)
     dynamic_coordinator.load_blueprint(original_class.blueprint())
-    assert dynamic_coordinator._module_manager_keys[original_class] == "python"
+    assert dynamic_coordinator._module_manager_keys[original_class.name] == "python"
 
 
 def test_restart_preserves_remapped_streams(dynamic_coordinator) -> None:
@@ -1259,8 +1287,177 @@ def test_start_rpc_service_responds_to_ping(dynamic_coordinator) -> None:
         client.stop()
 
 
+def test_start_rpc_service_is_idempotent(dynamic_coordinator) -> None:
+    dynamic_coordinator.start_rpc_service()
+    first_service = dynamic_coordinator._coordinator_rpc
+
+    dynamic_coordinator.start_rpc_service()
+
+    assert dynamic_coordinator._coordinator_rpc is first_service
+
+
+def test_loop_starts_rpc_service_and_stops_on_interrupt(dynamic_coordinator, mocker) -> None:
+    start_rpc = mocker.patch.object(dynamic_coordinator, "start_rpc_service")
+    stop = mocker.patch.object(dynamic_coordinator, "stop")
+    event = mocker.patch("dimos.core.coordination.module_coordinator.threading.Event")
+    event.return_value.wait.side_effect = KeyboardInterrupt
+
+    dynamic_coordinator.loop()
+
+    start_rpc.assert_called_once_with()
+    event.return_value.wait.assert_called_once_with()
+    stop.assert_called_once_with()
+
+
 def test_list_module_names(dynamic_coordinator) -> None:
     assert dynamic_coordinator.list_module_names() == []
     dynamic_coordinator.load_module(ModuleA)
     dynamic_coordinator.load_module(ModuleC)
     assert set(dynamic_coordinator.list_module_names()) == {"ModuleA", "ModuleC"}
+
+
+def test_load_blueprint_by_name_uses_shared_resolver(
+    monkeypatch: pytest.MonkeyPatch, mocker
+) -> None:
+    expected_blueprint = ExternalNameLoadModule.blueprint()
+
+    def fake_get_by_name(name: str):
+        assert name == "my-test-stack.demo"
+        return expected_blueprint
+
+    coordinator = ModuleCoordinator()
+    load_blueprint = mocker.patch.object(ModuleCoordinator, "load_blueprint")
+    monkeypatch.setattr(resolver, "get_by_name", fake_get_by_name)
+
+    coordinator.load_blueprint_by_name("my-test-stack.demo")
+
+    load_blueprint.assert_called_once_with(expected_blueprint)
+
+
+class NamedModule(Module):
+    @rpc
+    def whoami(self) -> str:
+        return self.config.instance_name or "default"
+
+
+def test_deploy_two_instances_of_same_class(dynamic_coordinator) -> None:
+    """Two instances of one class get separate RPC topics and coordinator entries."""
+    p0 = dynamic_coordinator.deploy(NamedModule, instance_name="robot0/namedmodule")
+    p1 = dynamic_coordinator.deploy(NamedModule, instance_name="robot1/namedmodule")
+
+    assert dynamic_coordinator.get_instance("robot0/namedmodule") is p0
+    assert dynamic_coordinator.get_instance("robot1/namedmodule") is p1
+    with pytest.raises(ValueError, match="Multiple instances"):
+        dynamic_coordinator.get_instance(NamedModule)
+
+    # Each proxy reaches its own instance over the instance-name RPC topic.
+    assert p0.remote_name == "robot0/namedmodule"
+    assert p0.whoami() == "robot0/namedmodule"
+    assert p1.whoami() == "robot1/namedmodule"
+
+    assert set(dynamic_coordinator.list_module_names()) == {
+        "robot0/namedmodule",
+        "robot1/namedmodule",
+    }
+    descriptors = {d.rpc_name: d for d in dynamic_coordinator.list_modules()}
+    assert descriptors["robot0/namedmodule"].class_name == "NamedModule"
+
+
+def test_rpc_client_pickle_preserves_remote_name(dynamic_coordinator) -> None:
+    """Proxies pickled into workers (set_module_ref) must keep the instance RPC name."""
+    proxy = dynamic_coordinator.deploy(NamedModule, instance_name="robot0/namedmodule")
+    restored = pickle.loads(pickle.dumps(proxy))
+    try:
+        assert restored.remote_name == "robot0/namedmodule"
+        assert restored.whoami() == "robot0/namedmodule"
+    finally:
+        restored.stop_rpc_client()
+
+
+def test_spec_config_kwarg_reaches_provider_config() -> None:
+    """A config-field kwarg pinned on a WebRTC spec (e.g. robot_type in a hosted
+    blueprint) must survive materialization. Regression: the coordinator builds a
+    provider config from CLI/env overrides and passes it as config=, which the
+    transport's `config or config_cls(**kwargs)` guard would otherwise let win
+    unconditionally — silently dropping the spec kwarg."""
+    spec = CloudflareTransport.spec("state_reliable", robot_type="go2")
+    bp = Blueprint(blueprints=(), transport_map=MappingProxyType({("s", bytes): spec}))
+    t = _materialize_transports(bp, {})[("s", bytes)]
+    assert t._config.robot_type == "go2"
+
+
+class IoTfPublisher(Module):
+    tf: Out[TFMessage]
+
+    @rpc
+    def send(self, child: str) -> None:
+        self.tf.publish(TFMessage(Transform(frame_id="world", child_frame_id=child)))
+
+
+class IoTfEcho(Module):
+    tf: IO[TFMessage]
+    _seen: list[str] | None = None
+
+    @rpc
+    def start(self) -> None:
+        self._seen = []
+        super().start()
+
+    async def handle_tf(self, msg: TFMessage) -> None:
+        assert self._seen is not None
+        self._seen.extend(t.child_frame_id for t in msg.transforms)
+
+    @rpc
+    def send(self, child: str) -> None:
+        self.tf.publish(TFMessage(Transform(frame_id="world", child_frame_id=child)))
+
+    @rpc
+    def seen(self) -> list[str]:
+        return list(self._seen or [])
+
+
+class IoTfConsumer(Module):
+    tf: In[TFMessage]
+    _seen: list[str] | None = None
+
+    @rpc
+    def start(self) -> None:
+        self._seen = []
+        super().start()
+
+    async def handle_tf(self, msg: TFMessage) -> None:
+        assert self._seen is not None
+        self._seen.extend(t.child_frame_id for t in msg.transforms)
+
+    @rpc
+    def seen(self) -> list[str]:
+        return list(self._seen or [])
+
+
+def test_io_port_autoconnects_and_flows_both_ways(wait_until) -> None:
+    """An IO port shares the topic with same-named In/Out ports: it hears the
+    publisher, its own publishes reach the consumer, and loopback feeds it back
+    its own messages."""
+    blueprint_set = autoconnect(
+        IoTfPublisher.blueprint(), IoTfEcho.blueprint(), IoTfConsumer.blueprint()
+    )
+
+    coordinator = ModuleCoordinator.build(blueprint_set, _BUILD_WITHOUT_RERUN.copy())
+    try:
+        publisher = coordinator.get_instance(IoTfPublisher)
+        echo = coordinator.get_instance(IoTfEcho)
+        consumer = coordinator.get_instance(IoTfConsumer)
+
+        assert publisher.tf.transport.topic == echo.tf.transport.topic
+        assert echo.tf.transport.topic == consumer.tf.transport.topic
+        assert "tf" in str(echo.tf.transport.topic)
+
+        publisher.send("from_pub")
+        wait_until(lambda: "from_pub" in echo.seen(), timeout=10.0)
+        wait_until(lambda: "from_pub" in consumer.seen(), timeout=10.0)
+
+        echo.send("from_echo")
+        wait_until(lambda: "from_echo" in consumer.seen(), timeout=10.0)
+        wait_until(lambda: "from_echo" in echo.seen(), timeout=10.0)
+    finally:
+        coordinator.stop()

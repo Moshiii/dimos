@@ -27,8 +27,8 @@ from dimos.benchmark.agent_eval.observation_recorder import (
     AgentEvalObservationRecorder,
 )
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
-from dimos.perception.perceive_loop_skill import PerceiveLoopSkill
-from dimos.perception.spatial_perception import SpatialMemory
+from dimos.perception.experimental.perceive_loop_skill import PerceiveLoopSkill
+from dimos.perception.experimental.spatial_perception import SpatialMemory
 
 
 def test_observation_recorder_has_exact_agent_visible_allowlist() -> None:

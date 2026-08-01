@@ -21,9 +21,11 @@ from pathlib import Path
 
 from dimos.control.components import HardwareComponent, HardwareType, make_joints
 from dimos.core.global_config import global_config
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.robot.manipulators._modeling import (
     base_pose,
+    coordinator_joint_mapping,
     joint_names,
 )
 from dimos.utils.data import LfsPath
@@ -98,21 +100,31 @@ def make_a750_model_config(
     name: str = "arm",
     *,
     joint_prefix: str | None = None,
-    coordinator_task_name: str | None = None,
 ) -> RobotModelConfig:
-    _ = joint_prefix
     dof = 6
+    local_joint_names = joint_names(dof)
     return RobotModelConfig(
         name=name,
         model_path=A750_MODEL_PATH,
         base_pose=base_pose(),
-        joint_names=joint_names(dof),
-        end_effector_link="gripper_base",
+        joint_names=local_joint_names,
         base_link="base_link",
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator",
+                joint_names=tuple(local_joint_names),
+                base_link="base_link",
+                tip_link="gripper_base",
+            )
+        ],
         package_paths=A750_PACKAGE_PATHS,
         auto_convert_meshes=True,
         collision_exclusion_pairs=A750_GRIPPER_COLLISION_EXCLUSIONS,
-        coordinator_task_name=coordinator_task_name or f"traj_{name}",
+        joint_name_mapping=coordinator_joint_mapping(
+            name,
+            dof,
+            joint_prefix=joint_prefix,
+        ),
         gripper_hardware_id=name,
         home_joints=A750_HOME_JOINTS,
     )

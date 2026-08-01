@@ -53,7 +53,7 @@ from dimos.benchmark.spatial.models import (
     Trajectory,
 )
 from dimos.benchmark.spatial.utilities import canonical_json, hash_file_sha256, stable_opaque_id
-from dimos.mapping.voxels import VoxelGridMapper, VoxelGridMapperConfig
+from dimos.mapping.voxels.module import VoxelGridMapper, VoxelGridMapperConfig
 from dimos.memory2.stream import Stream
 from dimos.memory2.type.observation import Observation
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2

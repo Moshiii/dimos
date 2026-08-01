@@ -44,17 +44,17 @@ def test_side_selects_openarm_joint_limits() -> None:
 
 def test_invalid_side_is_rejected() -> None:
     with pytest.raises(ValueError, match="side must be 'left' or 'right'"):
-        _ = OpenArmRSAdapter(side="middle", use_mock_bus=True)
+        OpenArmRSAdapter(side="middle", use_mock_bus=True)
 
 
 def test_non_openarm_dof_is_rejected() -> None:
     with pytest.raises(ValueError, match="only supports 7 DOF"):
-        _ = OpenArmRSAdapter(dof=2, use_mock_bus=True)
+        OpenArmRSAdapter(dof=2, use_mock_bus=True)
 
 
 def test_custom_non_openarm_metadata_is_rejected() -> None:
     with pytest.raises(ValueError, match="does not accept custom motor_specs"):
-        _ = OpenArmRSAdapter(
+        OpenArmRSAdapter(
             use_mock_bus=True,
             motor_specs=[
                 {"name": "shoulder", "type": "DM4310", "send_id": 1, "recv_id": 17},
@@ -62,7 +62,7 @@ def test_custom_non_openarm_metadata_is_rejected() -> None:
         )
 
     with pytest.raises(ValueError, match="fixed OpenArm limits"):
-        _ = OpenArmRSAdapter(
+        OpenArmRSAdapter(
             use_mock_bus=True,
             position_lower=[-0.5] * 7,
         )

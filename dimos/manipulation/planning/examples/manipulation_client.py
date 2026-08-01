@@ -25,10 +25,14 @@ Usage:
 Available functions:
     joints()              Get current joint positions
     ee()                  Get end-effector pose
+    groups()              List explicit planning groups
     state()               Get module state (IDLE, PLANNING, EXECUTING, ...)
     ik_pose(x,y,z, seed_joints=None) Solve IK only, without path planning
+    ik_group_pose(group_id,x,y,z) Solve IK for an explicit planning group
     plan(joints)          Plan to joint configuration, e.g. plan([0.1]*7)
+    plan_group(group_id,joints) Plan to an explicit planning-group joint target
     plan_pose(x,y,z)      Plan to Cartesian pose
+    plan_group_pose(group_id,x,y,z) Plan to an explicit planning-group pose target
     preview(duration=None) Preview planned path in Meshcat
     execute()             Execute planned trajectory via coordinator
     home()                Move to home position
@@ -39,6 +43,10 @@ Available functions:
     add_box(name,x,y,z)   Add box obstacle
     add_sphere(name,x,y,z) Add sphere obstacle
     add_cylinder(name,x,y,z) Add cylinder obstacle
+    update_box(name,x,y,z,w,h,d) Replace a complete box obstacle
+    update_sphere(name,x,y,z,radius) Replace a complete sphere obstacle
+    update_cylinder(name,x,y,z,radius,height) Replace a complete cylinder obstacle
+    update_pose(name,x,y,z) Move an obstacle without changing its geometry
     remove(id)            Remove obstacle by ID
     collision_free(joints) Check if config is collision-free
 """
@@ -50,8 +58,10 @@ from typing import Any
 
 from dimos.core.rpc_client import RPCClient
 from dimos.manipulation.manipulation_module import ManipulationModule
+from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.spec.models import IKResult
 from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -78,6 +88,21 @@ def plan(target_joints: list[float], robot_name: str | None = None) -> bool:
     """Plan to joint configuration. e.g. plan([0.1]*7)"""
     js = JointState(position=target_joints)
     return _client.plan_to_joints(js, robot_name)
+
+
+def groups() -> list[PlanningGroup]:
+    """List explicit planning groups available for group APIs."""
+    return _client.list_planning_groups()
+
+
+def plan_group(group_id: str, target_joints: list[float] | JointState) -> bool:
+    """Plan to a joint target for an explicit planning group."""
+    target = (
+        target_joints
+        if isinstance(target_joints, JointState)
+        else JointState(position=target_joints)
+    )
+    return _client.plan_to_joint_targets({group_id: target})
 
 
 def _make_target_pose(
@@ -144,6 +169,26 @@ def ik_pose(
     return _client.inverse_kinematics_single(target, robot_name, seed)
 
 
+def ik_group_pose(
+    group_id: str,
+    x: float,
+    y: float,
+    z: float,
+    roll: float | None = None,
+    pitch: float | None = None,
+    yaw: float | None = None,
+    seed: JointState | None = None,
+) -> IKResult:
+    """Solve IK for an explicit planning group pose target."""
+    target = _make_target_pose(x, y, z, roll, pitch, yaw)
+    stamped = PoseStamped(
+        frame_id="world",
+        position=target.position,
+        orientation=target.orientation,
+    )
+    return _client.inverse_kinematics({group_id: stamped}, seed=seed)
+
+
 def plan_pose(
     x: float,
     y: float,
@@ -158,11 +203,25 @@ def plan_pose(
     return _client.plan_to_pose(target, robot_name)
 
 
+def plan_group_pose(
+    group_id: str,
+    x: float,
+    y: float,
+    z: float,
+    roll: float | None = None,
+    pitch: float | None = None,
+    yaw: float | None = None,
+) -> bool:
+    """Plan to a Cartesian pose for an explicit planning group."""
+    target = _make_target_pose(x, y, z, roll, pitch, yaw)
+    return _client.plan_to_pose_targets({group_id: target})
+
+
 def preview(
     duration: float | None = None,
     robot_name: str | None = None,
 ) -> bool:
-    """Preview the last generated plan in Visualizer."""
+    """Preview the last generated plan in the visualizer."""
     return _client.preview_plan(None, duration, robot_name)
 
 
@@ -222,6 +281,75 @@ def add_cylinder(
     """Add a cylinder obstacle. e.g. add_cylinder("can", 0.3, 0, 0.2)"""
     pose = Pose(position=Vector3(x=x, y=y, z=z), orientation=Quaternion(0, 0, 0, 1))
     return _client.add_obstacle(name, pose, "cylinder", [radius, height], None)
+
+
+def update_obstacle(
+    name: str,
+    pose: Pose,
+    shape: str,
+    dimensions: list[float] | None = None,
+    mesh_path: str | None = None,
+    color: list[float] | None = None,
+) -> bool:
+    """Replace a complete obstacle; omitted values use new-object defaults."""
+    return _client.update_obstacle(name, pose, shape, dimensions, mesh_path, color)
+
+
+def update_box(
+    name: str,
+    x: float,
+    y: float,
+    z: float,
+    w: float,
+    h: float,
+    d: float,
+    color: list[float] | None = None,
+) -> bool:
+    """Replace a complete box obstacle."""
+    pose = Pose(position=Vector3(x=x, y=y, z=z), orientation=Quaternion(0, 0, 0, 1))
+    return update_obstacle(name, pose, "box", [w, h, d], color=color)
+
+
+def update_sphere(
+    name: str,
+    x: float,
+    y: float,
+    z: float,
+    radius: float,
+    color: list[float] | None = None,
+) -> bool:
+    """Replace a complete sphere obstacle."""
+    pose = Pose(position=Vector3(x=x, y=y, z=z), orientation=Quaternion(0, 0, 0, 1))
+    return update_obstacle(name, pose, "sphere", [radius], color=color)
+
+
+def update_cylinder(
+    name: str,
+    x: float,
+    y: float,
+    z: float,
+    radius: float,
+    height: float,
+    color: list[float] | None = None,
+) -> bool:
+    """Replace a complete cylinder obstacle."""
+    pose = Pose(position=Vector3(x=x, y=y, z=z), orientation=Quaternion(0, 0, 0, 1))
+    return update_obstacle(name, pose, "cylinder", [radius, height], color=color)
+
+
+def update_pose(
+    name: str,
+    x: float,
+    y: float,
+    z: float,
+    roll: float = 0.0,
+    pitch: float = 0.0,
+    yaw: float = 0.0,
+) -> bool:
+    """Move an obstacle while preserving its geometry and appearance."""
+    orientation = Quaternion.from_euler(Vector3(x=roll, y=pitch, z=yaw))
+    pose = Pose(position=Vector3(x=x, y=y, z=z), orientation=orientation)
+    return _client.update_obstacle_pose(name, pose)
 
 
 def remove(obstacle_id: str) -> bool:

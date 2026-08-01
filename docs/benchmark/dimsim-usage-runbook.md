@@ -7,7 +7,7 @@ code-policy observer, and run one automatic scored destination episode.
 The supported stack is `unitree-go2-dimsim-external-pi-eval`. It includes the
 Go2 spatial/navigation modules, observation recording, the persistent
 code-policy kernel, MCP, and the skills that Pi can reach through `app` ([stack
-definition](../../dimos/benchmark/agent_eval/blueprint.py#L15-L51)).
+definition](/dimos/benchmark/agent_eval/blueprint.py#L15-L51)).
 
 ## 1. Prepare the checkout
 
@@ -25,8 +25,8 @@ cd ../..
 The first DimSim launch may need network access. DimOS downloads pinned Deno,
 clones the pinned external DimSim revision, and stores both under the DimOS
 state directory. Hidden mode also installs pinned Playwright Chromium when it is
-missing ([Deno bootstrap](../../dimos/simulation/dimsim/deno_utils.py#L29-L73),
-[DimSim checkout](../../dimos/simulation/dimsim/dimsim_process.py#L142-L207)).
+missing ([Deno bootstrap](/dimos/simulation/dimsim/deno_utils.py#L29-L73),
+[DimSim checkout](/dimos/simulation/dimsim/dimsim_process.py#L142-L207)).
 Later launches reject a modified or wrong-revision checkout rather than running
 an unverifiable simulator.
 
@@ -38,7 +38,7 @@ export OPENAI_API_KEY=...
 ```
 
 Subscription authentication instead uses an absolute path to Pi's OAuth JSON;
-see the [evaluation configuration example](dimsim-agent-evaluation.md#generate-and-select-the-task).
+see the [evaluation configuration example](/docs/benchmark/dimsim-agent-evaluation.md#generate-and-select-the-task).
 
 ## 2. Choose a launch mode
 
@@ -74,7 +74,7 @@ dimos mcp list-tools
 In foreground mode, Ctrl+C stops the whole stack. `--daemon` eventually returns
 the terminal after startup and records the run in the run registry. It may take
 time to build modules before it detaches
-([CLI lifecycle](../usage/cli.md#dimos-run)).
+([CLI lifecycle](/docs/usage/cli.md#dimos-run)).
 
 Open exactly one DimSim scene tab:
 
@@ -116,8 +116,8 @@ interaction.
 With `DIMSIM_HEADLESS=false`, DimOS does not create its usual hidden Playwright
 client. The first page you open at port 8090 becomes the authoritative simulator
 client. Opening several copies can create competing simulator clients. Rerun is
-separate and safe to view independently ([manual visual workflow](dimsim-agent-evaluation.md#manual-visual-smoke-test),
-[launcher behavior](../../dimos/simulation/dimsim/dimsim_process.py#L54-L83)).
+separate and safe to view independently ([manual visual workflow](/docs/benchmark/dimsim-agent-evaluation.md#manual-visual-smoke-test),
+[launcher behavior](/dimos/simulation/dimsim/dimsim_process.py#L54-L83)).
 
 ### Headless automatic mode
 
@@ -138,7 +138,7 @@ memory, MCP, code policy, or recording. Avoid opening another DimSim tab during
 an automatic run.
 
 CPU rendering is the predictable fallback. If the host has a working GPU path,
-omit `DIMSIM_RENDER=cpu`; DimSim defaults to GPU outside CI ([render selection](../../dimos/simulation/dimsim/dimsim_process.py#L54-L79)).
+omit `DIMSIM_RENDER=cpu`; DimSim defaults to GPU outside CI ([render selection](/dimos/simulation/dimsim/dimsim_process.py#L54-L79)).
 
 ## 3. Check and operate the running stack
 
@@ -159,7 +159,7 @@ dimos stop --force       # immediate SIGKILL; use only when graceful stop fails
 Keep `DIMSIM_HEADLESS` and `DIMSIM_RENDER` exported if you expect `dimos
 restart` to preserve the same visible/headless behavior: restart saves the CLI
 arguments, while these two settings are environment variables. The general CLI
-behavior is documented in [CLI Reference](../usage/cli.md#commands).
+behavior is documented in [CLI Reference](/docs/usage/cli.md#commands).
 
 ### Direct operator control
 
@@ -173,7 +173,7 @@ dimos mcp call relative_move \
 
 Other examples are a 90-degree right turn (`degrees: -90`) or a left offset
 (`left: 0.5`). `relative_move` sets a navigation goal and waits for arrival or
-failure; it is not raw velocity teleoperation ([skill semantics](../../dimos/robot/unitree/unitree_skill_container.py#L210-L255)).
+failure; it is not raw velocity teleoperation ([skill semantics](/dimos/robot/unitree/unitree_skill_container.py#L210-L255)).
 Cancel a navigation goal with:
 
 ```bash
@@ -189,7 +189,7 @@ dimos mcp call python_exec --json-args '{"code":"print(app.skills)"}'
 
 The persistent Python namespace preloads `app` for deployed DimOS RPCs and
 skills and `memory` for recorded observations. Code is trusted, unsandboxed, and
-persists across calls ([code-policy contract](../../dimos/agents/code_policy.py#L186-L237)).
+persists across calls ([code-policy contract](/dimos/agents/code_policy.py#L186-L237)).
 Do not paste untrusted Python into this interface.
 
 ## 4. Run Pi manually and observe its code
@@ -211,7 +211,7 @@ For a headless host, use `--no-open`; use `--web-port 0` to choose a free
 loopback port. Ctrl+C detaches the observer without stopping the kernel or robot.
 Each invocation writes an append-only event log and a notebook beneath
 `~/.local/state/dimos/code-policy-watch/`, or beneath `--output DIR` ([observer
-guide](dimsim-agent-evaluation.md#manual-visual-smoke-test), [CLI options](../../dimos/robot/cli/dimos.py#L621-L707)).
+guide](/docs/benchmark/dimsim-agent-evaluation.md#manual-visual-smoke-test), [CLI options](/dimos/cli/dimos.py#L621-L707)).
 
 In another terminal, start Pi's restricted TUI:
 
@@ -228,8 +228,8 @@ Go to the bathtub and stop within 1 meter of its outer edge.
 
 Pi may inspect `app` and `memory`, then call any deployed skill or RPC from
 inside Python. It cannot call those host tools directly: the Pi CLI disables its
-built-ins and other extensions and exposes only `python_exec` ([manual command](../../packages/pi-spatial-adapter/package.json#L12),
-[adapter check](../../packages/pi-spatial-adapter/src/manual-code-policy-extension.ts#L55-L113)).
+built-ins and other extensions and exposes only `python_exec` ([manual command](/packages/pi-spatial-adapter/package.json#L12),
+[adapter check](/packages/pi-spatial-adapter/src/manual-code-policy-extension.ts#L55-L113)).
 
 Watch three views while it works:
 
@@ -243,7 +243,7 @@ scored result; use the automatic runner for pass/fail and retained evidence.
 ## 5. Run one automatic scored episode
 
 The runner attaches to the already-running stack. It never starts or stops
-DimOS or DimSim ([runner ownership](dimsim-agent-evaluation.md#prerequisites)).
+DimOS or DimSim ([runner ownership](/docs/benchmark/dimsim-agent-evaluation.md#prerequisites)).
 
 ### Generate a release from the live scene
 
@@ -292,8 +292,8 @@ Copy its `task_id` into `/tmp/dimsim-eval.json`:
 ```
 
 The current runner accepts only a generated `destination` task and the pinned
-`gpt-5.6-luna`/`medium` combination ([selection constraints](../../dimos/benchmark/agent_eval/config.py#L72-L85),
-[destination validation](../../dimos/benchmark/agent_eval/config.py#L125-L159)).
+`gpt-5.6-luna`/`medium` combination ([selection constraints](/dimos/benchmark/agent_eval/config.py#L72-L85),
+[destination validation](/dimos/benchmark/agent_eval/config.py#L125-L159)).
 
 Run it:
 
@@ -305,8 +305,8 @@ uv run python -m dimos.benchmark.agent_eval run \
 Exit code 0 means the evaluation infrastructure completed and wrote required
 evidence. It does **not** mean the task passed: inspect `task_result` in the
 outcome. A nonzero code means preflight, infrastructure, interruption, cleanup,
-or artifact failure ([outcome model](../../dimos/benchmark/agent_eval/models.py#L179-L198),
-[runner exit mapping](../../dimos/benchmark/agent_eval/runner.py#L309-L326)).
+or artifact failure ([outcome model](/dimos/benchmark/agent_eval/models.py#L179-L198),
+[runner exit mapping](/dimos/benchmark/agent_eval/runner.py#L309-L326)).
 
 ## 6. Inspect automatic-run artifacts
 
@@ -335,10 +335,10 @@ Read the files as follows:
 - `pi-prompt/`: exact system and initial prompts.
 - `pi-session/`: Pi's native JSONL session.
 
-The complete layout and evidence boundary are documented in [Run and inspect](dimsim-agent-evaluation.md#run-and-inspect).
+The complete layout and evidence boundary are documented in [Run and inspect](/docs/benchmark/dimsim-agent-evaluation.md#run-and-inspect).
 The runner resets the code-policy session and simulator pose before each attempt,
 starts the private evaluator, and uses only the native DimSim terminal result for
-pass/fail ([runner sequence](../../dimos/benchmark/agent_eval/runner.py#L127-L223)).
+pass/fail ([runner sequence](/dimos/benchmark/agent_eval/runner.py#L127-L223)).
 
 ## 7. Common failure checks
 
@@ -348,7 +348,7 @@ pass/fail ([runner sequence](../../dimos/benchmark/agent_eval/runner.py#L127-L22
   page with several manual tabs.
 - **Another service uses port 8090:** choose a different `--dimsim-port` only if
   every client/config uses the matching port. Starting DimSim attempts to stop
-  an existing process on its configured port ([port cleanup](../../dimos/simulation/dimsim/dimsim_process.py#L123-L139)).
+  an existing process on its configured port ([port cleanup](/dimos/simulation/dimsim/dimsim_process.py#L123-L139)).
 - **MCP is unavailable:** confirm the evaluation blueprint is running and check
   `dimos mcp status`; its default endpoint is `127.0.0.1:9990`.
 - **Startup reports `sqlite3.OperationalError: disk I/O error`:** stop every
@@ -365,9 +365,9 @@ pass/fail ([runner sequence](../../dimos/benchmark/agent_eval/runner.py#L127-L22
   tools may also exist).
 - **Automatic generation fails:** the live apartment must match the pinned
   profile, scene revision, spawn, asset IDs, and collision geometry. The
-  generator fails closed by design ([generation compatibility](dimsim-task-generation.md#private-oracle-contract)).
+  generator fails closed by design ([generation compatibility](/docs/benchmark/dimsim-task-generation.md#private-oracle-contract)).
 - **Runner says another attempt is active:** only one attempt may hold a given
-  `output_root` lock at a time ([attempt lock](../../dimos/benchmark/agent_eval/store.py#L44-L80)).
+  `output_root` lock at a time ([attempt lock](/dimos/benchmark/agent_eval/store.py#L44-L80)).
 - **A cold run times out:** Pi subscription or model initialization can take
   more than five minutes, so keep `readiness_s` at 600 seconds for the first
   attempt.

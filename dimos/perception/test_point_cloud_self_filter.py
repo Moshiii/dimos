@@ -14,7 +14,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+
 import numpy as np
+import pytest
 from pytest_mock import MockerFixture
 
 from dimos.msgs.geometry_msgs.Transform import Transform
@@ -23,10 +26,29 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.perception import point_cloud_self_filter
 from dimos.perception.point_cloud_self_filter import (
     PointCloudSelfFilter,
-    PointCloudSelfFilterConfig,
     SelfFilterRegion,
 )
 from dimos.protocol.tf.tf import MultiTBuffer
+
+
+class _FakeTF(MultiTBuffer):
+    def dispose(self) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _stop_created_modules(mocker: MockerFixture) -> Generator[None, None, None]:
+    modules: list[PointCloudSelfFilter] = []
+    original_init = PointCloudSelfFilter.__init__
+
+    def tracked_init(self: PointCloudSelfFilter, **kwargs: object) -> None:
+        original_init(self, **kwargs)
+        modules.append(self)
+
+    mocker.patch.object(PointCloudSelfFilter, "__init__", tracked_init)
+    yield
+    for module in modules:
+        module.stop()
 
 
 def _cloud(
@@ -42,13 +64,12 @@ def _cloud(
 
 
 def _filter(regions: list[SelfFilterRegion], *, drop_missing: bool = False) -> PointCloudSelfFilter:
-    module = object.__new__(PointCloudSelfFilter)
-    module.__dict__["config"] = PointCloudSelfFilterConfig(
+    module = PointCloudSelfFilter(
         regions=regions,
         drop_cloud_on_missing_tf=drop_missing,
         tf_tolerance_s=100.0,
     )
-    module.__dict__["_tf"] = MultiTBuffer()
+    module._tf = _FakeTF()  # type: ignore[assignment]
     return module
 
 

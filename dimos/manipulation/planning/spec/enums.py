@@ -24,7 +24,6 @@ class ObstacleType(Enum):
     SPHERE = auto()
     CYLINDER = auto()
     MESH = auto()
-    OCTREE = auto()
 
 
 class IKStatus(Enum):
@@ -36,6 +35,7 @@ class IKStatus(Enum):
     JOINT_LIMITS = auto()
     COLLISION = auto()
     TIMEOUT = auto()
+    UNSUPPORTED = auto()
 
 
 class PlanningStatus(Enum):
@@ -49,23 +49,3 @@ class PlanningStatus(Enum):
     COLLISION_AT_START = auto()
     COLLISION_AT_GOAL = auto()
     UNSUPPORTED = auto()
-
-
-class ParametrizationStatus(Enum):
-    """Status of trajectory parametrization."""
-
-    SUCCESS = auto()
-    INVALID_PLAN = auto()
-    INFEASIBLE = auto()
-    BACKEND_UNAVAILABLE = auto()
-    FAILED = auto()
-
-
-class TrajectoryDispatchStatus(Enum):
-    """Status of trajectory dispatch preparation."""
-
-    SUCCESS = auto()
-    INVALID_TRAJECTORY = auto()
-    MISSING_TASK = auto()
-    MISSING_JOINT = auto()
-    FAILED = auto()

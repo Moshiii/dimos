@@ -129,9 +129,7 @@ def test_viewer_opens_every_predicate_and_variant_without_writes(tmp_path: Path)
             assert _inspector_rows(question_section)["Question"] == instance.question.text
             assert "/agent-visible/observed-map" in command_names
             _assert_predicate_overlay(predicate, command_names)
-            assert not any(
-                name.startswith("/private-oracle/relief/") for name in command_names
-            )
+            assert not any(name.startswith("/private-oracle/relief/") for name in command_names)
             assert not any(
                 name.startswith("/private-oracle/walls/blocked/") for name in command_names
             )

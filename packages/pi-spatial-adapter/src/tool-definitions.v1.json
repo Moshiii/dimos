@@ -16,7 +16,9 @@
             "maxLength": 4096
           }
         },
-        "required": ["command"]
+        "required": [
+          "command"
+        ]
       }
     },
     {
@@ -35,7 +37,9 @@
             "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
           }
         },
-        "required": ["path"]
+        "required": [
+          "path"
+        ]
       }
     }
   ],
@@ -48,9 +52,14 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "answer": {"type": "boolean", "description": "Boolean answer."}
+          "answer": {
+            "type": "boolean",
+            "description": "Boolean answer."
+          }
         },
-        "required": ["answer"]
+        "required": [
+          "answer"
+        ]
       },
       "integer": {
         "type": "object",
@@ -63,7 +72,9 @@
             "maximum": 2147483647
           }
         },
-        "required": ["answer"]
+        "required": [
+          "answer"
+        ]
       }
     }
   }

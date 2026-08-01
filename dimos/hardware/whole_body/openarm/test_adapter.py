@@ -26,7 +26,6 @@ import dimos.hardware.whole_body.openarm.adapter as openarm_dual_adapter
 from dimos.hardware.whole_body.openarm.adapter import (
     OpenArmDualBindingUnavailableError,
     OpenArmDualWholeBodyAdapter,
-    register,
 )
 from dimos.hardware.whole_body.registry import WholeBodyAdapterRegistry
 from dimos.hardware.whole_body.spec import WholeBodyAdapter
@@ -65,15 +64,13 @@ def test_openarm_dual_configures_side_gravity_models() -> None:
 
 def test_openarm_dual_rejects_non_14_dof() -> None:
     with pytest.raises(ValueError, match="supports 14 DOF"):
-        _ = OpenArmDualWholeBodyAdapter(dof=7, use_mock_bus=True)
+        OpenArmDualWholeBodyAdapter(dof=7, use_mock_bus=True)
 
 
-def test_register_preserves_openarm_dual_key() -> None:
+def test_manifest_preserves_openarm_dual_key() -> None:
     registry = WholeBodyAdapterRegistry()
 
-    register(registry)
-
-    assert registry.available() == ["openarm_dual"]
+    assert "openarm_dual" in registry.available()
     assert isinstance(
         registry.create("openarm_dual", use_mock_bus=True), OpenArmDualWholeBodyAdapter
     )
@@ -81,15 +78,14 @@ def test_register_preserves_openarm_dual_key() -> None:
 
 def test_openarm_dual_module_import_does_not_probe_binding(mocker) -> None:
     mocker.patch(
-        "dimos.hardware.damiao.runtime.importlib.import_module",
+        "dimos.hardware.damiao.runtime._load_can_motor_control",
         side_effect=AssertionError("binding import must stay lazy"),
     )
 
-    reloaded = importlib.reload(openarm_dual_adapter)
+    importlib.reload(openarm_dual_adapter)
     registry = WholeBodyAdapterRegistry()
-    reloaded.register(registry)
 
-    assert registry.available() == ["openarm_dual"]
+    assert "openarm_dual" in registry.available()
 
 
 def test_openarm_rs_preserves_constructor_deployment_options() -> None:

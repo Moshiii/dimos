@@ -1,3 +1,17 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from hashlib import sha256
 import json
 import os
@@ -45,7 +59,6 @@ from dimos.benchmark.spatial.pi_baseline.runner import (
     run_condition,
     run_paired,
 )
-from dimos.benchmark.spatial.pi_baseline.scheduler_runtime import SchedulerRuntime
 from dimos.benchmark.spatial.pi_baseline.topology import PinnedDirectory
 from dimos.benchmark.spatial.test_pi_baseline_broker import _png
 from dimos.benchmark.spatial.test_pi_baseline_config import valid_payload
@@ -630,9 +643,6 @@ def test_score_publication_wins_before_later_cancellation(
 ) -> None:
     monkeypatch.setattr("dimos.benchmark.spatial.pi_baseline.runner.stage_public_instance", _stage)
     cancel_requested, publication_lock = _operation_pair()
-    runtime = object.__new__(SchedulerRuntime)
-    runtime._cancel_requested = cancel_requested
-    runtime._publication_lock = publication_lock
     monkeypatch.setattr(
         "dimos.benchmark.spatial.pi_baseline.runner.score_case",
         _score,
@@ -646,7 +656,8 @@ def test_score_publication_wins_before_later_cancellation(
 
             def cancel() -> None:
                 cancellation_started.set()
-                runtime.cancel()
+                with publication_lock:
+                    cancel_requested.set()
 
             canceller = Thread(target=cancel)
             canceller.start()

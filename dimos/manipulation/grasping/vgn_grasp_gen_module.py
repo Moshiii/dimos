@@ -36,6 +36,7 @@ from dimos.msgs.grasping_msgs.GraspCandidateArray import GraspCandidateArray
 from dimos.msgs.grasping_msgs.TargetBounds import TargetBounds
 from dimos.msgs.reconstruction_msgs.TSDFGrid import TSDFGrid
 from dimos.msgs.std_msgs.Header import Header
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.perception.reconstruction.tsdf_debug_export import export_tsdf_debug_files
 from dimos.utils.logging_config import setup_logger
 
@@ -95,6 +96,7 @@ class VGNGraspGenModule(Module):
     config: VGNGraspGenModuleConfig
 
     tsdf: In[TSDFGrid]
+    tf: In[TFMessage]
 
     grasp_candidates: Out[GraspCandidateArray]
     grasp_poses: Out[PoseArray]
@@ -318,7 +320,7 @@ class VGNGraspGenModule(Module):
     def _output_from_target_matrix(self, tsdf: TSDFGrid) -> np.ndarray | None:
         if tsdf.frame_id == self.config.output_frame:
             return np.eye(4, dtype=np.float64)
-        transform = self.tf.get(self.config.output_frame, tsdf.frame_id, tsdf.ts, 0.1)
+        transform = self.tfbuffer.get(self.config.output_frame, tsdf.frame_id, tsdf.ts, 0.1)
         if transform is None:
             return None
         return transform.to_matrix().astype(np.float64)
@@ -376,7 +378,7 @@ class VGNGraspGenModule(Module):
     ) -> np.ndarray | None:
         if parent_frame == child_frame:
             return np.eye(4, dtype=np.float64)
-        transform = self.tf.get(parent_frame, child_frame, ts, 0.1)
+        transform = self.tfbuffer.get(parent_frame, child_frame, ts, 0.1)
         if transform is None:
             return None
         return transform.to_matrix().astype(np.float64)

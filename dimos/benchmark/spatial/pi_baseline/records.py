@@ -1,4 +1,18 @@
 # Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
 """Strict versioned records owned by the Python PI baseline."""
 
 from __future__ import annotations
@@ -60,7 +74,9 @@ class Prediction(VersionedRecord):
     def validate_value_type(self) -> Prediction:
         if self.answer_type is AnswerType.BOOLEAN and type(self.value) is not bool:
             raise ValueError("boolean predictions require a bool")
-        if self.answer_type is AnswerType.INTEGER and (type(self.value) is not int or self.value < 0):
+        if self.answer_type is AnswerType.INTEGER and (
+            type(self.value) is not int or self.value < 0
+        ):
             raise ValueError("integer predictions require a non-negative int")
         return self
 

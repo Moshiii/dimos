@@ -1,5 +1,6 @@
-# How to Integrate a New Manipulator Arm
-
+---
+title: "How to Integrate a New Manipulator Arm"
+---
 This guide walks through integrating a new robot arm with DimOS, from writing the hardware adapter to creating blueprints for planning and control.
 
 ## Architecture Overview
@@ -45,13 +46,13 @@ Create a new directory for your arm under `dimos/hardware/manipulators/`:
 ```
 dimos/hardware/manipulators/
 ├── spec.py              # ManipulatorAdapter Protocol (don't modify)
-├── registry.py          # Manifest-based adapter registry (don't modify)
+├── registry.py          # Auto-discovery registry (don't modify)
 ├── mock/
 ├── xarm/
 ├── piper/
 └── yourarm/             # ← New directory
     ├── __init__.py
-    ├── __registry__.py
+    ├── _registry.py  # Declares your adapter (name → import path)
     └── adapter.py
 ```
 
@@ -339,8 +340,15 @@ class YourArmAdapter:
     def read_force_torque(self) -> list[float] | None:
         """Read F/T sensor data [fx, fy, fz, tx, ty, tz]. None if no sensor."""
         return None
+```
 
-__all__ = ["YourArmAdapter"]
+Then declare the adapter in a `_registry.py` manifest next to it:
+
+```py
+# dimos/hardware/manipulators/yourarm/_registry.py
+ADAPTER_FACTORIES = {
+    "yourarm": "dimos.hardware.manipulators.yourarm.adapter:YourArmAdapter",
+}
 ```
 
 ### Key implementation notes
@@ -362,44 +370,15 @@ __all__ = ["YourArmAdapter"]
 
 ## Step 2: Create Package Files
 
-### \_\_init\_\_.py
+### How discovery works
 
-```python skip
-"""YourArm manipulator hardware adapter.
-
-Usage:
-    >>> from dimos.hardware.manipulators.yourarm import YourArmAdapter
-    >>> adapter = YourArmAdapter(address="192.168.1.100", dof=6)
-    >>> adapter.connect()
-    >>> positions = adapter.read_joint_positions()
-"""
-
-from dimos.hardware.manipulators.yourarm.adapter import YourArmAdapter
-
-__all__ = ["YourArmAdapter"]
-```
-
-### `__registry__.py`
-
-Create a lightweight manifest next to `adapter.py`:
-
-```python skip
-ADAPTER_FACTORIES = {
-    "yourarm": "dimos.hardware.manipulators.yourarm.adapter:YourArmAdapter",
-}
-
-__all__ = ["ADAPTER_FACTORIES"]
-```
-
-### How auto-discovery works
-
-The `AdapterRegistry` in `dimos/hardware/manipulators/registry.py` automatically discovers your adapter metadata at import time:
+The `AdapterRegistry` in `dimos/hardware/manipulators/registry.py` discovers adapters from `_registry.py` manifests at import time:
 
 1. It iterates over all subpackages under `dimos/hardware/manipulators/`
-2. For each subpackage, it imports `<subpackage>.__registry__`
-3. It reads `ADAPTER_FACTORIES` entries such as `"yourarm": "dimos.hardware.manipulators.yourarm.adapter:YourArmAdapter"`
+2. For each subpackage, it loads `<subpackage>._registry` and records each `ADAPTER_FACTORIES` entry (name → `"module:attr"` import path)
+3. Your adapter module is imported only when `create("yourarm")` is first called
 
-This means **no central registry edit is needed**. The adapter implementation module is imported lazily only when the adapter is selected through `adapter_registry.create("yourarm", ...)`, so unrelated adapter listing does not import your vendor SDK.
+The manifest must import nothing beyond stdlib — it is loaded even when your vendor SDK is missing, so the name always shows up in `available()` and a missing SDK fails loudly at `create()` instead of silently dropping the adapter. A CI test (`dimos/hardware/test_adapter_registries.py`) fails if an adapter directory has no manifest or a manifest path doesn't resolve.
 
 You can verify discovery works:
 
@@ -529,14 +508,12 @@ def _make_base_pose(x=0.0, y=0.0, z=0.0) -> PoseStamped:
 def _make_yourarm_config(
     name: str = "arm",
     y_offset: float = 0.0,
-    coordinator_task: str | None = None,
 ) -> RobotModelConfig:
     """Create YourArm robot config for planning.
 
     Args:
         name: Robot name in the Drake planning world.
         y_offset: Y-axis offset for multi-arm setups.
-        coordinator_task: Coordinator task name for trajectory execution via RPC.
     """
     # These must match the joint names in your URDF
     joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
@@ -551,18 +528,16 @@ def _make_yourarm_config(
                 joint_names=tuple(joint_names),
                 base_link="base_link",
                 tip_link="link6",
-                source="fallback",
             )
         ],
-        base_pose=_make_base_pose(y=y_offset),  # Compatibility; prefer model placement
-        base_link="base_link",                 # Compatibility robot-scoped base
+        base_pose=_make_base_pose(y=y_offset),  # world -> base_link placement
+        base_link="base_link",                 # Robot-scoped placement/weld/strip link
         package_paths={"yourarm_description": _YOURARM_PACKAGE_PATH},
         xacro_args={},                  # Xacro arguments if using .xacro files
         collision_exclusion_pairs=[],   # Pairs of links that can touch (e.g., gripper fingers)
         auto_convert_meshes=True,       # Convert DAE/STL meshes for Drake
         max_velocity=1.0,               # Max velocity scaling factor
         max_acceleration=2.0,           # Max acceleration scaling factor
-        coordinator_task_name=coordinator_task,
     )
 ```
 
@@ -573,7 +548,7 @@ Add this to your `dimos/robot/yourarm/blueprints.py` alongside the coordinator b
 ```python skip
 
 yourarm_planner = manipulation_module(
-    robots=[_make_yourarm_config("arm", coordinator_task="traj_arm")],
+    robots=[_make_yourarm_config("arm")],
     planning_timeout=10.0,
     visualization={"backend": "meshcat"},
 )
@@ -588,9 +563,9 @@ yourarm_planner = manipulation_module(
 |-------|-------------|
 | `model_path` | Path to `.urdf` or `.xacro` file |
 | `joint_names` | Ordered controllable local model joint set (must match URDF); not itself a planning group |
-| `planning_groups` / `srdf_path` | Explicit planning groups or SRDF source; fallback can generate `{robot_name}/manipulator` for an unambiguous single chain |
+| `planning_groups` / `srdf_path` | Explicit planning groups or SRDF source; direct `RobotModelConfig(...)` helpers should pass explicit groups, while shared config helpers can discover groups from SRDF/fallback |
+| `base_pose` / `base_link` | Optional robot placement: `base_pose` places `base_link` in the world for weld/strip behavior |
 | `package_paths` | Maps `package://` URIs to filesystem paths (for xacro) |
-| `coordinator_task_name` | Must match the `TaskConfig.name` in your coordinator blueprint |
 | `collision_exclusion_pairs` | List of `(link_a, link_b)` tuples for links that may legitimately touch (e.g., gripper fingers) |
 
 Coordinator-facing joint states and trajectories use global joint names derived
@@ -598,10 +573,10 @@ mechanically as `{robot_name}/{local_joint_name}` (for example, `arm/joint1`).
 Keep hardware-native name translation inside the hardware adapter; manipulation
 planning config uses local model joint names.
 
-`base_link`, `base_pose`, and `end_effector_link` are compatibility fields used
-by current placement and robot-scoped helper paths. New planning code should use
-SRDF/planning-group chain base/tip links and encode robot placement in the model. See
-[Planning Groups](/docs/capabilities/manipulation/planning_groups.md).
+Planning-group `base_link`/`tip_link` values define kinematic chains and pose
+target frames. `base_link` is only the robot-scoped link placed by
+`base_pose`; do not use it as a substitute for planning-group chain metadata.
+See [Planning Groups](/docs/capabilities/manipulation/planning_groups.md).
 
 ## Step 5: Register Blueprints
 
@@ -706,8 +681,8 @@ adapter.disconnect()
 Files to create:
 
 - [ ] `dimos/hardware/manipulators/yourarm/__init__.py`
-- [ ] `dimos/hardware/manipulators/yourarm/__registry__.py` (maps adapter key to implementation path)
 - [ ] `dimos/hardware/manipulators/yourarm/adapter.py` (implements Protocol)
+- [ ] `dimos/hardware/manipulators/yourarm/_registry.py` (declares `ADAPTER_FACTORIES`)
 - [ ] `dimos/robot/yourarm/__init__.py`
 - [ ] `dimos/robot/yourarm/blueprints.py` (coordinator + planning blueprints)
 
@@ -718,6 +693,5 @@ Files to modify:
 Verification:
 
 - [ ] `adapter_registry.available()` includes `"yourarm"`
-- [ ] `adapter_registry.create("yourarm", address="192.168.1.100", dof=6)` returns your adapter
 - [ ] `pytest dimos/robot/test_all_blueprints_generation.py` passes (regenerates `all_blueprints.py`)
 - [ ] `dimos run coordinator-yourarm` starts successfully

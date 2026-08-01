@@ -80,9 +80,9 @@ directly.
 Create a small Vite/React build next to the Pi adapter, not inside the existing
 robot-facing Svelte UI. The adapter already requires Node 22 and TypeScript but
 has no React dependency or browser build
-([Pi adapter package](../../packages/pi-spatial-adapter/package.json)); the
+([Pi adapter package](/packages/pi-spatial-adapter/package.json)); the
 existing web interface is a separate Svelte/Vite application
-([web interface package](../../dimos/web/dimos_interface/package.json)).
+([web interface package](/dimos/web/dimos_interface/package.json)).
 
 Keep the boundary deliberately narrow:
 

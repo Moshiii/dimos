@@ -1,4 +1,18 @@
 # Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
 """Canonical public ``case.v1.json`` projection."""
 
 from __future__ import annotations
@@ -35,7 +49,9 @@ _FORBIDDEN = {
 class DescriptorMismatchError(ValueError):
     """Safe metadata for a staging descriptor-set mismatch."""
 
-    def __init__(self, expected_entry_count: int, actual_entry_count: int, actual_entries_sha256: str) -> None:
+    def __init__(
+        self, expected_entry_count: int, actual_entry_count: int, actual_entries_sha256: str
+    ) -> None:
         super().__init__()
         self.expected_entry_count = expected_entry_count
         self.actual_entry_count = actual_entry_count
@@ -142,7 +158,9 @@ def stage_public_instance(
         finally:
             maps.close()
         map_hash = hashlib.sha256(map_data).hexdigest()
-        schema_source = Path(__file__).parents[4] / "packages/pi-spatial-adapter/src/tool-definitions.v1.json"
+        schema_source = (
+            Path(__file__).parents[4] / "packages/pi-spatial-adapter/src/tool-definitions.v1.json"
+        )
         schema_data = schema_source.read_bytes()
         child.write_bytes("schema.v1.json", schema_data)
         schema_hash = hashlib.sha256(schema_data).hexdigest()
@@ -252,20 +270,37 @@ def _verify_staging_descriptor(root: PinnedDirectory, staging: StagingRecord) ->
     manifest = json.loads(root.read_relative("staging-manifest.v1.json"))
     provenance = json.loads(root.read_relative("provenance.v1.json"))
     inventory = json.loads(root.read_relative("inventory.v1.json"))
-    if not isinstance(case, dict) or not isinstance(manifest, dict) or not isinstance(provenance, dict):
+    if (
+        not isinstance(case, dict)
+        or not isinstance(manifest, dict)
+        or not isinstance(provenance, dict)
+    ):
         raise ValueError("invalid staging metadata")
-    if manifest.get("record_type") != "pi-staging-manifest" or provenance.get("record_type") != "pi-provenance":
+    if (
+        manifest.get("record_type") != "pi-staging-manifest"
+        or provenance.get("record_type") != "pi-provenance"
+    ):
         raise ValueError("invalid staging metadata")
-    if manifest.get("provenance") != provenance or provenance.get("map_sha256") != staging.map_sha256:
+    if (
+        manifest.get("provenance") != provenance
+        or provenance.get("map_sha256") != staging.map_sha256
+    ):
         raise ValueError("staging provenance does not match map")
-    if provenance.get("case_sha256") != hashlib.sha256(root.read_relative(staging.case_path)).hexdigest():
+    if (
+        provenance.get("case_sha256")
+        != hashlib.sha256(root.read_relative(staging.case_path)).hexdigest()
+    ):
         raise ValueError("staging provenance does not match case")
-    if provenance.get("schema_sha256") != staging.schema_sha256 or hashlib.sha256(
-        root.read_relative(staging.schema_path)
-    ).hexdigest() != staging.schema_sha256:
+    if (
+        provenance.get("schema_sha256") != staging.schema_sha256
+        or hashlib.sha256(root.read_relative(staging.schema_path)).hexdigest()
+        != staging.schema_sha256
+    ):
         raise ValueError("staging schema does not match its record")
     entries = inventory.get("files") if isinstance(inventory, dict) else None
-    if not isinstance(entries, list) or {entry.get("path") for entry in entries} != expected - {"inventory.v1.json"}:
+    if not isinstance(entries, list) or {entry.get("path") for entry in entries} != expected - {
+        "inventory.v1.json"
+    }:
         raise ValueError("staged inventory is incomplete or contains private artifacts")
     for entry in entries:
         relative = str(entry["path"])

@@ -403,6 +403,3 @@ class DamiaoArmAdapter:
             float(np.clip(value, -limit, limit))
             for value, limit in zip(values, self._gravity_torque_limits, strict=False)
         ]
-
-
-__all__ = ["DamiaoArmAdapter"]

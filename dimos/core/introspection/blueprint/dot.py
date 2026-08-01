@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
+from dimos.cli import theme
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.core.introspection.utils import (
     GROUP_COLORS,
@@ -34,7 +35,6 @@ from dimos.core.introspection.utils import (
     sanitize_id,
 )
 from dimos.core.module import ModuleBase
-from dimos.utils.cli import theme
 
 if TYPE_CHECKING:
     from dimos.core.coordination.module_coordinator import ResolvedModulePlan
@@ -98,7 +98,7 @@ def render(
         module_classes[bp.module.__name__] = bp.module
         for conn in bp.streams:
             # Apply remapping
-            remapped_name = blueprint_set.remapping_map.get((bp.module, conn.name), conn.name)
+            remapped_name = blueprint_set.remapping_map.get((bp.name, conn.name), conn.name)
             if not isinstance(remapped_name, str):
                 continue
             key = (remapped_name, conn.type)

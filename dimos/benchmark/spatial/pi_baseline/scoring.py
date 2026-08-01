@@ -1,4 +1,18 @@
 # Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
 """Host-only scoring against explicitly supplied private oracle data."""
 
 from __future__ import annotations
@@ -43,7 +57,9 @@ class PrivateScore(SpatialModel):
     def validate_value_type(self) -> PrivateScore:
         if self.answer_type is AnswerType.BOOLEAN and type(self.value) is not bool:
             raise ValueError("boolean scores require a bool")
-        if self.answer_type is AnswerType.INTEGER and (type(self.value) is not int or self.value < 0):
+        if self.answer_type is AnswerType.INTEGER and (
+            type(self.value) is not int or self.value < 0
+        ):
             raise ValueError("integer scores require a non-negative int")
         return self
 
@@ -151,19 +167,29 @@ def _load_case(case: Path | dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _load_answer(root: Path, case: dict[str, JsonValue], question_id: str) -> Answer:
     path = _oracle_path(root, case, "answers.jsonl")
-    matches = [Answer.model_validate_json(line) for line in path.read_text().splitlines() if line and json.loads(line).get("question_id") == question_id]
+    matches = [
+        Answer.model_validate_json(line)
+        for line in path.read_text().splitlines()
+        if line and json.loads(line).get("question_id") == question_id
+    ]
     if len(matches) != 1:
         raise ValueError(f"expected exactly one private answer for {question_id}")
     return matches[0]
 
 
-def _load_override(root: Path, case: dict[str, JsonValue], question_id: str) -> ReviewOverride | None:
+def _load_override(
+    root: Path, case: dict[str, JsonValue], question_id: str
+) -> ReviewOverride | None:
     scene = _string(_mapping(case, "scene"), "scene_id")
     trajectory = _string(_mapping(case, "trajectory"), "trajectory_id")
     path = root / "scenes" / scene / "trajectories" / trajectory / "review_overrides.jsonl"
     if not path.exists():
         return None
-    matches = [ReviewOverride.model_validate_json(line) for line in path.read_text().splitlines() if line and json.loads(line).get("question_id") == question_id]
+    matches = [
+        ReviewOverride.model_validate_json(line)
+        for line in path.read_text().splitlines()
+        if line and json.loads(line).get("question_id") == question_id
+    ]
     if len(matches) > 1:
         raise ValueError(f"multiple private review overrides for {question_id}")
     return matches[0] if matches else None

@@ -31,6 +31,9 @@ class FakeTF(MultiTBuffer):
     def stop(self) -> None:
         pass
 
+    def dispose(self) -> None:
+        pass
+
 
 def _make_module(**kwargs: object) -> TfPoseSource:
     module = TfPoseSource(**kwargs)
@@ -54,7 +57,7 @@ def test_tf_pose_source_publishes_odometry_from_tf_lookup() -> None:
         child_frame_id="camera",
         ts=time.time(),
     )
-    module.tf.receive_transform(transform)
+    module.tfbuffer.receive_transform(transform)
 
     try:
         assert module.tick()
@@ -83,7 +86,7 @@ def test_tf_pose_source_skips_missing_and_stale_tf() -> None:
         assert not module.tick()
         assert published == []
 
-        module.tf.receive_transform(
+        module.tfbuffer.receive_transform(
             Transform(frame_id="world", child_frame_id="camera", ts=time.time() - 10.0)
         )
 
@@ -96,7 +99,7 @@ def test_tf_pose_source_skips_missing_and_stale_tf() -> None:
 def test_tf_pose_source_sets_frame_ids() -> None:
     module = _make_module(target_frame="map", source_frame="wrist_camera", tf_tolerance_s=1.0)
     published = _collect_published(module)
-    module.tf.receive_transform(
+    module.tfbuffer.receive_transform(
         Transform(frame_id="map", child_frame_id="wrist_camera", ts=time.time())
     )
 
@@ -117,7 +120,7 @@ def test_tf_pose_source_fixed_rate_lifecycle() -> None:
         publish_rate_hz=20.0,
     )
     published = _collect_published(module)
-    module.tf.receive_transform(
+    module.tfbuffer.receive_transform(
         Transform(frame_id="world", child_frame_id="camera", ts=time.time())
     )
 

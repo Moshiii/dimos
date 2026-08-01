@@ -127,10 +127,3 @@ class OpenArmRSAdapter(DamiaoArmAdapter):
 
 def register(registry: AdapterRegistry) -> None:
     registry.register("openarm_rs", OpenArmRSAdapter)
-
-
-__all__ = [
-    "OpenArmRSAdapter",
-    "OpenArmRSBindingUnavailableError",
-    "register",
-]

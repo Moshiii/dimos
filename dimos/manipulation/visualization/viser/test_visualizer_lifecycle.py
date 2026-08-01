@@ -21,19 +21,25 @@ import pytest
 
 pytest.importorskip("viser", reason="Viser optional dependency is not installed")
 
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
-from dimos.manipulation.planning.spec.enums import PlanningStatus
-from dimos.manipulation.planning.spec.models import GeneratedPlan, PlanningSceneInfo
+from dimos.manipulation.planning.spec.models import (
+    PlanningSceneInfo,
+    VisualizationSession,
+    VisualizationStateFrame,
+)
 from dimos.manipulation.visualization.viser import (
     runtime as runtime_module,
+    scene as scene_module,
     visualizer as visualizer_module,
 )
-from dimos.manipulation.visualization.viser.animation import GroupPreviewAnimation
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.manipulation.visualization.viser.runtime import ViserRuntime
+from dimos.manipulation.visualization.viser.scene import RobotDisplayMode, ViserManipulationScene
 from dimos.manipulation.visualization.viser.visualizer import ViserManipulationVisualizer
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 
 
 class FakeDependency:
@@ -42,6 +48,23 @@ class FakeDependency:
 
 class FakeViserUrdf:
     pass
+
+
+class FakeSceneUrdf:
+    def __init__(
+        self,
+        _server: FakeServer,
+        _path: Path | None = None,
+        *,
+        urdf_or_path: object | None = None,
+        **_kwargs: object,
+    ) -> None:
+        self.show_visual = True
+        self.show_collision = False
+        self.cfg: list[float] | None = None
+
+    def update_cfg(self, cfg: list[float]) -> None:
+        self.cfg = list(cfg)
 
 
 class FakeServer:
@@ -63,8 +86,12 @@ def fake_robot_config(name: str) -> RobotModelConfig:
         name=name,
         model_path=Path(f"{name}.urdf"),
         base_pose=PoseStamped(),
-        joint_names=["joint1"],
-        end_effector_link="ee_link",
+        joint_names=[],
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator", joint_names=(), base_link="base_link", tip_link="ee_link"
+            )
+        ],
     )
 
 
@@ -75,8 +102,6 @@ def test_visualizer_construction_is_lazy(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(visualizer_module, "ViserRuntime", fail_runtime)
 
     visualizer = ViserManipulationVisualizer(
-        world_monitor=FakeDependency(),
-        manipulation_module=FakeDependency(),
         config=ViserVisualizationConfig(panel_enabled=False),
     )
 
@@ -107,8 +132,6 @@ def test_visualizer_initializes_all_scene_robots_from_planning_scene(
             self,
             server: FakeServer,
             viser_urdf: type[FakeViserUrdf],
-            *,
-            preview_fps: float,
         ) -> None:
             calls.append(("create", "scene"))
 
@@ -122,12 +145,12 @@ def test_visualizer_initializes_all_scene_robots_from_planning_scene(
         def __init__(
             self,
             server: FakeServer,
-            world_monitor: object,
-            manipulation_module: object,
+            scene_info: PlanningSceneInfo,
+            operator: object,
+            current_states: dict[str, JointState],
             config: ViserVisualizationConfig,
             scene: FakeScene,
         ) -> None:
-            del world_monitor, manipulation_module, config, scene
             calls.append(("create", "gui"))
 
         def start(self) -> None:
@@ -144,8 +167,6 @@ def test_visualizer_initializes_all_scene_robots_from_planning_scene(
     monkeypatch.setattr(visualizer_module, "ViserManipulationScene", FakeScene)
     monkeypatch.setattr(visualizer_module, "ViserPanelGui", FakeGui)
     visualizer = ViserManipulationVisualizer(
-        world_monitor=FakeDependency(),
-        manipulation_module=FakeDependency(),
         config=ViserVisualizationConfig(panel_enabled=True),
     )
     scene = PlanningSceneInfo(
@@ -155,7 +176,7 @@ def test_visualizer_initializes_all_scene_robots_from_planning_scene(
         }
     )
 
-    visualizer.initialize_scene(scene)
+    visualizer.initialize(VisualizationSession(scene, operator=FakeDependency()))
 
     assert calls == [
         ("start", "runtime"),
@@ -190,8 +211,6 @@ def test_visualizer_closes_partial_startup_when_gui_start_fails(
             self,
             server: FakeServer,
             viser_urdf: type[FakeViserUrdf],
-            *,
-            preview_fps: float,
         ) -> None:
             pass
 
@@ -202,12 +221,12 @@ def test_visualizer_closes_partial_startup_when_gui_start_fails(
         def __init__(
             self,
             server: FakeServer,
-            world_monitor: object,
-            manipulation_module: object,
+            scene_info: PlanningSceneInfo,
+            operator: object,
+            current_states: dict[str, JointState],
             config: ViserVisualizationConfig,
             scene: FakeScene,
         ) -> None:
-            del world_monitor, manipulation_module, config, scene
             pass
 
         def start(self) -> None:
@@ -221,13 +240,13 @@ def test_visualizer_closes_partial_startup_when_gui_start_fails(
     monkeypatch.setattr(visualizer_module, "ViserManipulationScene", FakeScene)
     monkeypatch.setattr(visualizer_module, "ViserPanelGui", FakeGui)
     visualizer = ViserManipulationVisualizer(
-        world_monitor=FakeDependency(),
-        manipulation_module=FakeDependency(),
         config=ViserVisualizationConfig(panel_enabled=True),
     )
 
     with pytest.raises(RuntimeError, match="gui failed"):
-        visualizer.initialize_scene(PlanningSceneInfo(robots={}))
+        visualizer.initialize(
+            VisualizationSession(PlanningSceneInfo(robots={}), operator=FakeDependency())
+        )
 
     assert closed == ["gui", "scene", "runtime"]
     assert visualizer.get_visualization_url() is None
@@ -255,8 +274,6 @@ def test_visualizer_closes_runtime_when_scene_creation_fails(
             self,
             server: FakeServer,
             viser_urdf: type[FakeViserUrdf],
-            *,
-            preview_fps: float,
         ) -> None:
             raise RuntimeError("scene failed")
 
@@ -264,13 +281,13 @@ def test_visualizer_closes_runtime_when_scene_creation_fails(
     monkeypatch.setattr(visualizer_module, "ViserUrdf", FakeViserUrdf)
     monkeypatch.setattr(visualizer_module, "ViserManipulationScene", FailingScene)
     visualizer = ViserManipulationVisualizer(
-        world_monitor=FakeDependency(),
-        manipulation_module=FakeDependency(),
         config=ViserVisualizationConfig(panel_enabled=False),
     )
 
     with pytest.raises(RuntimeError, match="scene failed"):
-        visualizer.initialize_scene(PlanningSceneInfo(robots={}))
+        visualizer.initialize(
+            VisualizationSession(PlanningSceneInfo(robots={}), operator=FakeDependency())
+        )
 
     assert closed == ["runtime"]
     assert visualizer.get_visualization_url() is None
@@ -298,8 +315,6 @@ def test_visualizer_close_is_best_effort_when_gui_raises(
             self,
             server: FakeServer,
             viser_urdf: type[FakeViserUrdf],
-            *,
-            preview_fps: float,
         ) -> None:
             pass
 
@@ -310,12 +325,12 @@ def test_visualizer_close_is_best_effort_when_gui_raises(
         def __init__(
             self,
             server: FakeServer,
-            world_monitor: object,
-            manipulation_module: object,
+            scene_info: PlanningSceneInfo,
+            operator: object,
+            current_states: dict[str, JointState],
             config: ViserVisualizationConfig,
             scene: FakeScene,
         ) -> None:
-            del world_monitor, manipulation_module, config, scene
             pass
 
         def start(self) -> None:
@@ -333,11 +348,11 @@ def test_visualizer_close_is_best_effort_when_gui_raises(
     monkeypatch.setattr(visualizer_module, "ViserManipulationScene", FakeScene)
     monkeypatch.setattr(visualizer_module, "ViserPanelGui", FailingGui)
     visualizer = ViserManipulationVisualizer(
-        world_monitor=FakeDependency(),
-        manipulation_module=FakeDependency(),
         config=ViserVisualizationConfig(panel_enabled=True),
     )
-    visualizer.initialize_scene(PlanningSceneInfo(robots={}))
+    visualizer.initialize(
+        VisualizationSession(PlanningSceneInfo(robots={}), operator=FakeDependency())
+    )
 
     with pytest.raises(RuntimeError, match="gui close failed"):
         visualizer.close()
@@ -380,7 +395,6 @@ def test_visualizer_publish_preview_and_close_paths(
 ) -> None:
     calls: list[tuple[str, str]] = []
     current = JointState({"name": ["joint1"], "position": [0.5]})
-    latest_map = object()
 
     class FakeRuntime:
         url = "http://localhost:8095"
@@ -400,8 +414,6 @@ def test_visualizer_publish_preview_and_close_paths(
             self,
             server: FakeServer,
             viser_urdf: type[FakeViserUrdf],
-            *,
-            preview_fps: float,
         ) -> None:
             calls.append(("scene", "create"))
 
@@ -409,154 +421,165 @@ def test_visualizer_publish_preview_and_close_paths(
             assert joint_state == current
             calls.append(("update", robot_id))
 
-        def update_planning_voxel_map(self, cloud: object | None) -> None:
-            assert cloud is latest_map
-            calls.append(("planning_map", "update"))
+        def register_robot(self, robot_id: str, config: RobotModelConfig) -> None:
+            calls.append(("register", robot_id))
 
-        def show_preview(self, robot_id: str) -> None:
-            calls.append(("show", robot_id))
+        def cancel_preview_animation(self) -> None:
+            calls.append(("cancel", "preview"))
 
-        def hide_preview(self, robot_id: str) -> None:
-            calls.append(("hide", robot_id))
-
-        def animate_preview(self, preview: GroupPreviewAnimation, duration: float) -> None:
-            assert preview.group_ids == ("arm/manipulator",)
-            assert len(preview.tracks) == 1
-            assert preview.tracks[0].path == (current,)
+        def animate_preview(self, preview: object, duration: float) -> None:
             assert duration == 1.5
-            calls.append(("animate", preview.tracks[0].robot_id))
+            calls.append(("animate", "groups"))
 
         def close(self) -> None:
             calls.append(("scene", "close"))
 
-    world_monitor = SimpleNamespace(
-        get_current_joint_state=lambda _robot_id: current,
-        planning_groups=SimpleNamespace(
-            select=lambda _group_ids: SimpleNamespace(
-                groups=(SimpleNamespace(id="arm/manipulator", robot_name="arm"),),
-                robot_names=("arm",),
-            )
-        ),
-    )
-    robot_config = fake_robot_config("arm")
-    manipulation_module = SimpleNamespace(
-        robot_items=lambda: [("arm", "robot-1", robot_config)],
-        robot_id_for_name=lambda robot_name: "robot-1" if robot_name == "arm" else None,
-        get_robot_config=lambda robot_name: robot_config if robot_name == "arm" else None,
-        latest_planning_voxel_map=lambda: latest_map,
-    )
     monkeypatch.setattr(visualizer_module, "ViserRuntime", FakeRuntime)
     monkeypatch.setattr(visualizer_module, "ViserUrdf", FakeViserUrdf)
     monkeypatch.setattr(visualizer_module, "ViserManipulationScene", FakeScene)
     visualizer = ViserManipulationVisualizer(
-        world_monitor=world_monitor,
-        manipulation_module=manipulation_module,
         config=ViserVisualizationConfig(panel_enabled=False),
     )
 
-    visualizer.publish_visualization()
-    visualizer.show_preview(("arm/manipulator",))
-    visualizer.hide_preview(("arm/manipulator",))
-    plan = GeneratedPlan(
-        group_ids=("arm/manipulator",),
-        path=[JointState(name=["arm/joint1"], position=[0.5])],
-        status=PlanningStatus.SUCCESS,
+    assert hasattr(ViserManipulationVisualizer, "cancel_preview_animation")
+    visualizer.initialize(
+        VisualizationSession(PlanningSceneInfo({"robot-1": fake_robot_config("arm")}))
     )
-    visualizer.animate_plan(plan, duration=1.5)
+    visualizer.cancel_preview_animation()
+    visualizer.update_state(VisualizationStateFrame({"robot-1": current}))
+    visualizer.cancel_preview_animation()
+    visualizer.animate_trajectory(JointTrajectory(joint_names=["arm/joint1"]), duration=1.5)
     visualizer.close()
-    visualizer.publish_visualization()
+    visualizer.update_state(VisualizationStateFrame({"robot-1": current}))
 
     assert calls == [
         ("runtime", "start"),
         ("scene", "create"),
+        ("register", "robot-1"),
+        ("cancel", "preview"),
         ("update", "robot-1"),
-        ("planning_map", "update"),
-        ("show", "robot-1"),
-        ("hide", "robot-1"),
-        ("animate", "robot-1"),
+        ("cancel", "preview"),
+        ("animate", "groups"),
         ("scene", "close"),
         ("runtime", "close"),
     ]
 
 
-def test_visualizer_animates_multi_robot_plan_as_one_group_preview(
+def test_scene_prepares_urdf_applies_base_pose_and_rejects_wrong_root(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    previews: list[GroupPreviewAnimation] = []
+    created: list[tuple[Path, str]] = []
+    prepared: list[dict[str, object]] = []
+    frames: list[dict[str, object]] = []
+    fixed_world_root = tmp_path / "fixed-world.urdf"
+    fixed_world_root.write_text(
+        """<robot name="arm">
+<link name="world"/><link name="base_link"/>
+<joint name="world_to_base" type="fixed"><parent link="world"/><child link="base_link"/></joint>
+</robot>"""
+    )
+    non_fixed_world_root = tmp_path / "non-fixed-world.urdf"
+    non_fixed_world_root.write_text(
+        """<robot name="arm">
+<link name="world"/><link name="base_link"/>
+<joint name="world_to_base" type="revolute"><parent link="world"/><child link="base_link"/></joint>
+</robot>"""
+    )
 
-    class FakeRuntime:
-        url = "http://localhost:8095"
+    class Handle:
+        def remove(self) -> None:
+            return None
 
-        def __init__(self, config: ViserVisualizationConfig) -> None:
-            self.config = config
+    class SceneApi:
+        def add_frame(self, name: str, **kwargs: object) -> Handle:
+            frames.append({"name": name, **kwargs})
+            return Handle()
 
-        def start(self) -> FakeServer:
-            return FakeServer()
+    class Server:
+        scene = SceneApi()
 
-        def close(self) -> None:
-            pass
-
-    class FakeScene:
+    class Urdf:
         def __init__(
             self,
-            server: FakeServer,
-            viser_urdf: type[FakeViserUrdf],
+            _server: Server,
+            path: Path | None = None,
             *,
-            preview_fps: float,
+            urdf_or_path: object | None = None,
+            root_node_name: str,
+            **_kwargs: object,
         ) -> None:
-            pass
+            created.append((path or fixed_world_root, root_node_name))
+            self._meshes: list[object] = []
 
-        def animate_preview(self, preview: GroupPreviewAnimation, duration: float) -> None:
-            assert duration == 2.0
-            previews.append(preview)
+    config = fake_robot_config("arm")
+    config.base_pose.position.x = 1.0
 
-        def close(self) -> None:
-            pass
+    def prepare(path: Path, **kwargs: object) -> Path:
+        prepared.append(kwargs)
+        return fixed_world_root if path.name == "arm.urdf" else non_fixed_world_root
 
-    groups = (
-        SimpleNamespace(id="left/arm", robot_name="left"),
-        SimpleNamespace(id="right/arm", robot_name="right"),
-    )
-    world_monitor = SimpleNamespace(
-        get_current_joint_state=lambda robot_id: JointState(
-            {"name": ["joint1"], "position": [0.0 if robot_id == "left-id" else 10.0]}
-        ),
-        planning_groups=SimpleNamespace(
-            select=lambda _group_ids: SimpleNamespace(groups=groups, robot_names=("left", "right"))
-        ),
-    )
-    configs = {"left": fake_robot_config("left"), "right": fake_robot_config("right")}
-    manipulation_module = SimpleNamespace(
-        robot_id_for_name=lambda robot_name: f"{robot_name}-id" if robot_name in configs else None,
-        get_robot_config=lambda robot_name: configs.get(robot_name),
-    )
-    monkeypatch.setattr(visualizer_module, "ViserRuntime", FakeRuntime)
-    monkeypatch.setattr(visualizer_module, "ViserUrdf", FakeViserUrdf)
-    monkeypatch.setattr(visualizer_module, "ViserManipulationScene", FakeScene)
-    visualizer = ViserManipulationVisualizer(
-        world_monitor=world_monitor,
-        manipulation_module=manipulation_module,
-        config=ViserVisualizationConfig(panel_enabled=False),
+    monkeypatch.setattr(
+        "dimos.manipulation.visualization.viser.scene.prepare_urdf_for_drake",
+        prepare,
     )
 
-    visualizer.animate_plan(
-        GeneratedPlan(
-            group_ids=("left/arm", "right/arm"),
-            path=[
-                JointState(name=["left/joint1", "right/joint1"], position=[0.0, 10.0]),
-                JointState(name=["left/joint1", "right/joint1"], position=[1.0, 11.0]),
-            ],
-            status=PlanningStatus.SUCCESS,
-        ),
-        duration=2.0,
-    )
+    def parse_prepared_model(path: Path) -> SimpleNamespace:
+        content = path.read_text()
+        return SimpleNamespace(root_link="world" if 'name="world"' in content else "base_link")
 
-    assert len(previews) == 1
-    preview = previews[0]
-    assert preview.group_ids == ("left/arm", "right/arm")
-    assert [(track.robot_id, track.group_ids) for track in preview.tracks] == [
-        ("left-id", ("left/arm",)),
-        ("right-id", ("right/arm",)),
+    monkeypatch.setattr(
+        "dimos.manipulation.visualization.viser.scene.parse_model", parse_prepared_model
+    )
+    scene = ViserManipulationScene(Server(), Urdf)
+    monkeypatch.setattr(scene, "_model_has_collision_geometry", lambda _model: True)
+
+    scene.register_robot("robot-1", config)
+
+    assert [root for _, root in created] == [
+        "/robots/robot-1/current/base_pose/urdf",
+        "/targets/robot-1/target/base_pose/urdf",
+        "/previews/robot-1/ghost/base_pose/urdf",
     ]
-    assert [tuple(point.position) for point in preview.tracks[0].path] == [(0.0,), (1.0,)]
-    assert [tuple(point.position) for point in preview.tracks[1].path] == [(10.0,), (11.0,)]
+    assert prepared == [{"package_paths": {}, "xacro_args": {}, "convert_meshes": False}]
+    assert all(path == fixed_world_root for path, _ in created)
+    assert all(frame["position"] == (1.0, 0.0, 0.0) for frame in frames)
+    wrong_root_config = fake_robot_config("wrong")
+    with pytest.raises(ValueError, match="prepared URDF root 'world'"):
+        scene.prepared_urdf_path(wrong_root_config)
+
+
+@pytest.mark.parametrize("mode", ["collision", "both"])
+def test_selected_display_mode_survives_primary_recreation_and_joint_updates(
+    mode: RobotDisplayMode,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scene = ViserManipulationScene(FakeServer(), FakeSceneUrdf)
+    scene.prepared_urdf_path = lambda _config: Path("prepared.urdf")
+    monkeypatch.setattr(
+        scene_module.URDF,
+        "load",
+        lambda *args, **kwargs: SimpleNamespace(
+            actuated_joint_names=("joint1",),
+            collision_scene=SimpleNamespace(),
+        ),
+    )
+    config = fake_robot_config("arm")
+    config.joint_names = ["joint1"]
+
+    scene.register_robot("robot-1", config)
+    scene.robot_display_mode = mode
+    old_current = scene._urdfs["robot-1:current"]
+    scene._urdfs.pop("robot-1:current")
+
+    scene.register_robot("robot-1", config)
+    current = scene._urdfs["robot-1:current"]
+    scene.update_current_robot("robot-1", JointState({"name": ["joint1"], "position": [0.75]}))
+
+    assert current is not old_current
+    assert scene.robot_display_mode == mode
+    assert (current.show_visual, current.show_collision) == (
+        mode == "both",
+        True,
+    )
+    assert current.cfg == [0.75]

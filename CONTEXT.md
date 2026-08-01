@@ -140,65 +140,29 @@ _Avoid_: complete Pi agent session, invalid transcript, published benchmark resu
 
 Native Pi session, v3 JSONL, session receipt, prompt context evidence, pinned Pi export, and disposable HTML use the compatibility contract in [ADR 0003](docs/adr/0003-native-pi-session-evidence.md). This glossary does not duplicate that API, schema, lifecycle, or upgrade policy.
 
-**Planning group**:
-A named subset of a robot model's joints and frames that can be selected as a planning unit.
-_Avoid_: move group, joint group
+## Manipulation planning language
 
-**Composite planning group**:
-A planning group that represents coordinated motion across multiple selected planning groups.
-_Avoid_: group combination, combined groups, multi-group plan
+**Cartesian Waypoint**:
+One absolute TCP pose or relative rigid displacement within a Cartesian target.
 
-**Auxiliary planning group**:
-A planning group included in a planning request that may move as part of the plan but does not have its own task-space target in that plan.
-_Avoid_: extra group, passive target group, unconstrained target
+**Cartesian Target**:
+An ordered, homogeneous sequence of Cartesian waypoints for one planning group, including its starting waypoint. An absolute target contains only `PoseStamped` waypoints and starts at the current TCP pose. A relative target contains only `Transform` waypoints, starts with the identity transform, and measures every waypoint from the planning-start TCP pose.
+_Avoid_: Cartesian track
 
-**Linear TCP path**:
-A motion recipe where the tool center point follows a straight Cartesian segment from its start pose to its target pose within configured Cartesian tolerance.
-_Avoid_: linear joint motion, linear motion
+**Cartesian Path Configuration**:
+Per-planning-call policy that selects how Cartesian waypoints are connected and constrains that operation. It is independent of the startup configuration that selects and constructs a planner backend.
 
-**TCP target planning**:
-A manipulation-planning capability where the final tool center point pose is constrained but the intermediate path shape is not.
-_Avoid_: Cartesian planning when path shape is unspecified, linear TCP path planning
+**Standard Cartesian Planning**:
+Cartesian waypoint planning through a backend's supported serializable options. For RoboPlan, this includes multi-waypoint and simultaneous multi-end-effector paths, bounded and time-optimal speed modes, tracking tolerances, and solver tuning.
 
-**Cartesian servo / IK control**:
-A live manipulation-control capability that follows Cartesian commands through inverse kinematics during execution rather than producing an offline geometric path.
-_Avoid_: Cartesian planning, linear TCP path planning, TCP target planning
+**Bounded Speed Mode**:
+A Cartesian timing policy that treats configured tool speeds and accelerations as maxima and slows the motion further when required by tracking or joint limits.
 
-**Linear TCP trajectory smoothing**:
-A manipulation-planning capability that makes a Linear TCP path executable without treating every intermediate Cartesian sample as a stop, while preserving Cartesian-line tolerance.
-_Avoid_: waypoint skipping, making linear motion faster
+**Time-Optimal Speed Mode**:
+A Cartesian timing policy that resolves the requested path into joint space and retimes it against joint limits, optionally blending intermediate corners.
 
-**Adaptive-conservative smoothing**:
-A trajectory smoothing policy that starts with an aggressive simplification and, on validation failure, preserves more of the original path rather than relaxing correctness tolerances.
-_Avoid_: tolerance loosening, unsafe smoothing retry
-
-**Trajectory post-processing pipeline**:
-A staged manipulation-planning capability that may refine a geometric path, validate the refinement, assign timing, and apply execution-oriented smoothing while preserving the path's declared constraints.
-_Avoid_: hidden waypoint hack, one-off retiming step
-
-**Path-constraint metadata**:
-Optional planning metadata attached to a geometric path that declares the path constraints any post-processing must preserve.
-_Avoid_: planner debug data, visualization-only metadata
-
-**Non-blocking smoothing fallback**:
-A trajectory post-processing policy where smoothing failures fall back to the original geometric path rather than failing parametrization; the worst expected outcome is a slower valid trajectory.
-_Avoid_: strict smoothing gate, smoothing-required parametrization
-
-**Composite RoboPlan model**:
-A RoboPlan-facing robot model that represents multiple registered robot models as one planning scene.
-_Avoid_: combined URDF, merged robot scene
-
-**Planning world**:
-The authoritative belief state for manipulation planning, including robot state and scene state used by planners.
-_Avoid_: planner context, backend instance
-
-**Planning-scene synchronization**:
-The capability that keeps the Planning world's obstacle state consistent with selected authoritative scene sources.
-_Avoid_: environment sync, world sync, simulator sync
-
-**Visualization scene mirroring**:
-The non-authoritative capability that renders Scene Registry state or Planning world projections for user inspection without serving as the planner's safety source.
-_Avoid_: planning-scene synchronization when referring only to display updates, visualization sync as a planner guarantee
+**Custom Planner Components**:
+Backend-native solver tasks, constraints, and barriers injected as live objects. These are outside standard Cartesian planning and require a separate constrained-IK interface.
 
 **Scene Registry**:
 The authoritative catalog of scene entities known to DimOS across perception, simulation, and explicit declarations.
@@ -239,38 +203,6 @@ _Avoid_: obstacle command when the change is registry-level, collision object me
 **Source-scoped identity**:
 A Scene entity identity formed from the scene source and that source's stable local identifier, without assuming entities from different sources refer to the same physical thing.
 _Avoid_: global object id, automatic semantic merge
-
-**Trajectory parametrization**:
-The manipulation-planning capability that assigns time to a geometric joint path under motion constraints.
-_Avoid_: trajectory generation, retiming when referring to the broader capability
-
-**Generated trajectory**:
-A manipulation-planning artifact that represents a geometric path after trajectory parametrization, ready for preview, validation, benchmarking, or execution planning.
-_Avoid_: timed generated plan, generated plan when referring to the time-parametrized artifact, joint trajectory when referring to the manipulation-level artifact
-
-**Shared trajectory time domain**:
-The single timing basis a generated trajectory uses for all selected joints and robot-local projections in a composite or multi-robot motion.
-_Avoid_: independent per-robot timing, per-arm retiming when referring to coordinated composite motion
-
-**Trajectory dispatch**:
-An execution-preparation artifact that derives control-task-specific joint trajectory messages from a generated trajectory without changing the generated trajectory's canonical global timing.
-_Avoid_: generated trajectory projection, execution-time parametrization, per-task generated trajectory
-
-**Robokin kinematics backend**:
-A DimOS kinematics backend that presents multiple robokin-supported inverse-kinematics engines through one robotics-facing capability.
-_Avoid_: Oink backend, RoboKin world backend, single-engine Oink solver
-
-**Robokin engine**:
-A specific solver implementation selected inside the Robokin kinematics backend, such as Placo, Pyroki, or Oink.
-_Avoid_: Robokin backend, world backend, planner backend
-
-**RoboPlan kinematics backend**:
-A DimOS kinematics backend implemented by RoboPlanWorld using RoboPlan-backed model state, planning groups, Jacobians, and collision state.
-_Avoid_: Robokin backend, separate RoboPlan IK world, planner-only RoboPlan integration
-
-**RoboPlan Oink IK solver**:
-RoboPlan's task-based inverse-kinematics capability for solving one or more frame pose targets under joint constraints.
-_Avoid_: hand-written Jacobian IK, Robokin-only Oink wrapper
 
 **Coordinated simulation clock**:
 A simulation benchmark clock policy where simulator time advances in lockstep with the DimOS control coordinator clock.

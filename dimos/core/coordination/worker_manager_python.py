@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from dimos.core.coordination.blueprints import config_key
 from dimos.core.coordination.python_worker import PythonWorker
 from dimos.core.coordination.worker_launcher import WorkerLauncher
 from dimos.core.global_config import GlobalConfig
@@ -29,6 +30,17 @@ if TYPE_CHECKING:
     from dimos.core.resource_monitor.monitor import StatsMonitor
 
 logger = setup_logger()
+
+
+def _merge_config_kwargs(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, override_value in overrides.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, Mapping) and isinstance(override_value, Mapping):
+            merged[key] = _merge_config_kwargs(base_value, override_value)
+        else:
+            merged[key] = override_value
+    return merged
 
 
 class WorkerManagerPython:
@@ -95,7 +107,7 @@ class WorkerManagerPython:
         self._ensure_capacity_for_dedicated([(module_class, global_config, kwargs)])
         worker = self._select_worker(dedicated=module_class.dedicated_worker)
         actor = worker.deploy_module(module_class, global_config, kwargs=kwargs)
-        return RPCClient(actor, module_class)
+        return RPCClient(actor, module_class, kwargs.get("instance_name"))
 
     def deploy_fresh(
         self,
@@ -121,7 +133,7 @@ class WorkerManagerPython:
         if module_class.dedicated_worker:
             worker.dedicated = True
         actor = worker.deploy_module(module_class, global_config, kwargs=kwargs)
-        return RPCClient(actor, module_class)
+        return RPCClient(actor, module_class, kwargs.get("instance_name"))
 
     def undeploy(self, proxy: ModuleProxyProtocol) -> None:
         """Undeploy a module and shut down its worker if it is now empty."""
@@ -145,7 +157,11 @@ class WorkerManagerPython:
             self._workers.remove(target)
             self._n_workers = max(0, self._n_workers - 1)
 
-    def deploy_parallel(self, specs: Iterable[ModuleSpec]) -> list[ModuleProxyProtocol]:
+    def deploy_parallel(
+        self,
+        specs: Iterable[ModuleSpec],
+        blueprint_args: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> list[ModuleProxyProtocol]:
         if self._closed:
             raise RuntimeError("WorkerManager is closed")
 
@@ -169,6 +185,11 @@ class WorkerManagerPython:
             module_class, _, kwargs = specs[i]
             worker = self._select_worker(dedicated=module_class.dedicated_worker)
             worker.reserve_slot()
+            if blueprint_args is not None:
+                instance_key = kwargs.get("instance_name") or module_class.name
+                args = blueprint_args.get(config_key(instance_key), {})
+                safe_args = {key: value for key, value in args.items() if key != "instance_name"}
+                kwargs.update(_merge_config_kwargs(kwargs, safe_args))
             workers_by_index[i] = worker
 
         assignments = [(workers_by_index[i], specs[i]) for i in range(len(specs))]
@@ -176,7 +197,9 @@ class WorkerManagerPython:
         def _deploy(item: tuple[PythonWorker, ModuleSpec]) -> ModuleProxyProtocol:
             worker, (module_class, global_config, kwargs) = item
             return RPCClient(
-                worker.deploy_module(module_class, global_config, kwargs), module_class
+                worker.deploy_module(module_class, global_config, kwargs),
+                module_class,
+                kwargs.get("instance_name"),
             )
 
         try:

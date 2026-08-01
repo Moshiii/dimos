@@ -24,6 +24,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -51,6 +52,7 @@ class PointCloudSelfFilter(Module):
     config: PointCloudSelfFilterConfig  # type: ignore[assignment]
 
     pointcloud: In[PointCloud2]
+    tf: In[TFMessage]
     filtered_pointcloud: Out[PointCloud2]
 
     def __init__(self, **kwargs: object) -> None:
@@ -90,7 +92,7 @@ class PointCloudSelfFilter(Module):
         points_h = np.column_stack((points, ones))
 
         for region in self.self_filter_config.regions:
-            transform = self.tf.get(
+            transform = self.tfbuffer.get(
                 cloud.frame_id,
                 region.frame_id,
                 time_point=cloud.ts,

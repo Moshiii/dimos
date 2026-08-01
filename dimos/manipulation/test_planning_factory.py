@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator
 from pathlib import Path
 import sys
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -32,11 +33,16 @@ from dimos.manipulation.planning.factory import (
     create_world,
     validate_backend_combination,
 )
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.kinematics.config import (
     JacobianKinematicsConfig,
-    RoboPlanKinematicsConfig,
+    PinkKinematicsConfig,
 )
 from dimos.manipulation.planning.kinematics.jacobian_ik import JacobianIK
+from dimos.manipulation.planning.planners.config import (
+    RoboPlanPlannerConfig,
+    RRTConnectPlannerConfig,
+)
 from dimos.manipulation.planning.planners.rrt_planner import RRTConnectPlanner
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.protocols import PlannerSpec
@@ -67,8 +73,14 @@ def robot_config() -> RobotModelConfig:
         model_path=Path("/path/to/robot.urdf"),
         base_pose=PoseStamped(position=Vector3(), orientation=Quaternion()),  # type: ignore[call-arg]
         joint_names=["joint1", "joint2"],
-        end_effector_link="tcp",
-        coordinator_task_name="traj_arm",
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="manipulator",
+                joint_names=("joint1", "joint2"),
+                base_link="base_link",
+                tip_link="tcp",
+            )
+        ],
     )
 
 
@@ -80,17 +92,23 @@ def test_create_world_unknown_backend() -> None:
 
 
 def test_factory_selects_expected_implementations() -> None:
-    assert isinstance(create_planner(name="rrt_connect"), RRTConnectPlanner)
+    assert isinstance(create_planner(config=RRTConnectPlannerConfig()), RRTConnectPlanner)
     assert isinstance(create_kinematics(name="jacobian"), JacobianIK)
 
 
-def test_default_planner_path_does_not_import_roboplan(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rrt_planner_backend_does_not_import_roboplan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     for module_name in list(sys.modules):
         if module_name == "roboplan" or module_name.startswith("roboplan."):
             monkeypatch.delitem(sys.modules, module_name, raising=False)
 
-    create_planner(name="rrt_connect")
-    validate_backend_combination()
+    create_planner(config=RRTConnectPlannerConfig())
+    validate_backend_combination(
+        world_backend="drake",
+        planner_backend="rrt_connect",
+        kinematics_name="pink",
+    )
 
     assert "roboplan.core" not in sys.modules
     assert "roboplan.rrt" not in sys.modules
@@ -98,57 +116,49 @@ def test_default_planner_path_does_not_import_roboplan(monkeypatch: pytest.Monke
 
 def test_validate_backend_combination_rejects_invalid_combinations() -> None:
     with pytest.raises(
-        ValueError, match='planner_name="roboplan" requires world_backend="roboplan"'
+        ValueError, match='planner.backend="roboplan" requires world_backend="roboplan"'
     ):
-        validate_backend_combination(world_backend="drake", planner_name="roboplan")
+        validate_backend_combination(world_backend="drake", planner_backend="roboplan")
 
     with pytest.raises(
         ValueError, match='kinematics_name="drake_optimization" requires world_backend="drake"'
     ):
         validate_backend_combination(world_backend="roboplan", kinematics_name="drake_optimization")
 
-    with pytest.raises(
-        ValueError, match='kinematics_name="roboplan" requires world_backend="roboplan"'
-    ):
-        validate_backend_combination(world_backend="drake", kinematics_name="roboplan")
-
 
 def test_create_planner_uses_roboplan_world_as_native_planner(mocker: MockerFixture) -> None:
     world = mocker.MagicMock(spec=PlannerSpec)
+    roboplan_world_module = ModuleType("dimos.manipulation.planning.world.roboplan_world")
+    roboplan_world_module.RoboPlanWorld = type(world)  # type: ignore[attr-defined]
 
-    assert create_planner(name="roboplan", world=world, world_backend="roboplan") is world
+    mocker.patch.dict(
+        sys.modules,
+        {
+            "dimos.manipulation.planning.world.roboplan_world": roboplan_world_module,
+        },
+    )
+    assert (
+        create_planner(
+            config=RoboPlanPlannerConfig(),
+            world=world,
+            world_backend="roboplan",
+        )
+        is world
+    )
 
 
 def test_create_planner_rejects_roboplan_without_roboplan_world(mocker: MockerFixture) -> None:
     with pytest.raises(
-        ValueError, match='planner_name="roboplan" requires world_backend="roboplan"'
+        ValueError, match='planner.backend="roboplan" requires world_backend="roboplan"'
     ):
-        create_planner(name="roboplan", world=mocker.MagicMock(), world_backend="drake")
-
-
-def test_create_kinematics_uses_roboplan_world_as_native_solver(mocker: MockerFixture) -> None:
-    world = mocker.MagicMock()
-    config = RoboPlanKinematicsConfig(max_iterations=7)
-
-    assert create_kinematics(config=config, world=world, world_backend="roboplan") is world
-    world.configure_kinematics.assert_called_once_with(config)
-
-
-def test_create_kinematics_rejects_roboplan_without_roboplan_world(mocker: MockerFixture) -> None:
-    with pytest.raises(
-        ValueError, match='kinematics_name="roboplan" requires world_backend="roboplan"'
-    ):
-        create_kinematics(
-            config=RoboPlanKinematicsConfig(), world=mocker.MagicMock(), world_backend="drake"
+        create_planner(
+            config=RoboPlanPlannerConfig(),
+            world=mocker.MagicMock(),
+            world_backend="drake",
         )
 
-    world = mocker.MagicMock()
-    del world.configure_kinematics
-    with pytest.raises(ValueError, match="requires a RoboPlan world"):
-        create_kinematics(config=RoboPlanKinematicsConfig(), world=world, world_backend="roboplan")
 
-
-def test_create_planning_stack_wires_selected_components(
+def test_create_planning_stack_defaults_to_roboplan(
     mocker: MockerFixture, robot_config: RobotModelConfig
 ) -> None:
     world = mocker.MagicMock()
@@ -169,19 +179,16 @@ def test_create_planning_stack_wires_selected_components(
         return_value=planner,
     )
 
-    result = create_planning_stack(
-        robot_config,
-        world_backend="drake",
-        planner_name="rrt_connect",
-        kinematics_name="jacobian",
-    )
+    result = create_planning_stack(robot_config)
 
     assert result == (world, kinematics, planner, "robot-id")
-    mock_world.assert_called_once_with(backend="drake", visualization=None)
-    mock_kinematics.assert_called_once_with(
-        config=JacobianKinematicsConfig(), world=world, world_backend="drake"
+    mock_world.assert_called_once_with(backend="roboplan", visualization=None)
+    mock_kinematics.assert_called_once_with(config=PinkKinematicsConfig())
+    mock_planner.assert_called_once_with(
+        config=RoboPlanPlannerConfig(),
+        world=world,
+        world_backend="roboplan",
     )
-    mock_planner.assert_called_once_with(name="rrt_connect", world=world, world_backend="drake")
     world.add_robot.assert_called_once_with(robot_config)
     world.finalize.assert_called_once()
 
@@ -208,7 +215,12 @@ def test_start_uses_configured_planner_and_kinematics(
     robot_config: RobotModelConfig,
     make_module: Callable[..., ManipulationModule],
 ) -> None:
-    module = make_module(robots=[robot_config], kinematics=JacobianKinematicsConfig())
+    planner_config = RRTConnectPlannerConfig()
+    module = make_module(
+        robots=[robot_config],
+        planner=planner_config,
+        kinematics=JacobianKinematicsConfig(),
+    )
     world = mocker.MagicMock(name="world")
     world_monitor = mocker.MagicMock()
     world_monitor.add_robot.return_value = "robot-id"
@@ -230,12 +242,12 @@ def test_start_uses_configured_planner_and_kinematics(
     module._initialize_planning()
 
     create_world_mock.assert_called_once_with(
-        backend="drake", visualization=module.config.visualization
+        backend="roboplan", visualization=module.config.visualization
     )
     create_planning_specs_mock.assert_called_once_with(
         world=world,
-        world_backend="drake",
-        planner_name="rrt_connect",
+        world_backend="roboplan",
+        planner=planner_config,
         kinematics_name=None,
         kinematics=module.config.kinematics,
     )

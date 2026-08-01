@@ -19,7 +19,8 @@ from typing import Any
 from reactivex import Observable, Subject
 
 from dimos.core.global_config import GlobalConfig
-from dimos.core.transport import LCMTransport
+from dimos.core.transport import PubSubTransport
+from dimos.core.transport_factory import make_transport
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
@@ -28,7 +29,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.protocol.tf.tf import LCMTF
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.simulation.dimsim.dimsim_process import DimSimProcess
 from dimos.utils.logging_config import setup_logger
 
@@ -50,17 +51,17 @@ class DimSimConnection:
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self._dimsim_process: DimSimProcess = DimSimProcess(global_config)
-        self._odom_transport: LCMTransport[PoseStamped] = LCMTransport("/odom", PoseStamped)
-        self._lidar_transport: LCMTransport[PointCloud2] = LCMTransport("/lidar", PointCloud2)
-        self._video_transport: LCMTransport[Image] = LCMTransport("/color_image", Image)
-        self._cmd_vel_transport: LCMTransport[Twist] = LCMTransport("/cmd_vel", Twist)
+        self._odom_transport: PubSubTransport[PoseStamped] = make_transport("/odom", PoseStamped)
+        self._lidar_transport: PubSubTransport[PointCloud2] = make_transport("/lidar", PointCloud2)
+        self._video_transport: PubSubTransport[Image] = make_transport("/color_image", Image)
+        self._cmd_vel_transport: PubSubTransport[Twist] = make_transport("/cmd_vel", Twist)
+        self._tf_transport: PubSubTransport[TFMessage] = make_transport("/tf", TFMessage)
         self._unsubscribes: list[Callable[[], None]] = []
         self._latest_sensor_ts = {
             "odom": float("-inf"),
             "lidar": float("-inf"),
             "video": float("-inf"),
         }
-        self._tf = LCMTF()
 
     def start(self) -> None:
         self._dimsim_process.start()
@@ -69,6 +70,7 @@ class DimSimConnection:
             self._lidar_transport,
             self._video_transport,
             self._cmd_vel_transport,
+            self._tf_transport,
         ):
             transport.start()
         self._unsubscribes = [
@@ -76,10 +78,8 @@ class DimSimConnection:
             self._lidar_transport.subscribe(self._handle_lidar),
             self._video_transport.subscribe(self._handle_video),
         ]
-        self._tf.start()
 
     def stop(self) -> None:
-        self._tf.stop()
         for unsubscribe in self._unsubscribes:
             unsubscribe()
         self._unsubscribes.clear()
@@ -88,6 +88,7 @@ class DimSimConnection:
             self._video_transport,
             self._lidar_transport,
             self._odom_transport,
+            self._tf_transport,
         ):
             transport.stop()
         self._dimsim_process.stop()
@@ -121,10 +122,23 @@ class DimSimConnection:
     def balance_stand(self) -> bool:
         return True
 
-    def set_obstacle_avoidance(self, enabled: bool = True) -> None:
+    def sport_command(self, api_id: int) -> bool:
+        return True
+
+    def stop_movement(self) -> None:
+        # No webrtc deadman timer in sim; the cmd_vel timeout covers it.
         pass
 
+    def set_obstacle_avoidance(self, enabled: bool = True) -> bool:
+        return True
+
     def set_rage_mode(self, enable: bool) -> bool:
+        return True
+
+    def set_light(self, level: int) -> bool:
+        return True
+
+    def switch_joystick(self, enable: bool = True) -> bool:
         return True
 
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
@@ -133,7 +147,7 @@ class DimSimConnection:
     def _handle_odom(self, msg: PoseStamped) -> None:
         if not self._is_new_sensor_sample("odom", msg.ts):
             return
-        self._tf.publish(*_odom_to_tf(msg))
+        self._tf_transport.publish(TFMessage(*_odom_to_tf(msg)))
         self.odom_stream().on_next(msg)
 
     def _handle_lidar(self, msg: PointCloud2) -> None:

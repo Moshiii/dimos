@@ -19,7 +19,6 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-import cv2
 import numpy as np
 from pydantic import Field
 import reactivex as rx
@@ -30,7 +29,7 @@ from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
-from dimos.core.transport import LCMTransport
+from dimos.core.transport_factory import make_transport
 from dimos.hardware.sensors.camera.spec import (
     OPTICAL_ROTATION,
     DepthCameraConfig,
@@ -42,6 +41,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.spec import perception
 from dimos.utils.reactive import backpressure
 
@@ -79,6 +79,7 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
     pointcloud: Out[PointCloud2]
     camera_info: Out[CameraInfo]
     depth_camera_info: Out[CameraInfo]
+    tf: Out[TFMessage]
 
     @property
     def _camera_link(self) -> str:
@@ -269,6 +270,8 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
         )
 
     def _capture_loop(self) -> None:
+        import cv2
+
         while self._running and self._pipeline is not None:
             try:
                 frames = self._pipeline.wait_for_frames(timeout_ms=1000)
@@ -393,7 +396,7 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
         )
         transforms.append(color_to_color_optical)
 
-        self.tf.publish(*transforms)
+        self.tf.publish(TFMessage(*transforms))
 
     def _generate_pointcloud(self) -> None:
         """Generate and publish pointcloud from latest images (called by rx.interval)."""
@@ -460,11 +463,11 @@ def main() -> None:
     dimos.start()
 
     camera = dimos.deploy(RealSenseCamera, enable_pointcloud=True, pointcloud_fps=5.0)
-    camera.color_image.transport = LCMTransport("/camera/color", Image)
-    camera.depth_image.transport = LCMTransport("/camera/depth", Image)
-    camera.pointcloud.transport = LCMTransport("/camera/pointcloud", PointCloud2)
-    camera.camera_info.transport = LCMTransport("/camera/color_info", CameraInfo)
-    camera.depth_camera_info.transport = LCMTransport("/camera/depth_info", CameraInfo)
+    camera.color_image.transport = make_transport("/camera/color", Image)
+    camera.depth_image.transport = make_transport("/camera/depth", Image)
+    camera.pointcloud.transport = make_transport("/camera/pointcloud", PointCloud2)
+    camera.camera_info.transport = make_transport("/camera/color_info", CameraInfo)
+    camera.depth_camera_info.transport = make_transport("/camera/depth_info", CameraInfo)
 
     def cleanup() -> None:
         try:

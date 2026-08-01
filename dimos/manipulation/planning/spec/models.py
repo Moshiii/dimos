@@ -16,27 +16,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 from dimos.manipulation.planning.spec.enums import (
     IKStatus,
     ObstacleType,
-    ParametrizationStatus,
     PlanningStatus,
-    TrajectoryDispatchStatus,
 )
 
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
+    from dimos.manipulation.planning.groups.models import PlanningGroup
     from dimos.manipulation.planning.spec.config import RobotModelConfig
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+    from dimos.msgs.geometry_msgs.Transform import Transform
     from dimos.msgs.sensor_msgs.JointState import JointState
     from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
-    from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
 
 
 RobotName: TypeAlias = str
@@ -58,6 +57,13 @@ JointPath: TypeAlias = "list[JointState]"
 """List of joint states forming a path (each waypoint has names + positions)"""
 
 
+CartesianWaypoint: TypeAlias = "PoseStamped | Transform"
+"""One absolute TCP pose or relative rigid displacement from the planning start."""
+
+CartesianTarget: TypeAlias = "Sequence[PoseStamped] | Sequence[Transform]"
+"""Ordered homogeneous Cartesian waypoints for one planning group."""
+
+
 @dataclass(frozen=True)
 class PlanningSceneInfo:
     """Stable planning-scene metadata for external collaborators.
@@ -69,149 +75,32 @@ class PlanningSceneInfo:
     robots: Mapping[WorldRobotID, RobotModelConfig]
     """Robot model configurations keyed by world robot ID."""
 
+    planning_groups: tuple[PlanningGroup, ...] = ()
+    """Resolved immutable planning groups for the initialized scene."""
+
+
+@dataclass(frozen=True)
+class VisualizationSession:
+    """One-shot immutable visualization initialization payload."""
+
+    scene: PlanningSceneInfo
+    operator: object | None = None
+    """Optional concrete ManipulationOperator; typed as object to avoid low-level cycles."""
+
+
+@dataclass(frozen=True)
+class VisualizationStateFrame:
+    """Pushed current joint states for visualization backends."""
+
+    joint_states: Mapping[WorldRobotID, JointState]
+
 
 Jacobian: TypeAlias = "NDArray[np.float64]"
 """6 x n Jacobian matrix (rows: [vx, vy, vz, wx, wy, wz])"""
 
-CollisionCheckStatus: TypeAlias = Literal[
-    "VALID",
-    "COLLISION",
-    "INVALID",
-    "UNAVAILABLE",
-    "STALE_STATE",
-]
-"""Status for a planning-world collision target check."""
 
-ForwardKinematicsStatus: TypeAlias = Literal[
-    "VALID",
-    "INVALID",
-    "UNAVAILABLE",
-    "STALE_STATE",
-]
-"""Status for a group-scoped forward-kinematics query."""
-
-CartesianPathMode: TypeAlias = Literal["free", "linear"]
-"""Mode describing requested Cartesian path semantics."""
-
-PathConstraintKind: TypeAlias = Literal["linear_tcp"]
-"""Kind discriminator for geometric path constraints."""
-
-
-@dataclass(frozen=True)
-class CartesianDelta:
-    """Relative TCP delta for Cartesian planning.
-
-    Translation is meters. Rotation is roll, pitch, yaw in radians. The frame is the
-    frame in which the delta is expressed.
-    """
-
-    translation: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    frame_id: str = "world"
-
-
-@dataclass(frozen=True)
-class LinearTcpPathConstraint:
-    """Straight-line TCP constraint carried by a geometric plan.
-
-    The constrained TCP must follow the world-frame segment from `start_pose` to
-    `target_pose` within the provided translational and rotational tolerances.
-    """
-
-    kind: PathConstraintKind = "linear_tcp"
-    group_id: PlanningGroupID = ""
-    tcp_frame: str = ""
-    start_pose: PoseStamped | None = None
-    target_pose: PoseStamped | None = None
-    max_translational_deviation: float = 1e-3
-    max_rotational_deviation: float = 1e-2
-
-
-PathConstraintMetadata: TypeAlias = LinearTcpPathConstraint
-"""Optional metadata declaring constraints a post-processor must preserve."""
-
-
-@dataclass(frozen=True)
-class CollisionCheckResult:
-    """Result of a planning-world collision target check."""
-
-    status: CollisionCheckStatus
-    collision_free: bool | None
-    message: str
-
-
-@dataclass(frozen=True)
-class ForwardKinematicsResult:
-    """Result of a group-scoped forward-kinematics query."""
-
-    status: ForwardKinematicsStatus
-    pose: PoseStamped | None
-    message: str
-
-
-@dataclass
-class GeneratedPlan:
-    """Canonical generated planning artifact.
-
-    The path uses global joint names and contains exactly the selected joints.
-    Downstream preview/execution projections are computed lazily from this data.
-    """
-
-    group_ids: tuple[PlanningGroupID, ...]
-    path: list[JointState] = field(default_factory=list)
-    status: PlanningStatus = PlanningStatus.NO_SOLUTION
-    planning_time: float = 0.0
-    path_length: float = 0.0
-    iterations: int = 0
-    message: str = ""
-    path_constraints: PathConstraintMetadata | None = None
-
-    def is_success(self) -> bool:
-        """Check if planning was successful."""
-        return self.status == PlanningStatus.SUCCESS
-
-
-@dataclass
-class GeneratedTrajectory:
-    """Canonical global time-parametrized manipulation artifact.
-
-    The trajectory uses global joint names, a single shared `time_from_start`
-    domain across all joints, and status that is independent from the source
-    geometric `GeneratedPlan.status`.
-    """
-
-    joint_names: list[GlobalJointName] = field(default_factory=list)
-    points: list[TrajectoryPoint] = field(default_factory=list)
-    duration: float = 0.0
-    speed_scale: float = 1.0
-    status: ParametrizationStatus = ParametrizationStatus.FAILED
-    message: str = ""
-    source_group_ids: tuple[PlanningGroupID, ...] = ()
-    source_plan_status: PlanningStatus = PlanningStatus.NO_SOLUTION
-    source_plan_message: str = ""
-
-    def is_success(self) -> bool:
-        """Check if trajectory parametrization was successful."""
-        return self.status == ParametrizationStatus.SUCCESS
-
-
-@dataclass
-class TrajectoryDispatch:
-    """Execution-preparation artifact derived from `GeneratedTrajectory`.
-
-    `trajectories_by_task` contains coordinator-task-specific messages. These
-    messages preserve the generated trajectory timing instead of retiming each
-    task projection independently.
-    """
-
-    trajectories_by_task: dict[str, JointTrajectory] = field(default_factory=dict)
-    robot_names_by_task: dict[str, RobotName] = field(default_factory=dict)
-    status: TrajectoryDispatchStatus = TrajectoryDispatchStatus.FAILED
-    message: str = ""
-
-    def is_success(self) -> bool:
-        """Check if dispatch preparation was successful."""
-        return self.status == TrajectoryDispatchStatus.SUCCESS
+DEFAULT_OBSTACLE_RGBA: tuple[float, float, float, float] = (0.8, 0.2, 0.2, 0.8)
+"""Default RGBA (0-1 range) applied to obstacles that carry no explicit color."""
 
 
 @dataclass
@@ -220,28 +109,23 @@ class Obstacle:
 
     Attributes:
         name: Unique name for the obstacle
-        obstacle_type: Type of geometry (BOX, SPHERE, CYLINDER, MESH, OCTREE)
+        obstacle_type: Type of geometry (BOX, SPHERE, CYLINDER, MESH)
         pose: Pose of the obstacle in world frame
         dimensions: Type-specific dimensions:
             - BOX: (width, height, depth)
             - SPHERE: (radius,)
             - CYLINDER: (radius, height)
-            - MESH/OCTREE: Not used
+            - MESH: Not used
         color: RGBA color tuple (0-1 range)
         mesh_path: Path to mesh file (for MESH type)
-        points: Non-empty Nx3 point array projected into an OCTREE obstacle.
-            Points are interpreted in the obstacle local frame and transformed by pose.
-        octree_resolution: Positive voxel edge length for OCTREE obstacles.
     """
 
     name: str
     obstacle_type: ObstacleType
     pose: PoseStamped
     dimensions: tuple[float, ...] = ()
-    color: tuple[float, float, float, float] = (0.8, 0.2, 0.2, 0.8)
+    color: tuple[float, float, float, float] = DEFAULT_OBSTACLE_RGBA
     mesh_path: str | None = None
-    points: NDArray[np.float64] | None = None
-    octree_resolution: float | None = None
 
 
 @dataclass
@@ -293,10 +177,27 @@ class PlanningResult:
     message: str = ""
     # Optional timing (set by optimization-based planners)
     timestamps: list[float] | None = None
-    path_constraints: PathConstraintMetadata | None = None
 
     def is_success(self) -> bool:
         """Check if planning was successful."""
+        return self.status == PlanningStatus.SUCCESS
+
+
+@dataclass
+class GeneratedPlan:
+    """Canonical selected-planning-group plan exposed by ManipulationModule."""
+
+    group_ids: tuple[PlanningGroupID, ...]
+    trajectory: JointTrajectory
+    path: list[JointState] = field(default_factory=list)
+    status: PlanningStatus = PlanningStatus.NO_SOLUTION
+    planning_time: float = 0.0
+    path_length: float = 0.0
+    iterations: int = 0
+    message: str = ""
+
+    def is_success(self) -> bool:
+        """Check if the generated plan was successful."""
         return self.status == PlanningStatus.SUCCESS
 
 
@@ -312,7 +213,7 @@ class CollisionObjectMessage:
         primitive_type: "box", "sphere", or "cylinder" (for add/update)
         pose: Pose of the obstacle (for add/update)
         dimensions: Type-specific dimensions (for add/update)
-        color: RGBA color tuple
+        color: RGBA color tuple. ``None`` means the field was omitted.
     """
 
     id: str
@@ -320,4 +221,4 @@ class CollisionObjectMessage:
     primitive_type: str | None = None
     pose: PoseStamped | None = None
     dimensions: tuple[float, ...] | None = None
-    color: tuple[float, float, float, float] = (0.8, 0.2, 0.2, 0.8)
+    color: tuple[float, float, float, float] | None = None

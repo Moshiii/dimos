@@ -246,6 +246,3 @@ class DamiaoWholeBodyAdapter:
             float(np.clip(value, -limit, limit))
             for value, limit in zip(values, group_spec.gravity_torque_limits, strict=False)
         ]
-
-
-__all__ = ["DamiaoWholeBodyAdapter"]

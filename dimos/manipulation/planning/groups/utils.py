@@ -16,16 +16,22 @@
 
 from collections.abc import Mapping, Sequence
 
+import numpy as np
+from numpy.typing import NDArray
+
 from dimos.manipulation.planning.groups.identifiers import (
     assert_global_joint_names,
     assert_local_joint_names,
     is_global_joint_name,
+    make_global_joint_names,
 )
 from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.spec.models import (
     GlobalJointName,
+    JointPath,
     LocalModelJointName,
     PlanningGroupID,
+    RobotName,
 )
 from dimos.msgs.sensor_msgs.JointState import JointState
 
@@ -134,3 +140,97 @@ def joint_target_to_global_names(
     if extra:
         raise ValueError(f"Target for '{group.id}' has extra joints: {sorted(extra)}")
     return JointState(name=list(group.joint_names), position=global_positions)
+
+
+def project_global_joint_path_to_robot(
+    path: Sequence[JointState],
+    *,
+    robot_name: RobotName,
+    local_joint_names: Sequence[LocalModelJointName],
+    current_joint_state: JointState | None,
+) -> JointPath:
+    """Project a selected-global-joint path into one robot's local joint path."""
+    if not path:
+        return []
+
+    selected_joint_names = tuple(path[0].name)
+    assert_global_joint_names(selected_joint_names)
+    if any(
+        len(waypoint.name) != len(waypoint.position) or tuple(waypoint.name) != selected_joint_names
+        for waypoint in path
+    ):
+        raise ValueError("inconsistent waypoint joint names")
+
+    selected_joint_indices = dict(
+        zip(selected_joint_names, range(len(selected_joint_names)), strict=True)
+    )
+    selected_joint_set = set(selected_joint_names)
+    waypoint_positions = [[float(position) for position in waypoint.position] for waypoint in path]
+    current_by_name = (
+        dict(zip(current_joint_state.name, current_joint_state.position, strict=False))
+        if current_joint_state is not None
+        else {}
+    )
+    global_joint_names = make_global_joint_names(robot_name, tuple(local_joint_names))
+    joint_pairs = list(zip(local_joint_names, global_joint_names, strict=True))
+    try:
+        base_positions = [
+            0.0 if global_name in selected_joint_set else float(current_by_name[local_name])
+            for local_name, global_name in joint_pairs
+        ]
+    except KeyError as exc:
+        raise ValueError(f"missing joint '{exc.args[0]}'") from exc
+
+    overlay_indices = [
+        (local_index, selected_joint_indices[global_name])
+        for local_index, (_, global_name) in enumerate(joint_pairs)
+        if global_name in selected_joint_indices
+    ]
+    local_path: JointPath = []
+    for waypoint_positions_by_joint in waypoint_positions:
+        projected_positions = base_positions.copy()
+        for local_index, selected_index in overlay_indices:
+            projected_positions[local_index] = waypoint_positions_by_joint[selected_index]
+        local_path.append(JointState(name=list(local_joint_names), position=projected_positions))
+    return local_path
+
+
+def joint_state_to_ordered_positions(
+    joint_state: JointState,
+    *,
+    joint_names: Sequence[str],
+    joint_name_mapping: Mapping[str, str],
+) -> NDArray[np.float64]:
+    """Convert a JointState to an array ordered by local robot joint names."""
+    if not joint_state.name:
+        if len(joint_state.position) != len(joint_names):
+            raise ValueError("JointState position length must match configured joint count")
+        return np.asarray(joint_state.position, dtype=np.float64)
+
+    if len(joint_state.name) != len(joint_state.position):
+        raise ValueError("JointState name and position lengths must match")
+
+    joint_name_set = set(joint_names)
+    name_to_pos: dict[str, float] = {}
+    for name, position in zip(joint_state.name, joint_state.position, strict=True):
+        if name in joint_name_set:
+            resolved_name = name
+        elif name in joint_name_mapping:
+            resolved_name = joint_name_mapping[name]
+        elif is_global_joint_name(name):
+            resolved_name = name.split("/", maxsplit=1)[1]
+            if resolved_name not in joint_name_set:
+                raise ValueError(f"Unknown global joint name: {name}")
+        else:
+            raise ValueError(
+                f"Unrecognized joint name '{name}': not a known local name, not in joint_name_mapping, and not a global name"
+            )
+
+        if resolved_name in name_to_pos:
+            raise ValueError(f"JointState resolves duplicate joint '{resolved_name}'")
+        name_to_pos[resolved_name] = float(position)
+
+    missing = [name for name in joint_names if name not in name_to_pos]
+    if missing:
+        raise ValueError(f"JointState missing joints: {missing}")
+    return np.asarray([name_to_pos[name] for name in joint_names], dtype=np.float64)

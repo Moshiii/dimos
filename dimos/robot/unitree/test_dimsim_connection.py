@@ -58,7 +58,6 @@ def test_dimsim_connection_forwards_sensor_samples_and_motion_commands(
     mocker,
 ) -> None:
     transports: dict[str, _FakeTransport] = {}
-    tf = mocker.Mock()
 
     def make_transport(topic: str, data_type: type[Any]) -> _FakeTransport:
         transport = _FakeTransport(topic, data_type)
@@ -70,10 +69,9 @@ def test_dimsim_connection_forwards_sensor_samples_and_motion_commands(
         lambda _config: _FakeProcess(),
     )
     monkeypatch.setattr(
-        "dimos.robot.unitree.dimsim_connection.LCMTransport",
+        "dimos.robot.unitree.dimsim_connection.make_transport",
         make_transport,
     )
-    monkeypatch.setattr("dimos.robot.unitree.dimsim_connection.LCMTF", lambda: tf)
     connection = DimSimConnection(GlobalConfig())
     lidar_samples: list[Any] = []
     video_samples: list[Any] = []
@@ -101,7 +99,7 @@ def test_dimsim_connection_forwards_sensor_samples_and_motion_commands(
         assert video_samples == [video]
         assert odom_samples == [odom]
         assert transports["/cmd_vel"].published == [command]
-        tf.publish.assert_called_once_with(*transforms)
+        assert transports["/tf"].published[0].transforms == transforms
     finally:
         connection.stop()
 
@@ -111,7 +109,6 @@ def test_dimsim_connection_rejects_duplicate_sensor_timestamps(
     mocker,
 ) -> None:
     transports: dict[str, _FakeTransport] = {}
-    tf = mocker.Mock()
 
     def make_transport(topic: str, data_type: type[Any]) -> _FakeTransport:
         transport = _FakeTransport(topic, data_type)
@@ -123,10 +120,9 @@ def test_dimsim_connection_rejects_duplicate_sensor_timestamps(
         lambda _config: _FakeProcess(),
     )
     monkeypatch.setattr(
-        "dimos.robot.unitree.dimsim_connection.LCMTransport",
+        "dimos.robot.unitree.dimsim_connection.make_transport",
         make_transport,
     )
-    monkeypatch.setattr("dimos.robot.unitree.dimsim_connection.LCMTF", lambda: tf)
     connection = DimSimConnection(GlobalConfig())
     samples: list[Any] = []
     connection.video_stream().subscribe(samples.append)

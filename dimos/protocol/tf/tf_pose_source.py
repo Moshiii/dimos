@@ -20,9 +20,10 @@ import time
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.core.stream import Out
+from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 
 
 class TfPoseSourceConfig(ModuleConfig):
@@ -38,6 +39,7 @@ class TfPoseSource(Module):
     config: TfPoseSourceConfig  # type: ignore[assignment]
 
     odometry: Out[Odometry]
+    tf: In[TFMessage]
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -67,7 +69,7 @@ class TfPoseSource(Module):
         """Publish one odometry sample if the configured TF is available."""
 
         config = self.pose_source_config
-        transform = self.tf.get(
+        transform = self.tfbuffer.get(
             config.target_frame,
             config.source_frame,
             time_point=time.time(),

@@ -23,7 +23,7 @@ from dimos.benchmark.agent_eval.observation_recorder import (
     AgentEvalObservationRecorder,
 )
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.perception.spatial_perception import SpatialMemory
+from dimos.perception.experimental.spatial_perception import SpatialMemory
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer

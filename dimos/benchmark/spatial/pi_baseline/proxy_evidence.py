@@ -1,4 +1,18 @@
 # Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Copyright 2026 Dimensional Inc.
 # Licensed under the Apache License, Version 2.0 (the "License").
 
 """Advisory package configuration and normalized audit evidence.
@@ -51,7 +65,9 @@ class PackageIndexConfig:
         return {
             "proxy_url": self.proxy_url.rstrip("/"),
             "index_urls": tuple(url.rstrip("/") for url in self.index_urls),
-            "allowed_hosts": tuple(sorted({host.lower().rstrip(".") for host in self.allowed_hosts})),
+            "allowed_hosts": tuple(
+                sorted({host.lower().rstrip(".") for host in self.allowed_hosts})
+            ),
         }
 
 
@@ -63,9 +79,7 @@ class PackageIndexAuditEvidence:
     requested_urls: tuple[str, ...]
 
     def normalized(self) -> dict[str, object]:
-        allowed = {
-            host.lower().rstrip(".") for host in self.config.allowed_hosts
-        }
+        allowed = {host.lower().rstrip(".") for host in self.config.allowed_hosts}
         urls = tuple(url.rstrip("/") for url in self.requested_urls)
         for url in urls:
             if _host(url) not in allowed:

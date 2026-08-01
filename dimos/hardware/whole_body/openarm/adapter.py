@@ -164,6 +164,3 @@ class OpenArmDualWholeBodyAdapter(DamiaoWholeBodyAdapter):
 
 def register(registry: WholeBodyAdapterRegistry) -> None:
     registry.register("openarm_dual", OpenArmDualWholeBodyAdapter)
-
-
-__all__ = ["OpenArmDualBindingUnavailableError", "OpenArmDualWholeBodyAdapter", "register"]

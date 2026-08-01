@@ -301,7 +301,8 @@ def test_missing_world_transform_returns_none_and_does_not_publish(mocker) -> No
         "_detector",
         _FakeDetector([_FakeGrasp(_grasp_matrix((0.01, 0.02, 0.03)))], [0.9]),
     )
-    get_transform = mocker.patch.object(module.tf, "get", return_value=None)
+    module._tf = mocker.Mock()
+    get_transform = mocker.patch.object(module.tfbuffer, "get", return_value=None)
     candidates_out: list[GraspCandidateArray] = []
     module.grasp_candidates.subscribe(candidates_out.append)
 
@@ -326,7 +327,8 @@ def test_world_transform_is_applied(mocker) -> None:  # type: ignore[no-untyped-
         child_frame_id="camera",
         ts=10.0,
     )
-    mocker.patch.object(module.tf, "get", return_value=transform)
+    module._tf = mocker.Mock()
+    mocker.patch.object(module.tfbuffer, "get", return_value=transform)
 
     result = module.generate_grasps_from_tsdf(_tsdf_grid(frame_id="camera"))
 
@@ -397,7 +399,8 @@ def test_target_mask_does_not_mutate_original_and_suppresses_outside_voxels() ->
 def test_target_bounds_transform_failure_returns_none_and_clears(mocker: MockerFixture) -> None:
     module = VGNGraspGenModule(output_frame="world")
     module._latest_tsdf = _tsdf_grid(frame_id="tsdf")
-    mocker.patch.object(module.tf, "get", return_value=None)
+    module._tf = mocker.Mock()
+    mocker.patch.object(module.tfbuffer, "get", return_value=None)
     candidates_out: list[GraspCandidateArray] = []
     module.grasp_candidates.subscribe(candidates_out.append)
 

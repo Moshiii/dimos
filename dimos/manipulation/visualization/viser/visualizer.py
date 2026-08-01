@@ -18,9 +18,9 @@ from collections.abc import Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from dimos.manipulation.planning.groups.identifiers import make_global_joint_name
 from dimos.manipulation.visualization.viser.animation import (
     GroupPreviewAnimation,
+    PreviewFrame,
     PreviewTrack,
 )
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
@@ -33,6 +33,7 @@ from dimos.manipulation.visualization.viser.runtime import (
 from dimos.manipulation.visualization.viser.scene import ViserManipulationScene
 from dimos.manipulation.visualization.viser.theme import apply_dimos_theme
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.utils.logging_config import setup_logger
 
 try:
@@ -47,14 +48,14 @@ except ImportError as e:
     raise ModuleNotFoundError(VISER_URDF_INSTALL_HINT) from e
 
 if TYPE_CHECKING:
-    from dimos.manipulation.manipulation_module import ManipulationModule
-    from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
     from dimos.manipulation.planning.spec.config import RobotModelConfig
     from dimos.manipulation.planning.spec.models import (
-        GeneratedPlan,
-        PlanningGroupID,
+        Obstacle,
         PlanningSceneInfo,
+        VisualizationSession,
+        VisualizationStateFrame,
     )
+    from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 logger = setup_logger()
 
@@ -65,17 +66,19 @@ class ViserManipulationVisualizer:
     def __init__(
         self,
         *,
-        world_monitor: WorldMonitor,
-        manipulation_module: ManipulationModule,
         config: ViserVisualizationConfig | None = None,
     ) -> None:
-        self._world_monitor = world_monitor
-        self._manipulation_module = manipulation_module
         self.config = config or ViserVisualizationConfig()
         self._runtime: ViserRuntime | None = None
         self._server: ViserServer | None = None
         self._scene: ViserManipulationScene | None = None
         self._gui: ViserPanelGui | None = None
+        self._session_scene: PlanningSceneInfo | None = None
+        self._operator: object | None = None
+        self._current_states: dict[str, JointState] = {}
+        self._robot_names_by_id: dict[str, str] = {}
+        self._robot_ids_by_name: dict[str, str] = {}
+        self._configs_by_name: dict[str, RobotModelConfig] = {}
         self._closed = False
 
     def _ensure_started(self) -> None:
@@ -87,20 +90,19 @@ class ViserManipulationVisualizer:
         try:
             server = runtime.start()
             apply_dimos_theme(server)
-            scene = ViserManipulationScene(
-                server,
-                ViserUrdf,
-                preview_fps=self.config.preview_fps,
-            )
+            scene = ViserManipulationScene(server, ViserUrdf)
             gui = (
                 ViserPanelGui(
                     server,
-                    self._world_monitor,
-                    self._manipulation_module,
+                    self._session_scene,
+                    self._operator,
+                    self._current_states,
                     self.config,
                     scene,
                 )
                 if self.config.panel_enabled
+                and self._session_scene is not None
+                and self._operator is not None
                 else None
             )
             if gui is not None:
@@ -127,7 +129,20 @@ class ViserManipulationVisualizer:
         self._closed = False
         logger.info(f"Viser manipulation visualization: {self.get_visualization_url()}")
 
-    def initialize_scene(self, scene: PlanningSceneInfo) -> None:
+    def initialize(self, session: VisualizationSession) -> None:
+        """Initialize Viser robot visuals from a one-shot visualization session."""
+        self._operator = session.operator
+        self._session_scene = session.scene
+        self._robot_names_by_id = {
+            str(robot_id): config.name for robot_id, config in session.scene.robots.items()
+        }
+        self._robot_ids_by_name = {
+            config.name: str(robot_id) for robot_id, config in session.scene.robots.items()
+        }
+        self._configs_by_name = {config.name: config for config in session.scene.robots.values()}
+        self._initialize_scene(session.scene)
+
+    def _initialize_scene(self, scene: PlanningSceneInfo) -> None:
         """Initialize Viser robot visuals from planning-scene metadata."""
         if self._closed:
             return
@@ -146,146 +161,160 @@ class ViserManipulationVisualizer:
     def get_visualization_url(self) -> str | None:
         return None if self._runtime is None else self._runtime.url
 
-    def publish_visualization(self, ctx: None = None) -> None:
-        """Update current robot render state. ctx is accepted for protocol compatibility."""
+    def add_vis_obstacle(self, obstacle_id: str, obstacle: Obstacle) -> None:
+        """Render an accepted planning obstacle."""
+        if self._closed:
+            return
+        self._ensure_started()
+        if self._scene is not None:
+            self._scene.add_vis_obstacle(obstacle_id, obstacle)
+
+    def update_vis_obstacle(self, obstacle: Obstacle) -> None:
+        """Replace an obstacle representation without affecting planning state."""
+        if self._closed:
+            return
+        try:
+            self._ensure_started()
+            if self._scene is None:
+                return
+            self._scene.update_vis_obstacle(obstacle)
+        except Exception as error:
+            logger.warning(
+                "Obstacle visualization update failed for '%s': %s",
+                obstacle.name,
+                error,
+                exc_info=True,
+            )
+            if self._scene is not None:
+                self._scene.show_obstacle_warning(
+                    f"⚠️ Obstacle visualization is stale for `{obstacle.name}`: {error}"
+                )
+
+    def update_vis_obstacle_pose(self, obstacle_id: str, pose: PoseStamped) -> None:
+        """Move an obstacle representation without affecting planning state."""
+        if self._closed:
+            return
+        try:
+            self._ensure_started()
+            if self._scene is None:
+                return
+            self._scene.update_vis_obstacle_pose(obstacle_id, pose)
+        except Exception as error:
+            logger.warning(
+                "Obstacle pose visualization update failed for '%s': %s",
+                obstacle_id,
+                error,
+                exc_info=True,
+            )
+            if self._scene is not None:
+                self._scene.show_obstacle_warning(
+                    f"⚠️ Obstacle visualization is stale for `{obstacle_id}`: {error}"
+                )
+
+    def remove_vis_obstacle(self, obstacle_id: str) -> None:
+        """Remove an obstacle representation."""
+        if self._closed:
+            return
+        self._ensure_started()
+        if self._scene is not None:
+            self._scene.remove_vis_obstacle(obstacle_id)
+
+    def clear_vis_obstacles(self) -> None:
+        """Remove all obstacle representations."""
+        if self._closed:
+            return
+        self._ensure_started()
+        if self._scene is not None:
+            self._scene.clear_vis_obstacles()
+
+    def update_state(self, frame: VisualizationStateFrame) -> None:
+        """Update current robot render state from a pushed state frame."""
         if self._closed:
             return
         self._ensure_started()
         if self._scene is None:
             return
-        for robot_name, robot_id, _config in self._manipulation_module.robot_items():
-            get_current_joint_state = getattr(
-                self._manipulation_module, "get_current_joint_state", None
-            )
-            current = (
-                get_current_joint_state(robot_name)
-                if callable(get_current_joint_state)
-                else self._world_monitor.get_current_joint_state(robot_id)
-            )
-            self._scene.update_current_robot(str(robot_id), current)
-        self._scene.update_planning_voxel_map(self._manipulation_module.latest_planning_voxel_map())
+        for robot_id, current in frame.joint_states.items():
+            robot_id_string = str(robot_id)
+            self._current_states[robot_id_string] = JointState(current)
+            self._scene.update_current_robot(robot_id_string, current)
         if self._gui is not None:
             self._gui.refresh()
 
-    def show_preview(self, group_ids: Sequence[PlanningGroupID]) -> None:
-        if not self._closed:
-            self._ensure_started()
-            if self._scene is None:
-                return
-            for robot_id in self._robot_ids_for_groups(group_ids):
-                self._scene.show_preview(str(robot_id))
-
-    def hide_preview(self, group_ids: Sequence[PlanningGroupID]) -> None:
-        if not self._closed:
-            self._ensure_started()
-            if self._scene is None:
-                return
-            for robot_id in self._robot_ids_for_groups(group_ids):
-                self._scene.hide_preview(str(robot_id))
-
-    def animate_plan(self, plan: GeneratedPlan, duration: float = 3.0) -> None:
+    def animate_trajectory(
+        self, trajectory: JointTrajectory, duration: float | None = None
+    ) -> None:
         if self._closed:
             return
         self._ensure_started()
         if self._scene is None:
             return
-        preview = self._build_group_preview_animation(plan)
+        preview = self._raw_preview_animation(trajectory)
         if preview is not None:
-            self._scene.animate_preview(preview, duration)
+            self._scene.animate_preview(
+                preview, duration if duration is not None else max(float(trajectory.duration), 0.0)
+            )
 
-    def _build_group_preview_animation(self, plan: GeneratedPlan) -> GroupPreviewAnimation | None:
-        selection = self._world_monitor.planning_groups.select(plan.group_ids)
+    def cancel_preview_animation(self, robot_ids: Sequence[str] | None = None) -> None:
+        """Cancel preview playback without starting a renderer or waiting for it.
+
+        The world monitor deliberately invokes this outside its visualization
+        lock, so a renderer sleeping between frames can observe the scene
+        generation change immediately.  Do not call ``_ensure_started()``:
+        cancelling before Viser has started must remain a no-op.  Likewise,
+        retain the scene reference while ``close()`` is unwinding so a
+        concurrent cancellation can still invalidate an in-flight frame.
+        """
+        scene = self._scene
+        if scene is not None:
+            if robot_ids is None:
+                scene.cancel_preview_animation()
+            else:
+                scene.cancel_preview_animation(robot_ids)
+
+    def _raw_preview_animation(self, trajectory: JointTrajectory) -> GroupPreviewAnimation | None:
+        robot_indices: dict[str, list[tuple[int, str]]] = {}
+        for index, global_name in enumerate(trajectory.joint_names):
+            if "/" not in str(global_name):
+                return None
+            robot_name, local_name = str(global_name).split("/", 1)
+            if robot_name not in self._robot_ids_by_name:
+                return None
+            robot_indices.setdefault(robot_name, []).append((index, local_name))
         tracks: list[PreviewTrack] = []
-        for robot_name in selection.robot_names:
-            robot_id = self._manipulation_module.robot_id_for_name(robot_name)
-            config = self._manipulation_module.get_robot_config(robot_name)
-            get_current_joint_state = getattr(
-                self._manipulation_module, "get_current_joint_state", None
-            )
-            current = (
-                get_current_joint_state(robot_name)
-                if callable(get_current_joint_state)
-                else self._world_monitor.get_current_joint_state(robot_id)
-                if robot_id is not None
-                else None
-            )
-            if robot_id is None or config is None or current is None:
-                logger.warning(
-                    "Cannot build group preview for robot '%s': missing id, config, or state",
-                    robot_name,
-                )
+        for robot_name, indexed_names in robot_indices.items():
+            robot_id = self._robot_ids_by_name[robot_name]
+            config = self._configs_by_name[robot_name]
+            current = self._current_states.get(robot_id)
+            baseline = self._baseline_values(config, current)
+            if baseline is None:
                 return None
-            path = self._robot_path_for_plan(robot_name, config, current, plan)
-            if not path:
-                logger.warning("Cannot project generated plan for robot '%s'", robot_name)
-                return None
-            tracks.append(
-                PreviewTrack(
-                    robot_id=str(robot_id),
-                    group_ids=tuple(
-                        group.id for group in selection.groups if group.robot_name == robot_name
-                    ),
-                    joint_names=tuple(config.joint_names),
-                    path=tuple(path),
-                )
-            )
-        if not tracks:
-            return None
-        return GroupPreviewAnimation(group_ids=plan.group_ids, tracks=tuple(tracks))
-
-    def _robot_ids_for_groups(self, group_ids: Sequence[PlanningGroupID]) -> list[str]:
-        selection = self._world_monitor.planning_groups.select(group_ids)
-        robot_ids: list[str] = []
-        for robot_name in selection.robot_names:
-            robot_id = self._manipulation_module.robot_id_for_name(robot_name)
-            if robot_id is not None:
-                robot_ids.append(str(robot_id))
-        return robot_ids
-
-    def _robot_path_for_plan(
-        self,
-        robot_name: str,
-        config: RobotModelConfig,
-        current: JointState,
-        plan: GeneratedPlan,
-    ) -> list[JointState]:
-        current_by_name = self._current_positions_by_name(config, current)
-        if current_by_name is None:
-            return []
-        path: list[JointState] = []
-        for waypoint in plan.path:
-            if len(waypoint.name) != len(waypoint.position):
-                return []
-            selected = dict(zip(waypoint.name, waypoint.position, strict=True))
-            positions: list[float] = []
-            for local_name in config.joint_names:
-                global_name = make_global_joint_name(robot_name, local_name)
-                if global_name in selected:
-                    positions.append(float(selected[global_name]))
-                    continue
-                if local_name not in current_by_name:
-                    return []
-                positions.append(current_by_name[local_name])
-            path.append(JointState(name=list(config.joint_names), position=positions))
-        return path
+            frames: list[PreviewFrame] = []
+            for point in trajectory.points:
+                selected = {
+                    local_name: float(point.positions[index]) for index, local_name in indexed_names
+                }
+                positions: list[float] = []
+                for local_name in config.joint_names:
+                    value = selected.get(local_name, baseline.get(local_name))
+                    if value is None:
+                        return None
+                    positions.append(float(value))
+                frames.append(PreviewFrame(float(point.time_from_start), tuple(positions)))
+            tracks.append(PreviewTrack(robot_id, tuple(config.joint_names), tuple(frames)))
+        return GroupPreviewAnimation(tuple(tracks)) if tracks else None
 
     @staticmethod
-    def _current_positions_by_name(
-        config: RobotModelConfig, current: JointState
+    def _baseline_values(
+        config: RobotModelConfig, current: JointState | None
     ) -> dict[str, float] | None:
-        if current.name:
-            if len(current.name) != len(current.position):
-                return None
-            return {
-                str(name): float(position)
-                for name, position in zip(current.name, current.position, strict=True)
-            }
-        if len(current.position) != len(config.joint_names):
+        if current is None or len(current.name) != len(current.position):
             return None
-        return {
-            str(name): float(position)
-            for name, position in zip(config.joint_names, current.position, strict=True)
+        values = {
+            str(name): float(value)
+            for name, value in zip(current.name, current.position, strict=True)
         }
+        return values if all(name in values for name in config.joint_names) else None
 
     def close(self) -> None:
         if self._closed:

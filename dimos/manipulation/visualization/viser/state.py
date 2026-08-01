@@ -21,8 +21,8 @@ import queue
 import threading
 from typing import Literal
 
-from dimos.manipulation.planning.spec.models import PlanningGroupID
-from dimos.manipulation.visualization.types import TargetEvaluation, TargetSetEvaluation
+from dimos.manipulation.planning.spec.models import GeneratedPlan, PlanningGroupID
+from dimos.manipulation.visualization.operator import TargetEvaluationResult
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.logging_config import setup_logger
@@ -70,11 +70,6 @@ class PlanStatus(str, Enum):
     FAILED = "failed"
 
 
-class PlanRecipe(str, Enum):
-    STANDARD = "standard"
-    LINEAR_TCP = "linear_tcp"
-
-
 class ActionStatus(str, Enum):
     IDLE = "idle"
     RUNNING = "running"
@@ -83,6 +78,11 @@ class ActionStatus(str, Enum):
     CANCELLING = "cancelling"
     CLEARING_PLAN = "clearing_plan"
     FAILED = "failed"
+
+
+class PlanningMode(str, Enum):
+    JOINT_SPACE = "joint_space"
+    CARTESIAN_SPACE = "cartesian_space"
 
 
 PreviewSource = Literal["cartesian", "joints"]
@@ -98,36 +98,29 @@ class FeasibilityState:
 @dataclass
 class PanelPlanState:
     status: PlanStatus = PlanStatus.NONE
-    recipe: PlanRecipe | None = None
-    group_ids: tuple[PlanningGroupID, ...] = ()
     robot: str | None = None
-    target_pose: Pose | None = None
-    target_joints: list[float] | None = None
-    start_joints_snapshot: dict[PlanningGroupID, list[float]] = field(default_factory=dict)
-    planned_path: list[JointState] | None = None
+    group_ids: tuple[PlanningGroupID, ...] = ()
+    target_sequence_id: int = 0
+    plan: GeneratedPlan | None = None
 
 
 @dataclass
 class PanelState:
     selected_robot: str | None = None
     selected_group_ids: tuple[PlanningGroupID, ...] = ()
-    auxiliary_group_ids: tuple[PlanningGroupID, ...] = ()
+    planning_mode: PlanningMode = PlanningMode.JOINT_SPACE
+    selection_epoch: int = 0
     pose_targets: dict[PlanningGroupID, Pose] = field(default_factory=dict)
     group_joint_targets: dict[PlanningGroupID, JointState] = field(default_factory=dict)
     target_joints: JointState | None = None
-    last_valid_target_joints: JointState | None = None
     group_poses: dict[PlanningGroupID, Pose] = field(default_factory=dict)
-    group_diagnostics: dict[PlanningGroupID, str] = field(default_factory=dict)
     runtime: PanelRuntime = PanelRuntime.STOPPED
     backend_status: BackendConnectionStatus = BackendConnectionStatus.DISCONNECTED
     target_status: TargetStatus = TargetStatus.EMPTY
     action_status: ActionStatus = ActionStatus.IDLE
     manipulation_state: str = "DISCONNECTED"
     current_joints: list[float] | None = None
-    current_ee_pose: Pose | None = None
     cartesian_target: Pose | None = None
-    joint_target: list[float] | None = None
-    next_plan_linear_tcp: bool = False
     feasibility: FeasibilityState = field(default_factory=FeasibilityState)
     latest_sequence_id: int = 0
     plan_state: PanelPlanState = field(default_factory=PanelPlanState)
@@ -141,8 +134,15 @@ class PanelState:
         self.mark_plan_stale()
         return self.latest_sequence_id
 
+    def advance_selection_epoch(self) -> int:
+        """Invalidate callbacks and plans that belong to an older group selection."""
+        self.selection_epoch += 1
+        self.next_sequence_id()
+        self.plan_state = PanelPlanState()
+        return self.selection_epoch
+
     def mark_plan_stale(self) -> None:
-        if self.plan_state.status == PlanStatus.FRESH:
+        if self.plan_state.status in {PlanStatus.FRESH, PlanStatus.PLANNING}:
             self.plan_state.status = PlanStatus.STALE
 
     def can_plan(self) -> bool:
@@ -152,8 +152,7 @@ class PanelState:
             and bool(self.selected_group_ids)
             and self.action_status == ActionStatus.IDLE
             and self.target_status == TargetStatus.FEASIBLE
-            and self.target_joints is not None
-            and self.manipulation_state in {"IDLE", "COMPLETED", "FAULT"}
+            and self.manipulation_state in {"IDLE", "COMPLETED"}
             and self.plan_state.status != PlanStatus.PLANNING
         )
 
@@ -172,11 +171,7 @@ class PanelState:
             ActionStatus.EXECUTING,
         } or (self.manipulation_state == "EXECUTING")
 
-    def can_execute(
-        self,
-        current_tolerance: float,
-        action_status: ActionStatus | None = None,
-    ) -> bool:
+    def can_execute(self, action_status: ActionStatus | None = None) -> bool:
         plan = self.plan_state
         effective_action_status = action_status or self.action_status
         if not (
@@ -186,23 +181,11 @@ class PanelState:
             and self.target_status == TargetStatus.FEASIBLE
             and self.manipulation_state in {"IDLE", "COMPLETED"}
             and plan.status == PlanStatus.FRESH
+            and plan.plan is not None
             and plan.group_ids == self.selected_group_ids
-            and bool(plan.start_joints_snapshot)
-            and self.target_joints is not None
+            and plan.target_sequence_id == self.latest_sequence_id
         ):
             return False
-        if self.current_joints is None:
-            return False
-        # Multi-group freshness is checked by group snapshot when available. The
-        # robot-level current-joint fallback preserves one-group legacy tests.
-        if len(plan.start_joints_snapshot) == 1:
-            snapshot = next(iter(plan.start_joints_snapshot.values()))
-            if len(snapshot) != len(self.current_joints):
-                return False
-            return all(
-                abs(expected - current) <= current_tolerance
-                for expected, current in zip(snapshot, self.current_joints, strict=False)
-            )
         return True
 
     @property
@@ -225,14 +208,14 @@ class PanelState:
 class TargetEvaluationRequest:
     sequence_id: int
     source: PreviewSource
-    group_ids: tuple[PlanningGroupID, ...]
     robot_name: str | None = None
-    auxiliary_group_ids: tuple[PlanningGroupID, ...] = ()
+    selection_epoch: int = 0
+    group_ids: tuple[PlanningGroupID, ...] = ()
     pose: Pose | None = None
-    pose_targets: dict[PlanningGroupID, Pose] = field(default_factory=dict)
     joints: JointState | None = None
+    auxiliary_group_ids: tuple[PlanningGroupID, ...] = ()
+    pose_targets: dict[PlanningGroupID, Pose] = field(default_factory=dict)
     joint_targets: dict[PlanningGroupID, JointState] = field(default_factory=dict)
-    check_collision: bool = True
 
 
 class TargetEvaluationWorker:
@@ -245,15 +228,11 @@ class TargetEvaluationWorker:
 
     def __init__(
         self,
-        handler: Callable[[TargetEvaluationRequest], TargetEvaluation | TargetSetEvaluation],
-        apply_result: Callable[
-            [TargetEvaluationRequest, TargetEvaluation | TargetSetEvaluation], None
-        ],
-        timeout_seconds: float | None = None,
+        handler: Callable[[TargetEvaluationRequest], TargetEvaluationResult],
+        apply_result: Callable[[TargetEvaluationRequest, TargetEvaluationResult], None],
     ) -> None:
         self._handler = handler
         self._apply_result = apply_result
-        self._timeout_seconds = timeout_seconds
         self._requests: queue.Queue[TargetEvaluationRequest] = queue.Queue(maxsize=1)
         self._submit_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -295,48 +274,10 @@ class TargetEvaluationWorker:
                 except queue.Empty:
                     break
             try:
-                self._run_evaluation(request)
+                result = self._handler(request)
+                self._apply_result(request, result)
             except Exception:
                 logger.warning("Target evaluation worker caught unhandled exception", exc_info=True)
-
-    def _run_evaluation(self, request: TargetEvaluationRequest) -> None:
-        timeout = self._evaluation_timeout()
-        if timeout is None:
-            result = self._handler(request)
-            self._apply_result(request, result)
-            return
-
-        result: TargetEvaluation | TargetSetEvaluation | None = None
-        error: Exception | None = None
-
-        def run() -> None:
-            nonlocal error, result
-            try:
-                result = self._handler(request)
-            except Exception as e:
-                error = e
-
-        thread = threading.Thread(target=run, name="ViserTargetEvaluation", daemon=True)
-        thread.start()
-        thread.join(timeout=max(timeout, 0.0))
-        if thread.is_alive():
-            self._apply_result(request, self._timeout_result(timeout))
-            return
-        if error is not None:
-            raise error
-        if result is not None:
-            self._apply_result(request, result)
-
-    def _evaluation_timeout(self) -> float | None:
-        return None if self._timeout_seconds is None else float(self._timeout_seconds)
-
-    def _timeout_result(self, timeout: float) -> TargetSetEvaluation:
-        return {
-            "success": False,
-            "collision_free": False,
-            "status": "TIMEOUT",
-            "message": f"Target evaluation timed out after {timeout:.1f}s",
-        }
 
 
 class OperationWorker:

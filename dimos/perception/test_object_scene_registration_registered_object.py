@@ -21,7 +21,7 @@ import open3d as o3d  # type: ignore[import-untyped]
 
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.perception.object_scene_registration import _to_registered_object
+from dimos.perception.experimental.object_scene_registration import _to_registered_object
 
 
 @dataclass(slots=True)

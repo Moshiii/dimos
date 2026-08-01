@@ -179,4 +179,3 @@ patches.
   but no public seed.
 - What licensing and redistribution terms apply to generated scenes and premade
   catalog assets in a public benchmark corpus?
-

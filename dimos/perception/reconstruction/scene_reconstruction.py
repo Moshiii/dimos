@@ -18,7 +18,6 @@ import time
 from typing import TYPE_CHECKING
 
 import numpy as np
-import open3d as o3d  # type: ignore[import-untyped]
 from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
@@ -31,6 +30,7 @@ from dimos.msgs.reconstruction_msgs.TSDFGrid import TSDFGrid
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -58,6 +58,7 @@ class SceneReconstructionModule(Module):
 
     depth_image: In[Image]
     depth_camera_info: In[CameraInfo]
+    tf: In[TFMessage]
 
     scene_pointcloud: Out[PointCloud2]
     tsdf: Out[TSDFGrid]
@@ -194,7 +195,7 @@ class SceneReconstructionModule(Module):
                 child_frame_id=depth_image.frame_id,
                 ts=depth_image.ts,
             )
-        return self.tf.get(
+        return self.tfbuffer.get(
             self.config.target_frame,
             depth_image.frame_id,
             depth_image.ts,
@@ -207,6 +208,8 @@ class SceneReconstructionModule(Module):
         camera_info: CameraInfo,
         target_from_camera: Transform,
     ) -> None:
+        import open3d as o3d  # type: ignore[import-untyped]
+
         depth_m = _depth_to_meters(depth_image, self.config.depth16_scale)
         if depth_m.shape != (camera_info.height, camera_info.width):
             raise ValueError(
@@ -234,6 +237,8 @@ class SceneReconstructionModule(Module):
         )
 
     def _new_volume(self) -> o3d.pipelines.integration.UniformTSDFVolume:
+        import open3d as o3d  # type: ignore[import-untyped]
+
         resolution = int(self.config.resolution)
         if resolution <= 0:
             raise ValueError("TSDF resolution must be positive")
@@ -355,6 +360,8 @@ def _depth_to_meters(depth_image: Image, depth16_scale: float) -> NDArray[np.flo
 
 
 def _make_intrinsic(camera_info: CameraInfo) -> o3d.camera.PinholeCameraIntrinsic:
+    import open3d as o3d  # type: ignore[import-untyped]
+
     intrinsic = camera_info.get_K_matrix()
     return o3d.camera.PinholeCameraIntrinsic(
         width=camera_info.width,

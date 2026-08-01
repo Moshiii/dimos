@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.robot.manipulators.common.blueprints import coordinator, planner
+from dimos.robot.manipulators.common.blueprints import coordinator, planner, trajectory_task
 from dimos.robot.manipulators.openarm.blueprints.basic import (
     left_hw,
     mock_left,
@@ -37,10 +37,7 @@ openarm_mock_planner_coordinator = autoconnect(
     ),
     coordinator(
         hardware=[mock_left, mock_right],
-        tasks=[
-            openarm_task(mock_left),
-            openarm_task(mock_right),
-        ],
+        tasks=[trajectory_task(mock_left, mock_right)],
     ),
 )
 
@@ -53,10 +50,7 @@ openarm_planner_coordinator = autoconnect(
     ),
     coordinator(
         hardware=[left_hw, right_hw],
-        tasks=[
-            openarm_task(left_hw),
-            openarm_task(right_hw),
-        ],
+        tasks=[trajectory_task(left_hw, right_hw)],
     ),
 )
 

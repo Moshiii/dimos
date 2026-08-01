@@ -15,8 +15,8 @@
 from dimos.manipulation.grasping.grasping import GraspingModule
 from dimos.manipulation.grasping.target_grasp_demo_controller import TargetGraspDemoController
 from dimos.manipulation.grasping.vgn_grasp_gen_module import VGNGraspGenModule
-from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
-from dimos.perception.reconstruction import SceneReconstructionModule
+from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
+from dimos.perception.reconstruction.scene_reconstruction import SceneReconstructionModule
 from dimos.robot.manipulators.xarm.blueprints.simulation import (
     vgn_mujoco_grasp_demo,
     xarm_perception_sim,
@@ -44,9 +44,10 @@ def test_vgn_mujoco_grasp_demo_blueprint_is_opt_in() -> None:
 
 def test_vgn_mujoco_grasp_demo_uses_stable_rerun_topics() -> None:
     assert (
-        vgn_mujoco_grasp_demo.remapping_map[(SceneReconstructionModule, "tsdf")] == "tsdf_surface"
+        vgn_mujoco_grasp_demo.remapping_map[(SceneReconstructionModule.name, "tsdf")]
+        == "tsdf_surface"
     )
-    assert vgn_mujoco_grasp_demo.remapping_map[(VGNGraspGenModule, "tsdf")] == "tsdf_surface"
+    assert vgn_mujoco_grasp_demo.remapping_map[(VGNGraspGenModule.name, "tsdf")] == "tsdf_surface"
 
 
 def test_vgn_mujoco_grasp_demo_uses_target_controller_not_workspace_auto_generation() -> None:

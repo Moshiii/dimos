@@ -461,4 +461,4 @@ The `/tmp` tree is ephemeral and should be copied to durable storage if it must
 survive host cleanup.
 
 The broader investigation and tooling wishlist are tracked in
-[Spatial Agent Understanding: Progress and Evaluation Plan](../development/spatial_agent_understanding_progress.md).
+[Spatial Agent Understanding: Progress and Evaluation Plan](/docs/development/spatial_agent_understanding_progress.md).

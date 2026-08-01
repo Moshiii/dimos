@@ -24,7 +24,9 @@ from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.grasping_msgs.TargetBounds import TargetBounds
 from dimos.msgs.perception_msgs.RegisteredObject import RegisteredObject
-from dimos.perception.object_scene_registration_spec import ObjectSceneRegistrationSpec
+from dimos.perception.experimental.object_scene_registration_spec import (
+    ObjectSceneRegistrationSpec,
+)
 from dimos.spec.utils import Spec
 from dimos.utils.logging_config import setup_logger
 
