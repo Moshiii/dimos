@@ -1,3 +1,17 @@
+// Copyright 2026 Dimensional Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // dimos native module for the Manifold Tech Odin1.
 //
 // The Odin1 runs SLAM onboard, so this is a thin source: connect via the odin1
@@ -28,8 +42,9 @@ struct Config {
     lidar_frame_id: String,
     /// Frame the camera image is stamped in.
     camera_frame_id: String,
-    /// Drop dtof points below this confidence. SDK suggests ~30-35.
-    #[validate(range(min = 0, max = 255))]
+    /// Drop dtof points below this confidence. Values run 0 to roughly 1300 in a
+    /// typical scene. The vendor recommends 30-35.
+    #[validate(range(min = 0, max = 65535))]
     confidence_min: u32,
     /// Publish the RGB camera image.
     publish_image: bool,

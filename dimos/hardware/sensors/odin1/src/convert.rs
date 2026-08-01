@@ -1,3 +1,17 @@
+// Copyright 2026 Dimensional Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // Odin1 frame -> dimos LCM message conversions. Unit decoding (microns, fixed
 // point) already happened in the odin1 wrapper, so these are struct mappings.
 
@@ -18,7 +32,7 @@ pub struct PublishConfig {
     pub child_frame_id: String,
     pub lidar_frame_id: String,
     pub camera_frame_id: String,
-    pub confidence_min: u8,
+    pub confidence_min: u16,
 }
 
 impl From<&Config> for PublishConfig {
@@ -28,7 +42,7 @@ impl From<&Config> for PublishConfig {
             child_frame_id: c.child_frame_id.clone(),
             lidar_frame_id: c.lidar_frame_id.clone(),
             camera_frame_id: c.camera_frame_id.clone(),
-            confidence_min: c.confidence_min as u8,
+            confidence_min: c.confidence_min as u16,
         }
     }
 }
@@ -57,11 +71,14 @@ fn field(name: &str, offset: i32) -> PointField {
     }
 }
 
-// The Odin emits points in the camera-optical frame (x right, y down, z forward).
-// Rotate into the dimos FLU convention (x forward, y left, z up) so the clouds
-// render upright and align with the other dimos lidar sources.
-fn optical_to_flu(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
-    (z, -x, -y)
+// The dtof xyz plane is (right, up, forward), which is left-handed: right crossed
+// with up points backward. Mapping it to the right-handed dimos FLU convention
+// (forward, left, up) therefore needs a handedness flip, not just a rotation, so
+// this negates the lateral axis rather than permuting alone.
+// The SLAM map cloud arrives in the SLAM world frame, already FLU and shared with
+// the odometry pose, so it is published untouched.
+fn sensor_to_flu(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    (z, -x, y)
 }
 
 /// Live dtof cloud: x,y,z,intensity, dropping points below the confidence floor.
@@ -73,7 +90,7 @@ pub fn dtof_to_pointcloud(frame: &DtofFrame, cfg: &PublishConfig) -> PointCloud2
         if frame.confidence[i] < cfg.confidence_min {
             continue;
         }
-        let (x, y, z) = optical_to_flu(
+        let (x, y, z) = sensor_to_flu(
             frame.xyz_m[i * 3],
             frame.xyz_m[i * 3 + 1],
             frame.xyz_m[i * 3 + 2],
@@ -109,7 +126,7 @@ pub fn slam_cloud_to_pointcloud(frame: &SlamCloudFrame, cfg: &PublishConfig) -> 
     let n = frame.points.len() as i32;
     let mut data: Vec<u8> = Vec::with_capacity(frame.points.len() * 16);
     for p in &frame.points {
-        let (x, y, z) = optical_to_flu(p.xyz_m[0], p.xyz_m[1], p.xyz_m[2]);
+        let [x, y, z] = p.xyz_m;
         data.extend_from_slice(&x.to_le_bytes());
         data.extend_from_slice(&y.to_le_bytes());
         data.extend_from_slice(&z.to_le_bytes());

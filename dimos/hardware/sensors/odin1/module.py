@@ -49,7 +49,8 @@ class Odin1Config(NativeModuleConfig):
     child_frame_id: str = FRAME_BODY
     lidar_frame_id: str = "odin1_dtof"
     camera_frame_id: str = "odin1_camera"
-    # Drop dtof points below this confidence. SDK suggests ~30-35.
+    # Drop dtof points below this confidence. Values run 0 to roughly 1300 in a
+    # typical scene. The vendor recommends 30-35.
     confidence_min: int = 32
     publish_image: bool = True
     # Publish odometry at IMU rate instead of the ~10Hz SLAM rate.
