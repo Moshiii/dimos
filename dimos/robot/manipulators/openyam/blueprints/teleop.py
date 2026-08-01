@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from dimos.control.coordinator import ControlCoordinator
+from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.robot.manipulators.common.blueprints import (
@@ -35,6 +35,17 @@ from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
 
 _openyam_keyboard_hw = openyam_hardware("arm")
 
+
+def _gripper_task() -> TaskConfig:
+    return TaskConfig(
+        name="servo_gripper",
+        type="servo",
+        joint_names=["arm/gripper"],
+        priority=20,
+        params={"timeout": 0.0, "default_positions": [0.0]},
+    )
+
+
 keyboard_teleop_openyam = autoconnect(
     KeyboardTeleopModule.blueprint(),
     ControlCoordinator.blueprint(
@@ -44,7 +55,8 @@ keyboard_teleop_openyam = autoconnect(
                 _openyam_keyboard_hw,
                 model_path=OPENYAM_GRAVITY_MODEL_PATH,
                 ee_joint_id=OPENYAM_DOF,
-            )
+            ),
+            _gripper_task(),
         ],
     ),
     ManipulationModule.blueprint(
@@ -67,6 +79,7 @@ keyboard_teleop_openyam_planner = autoconnect(
                 ee_joint_id=OPENYAM_DOF,
                 priority=10,
             ),
+            _gripper_task(),
             trajectory_task(_openyam_keyboard_planner_hw, priority=20),
         ],
     ),

@@ -1649,6 +1649,18 @@ class ManipulationModule(Module):
             return False
         return self._control_coordinator.set_gripper_position(hw_id, position)
 
+    def _set_gripper_endpoint(
+        self, *, open_position: bool, robot_name: RobotName | None = None
+    ) -> bool:
+        """Internal: command the configured open or closed endpoint."""
+
+        hw_id = self._get_gripper_hardware_id(robot_name)
+        if hw_id is None:
+            return False
+        if open_position:
+            return self._control_coordinator.open_gripper(hw_id)
+        return self._control_coordinator.close_gripper(hw_id)
+
     @rpc
     def get_gripper(self, robot_name: RobotName | None = None) -> float | None:
         """Get gripper position in meters.
@@ -1683,7 +1695,7 @@ class ManipulationModule(Module):
         Args:
             robot_name: Robot to control (only needed for multi-arm setups).
         """
-        if self._set_gripper_position(0.85, robot_name):
+        if self._set_gripper_endpoint(open_position=True, robot_name=robot_name):
             return SkillResult.ok("Gripper opened")
         return SkillResult.fail("GRIPPER_FAILED", "Failed to open gripper")
 
@@ -1694,7 +1706,7 @@ class ManipulationModule(Module):
         Args:
             robot_name: Robot to control (only needed for multi-arm setups).
         """
-        if self._set_gripper_position(0.0, robot_name):
+        if self._set_gripper_endpoint(open_position=False, robot_name=robot_name):
             return SkillResult.ok("Gripper closed")
         return SkillResult.fail("GRIPPER_FAILED", "Failed to close gripper")
 
