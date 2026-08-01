@@ -74,5 +74,5 @@ The repository SHALL provide a no-hardware CLI demo that runs a recorded target-
 - **THEN** the command selects only a candidate with a complete connected sequence and writes a summary, joint paths, and selected-grasp visualization without dispatching robot motion
 
 #### Scenario: No candidate has a complete sequence
-- **WHEN** every candidate within the configured demo limit fails connected validation
+- **WHEN** every candidate returned to the demo fails connected validation
 - **THEN** the command writes the rejection summary, exits unsuccessfully, and does not issue motion or gripper commands

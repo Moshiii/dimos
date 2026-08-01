@@ -24,7 +24,8 @@ Subclass PickAndPlaceModule (pick_and_place_module.py) adds perception integrati
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 import math
@@ -45,6 +46,12 @@ from dimos.manipulation.execution_manager import (
     ExecutionOutcome,
     ExecutionTarget,
     PlanExecutionManager,
+)
+from dimos.manipulation.grasping.grasp_selection import (
+    FeasibleGrasp,
+    GraspCandidateRejection,
+    GraspEvaluationState,
+    GraspSelectionResult,
 )
 from dimos.manipulation.planning.factory import (
     KinematicsName,
@@ -91,17 +98,21 @@ from dimos.manipulation.visualization.config import (
     NoManipulationVisualizationConfig,
 )
 from dimos.manipulation.visualization.factory import create_manipulation_visualization
+from dimos.manipulation.visualization.layers import VisualizationLayer
 from dimos.manipulation.visualization.operator import ManipulationOperator
 from dimos.manipulation.visualization.types import TargetEvaluation
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
+from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.transform_utils import offset_distance
 
 logger = setup_logger()
 
@@ -1018,6 +1029,14 @@ class ManipulationModule(Module):
         return self.plan_to_pose_targets({group_id: pose})
 
     @rpc
+    def set_visualization_layer(self, layer: VisualizationLayer) -> bool:
+        """Replace one display-only layer in the active manipulation visualizer."""
+        if self._world_monitor is None or self._world_monitor.visualization is None:
+            return False
+        self._world_monitor.visualization.set_layer(layer)
+        return True
+
+    @rpc
     def plan_to_pose_targets(
         self,
         pose_targets: Mapping[PlanningGroupID | PlanningGroup, Pose],
@@ -1155,6 +1174,118 @@ class ManipulationModule(Module):
         """
         result = self._plan_connected_pose_sequence(poses, robot_name, start)
         return result.failed_index, result.endpoint
+
+    @rpc
+    def select_first_feasible_grasp(
+        self,
+        candidates: GraspCandidateArray,
+        robot_name: str,
+        pre_grasp_offset: float,
+        retreat_offset: float | None = None,
+        approach_vector: tuple[float, float, float] = (0.0, 0.0, -1.0),
+        sequence_start: JointState | None = None,
+    ) -> GraspSelectionResult:
+        """Return the first score-ranked grasp with connected IK and motion plans."""
+        return self._select_first_feasible_grasp(
+            candidates.candidates,
+            robot_name,
+            pre_grasp_offset,
+            retreat_offset,
+            approach_vector,
+            sequence_start,
+        )
+
+    def _select_first_feasible_grasp(
+        self,
+        candidates: Sequence[GraspCandidate],
+        robot_name: str,
+        pre_grasp_offset: float,
+        retreat_offset: float | None = None,
+        approach_vector: tuple[float, float, float] = (0.0, 0.0, -1.0),
+        sequence_start: JointState | None = None,
+        on_state: Callable[[int, GraspEvaluationState], None] | None = None,
+    ) -> GraspSelectionResult:
+        """Evaluate model-ranked candidates until one is fully motion feasible."""
+        retreat = retreat_offset if retreat_offset is not None else pre_grasp_offset
+        if pre_grasp_offset <= 0.0 or retreat <= 0.0:
+            raise ValueError("grasp approach offsets must be positive")
+        approach = Vector3(approach_vector)
+        approach_norm = math.sqrt(sum(component * component for component in approach.as_tuple))
+        if not math.isclose(approach_norm, 1.0, abs_tol=1e-6):
+            raise ValueError("approach_vector must be a unit vector")
+
+        rejections: Counter[str] = Counter()
+        ik_rejections = (
+            GraspCandidateRejection.PRE_GRASP_IK_INFEASIBLE,
+            GraspCandidateRejection.GRASP_IK_INFEASIBLE,
+            GraspCandidateRejection.RETREAT_IK_INFEASIBLE,
+        )
+        planning_rejections = (
+            GraspCandidateRejection.PRE_GRASP_PLANNING_INFEASIBLE,
+            GraspCandidateRejection.GRASP_PLANNING_INFEASIBLE,
+            GraspCandidateRejection.RETREAT_PLANNING_INFEASIBLE,
+        )
+
+        for rank, candidate in enumerate(candidates, start=1):
+            if on_state is not None:
+                on_state(rank, GraspEvaluationState.CURRENT)
+            if not self._valid_grasp_candidate(candidate):
+                rejections[GraspCandidateRejection.INVALID.value] += 1
+                if on_state is not None:
+                    on_state(rank, GraspEvaluationState.REJECTED)
+                continue
+
+            pre_grasp_pose = offset_distance(candidate.pose, pre_grasp_offset, approach)
+            retreat_pose = offset_distance(candidate.pose, retreat, approach)
+            ik = self._solve_connected_pose_sequence_ik(
+                (pre_grasp_pose, candidate.pose, retreat_pose),
+                robot_name,
+                start=sequence_start,
+            )
+            if ik.failed_index is not None or ik.start is None:
+                failure_index = ik.failed_index if ik.failed_index is not None else 0
+                rejections[ik_rejections[failure_index].value] += 1
+                if on_state is not None:
+                    on_state(rank, GraspEvaluationState.REJECTED)
+                continue
+
+            planned = self._plan_connected_joint_sequence(
+                ik.joint_states,
+                robot_name,
+                start=ik.start,
+            )
+            if planned.failed_index is not None:
+                rejections[planning_rejections[planned.failed_index].value] += 1
+                if on_state is not None:
+                    on_state(rank, GraspEvaluationState.REJECTED)
+                continue
+
+            selected = FeasibleGrasp(candidate, rank, pre_grasp_pose, retreat_pose)
+            if on_state is not None:
+                on_state(rank, GraspEvaluationState.SELECTED)
+            return GraspSelectionResult(selected, dict(rejections), rank)
+
+        return GraspSelectionResult(None, dict(rejections), len(candidates))
+
+    @staticmethod
+    def _valid_grasp_candidate(candidate: GraspCandidate) -> bool:
+        pose = candidate.pose
+        values = (
+            pose.position.x,
+            pose.position.y,
+            pose.position.z,
+            pose.orientation.x,
+            pose.orientation.y,
+            pose.orientation.z,
+            pose.orientation.w,
+            candidate.score,
+        )
+        quaternion_norm = math.sqrt(sum(component * component for component in values[3:7]))
+        return all(math.isfinite(value) for value in values) and math.isclose(
+            quaternion_norm,
+            1.0,
+            abs_tol=1e-5,
+        )
 
     def _solve_connected_pose_sequence_ik(
         self,
@@ -1766,6 +1897,11 @@ class ManipulationModule(Module):
                         self._state = ManipulationState.FAULT
                         self._error_message = result.message
         return bool(result and result.accepted)
+
+    @rpc
+    def execute_and_wait(self, timeout: float = 60.0) -> bool:
+        """Execute the stored plan and wait for its expected trajectory duration."""
+        return self.execute_plan() and self._wait_for_trajectory_completion(timeout)
 
     @property
     def world_monitor(self) -> WorldMonitor | None:

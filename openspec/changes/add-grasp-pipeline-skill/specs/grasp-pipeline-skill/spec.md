@@ -23,14 +23,14 @@ The pipeline SHALL retrieve the selected object's `PointCloud2` through `ObjectS
 - **THEN** the pipeline performs no robot motion and returns a frame-mismatch failure
 
 ### Requirement: Ranked feasibility selection
-The pipeline SHALL examine candidates in descending generator-score order, up to a configurable attempt limit. It SHALL reject non-finite or malformed poses and candidates whose pre-grasp, grasp, or retreat targets fail kinematic or collision feasibility checks. Generator scores SHALL be treated only as relative ranking values, not calibrated probabilities.
+The pipeline SHALL examine every returned candidate in descending generator-score order until it finds the first fully feasible candidate. It SHALL reject non-finite or malformed poses and candidates whose pre-grasp, grasp, or retreat targets fail kinematic or collision feasibility checks. Generator scores SHALL be treated only as relative ranking values, not calibrated probabilities.
 
 #### Scenario: Highest-scored candidate is infeasible
 - **WHEN** the first candidate cannot satisfy approach or grasp feasibility and a lower-scored candidate can
 - **THEN** the pipeline selects the first feasible lower-scored candidate without moving for the rejected candidate
 
 #### Scenario: No candidate is feasible
-- **WHEN** every candidate within the configured attempt limit fails validation or feasibility
+- **WHEN** every returned candidate fails validation or feasibility
 - **THEN** the pipeline performs no gripper closure, leaves the robot in a safe pre-pick state, and returns `GRASP_ATTEMPTS_EXHAUSTED` with rejection counts by reason
 
 ### Requirement: Target-aware collision scene

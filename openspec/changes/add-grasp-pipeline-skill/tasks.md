@@ -1,7 +1,7 @@
 ## 1. Contracts and Configuration
 
 - [x] 1.1 Add phase-specific grasp pipeline error codes to `ManipulationSkillError` and unit-test their `SkillResult` serialization/logging behavior.
-- [x] 1.2 Add validated `PickAndPlaceModuleConfig` fields for provider fallback, planning frame, input age, candidate limit, pre-grasp/retreat offsets, and gripper-feedback verification.
+- [x] 1.2 Add validated `PickAndPlaceModuleConfig` fields for provider fallback, planning frame, input age, pre-grasp/retreat offsets, and gripper-feedback verification.
 - [x] 1.3 Declare optional injected `ObjectSceneRegistrationSpec` and `GraspGenSpec` dependencies on `PickAndPlaceModule`, and add blueprint build tests for present, absent, and ambiguous providers.
 - [x] 1.4 Define private typed transaction, phase, candidate, rejection, and verification-result models so state that changes together is not stored in parallel fields.
 
@@ -18,9 +18,9 @@
 - [x] 3.2 Retrieve and validate the selected object's point cloud through `ObjectSceneRegistrationSpec`, including non-empty data, timestamp age, and planning-frame checks.
 - [x] 3.3 Call `GraspGenSpec.propose_grasps`, validate the candidate-array header and poses, and preserve stable descending generator-score order.
 - [x] 3.4 Derive pre-grasp and retreat targets from the configured TCP approach axis and candidate pose.
-- [x] 3.5 Implement no-motion feasibility gating for pre-grasp, grasp, and retreat targets, capped by configuration and reporting rejection counts by reason.
+- [x] 3.5 Implement no-motion feasibility gating for pre-grasp, grasp, and retreat targets across all returned candidates, reporting rejection counts by reason and stopping at the first feasible candidate.
 - [x] 3.6 Retain the heuristic generator only behind explicit fallback configuration and identify the selected proposal source in results.
-- [x] 3.7 Add unit tests for duplicate names, ID prefixes, missing/stale/wrong-frame clouds, provider failures, malformed candidates, stable score ties, candidate limits, and lower-ranked feasible selection.
+- [x] 3.7 Add unit tests for duplicate names, ID prefixes, missing/stale/wrong-frame clouds, provider failures, malformed candidates, stable score ties, candidates beyond rank five, and lower-ranked feasible selection.
 
 ## 4. Pick Transaction and Verification
 

@@ -22,7 +22,7 @@
 
 ## 4. Live Pipeline Visualization
 
-- [x] 4.1 Add optional grasp visualization geometry and candidate-limit configuration to `PickAndPlaceModuleConfig`
+- [x] 4.1 Add optional grasp visualization geometry to `PickAndPlaceModuleConfig`
 - [x] 4.2 Publish the validated object cloud directly through `self._world_monitor.visualization`
 - [x] 4.3 Publish pending, current, and rejected candidate replacements during ranked connected-plan evaluation
 - [x] 4.4 Replace the proposal layer with only the green selected candidate before execution, or retain all-red evaluated candidates on exhaustion

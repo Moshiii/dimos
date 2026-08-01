@@ -539,22 +539,35 @@ class TestProposalSelection:
 
         assert transaction.rejections == {expected_rejection: 1}
 
-    def test_selection_rejects_malformed_candidate_and_honors_limit(
+    def test_selection_checks_candidates_beyond_rank_five(
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
-        module.config.max_grasp_candidates_to_check = 1
-        invalid = _candidate(0.4, 0.9)
-        invalid.pose.orientation.w = 0.0
-        solve_ik = mocker.patch.object(module, "_solve_connected_pose_sequence_ik")
-        plan_sequence = mocker.patch.object(module, "_plan_connected_joint_sequence")
+        invalid = [_candidate(0.4 + index * 0.01, 0.9 - index * 0.01) for index in range(5)]
+        for candidate in invalid:
+            candidate.pose.orientation.w = 0.0
+        solve_ik = mocker.patch.object(
+            module,
+            "_solve_connected_pose_sequence_ik",
+            return_value=_ik_result(0.1, 0.2, 0.3),
+        )
+        plan_sequence = mocker.patch.object(
+            module,
+            "_plan_connected_joint_sequence",
+            return_value=_plan_result(0.0, 0.3),
+        )
         transaction = SimpleNamespace(rejections=Counter())
 
-        with pytest.raises(RuntimeError, match="No feasible grasp among 1"):
-            module._select_feasible_grasp([invalid, _candidate(0.5, 0.8)], "arm", 0.1, transaction)
+        selected = module._select_feasible_grasp(
+            [*invalid, _candidate(0.5, 0.8)],
+            "arm",
+            0.1,
+            transaction,
+        )
 
-        solve_ik.assert_not_called()
-        plan_sequence.assert_not_called()
-        assert transaction.rejections == {"invalid": 1}
+        assert selected.rank == 6
+        solve_ik.assert_called_once()
+        plan_sequence.assert_called_once()
+        assert transaction.rejections == {"invalid": 5}
 
     def test_selection_visualization_tracks_current_rejected_and_selected(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -654,24 +667,18 @@ class TestProposalSelection:
 
         assert selected.rank == 1
 
-    def test_selection_plans_all_ik_survivors_in_estimated_cost_order(
+    def test_selection_stops_after_first_fully_feasible_candidate(
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
-        mocker.patch.object(
+        solve_ik = mocker.patch.object(
             module,
             "_solve_connected_pose_sequence_ik",
-            side_effect=[
-                _ik_result(1.0, 2.0, 3.0),
-                _ik_result(0.1, 0.2, 0.3),
-            ],
+            return_value=_ik_result(1.0, 2.0, 3.0),
         )
         plan_sequence = mocker.patch.object(
             module,
             "_plan_connected_joint_sequence",
-            side_effect=[
-                _plan_result(0.0, 0.6),
-                _plan_result(0.0, 0.2),
-            ],
+            return_value=_plan_result(0.0, 0.6),
         )
 
         selected = module._select_feasible_grasp(
@@ -682,13 +689,10 @@ class TestProposalSelection:
         )
 
         assert selected.rank == 1
-        assert plan_sequence.call_count == 2
-        first_planned_targets = plan_sequence.call_args_list[0].args[0]
-        second_planned_targets = plan_sequence.call_args_list[1].args[0]
-        assert [state.position[0] for state in first_planned_targets] == [0.1, 0.2, 0.3]
-        assert [state.position[0] for state in second_planned_targets] == [1.0, 2.0, 3.0]
+        solve_ik.assert_called_once()
+        plan_sequence.assert_called_once()
 
-    def test_selection_quality_band_rejects_easier_low_score_plan(
+    def test_selection_tries_next_candidate_after_full_plan_failure(
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         mocker.patch.object(
@@ -703,19 +707,21 @@ class TestProposalSelection:
             module,
             "_plan_connected_joint_sequence",
             side_effect=[
-                _plan_result(0.0, 2.0),
+                _plan_result(failed_index=1),
                 _plan_result(0.0, 0.1),
             ],
         )
+        transaction = SimpleNamespace(rejections=Counter())
 
         selected = module._select_feasible_grasp(
             [_candidate(0.4, 0.90), _candidate(0.5, 0.80)],
             "arm",
             0.1,
-            SimpleNamespace(rejections=Counter()),
+            transaction,
         )
 
-        assert selected.rank == 1
+        assert selected.rank == 2
+        assert transaction.rejections == {"grasp_planning_infeasible": 1}
 
 
 class TestPickTransaction:

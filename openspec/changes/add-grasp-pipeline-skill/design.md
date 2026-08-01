@@ -66,7 +66,7 @@ Name-only lookup must first establish uniqueness from the current detection snap
 
 ### 4. Separate candidate feasibility from physical execution
 
-Candidates remain in generator score order. For each candidate up to `max_grasp_candidates_to_check`, the pipeline:
+Candidates remain in generator score order. For each returned candidate, the pipeline:
 
 1. validates finite rigid-pose data and frame agreement;
 2. derives pre-grasp and retreat poses using the configured approach-axis offset;
@@ -128,7 +128,7 @@ Existing `OBJECT_NOT_DETECTED`, `GRASP_GENERATION_FAILED`, `GRASP_ATTEMPTS_EXHAU
 
 - [Single-view point clouds can produce geometrically plausible but poor grasps] → retain score ordering, validate scene feasibility, expose candidate rank/score, and leave visual servoing/regrasp for follow-up.
 - [Gripper aperture is an imperfect grasp signal, especially for thin objects] → make thresholds robot-specific, test boundary behavior, and describe verification as a closure proxy.
-- [Planning feasibility checks may be expensive across many GPU proposals] → cap candidates checked, stop at the first feasible candidate, and record rejection metrics for tuning.
+- [Planning feasibility checks may be expensive across many GPU proposals] → stop at the first fully feasible candidate and record rejection metrics for tuning.
 - [The target can be re-added by asynchronous perception during a pick] → add scoped suppression inside the obstacle monitor under its lock and test live-update behavior.
 - [A target-free collision world permits intended finger/object contact but cannot model post-grasp payload collisions] → keep all non-target obstacles and explicitly defer attached-object geometry.
 - [GraspGenX increases GPU memory and startup time] → retain a dedicated worker, lazy optional runtime imports, and blueprint-level opt-in.

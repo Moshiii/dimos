@@ -12,7 +12,7 @@ The `pick` pipeline SHALL publish the validated segmented object point cloud as 
 - **THEN** proposal generation, planning, and execution continue without visualization work
 
 ### Requirement: Candidate evaluation visualization
-The pipeline SHALL visualize only candidates within the configured feasibility-check limit. It SHALL represent rejected candidates in red, the candidate currently under evaluation in yellow, and pending candidates in gray. After a candidate passes the complete connected pre-grasp, grasp, and retreat planning check, the pipeline SHALL replace `grasp/proposals` with only that selected candidate in green.
+The pipeline SHALL visualize every returned candidate considered by feasibility selection. It SHALL represent rejected candidates in red, the candidate currently under evaluation in yellow, and pending candidates in gray. After a candidate passes the complete connected pre-grasp, grasp, and retreat planning check, the pipeline SHALL replace `grasp/proposals` with only that selected candidate in green.
 
 #### Scenario: Candidate evaluation begins
 - **WHEN** the pipeline begins validating a ranked candidate
@@ -23,7 +23,7 @@ The pipeline SHALL visualize only candidates within the configured feasibility-c
 - **THEN** the pipeline replaces `grasp/proposals` with only the selected lower-ranked candidate in green before physical execution begins
 
 #### Scenario: Every checked candidate fails
-- **WHEN** every candidate within the feasibility-check limit is rejected
+- **WHEN** every returned candidate is rejected
 - **THEN** `grasp/proposals` retains the evaluated candidates in red
 
 ### Requirement: Provider-independent visualization

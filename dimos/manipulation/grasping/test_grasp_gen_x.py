@@ -112,6 +112,18 @@ def test_messages_round_trip_empty_and_score() -> None:
     )
 
 
+def test_candidate_array_lcm_round_trip() -> None:
+    value = GraspCandidateArray(
+        Header(3.0, "camera"), [GraspCandidate(Pose(1, 2, 3), 0.25)], selected_index=1
+    )
+
+    decoded = GraspCandidateArray.lcm_decode(value.lcm_encode())
+
+    assert decoded.header.frame_id == "camera"
+    assert decoded.candidates[0].score == pytest.approx(0.25)
+    assert decoded.selected_index == 1
+
+
 def test_spec_signature() -> None:
     signature = inspect.signature(GraspGenSpec.propose_grasps)
 
@@ -167,6 +179,7 @@ def test_start_is_synchronous_and_idempotent(runtime: Any) -> None:
         assert len(module.propose_grasps(proposal_input())) == 1
     finally:
         module.stop()
+    runtime.return_value.stop.assert_called_once_with()
 
 
 def test_start_failure_is_explicit(runtime: Any) -> None:

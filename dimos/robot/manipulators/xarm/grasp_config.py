@@ -24,12 +24,23 @@ from dimos.manipulation.grasping.grasp_gen_x import (
 # Geometry was derived from UFACTORY's xarm_ros gripper URDF and collision
 # meshes at commit 0b5118eb6bf664fc3891c14b203e6ecbd5095dca:
 # - link_tcp is 0.172 m along +Z from xarm_gripper_base_link
+# - link_tcp's closing axis is 90 degrees counter-clockwise around local +Z
+#   from GraspGenX's local +X closing axis
 # - the inner finger volume is approximately 0.085 x 0.032 x 0.067 m
 # The model's grasp frame is the gripper base; DimOS plans for link_tcp.
 XARM_GRASP_FRAME_TO_TCP = (
+    (0.0, -1.0, 0.0, 0.0),
     (1.0, 0.0, 0.0, 0.0),
-    (0.0, 1.0, 0.0, 0.0),
     (0.0, 0.0, 1.0, 0.172),
+    (0.0, 0.0, 0.0, 1.0),
+)
+
+# Inverse of ``XARM_GRASP_FRAME_TO_TCP``. Rerun receives TCP poses, while the
+# sweep geometry below is expressed in the GraspGenX gripper-base frame.
+XARM_TCP_TO_GRASP_FRAME = (
+    (0.0, 1.0, 0.0, 0.0),
+    (-1.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0, -0.172),
     (0.0, 0.0, 0.0, 1.0),
 )
 

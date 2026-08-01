@@ -44,7 +44,7 @@ Alternative: import the standalone demo from production code. Rejected because d
 
 ### 3. Treat the proposal layer as a latest-wins selection view
 
-Before feasibility checks, the pipeline publishes candidates within `max_grasp_candidates_to_check` as pending gray wireframes. Immediately before each validation and connected-plan check, it replaces the layer with earlier candidates red, the current candidate yellow, and later candidates gray. A rejected candidate becomes red on the next replacement. When a candidate passes the complete pre-grasp, grasp, and retreat sequence check, the pipeline atomically replaces the layer with only that candidate in green.
+Before feasibility checks, the pipeline publishes all returned candidates as pending gray wireframes. Immediately before each validation and connected-plan check, it replaces the layer with earlier candidates red, the current candidate yellow, and later candidates gray. A rejected candidate becomes red on the next replacement. When a candidate passes the complete pre-grasp, grasp, and retreat sequence check, the pipeline atomically replaces the layer with only that candidate in green.
 
 If every candidate fails, all evaluated candidates remain red. The object cloud and final proposal state remain visible after the skill returns and are replaced by the next pick.
 

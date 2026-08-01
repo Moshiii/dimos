@@ -43,13 +43,12 @@ from dimos.manipulation.grasping.grasp_gen_x import (
     SweepVolumeGripperConfig,
 )
 from dimos.manipulation.grasping.grasp_proposal import GraspProposalInput
-from dimos.manipulation.grasping.heuristic_grasp import grasp_orientation
-from dimos.manipulation.manipulation_module import (
-    ConnectedPoseIKResult,
-    ManipulationModule,
-    ManipulationModuleConfig,
+from dimos.manipulation.grasping.grasp_selection import (
+    FeasibleGrasp,
+    GraspEvaluationState,
 )
-from dimos.manipulation.planning.utils.path_utils import compute_path_length
+from dimos.manipulation.grasping.heuristic_grasp import grasp_orientation
+from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
 from dimos.manipulation.skill_errors import ManipulationSkillError
 from dimos.manipulation.visualization.grasp import (
     GraspCandidateVisualState,
@@ -122,8 +121,6 @@ class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     execute_pick: bool = True
     planning_frame: str = "world"
     max_object_pointcloud_age: FiniteFloat = Field(default=10.0, gt=0.0)
-    max_grasp_candidates_to_check: int = Field(default=5, gt=0)
-    grasp_quality_score_delta: FiniteFloat = Field(default=0.05, ge=0.0)
     grasp_pre_grasp_offset: FiniteFloat | None = Field(default=None, gt=0.0)
     grasp_retreat_offset: FiniteFloat | None = Field(default=None, gt=0.0)
     grasp_approach_vector: tuple[FiniteFloat, FiniteFloat, FiniteFloat] = (0.0, 0.0, -1.0)
@@ -153,35 +150,7 @@ class _PickPhase(str, Enum):
     DONE = "DONE"
 
 
-class _CandidateRejection(str, Enum):
-    INVALID = "invalid"
-    PRE_GRASP_IK_INFEASIBLE = "pre_grasp_ik_infeasible"
-    GRASP_IK_INFEASIBLE = "grasp_ik_infeasible"
-    RETREAT_IK_INFEASIBLE = "retreat_ik_infeasible"
-    PRE_GRASP_PLANNING_INFEASIBLE = "pre_grasp_planning_infeasible"
-    GRASP_PLANNING_INFEASIBLE = "grasp_planning_infeasible"
-    RETREAT_PLANNING_INFEASIBLE = "retreat_planning_infeasible"
-
-
-@dataclass(frozen=True)
-class _FeasibleGrasp:
-    candidate: GraspCandidate
-    rank: int
-    pre_grasp_pose: Pose
-    retreat_pose: Pose
-
-
-@dataclass(frozen=True)
-class _IKFeasibleGrasp:
-    grasp: _FeasibleGrasp
-    ik: ConnectedPoseIKResult
-    estimated_cost: float
-
-
-@dataclass(frozen=True)
-class _PlannedGrasp:
-    grasp: _FeasibleGrasp
-    path_cost: float
+_FeasibleGrasp = FeasibleGrasp
 
 
 @dataclass(frozen=True)
@@ -196,7 +165,7 @@ class _PickTransaction:
     object_id: str = ""
     object_name: str = ""
     phase: _PickPhase = _PickPhase.RESOLVE
-    selected: _FeasibleGrasp | None = None
+    selected: FeasibleGrasp | None = None
     rejections: Counter[str] = field(default_factory=Counter)
     gripper_closed: bool = False
 
@@ -644,27 +613,6 @@ then refreshes perception obstacles.
         except Exception:
             logger.warning("Grasp proposal visualization failed", exc_info=True)
 
-    @staticmethod
-    def _valid_candidate(candidate: GraspCandidate) -> bool:
-        pose = candidate.pose
-        values = np.asarray(
-            [
-                pose.position.x,
-                pose.position.y,
-                pose.position.z,
-                pose.orientation.x,
-                pose.orientation.y,
-                pose.orientation.z,
-                pose.orientation.w,
-                candidate.score,
-            ],
-            dtype=float,
-        )
-        quaternion = values[3:7]
-        return bool(
-            np.all(np.isfinite(values)) and np.isclose(np.linalg.norm(quaternion), 1.0, atol=1e-5)
-        )
-
     def _select_feasible_grasp(
         self,
         candidates: list[GraspCandidate],
@@ -672,13 +620,11 @@ then refreshes perception obstacles.
         robot_pre_grasp_offset: float,
         transaction: _PickTransaction,
         sequence_start: JointState | None = None,
-    ) -> _FeasibleGrasp:
-        vector = Vector3(self.config.grasp_approach_vector)
+    ) -> FeasibleGrasp:
         pre_offset = self.config.grasp_pre_grasp_offset or robot_pre_grasp_offset
         retreat_offset = self.config.grasp_retreat_offset or pre_offset
-        limit = min(len(candidates), self.config.max_grasp_candidates_to_check)
-        displayed = candidates[:limit]
-        states = [GraspCandidateVisualState.PENDING] * limit
+        displayed = candidates
+        states = [GraspCandidateVisualState.PENDING] * len(displayed)
 
         def publish_states() -> None:
             self._publish_grasp_candidates(
@@ -691,110 +637,46 @@ then refreshes perception obstacles.
             )
 
         publish_states()
-        ik_feasible: list[_IKFeasibleGrasp] = []
-        ik_rejections = (
-            _CandidateRejection.PRE_GRASP_IK_INFEASIBLE,
-            _CandidateRejection.GRASP_IK_INFEASIBLE,
-            _CandidateRejection.RETREAT_IK_INFEASIBLE,
-        )
-        for rank, candidate in enumerate(displayed, start=1):
-            states[rank - 1] = GraspCandidateVisualState.CURRENT
-            publish_states()
-            if not self._valid_candidate(candidate):
-                transaction.rejections[_CandidateRejection.INVALID.value] += 1
-                states[rank - 1] = GraspCandidateVisualState.REJECTED
-                publish_states()
-                continue
-            pre_grasp = self._compute_pre_grasp_pose(candidate.pose, pre_offset, vector)
-            retreat = self._compute_pre_grasp_pose(candidate.pose, retreat_offset, vector)
-            ik = self._solve_connected_pose_sequence_ik(
-                (pre_grasp, candidate.pose, retreat),
-                robot_name,
-                start=sequence_start,
-            )
-            if ik.failed_index is not None:
-                transaction.rejections[ik_rejections[ik.failed_index].value] += 1
-                states[rank - 1] = GraspCandidateVisualState.REJECTED
-                publish_states()
-                continue
-            if ik.start is None:
-                transaction.rejections[ik_rejections[0].value] += 1
-                states[rank - 1] = GraspCandidateVisualState.REJECTED
-                publish_states()
-                continue
-            grasp = _FeasibleGrasp(candidate, rank, pre_grasp, retreat)
-            estimated_cost = compute_path_length([ik.start, *ik.joint_states])
-            ik_feasible.append(
-                _IKFeasibleGrasp(
-                    grasp=grasp,
-                    ik=ik,
-                    estimated_cost=estimated_cost,
+
+        def on_state(rank: int, state: GraspEvaluationState) -> None:
+            if state is GraspEvaluationState.SELECTED:
+                self._publish_grasp_candidates(
+                    [
+                        VisualizedGraspCandidate(
+                            displayed[rank - 1],
+                            rank,
+                            GraspCandidateVisualState.SELECTED,
+                        )
+                    ]
                 )
+                return
+            states[rank - 1] = (
+                GraspCandidateVisualState.CURRENT
+                if state is GraspEvaluationState.CURRENT
+                else GraspCandidateVisualState.REJECTED
             )
-            states[rank - 1] = GraspCandidateVisualState.PENDING
             publish_states()
 
-        planned: list[_PlannedGrasp] = []
-        planning_rejections = (
-            _CandidateRejection.PRE_GRASP_PLANNING_INFEASIBLE,
-            _CandidateRejection.GRASP_PLANNING_INFEASIBLE,
-            _CandidateRejection.RETREAT_PLANNING_INFEASIBLE,
+        result = self._select_first_feasible_grasp(
+            displayed,
+            robot_name,
+            pre_offset,
+            retreat_offset,
+            self.config.grasp_approach_vector,
+            sequence_start,
+            on_state,
         )
-        for evaluation in sorted(
-            ik_feasible,
-            key=lambda item: (
-                item.estimated_cost,
-                -item.grasp.candidate.score,
-                item.grasp.rank,
-            ),
-        ):
-            rank = evaluation.grasp.rank
-            states[rank - 1] = GraspCandidateVisualState.CURRENT
-            publish_states()
-            result = self._plan_connected_joint_sequence(
-                evaluation.ik.joint_states,
-                robot_name,
-                start=evaluation.ik.start,
-            )
-            if result.failed_index is not None:
-                transaction.rejections[planning_rejections[result.failed_index].value] += 1
-                states[rank - 1] = GraspCandidateVisualState.REJECTED
-                publish_states()
-                continue
-            path_cost = sum(compute_path_length(list(path)) for path in result.paths)
-            planned.append(_PlannedGrasp(evaluation.grasp, path_cost))
-            states[rank - 1] = GraspCandidateVisualState.PENDING
-            publish_states()
-
-        if planned:
-            best_score = max(item.grasp.candidate.score for item in planned)
-            minimum_score = best_score - self.config.grasp_quality_score_delta
-            eligible = [item for item in planned if item.grasp.candidate.score >= minimum_score]
-            selected = min(
-                eligible,
-                key=lambda item: (
-                    item.path_cost,
-                    -item.grasp.candidate.score,
-                    item.grasp.rank,
-                ),
-            ).grasp
-            self._publish_grasp_candidates(
-                [
-                    VisualizedGraspCandidate(
-                        selected.candidate,
-                        selected.rank,
-                        GraspCandidateVisualState.SELECTED,
-                    )
-                ]
-            )
-            return selected
+        transaction.rejections.update(result.rejections)
+        if result.selected is not None:
+            return result.selected
 
         summary = ", ".join(
             f"{reason}={count}" for reason, count in sorted(transaction.rejections.items())
         )
         raise _PickPipelineError(
             "GRASP_ATTEMPTS_EXHAUSTED",
-            f"No feasible grasp among {limit} candidate(s)" + (f" ({summary})" if summary else ""),
+            f"No feasible grasp among {result.evaluated_count} candidate(s)"
+            + (f" ({summary})" if summary else ""),
         )
 
     def _verify_grasp(self, robot_name: str) -> _GraspVerification:
