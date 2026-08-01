@@ -23,6 +23,7 @@ from dimos.core._test_future_annotations_helper import (
     FutureModuleOut,
 )
 from dimos.core.coordination.blueprints import (
+    Blueprint,
     DisabledModuleProxy,
     autoconnect,
 )
@@ -31,6 +32,7 @@ from dimos.core.coordination.module_coordinator import (
     ModuleCoordinator,
     _all_name_types,
     _check_requirements,
+    _materialize_transports,
     _verify_no_conflicts_with_existing,
     _verify_no_name_conflicts,
 )
@@ -38,8 +40,11 @@ from dimos.core.coordination.worker_manager_python import WorkerManagerPython
 from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig
 from dimos.core.module import Module
-from dimos.core.stream import In, Out
+from dimos.core.stream import IO, In, Out
+from dimos.core.transport import CloudflareTransport
+from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 import dimos.robot.get_all_blueprints as resolver
 from dimos.spec.utils import Spec
 
@@ -808,6 +813,28 @@ def test_start_rpc_service_responds_to_ping(dynamic_coordinator) -> None:
         client.stop()
 
 
+def test_start_rpc_service_is_idempotent(dynamic_coordinator) -> None:
+    dynamic_coordinator.start_rpc_service()
+    first_service = dynamic_coordinator._coordinator_rpc
+
+    dynamic_coordinator.start_rpc_service()
+
+    assert dynamic_coordinator._coordinator_rpc is first_service
+
+
+def test_loop_starts_rpc_service_and_stops_on_interrupt(dynamic_coordinator, mocker) -> None:
+    start_rpc = mocker.patch.object(dynamic_coordinator, "start_rpc_service")
+    stop = mocker.patch.object(dynamic_coordinator, "stop")
+    event = mocker.patch("dimos.core.coordination.module_coordinator.threading.Event")
+    event.return_value.wait.side_effect = KeyboardInterrupt
+
+    dynamic_coordinator.loop()
+
+    start_rpc.assert_called_once_with()
+    event.return_value.wait.assert_called_once_with()
+    stop.assert_called_once_with()
+
+
 def test_list_module_names(dynamic_coordinator) -> None:
     assert dynamic_coordinator.list_module_names() == []
     dynamic_coordinator.load_module(ModuleA)
@@ -871,3 +898,92 @@ def test_rpc_client_pickle_preserves_remote_name(dynamic_coordinator) -> None:
         assert restored.whoami() == "robot0/namedmodule"
     finally:
         restored.stop_rpc_client()
+
+
+def test_spec_config_kwarg_reaches_provider_config() -> None:
+    """A config-field kwarg pinned on a WebRTC spec (e.g. robot_type in a hosted
+    blueprint) must survive materialization. Regression: the coordinator builds a
+    provider config from CLI/env overrides and passes it as config=, which the
+    transport's `config or config_cls(**kwargs)` guard would otherwise let win
+    unconditionally — silently dropping the spec kwarg."""
+    spec = CloudflareTransport.spec("state_reliable", robot_type="go2")
+    bp = Blueprint(blueprints=(), transport_map=MappingProxyType({("s", bytes): spec}))
+    t = _materialize_transports(bp, {})[("s", bytes)]
+    assert t._config.robot_type == "go2"
+
+
+class IoTfPublisher(Module):
+    tf: Out[TFMessage]
+
+    @rpc
+    def send(self, child: str) -> None:
+        self.tf.publish(TFMessage(Transform(frame_id="world", child_frame_id=child)))
+
+
+class IoTfEcho(Module):
+    tf: IO[TFMessage]
+    _seen: list[str] | None = None
+
+    @rpc
+    def start(self) -> None:
+        self._seen = []
+        super().start()
+
+    async def handle_tf(self, msg: TFMessage) -> None:
+        assert self._seen is not None
+        self._seen.extend(t.child_frame_id for t in msg.transforms)
+
+    @rpc
+    def send(self, child: str) -> None:
+        self.tf.publish(TFMessage(Transform(frame_id="world", child_frame_id=child)))
+
+    @rpc
+    def seen(self) -> list[str]:
+        return list(self._seen or [])
+
+
+class IoTfConsumer(Module):
+    tf: In[TFMessage]
+    _seen: list[str] | None = None
+
+    @rpc
+    def start(self) -> None:
+        self._seen = []
+        super().start()
+
+    async def handle_tf(self, msg: TFMessage) -> None:
+        assert self._seen is not None
+        self._seen.extend(t.child_frame_id for t in msg.transforms)
+
+    @rpc
+    def seen(self) -> list[str]:
+        return list(self._seen or [])
+
+
+def test_io_port_autoconnects_and_flows_both_ways(wait_until) -> None:
+    """An IO port shares the topic with same-named In/Out ports: it hears the
+    publisher, its own publishes reach the consumer, and loopback feeds it back
+    its own messages."""
+    blueprint_set = autoconnect(
+        IoTfPublisher.blueprint(), IoTfEcho.blueprint(), IoTfConsumer.blueprint()
+    )
+
+    coordinator = ModuleCoordinator.build(blueprint_set, _BUILD_WITHOUT_RERUN.copy())
+    try:
+        publisher = coordinator.get_instance(IoTfPublisher)
+        echo = coordinator.get_instance(IoTfEcho)
+        consumer = coordinator.get_instance(IoTfConsumer)
+
+        assert publisher.tf.transport.topic == echo.tf.transport.topic
+        assert echo.tf.transport.topic == consumer.tf.transport.topic
+        assert "tf" in str(echo.tf.transport.topic)
+
+        publisher.send("from_pub")
+        wait_until(lambda: "from_pub" in echo.seen(), timeout=10.0)
+        wait_until(lambda: "from_pub" in consumer.seen(), timeout=10.0)
+
+        echo.send("from_echo")
+        wait_until(lambda: "from_echo" in consumer.seen(), timeout=10.0)
+        wait_until(lambda: "from_echo" in echo.seen(), timeout=10.0)
+    finally:
+        coordinator.stop()

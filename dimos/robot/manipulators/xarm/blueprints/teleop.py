@@ -19,7 +19,9 @@ from __future__ import annotations
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
+from dimos.core.stream import Out
 from dimos.manipulation.manipulation_module import ManipulationModule
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.common.blueprints import (
     eef_twist_task,
     teleop_ik_task,
@@ -136,16 +138,27 @@ coordinator_combined_xarm6 = ControlCoordinator.blueprint(
     ],
 )
 
-_xarm7_teleop_hw = xarm7_hardware("arm", gripper=True)
-_xarm6_teleop_hw = xarm6_hardware("arm", gripper=True)
+_xarm7_teleop_hw = xarm7_hardware(
+    "arm", gripper=True, gripper_open_position=0.85, gripper_closed_position=0.0
+)
+_xarm6_teleop_hw = xarm6_hardware(
+    "arm", gripper=True, gripper_open_position=0.85, gripper_closed_position=0.0
+)
 
 # Dual-input arm: VR (teleop_ik) preempts browser keyboard (eef_twist) via
 # higher priority; when VR is idle the always-active eef_twist holds/drives.
 # While engaged, VR also owns the gripper joint (trigger), so the browser
 # gripper toggle only takes effect when VR is disengaged.
 
+
+class _XArm7TeleopCoordinator(ControlCoordinator):
+    arm_joints: Out[JointState]
+
+
 coordinator_teleop_xarm7 = autoconnect(
-    ControlCoordinator.blueprint(
+    _XArm7TeleopCoordinator.blueprint(
+        instance_name="ControlCoordinator",
+        publish_robot_joint_states=True,
         hardware=[_xarm7_teleop_hw],
         tasks=[
             teleop_ik_task(
@@ -155,14 +168,14 @@ coordinator_teleop_xarm7 = autoconnect(
                 hand="right",
                 name="teleop_xarm",
                 priority=20,
-                params={**XARM_GRIPPER_PARAMS, "max_joint_delta_deg": 50.0},
+                params=XARM_GRIPPER_PARAMS,
             ),
             eef_twist_task(
                 _xarm7_teleop_hw,
                 model_path=XARM7_FK_MODEL,
                 ee_joint_id=7,
                 priority=10,
-                params={**XARM_GRIPPER_PARAMS, "max_joint_delta_deg": 50.0},
+                params=XARM_GRIPPER_PARAMS,
             ),
         ],
     ),
@@ -180,14 +193,14 @@ coordinator_teleop_xarm6 = autoconnect(
                 hand="right",
                 name="teleop_xarm",
                 priority=20,
-                params={**XARM_GRIPPER_PARAMS, "max_joint_delta_deg": 50.0},
+                params=XARM_GRIPPER_PARAMS,
             ),
             eef_twist_task(
                 _xarm6_teleop_hw,
                 model_path=XARM6_FK_MODEL,
                 ee_joint_id=6,
                 priority=10,
-                params={**XARM_GRIPPER_PARAMS, "max_joint_delta_deg": 50.0},
+                params=XARM_GRIPPER_PARAMS,
             ),
         ],
     ),
