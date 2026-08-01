@@ -19,10 +19,15 @@ from __future__ import annotations
 from dimos.control.coordinator import ControlCoordinator
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.manipulation.manipulation_module import ManipulationModule
-from dimos.robot.manipulators.common.blueprints import eef_twist_task
+from dimos.robot.manipulators.common.blueprints import (
+    coordinator,
+    eef_twist_task,
+    planner,
+    trajectory_task,
+)
 from dimos.robot.manipulators.openyam.config import (
     OPENYAM_DOF,
-    OPENYAM_MODEL_PATH,
+    OPENYAM_GRAVITY_MODEL_PATH,
     make_openyam_model_config,
     openyam_hardware,
 )
@@ -37,7 +42,7 @@ keyboard_teleop_openyam = autoconnect(
         tasks=[
             eef_twist_task(
                 _openyam_keyboard_hw,
-                model_path=OPENYAM_MODEL_PATH,
+                model_path=OPENYAM_GRAVITY_MODEL_PATH,
                 ee_joint_id=OPENYAM_DOF,
             )
         ],
@@ -45,5 +50,24 @@ keyboard_teleop_openyam = autoconnect(
     ManipulationModule.blueprint(
         robots=[make_openyam_model_config(name="arm")],
         visualization={"backend": "viser"},
+    ),
+)
+
+_openyam_keyboard_planner_hw = openyam_hardware("arm")
+
+keyboard_teleop_openyam_planner = autoconnect(
+    KeyboardTeleopModule.blueprint(),
+    planner(robots=[make_openyam_model_config(name="arm")]),
+    coordinator(
+        hardware=[_openyam_keyboard_planner_hw],
+        tasks=[
+            eef_twist_task(
+                _openyam_keyboard_planner_hw,
+                model_path=OPENYAM_GRAVITY_MODEL_PATH,
+                ee_joint_id=OPENYAM_DOF,
+                priority=10,
+            ),
+            trajectory_task(_openyam_keyboard_planner_hw, priority=20),
+        ],
     ),
 )
