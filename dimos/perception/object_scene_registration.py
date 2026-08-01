@@ -30,6 +30,7 @@ from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.msgs.vision_msgs.Detection2DArray import Detection2DArray
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
+from dimos.perception.detection.detectors.base import Detector
 from dimos.perception.detection.detectors.yoloe import Yoloe2DDetector, YoloePromptMode
 from dimos.perception.detection.objectDB import ObjectDB
 from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
@@ -47,7 +48,7 @@ logger = setup_logger()
 
 
 class ObjectSceneRegistrationModule(Module):
-    """Module for detecting objects in camera images using YOLO-E with 2D and 3D detection."""
+    """Module for prompted 2D detection, segmentation, and RGB-D object reconstruction."""
 
     color_image: In[Image]
     depth_image: In[Image]
@@ -60,7 +61,7 @@ class ObjectSceneRegistrationModule(Module):
     objects: Out[list[DetObject]]
     pointcloud: Out[PointCloud2]
 
-    _detector: Yoloe2DDetector | None = None
+    _detector: Detector | None = None
     _segmenter: Any | None = None
     _camera_info: CameraInfo | None = None
     _object_db: ObjectDB
@@ -83,6 +84,7 @@ class ObjectSceneRegistrationModule(Module):
         # Cache camera frames and run inference only through scan_scene().
         detect_on_request: bool = False,
         detector_confidence: float = 0.6,
+        detector_backend: Literal["yoloe", "moondream"] = "yoloe",
         segmentation_backend: Literal["yolo", "edgetam"] = "yolo",
         # Object 3D reconstruction tuning
         object_voxel_downsample: float = 0.005,
@@ -93,12 +95,15 @@ class ObjectSceneRegistrationModule(Module):
     ) -> None:
         if segmentation_backend not in ("yolo", "edgetam"):
             raise ValueError("segmentation_backend must be 'yolo' or 'edgetam'")
+        if detector_backend not in ("yoloe", "moondream"):
+            raise ValueError("detector_backend must be 'yoloe' or 'moondream'")
         super().__init__(**kwargs)
         self._target_frame = target_frame
         self._prompt_mode = prompt_mode
         self._register_objects = register_objects
         self._detect_on_request = detect_on_request
         self._detector_confidence = detector_confidence
+        self._detector_backend = detector_backend
         self._segmentation_backend = segmentation_backend
         self._object_db = ObjectDB(
             distance_threshold=distance_threshold,
@@ -115,16 +120,20 @@ class ObjectSceneRegistrationModule(Module):
     def start(self) -> None:
         super().start()
 
-        if self._prompt_mode == YoloePromptMode.LRPC:
-            model_name = "yoloe-11l-seg-pf.pt"
-        else:
-            model_name = "yoloe-11l-seg.pt"
+        if self._detector_backend == "moondream":
+            from dimos.perception.detection.detectors.moondream import Moondream2DDetector
 
-        self._detector = Yoloe2DDetector(
-            model_name=model_name,
-            prompt_mode=self._prompt_mode,
-            conf=self._detector_confidence,
-        )
+            self._detector = Moondream2DDetector()
+        else:
+            if self._prompt_mode == YoloePromptMode.LRPC:
+                model_name = "yoloe-11l-seg-pf.pt"
+            else:
+                model_name = "yoloe-11l-seg.pt"
+            self._detector = Yoloe2DDetector(
+                model_name=model_name,
+                prompt_mode=self._prompt_mode,
+                conf=self._detector_confidence,
+            )
         if self._segmentation_backend == "edgetam":
             from dimos.models.segmentation.edge_tam import EdgeTAMImageSegmenter
 
@@ -165,7 +174,10 @@ class ObjectSceneRegistrationModule(Module):
     ) -> None:
         """Set prompts for detection. Provide either text or bboxes, not both."""
         if self._detector is not None:
-            self._detector.set_prompts(text=text, bboxes=bboxes)
+            set_prompts = getattr(self._detector, "set_prompts", None)
+            if not callable(set_prompts):
+                raise RuntimeError("configured detector does not support prompts")
+            set_prompts(text=text, bboxes=bboxes)
 
     @rpc
     def select_object(self, track_id: int) -> dict[str, Any] | None:

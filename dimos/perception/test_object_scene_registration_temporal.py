@@ -96,6 +96,8 @@ def test_segmentation_backend_defaults_to_yolo() -> None:
 
     with pytest.raises(ValueError, match="segmentation_backend"):
         ObjectSceneRegistrationModule(segmentation_backend="invalid")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="detector_backend"):
+        ObjectSceneRegistrationModule(detector_backend="invalid")  # type: ignore[arg-type]
 
 
 def test_edgetam_backend_refines_yolo_detections(monkeypatch: Any, module: ObjectSceneRegistrationModule) -> None:

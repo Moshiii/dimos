@@ -7,7 +7,7 @@ runnable blueprints:
 | --- | --- |
 | `picknplace` | Filtered-object OBB center, with optional principal-axis yaw |
 | `picknplace-graspgenx` | GraspGenX proposals from the selected object's point cloud |
-| `picknplace-graspgenx-edgetam` | Text-prompted YOLO-E boxes refined by EdgeTAM, then GraspGenX |
+| `picknplace-graspgenx-edgetam` | Text-prompted Moondream boxes refined by EdgeTAM, then GraspGenX |
 
 Both use the wrist-mounted RealSense, object-scene registration in `link_base`,
 
@@ -40,7 +40,7 @@ Start one blueprint in the background:
 uv run --no-sync dimos run picknplace-graspgenx --daemon
 ```
 
-For text-prompted EdgeTAM segmentation before GraspGenX:
+For text-prompted Moondream identification and EdgeTAM segmentation before GraspGenX:
 
 ```bash
 uv run --no-sync dimos run picknplace-graspgenx-edgetam --daemon

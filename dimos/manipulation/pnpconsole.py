@@ -125,7 +125,7 @@ def main() -> None:
             if choice == "q":
                 return
             if choice == "1":
-                prompt = input("Object prompt (blank = default YOLO): ").strip()
+                prompt = input("Object prompt (blank = current detector prompt): ").strip()
                 detections = pnp.scan_scene(prompt or None)
                 print(f"Detected {detections.detections_length} object(s).")
             elif choice == "2":

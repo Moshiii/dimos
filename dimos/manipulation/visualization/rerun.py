@@ -45,7 +45,7 @@ def _blueprint() -> rrb.Blueprint:
     return rrb.Blueprint(
         rrb.Horizontal(
             rrb.Vertical(
-                rrb.Spatial2DView(origin="world/annotated_image", name="YOLO-E Segmentation"),
+                rrb.Spatial2DView(origin="world/annotated_image", name="Object Segmentation"),
                 rrb.Spatial2DView(origin="world/basic_grasp_overlay", name="Grasp Pose"),
                 rrb.Spatial2DView(origin="world/color_camera/color_image", name="RGB"),
             ),

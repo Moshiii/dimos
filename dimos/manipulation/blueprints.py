@@ -170,6 +170,7 @@ picknplace_graspgenx_edgetam = autoconnect(
     ObjectSceneRegistrationModule.blueprint(
         target_frame="link_base",
         prompt_mode=YoloePromptMode.PROMPT,
+        detector_backend="moondream",
         segmentation_backend="edgetam",
         register_objects=False,
         detect_on_request=True,
