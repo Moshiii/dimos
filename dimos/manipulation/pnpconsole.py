@@ -119,7 +119,8 @@ def main() -> None:
     while True:
         print("\n1) Scan  2) Info  3) Select target  4) Plan/preview approach")
         print("5) Execute approach  6) Plan/preview descent  7) Execute descent  8) Close")
-        print("9) Plan/preview ascent  10) Execute ascent  11) Open  12) Current EE  13) Go home  q) Quit")
+        print("9) Plan/preview ascent  10) Execute ascent  11) Open  12) Current EE  13) Go home")
+        print("14) Estimate/install table collision  q) Quit")
         choice = input("Select: ").strip().lower()
         try:
             if choice == "q":
@@ -228,8 +229,30 @@ def main() -> None:
                 _print_pose(manipulation.get_ee_pose("arm"))
             elif choice == "13":
                 print(manipulation.go_home("arm"))
+            elif choice == "14":
+                estimate = pnp.estimate_table_surface()
+                if estimate is None:
+                    print("No horizontal tabletop estimate. Scan the scene and try again.")
+                else:
+                    print(
+                        "Table estimate: "
+                        f"z={estimate['tabletop_z']:.3f} m, center=({estimate['center_x']:.3f}, "
+                        f"{estimate['center_y']:.3f}) m, size=({estimate['width']:.3f}, "
+                        f"{estimate['depth']:.3f}) m"
+                    )
+                    confirm = input("Install 15 mm-clearance table collision? [y/N]: ").strip().lower()
+                    if confirm in {"y", "yes"}:
+                        print(
+                            manipulation.set_table_collision(
+                                estimate["center_x"],
+                                estimate["center_y"],
+                                estimate["tabletop_z"],
+                                estimate["width"],
+                                estimate["depth"],
+                            )
+                        )
             else:
-                print("Choose 1-13 or q.")
+                print("Choose 1-14 or q.")
         except Exception as exc:
             print(f"RPC failed: {exc}")
 

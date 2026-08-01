@@ -20,7 +20,11 @@ import pytest
 
 from dimos.core.module import ModuleBase
 from dimos.manipulation.blueprints import _picknplace_xarm6_model, _xarm_graspgenx
-from dimos.manipulation.picknplace import PickNPlaceConfig, PickNPlaceModule
+from dimos.manipulation.picknplace import (
+    PickNPlaceConfig,
+    PickNPlaceModule,
+    _estimate_table_surface,
+)
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -97,6 +101,19 @@ def test_picknplace_graspgenx_uses_xarm_tcp_calibration() -> None:
 
 def test_picknplace_yaw_alignment_defaults_to_disabled() -> None:
     assert not PickNPlaceConfig().align_grasp_yaw
+
+
+def test_table_surface_estimate_ignores_objects_above_the_table() -> None:
+    x, y = np.meshgrid(np.linspace(0.2, 0.8, 20), np.linspace(-0.4, 0.4, 20))
+    table = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, 0.35)))
+    object_points = np.array([[0.5, 0.0, 0.55], [0.51, 0.0, 0.57], [0.5, 0.01, 0.56]])
+
+    estimate = _estimate_table_surface(np.vstack((table, object_points)))
+
+    assert estimate is not None
+    assert estimate["tabletop_z"] == pytest.approx(0.35, abs=0.01)
+    assert estimate["width"] >= 0.8
+    assert estimate["depth"] >= 1.0
 
 
 def test_picknplace_uses_top_graspgenx_candidate() -> None:

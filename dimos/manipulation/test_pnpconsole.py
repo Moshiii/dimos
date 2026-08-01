@@ -105,6 +105,26 @@ def test_client_previews_descent_before_explicit_execution(monkeypatch) -> None:
     manipulation.preview_plan.assert_called_with(duration=2.0)
 
 
+def test_client_confirms_table_collision_install(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    pnp = MagicMock()
+    pnp.estimate_table_surface.return_value = {
+        "center_x": 0.5,
+        "center_y": 0.0,
+        "tabletop_z": 0.35,
+        "width": 0.8,
+        "depth": 1.0,
+    }
+    app = MagicMock(PickNPlaceModule=pnp)
+    manipulation = app.ManipulationModule
+    monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
+    choices = iter(["14", "y", "q"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
+
+    pnpconsole.main()
+
+    manipulation.set_table_collision.assert_called_once_with(0.5, 0.0, 0.35, 0.8, 1.0)
+
+
 def test_preview_plays_once_slowly() -> None:
     manipulation = MagicMock()
 

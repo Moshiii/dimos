@@ -45,6 +45,34 @@ from dimos.perception.detection.type.detection3d.object import (
 from dimos.perception.object_scene_registration_spec import ObjectSceneRegistrationSpec
 
 
+def _estimate_table_surface(points: np.ndarray) -> dict[str, float] | None:
+    """Fit the dominant horizontal support plane and return a conservative footprint."""
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 30:
+        return None
+    import open3d as o3d  # type: ignore[import-untyped]
+
+    cloud = o3d.geometry.PointCloud()
+    cloud.points = o3d.utility.Vector3dVector(points)
+    plane, inliers = cloud.segment_plane(distance_threshold=0.01, ransac_n=3, num_iterations=1000)
+    normal = np.asarray(plane[:3], dtype=np.float64)
+    normal /= np.linalg.norm(normal)
+    if abs(normal[2]) < 0.98 or len(inliers) < 30:
+        return None
+    surface = points[np.asarray(inliers)]
+    x_low, y_low = np.quantile(surface[:, :2], 0.02, axis=0)
+    x_high, y_high = np.quantile(surface[:, :2], 0.98, axis=0)
+    # Extend the observed tabletop patch so collision protection includes its edges.
+    margin = 0.10
+    return {
+        "center_x": float((x_low + x_high) / 2),
+        "center_y": float((y_low + y_high) / 2),
+        "tabletop_z": float(np.median(surface[:, 2])),
+        "width": float(max(x_high - x_low + 2 * margin, 0.20)),
+        "depth": float(max(y_high - y_low + 2 * margin, 0.20)),
+        "inlier_count": float(len(inliers)),
+    }
+
+
 class PickNPlaceConfig(ModuleConfig):
     """Configuration for PickNPlaceModule."""
 
@@ -247,6 +275,45 @@ class PickNPlaceModule(Module):
     def get_grasp_candidates(self) -> GraspCandidateArray:
         """Return the GraspGenX proposals generated for the selected object."""
         return self._grasp_candidates or GraspCandidateArray()
+
+    @rpc
+    def estimate_table_surface(self) -> dict[str, float] | None:
+        """Estimate a horizontal tabletop from the latest full RGB-D scene cloud."""
+        scene = self._scene.get_full_scene_pointcloud(voxel_size=0.01)
+        if scene is None:
+            return None
+        estimate = _estimate_table_surface(scene.points_f32())
+        if estimate is None:
+            return None
+        z = estimate["tabletop_z"]
+        half_width = estimate["width"] / 2
+        half_depth = estimate["depth"] / 2
+        x = estimate["center_x"]
+        y = estimate["center_y"]
+        vertices = np.asarray(
+            [
+                [x - half_width, y - half_depth, z],
+                [x + half_width, y - half_depth, z],
+                [x + half_width, y + half_depth, z],
+                [x - half_width, y + half_depth, z],
+            ]
+        )
+        self._visualization.set_visualization_layer(
+            VisualizationLayer(
+                "picknplace/table-estimate",
+                "world",
+                (
+                    LineSetElement(
+                        "tabletop",
+                        vertices,
+                        np.asarray([[0, 1], [1, 2], [2, 3], [3, 0]]),
+                        colors=np.asarray([[80, 180, 255]] * 4),
+                        line_width=2.0,
+                    ),
+                ),
+            )
+        )
+        return estimate
 
     def _basic_grasp(self, number: int) -> tuple[PoseStamped, DetObject] | None:
         """Return the selected cloud's OBB-center grasp frame and object geometry."""

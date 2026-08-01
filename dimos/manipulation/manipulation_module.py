@@ -1691,6 +1691,37 @@ class ManipulationModule(Module):
         return self._world_monitor.add_obstacle(obstacle)
 
     @rpc
+    def set_table_collision(
+        self,
+        center_x: float,
+        center_y: float,
+        tabletop_z: float,
+        width: float,
+        depth: float,
+        safety_margin: float = 0.015,
+        thickness: float = 0.20,
+    ) -> bool:
+        """Install or update a conservative horizontal table collision slab."""
+        if self._world_monitor is None:
+            return False
+        if width <= 0.0 or depth <= 0.0 or thickness <= 0.0 or safety_margin < 0.0:
+            raise ValueError("table dimensions must be positive and safety_margin non-negative")
+        protected_top = tabletop_z - safety_margin
+        table = Obstacle(
+            name="calibrated-table",
+            obstacle_type=ObstacleType.BOX,
+            pose=PoseStamped(
+                position=Vector3(center_x, center_y, protected_top - thickness / 2),
+                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+            ),
+            dimensions=(width, depth, thickness),
+            color=(0.2, 0.5, 0.9, 0.35),
+        )
+        if self._world_monitor.update_obstacle(table):
+            return True
+        return bool(self._world_monitor.add_obstacle(table))
+
+    @rpc
     def update_obstacle(
         self,
         name: str,
