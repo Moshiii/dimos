@@ -17,8 +17,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import open3d as o3d  # type: ignore[import-untyped]
-import open3d.core as o3c  # type: ignore[import-untyped]
 
 from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper, local_bounds
 from dimos.memory2.transform import Transformer
@@ -36,8 +34,6 @@ if TYPE_CHECKING:
     from dimos.memory2.type.observation import Observation
 
 logger = setup_logger()
-
-DEFAULT_SHADOW_DEPTH = 0.2
 
 
 class RayTraceMap(Transformer[PointCloud2, PointCloud2]):
@@ -65,6 +61,7 @@ class RayTraceMap(Transformer[PointCloud2, PointCloud2]):
 
     def _local_bounds(
         self,
+        mapper: VoxelRayMapper,
         batch_points: list[NDArray[np.float32]],
         batch_origins: list[tuple[float, float, float]],
         last_obs: Observation[PointCloud2],
@@ -81,7 +78,7 @@ class RayTraceMap(Transformer[PointCloud2, PointCloud2]):
 
         points = np.concatenate(batch_points, axis=0)
         origins = np.asarray(batch_origins, dtype=np.float32)
-        margin = self._mapper_kwargs.get("shadow_depth", DEFAULT_SHADOW_DEPTH) + self.voxel_size
+        margin = mapper.shadow_depth + mapper.voxel_size
         return local_bounds(points, origins, self.region_percentile, margin)
 
     def _make_obs(
@@ -92,8 +89,13 @@ class RayTraceMap(Transformer[PointCloud2, PointCloud2]):
         batch_points: list[NDArray[np.float32]],
         batch_origins: list[tuple[float, float, float]],
     ) -> Observation[PointCloud2]:
+        import open3d as o3d  # type: ignore[import-untyped]
+        import open3d.core as o3c  # type: ignore[import-untyped]
+
         tags = {**last_obs.tags, "frame_count": count}
-        cx, cy, radius, z_min, z_max = self._local_bounds(batch_points, batch_origins, last_obs)
+        cx, cy, radius, z_min, z_max = self._local_bounds(
+            mapper, batch_points, batch_origins, last_obs
+        )
         positions = mapper.local_map((cx, cy, 0.0), radius, z_min, z_max)
         tags["region_bounds"] = (cx, cy, radius, z_min, z_max)
         pcd = o3d.t.geometry.PointCloud()
