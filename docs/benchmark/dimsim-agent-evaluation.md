@@ -273,5 +273,6 @@ dimos stop
 For a native pass/fail result and retained evidence, run the scored command in
 the preceding section instead of relying on visual judgment. The observer is a
 standalone local debugging aid: there is intentionally no runner `--observe`
-flag, browser/Jupyter frontend, interactive notebook attachment, remote
-observer mode, or effect on benchmark scoring and evaluator cleanup.
+flag, interactive Jupyter frontend or notebook attachment, remote observer
+mode, or effect on benchmark scoring and evaluator cleanup. The read-only web
+view described above is an observer, not an attached interactive frontend.
