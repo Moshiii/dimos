@@ -32,6 +32,8 @@ from dimos.core.coordination.blueprints import autoconnect
 import dimos.core.coordination.worker_manager_python as worker_manager_python
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
+from dimos.manipulation.manipulation_module import ManipulationModuleConfig
+from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.robot import external_blueprints as external
 import dimos.utils.cache as cache_utils
 
@@ -172,6 +174,18 @@ def test_load_config_args_merges_cli_g_overrides(tmp_path):
     )
     assert kwargs["g"]["robot_id"] == "go2-lab"  # survives the CLI overrides
     assert kwargs["g"]["local_relay"] is True  # the explicit flag wins its own key
+
+
+def test_load_config_args_overrides_nested_viser_host(tmp_path: Path) -> None:
+    kwargs = load_config_args(
+        ManipulationModuleConfig,
+        ["visualization.backend=viser", "visualization.host=0.0.0.0"],
+        tmp_path / "config.json",
+    )
+
+    config = ManipulationModuleConfig(**kwargs)
+    assert isinstance(config.visualization, ViserVisualizationConfig)
+    assert config.visualization.host == "0.0.0.0"
 
 
 def test_run_composition_leaves_blueprint_alone_when_relay_disabled() -> None:
