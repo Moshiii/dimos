@@ -122,6 +122,7 @@ def test_client_confirms_table_collision_install(monkeypatch) -> None:  # type: 
 
     pnpconsole.main()
 
+    pnp.scan_scene.assert_called_once_with()
     manipulation.set_table_collision.assert_called_once_with(0.5, 0.0, 0.35, 0.8, 1.0)
 
 

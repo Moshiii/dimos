@@ -120,7 +120,7 @@ def main() -> None:
         print("\n1) Scan  2) Info  3) Select target  4) Plan/preview approach")
         print("5) Execute approach  6) Plan/preview descent  7) Execute descent  8) Close")
         print("9) Plan/preview ascent  10) Execute ascent  11) Open  12) Current EE  13) Go home")
-        print("14) Estimate/install table collision  q) Quit")
+        print("14) Scan/estimate/install table collision  q) Quit")
         choice = input("Select: ").strip().lower()
         try:
             if choice == "q":
@@ -230,6 +230,8 @@ def main() -> None:
             elif choice == "13":
                 print(manipulation.go_home("arm"))
             elif choice == "14":
+                # A fresh RGB-D snapshot is required before fitting the table plane.
+                pnp.scan_scene()
                 estimate = pnp.estimate_table_surface()
                 if estimate is None:
                     print("No horizontal tabletop estimate. Scan the scene and try again.")
