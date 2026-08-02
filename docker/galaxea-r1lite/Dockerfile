@@ -104,19 +104,19 @@ RUN python3 -m pip check > /tmp/pipcheck.txt 2>/tmp/pipcheck_err.txt; \
     fi
 
 # Build-time gate, run as the runtime user. Constructing a teleop task
-# builds a real PinkStepper, which imports pink and verifies the QP
-# backend; a missing or downgraded solver fails the build here instead of
-# at robot startup.
+# builds the real Pink control pipeline, which imports pink and verifies
+# the QP backend; a missing or downgraded solver fails the build here
+# instead of at robot startup.
 RUN dimos list | grep -q r1lite-coordinator \
     && dimos list | grep -q r1lite-quest-teleop \
     && python3 -c "from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_coordinator import r1lite_coordinator" \
     && python3 -c "from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_keyboard_teleop import r1lite_keyboard_teleop" \
     && python3 -c "import pink, proxsuite" \
     && python3 -c "\
-from dimos.control.tasks.teleop_task.teleop_task import create_task; \
+from dimos.control.tasks.teleop_task.teleop_task import TeleopControlIKConfig, TeleopIKTask, create_task; \
 from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks; \
 tasks = [create_task(c, None) for c in _teleop_tasks()]; \
-assert all(t._config.solver == 'pink' for t in tasks)"
+assert tasks and all(isinstance(t, TeleopIKTask) and isinstance(t._config.control_ik, TeleopControlIKConfig) for t in tasks)"
 
 # The validated stop path is the SIGINT sequence (the connection streams
 # bounded chassis zeros and reports settling); docker stop must trigger
