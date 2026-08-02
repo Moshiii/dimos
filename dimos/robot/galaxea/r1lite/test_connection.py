@@ -558,7 +558,25 @@ def test_tick_failure_disarms_fails_and_zeros_chassis(failing_method: str) -> No
 # Stop sequence and lifecycle
 
 
-def test_stop_streams_chassis_zero_and_reports_settled() -> None:
+class _RecordingLogger:
+    """The module logger does not propagate to the root logger, so log
+    assertions capture through a swapped-in recorder instead of caplog."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def _record(self, msg: str, *args: Any) -> None:
+        self.lines.append(msg % args if args else msg)
+
+    def debug(self, msg: str, *args: Any, **_: Any) -> None:
+        self._record(msg, *args)
+
+    info = warning = error = exception = debug
+
+
+def test_stop_streams_chassis_zero_and_reports_settled(monkeypatch: Any) -> None:
+    log = _RecordingLogger()
+    monkeypatch.setattr(conn_mod, "logger", log)
     c = _armed(_bare())
     c.config.stop_zero_duration_s = 0.02
     c._on_cmd_vel(Twist(linear=Vector3(0.5, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0)))
@@ -570,6 +588,20 @@ def test_stop_streams_chassis_zero_and_reports_settled() -> None:
     assert speeds
     assert all(m.twist.linear.x == 0.0 for m in speeds)
     assert c._state is ConnectionState.STOPPED
+    assert any("chassis stop settled" in line for line in log.lines)
+
+
+def test_stop_with_moving_feedback_logs_not_settled(monkeypatch: Any) -> None:
+    log = _RecordingLogger()
+    monkeypatch.setattr(conn_mod, "logger", log)
+    c = _armed(_bare())
+    c.config.stop_zero_duration_s = 0.02
+    c._last_chassis_fb_ts = time.monotonic() + 10.0
+    c._last_chassis_lin = 0.5
+    c._last_chassis_ang = 0.0
+    c.stop()
+    assert any("chassis not settled after stop" in line for line in log.lines)
+    assert not any("chassis stop settled" in line for line in log.lines)
 
 
 def test_stop_zero_path_reserved_for_stop() -> None:

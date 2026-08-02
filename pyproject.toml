@@ -461,6 +461,23 @@ lint = [
     {include-group = "project-deps"},
 ]
 
+# Runtime closure for the Galaxea R1 Lite image beyond the base project
+# deps: the teleop solver stack plus the web/vis packages the r1lite
+# blueprints import at module scope. Exported with hashes by
+# docker/galaxea-r1lite/Dockerfile; keep it in sync with what the image
+# build-time gate imports.
+r1lite-runtime = [
+    "pin-pink>=4.2.0",
+    "qpsolvers[proxqp]>=4.12.0",
+    "python-socketio>=5.16.1",
+    "fastapi>=0.115.6",
+    "sse-starlette>=2.2.1",
+    "ffmpeg-python",
+    "soundfile",
+    "uvicorn>=0.34.0",
+    "pygame>=2.6.1",
+]
+
 # Full CI test group for the self-hosted runner. Inherits `tests` and adds
 # the heavy ML/perception/sim extras needed for self_hosted-marked tests (LFS,
 # GPU, ROS-dependent integration tests, simulation).

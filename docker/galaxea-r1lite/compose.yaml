@@ -1,0 +1,25 @@
+# Hardware-test compose for the R1 Lite development image. Development
+# use only; production deployment is a separate ticket.
+#
+# The digest below names the exact image under test, so session evidence
+# refers to an immutable artifact rather than a moving tag. Every CI build
+# produces a new digest: take it from the build job summary and update
+# this line before the session that uses it.
+#
+# Current: run 30325565389, revision 0a79d869c, built 2026-07-28.
+#
+# stop_grace_period covers the connection's SIGINT stop sequence: the
+# bounded chassis zero stream plus teardown completes well inside 20s;
+# the stage 5 protocol verifies the "chassis stop settled" line appears
+# before the container exits.
+services:
+  dimos:
+    image: ghcr.io/dimensionalos/dimos-r1lite@sha256:578e0fd30beefd46aa9efd91baab2ca6bf9722e7aa4041f611bb77ef6d65d52a
+    network_mode: host
+    ipc: host
+    pid: host
+    stop_grace_period: 20s
+    environment:
+      ROS_DOMAIN_ID: "2"
+    command: ["run", "r1lite-coordinator"]
+    restart: "no"
