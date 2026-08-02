@@ -21,28 +21,55 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.robot.manipulators.common.blueprints import (
     coordinator,
-    eef_twist_task,
     planner,
-    trajectory_task,
+)
+from dimos.robot.manipulators.common.topics import (
+    DEFAULT_TRAJECTORY_TASK_NAME,
+    EEF_TWIST_TASK_NAME,
 )
 from dimos.robot.manipulators.openyam.config import (
+    OPENYAM_ARM_JOINTS,
     OPENYAM_DOF,
     OPENYAM_GRAVITY_MODEL_PATH,
+    OPENYAM_GRIPPER_JOINT,
     make_openyam_model_config,
     openyam_hardware,
 )
 from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
 
-_openyam_keyboard_hw = openyam_hardware("arm")
+_openyam_keyboard_hw = openyam_hardware()
+
+
+def _eef_twist_task(*, priority: int = 10) -> TaskConfig:
+    return TaskConfig(
+        name=EEF_TWIST_TASK_NAME,
+        type="eef_twist",
+        joint_names=list(OPENYAM_ARM_JOINTS),
+        priority=priority,
+        params={
+            "model_path": OPENYAM_GRAVITY_MODEL_PATH,
+            "ee_joint_id": OPENYAM_DOF,
+        },
+    )
+
+
+def _trajectory_task(*, priority: int = 10) -> TaskConfig:
+    return TaskConfig(
+        name=DEFAULT_TRAJECTORY_TASK_NAME,
+        type="trajectory",
+        joint_names=list(OPENYAM_ARM_JOINTS),
+        priority=priority,
+        params={"start_position_tolerance": 0.05},
+    )
 
 
 def _gripper_task() -> TaskConfig:
     return TaskConfig(
         name="servo_gripper",
         type="servo",
-        joint_names=["arm/gripper"],
+        joint_names=[OPENYAM_GRIPPER_JOINT],
         priority=20,
-        params={"timeout": 0.0, "default_positions": [0.0]},
+        params={"timeout": 0.0},
     )
 
 
@@ -51,11 +78,7 @@ keyboard_teleop_openyam = autoconnect(
     ControlCoordinator.blueprint(
         hardware=[_openyam_keyboard_hw],
         tasks=[
-            eef_twist_task(
-                _openyam_keyboard_hw,
-                model_path=OPENYAM_GRAVITY_MODEL_PATH,
-                ee_joint_id=OPENYAM_DOF,
-            ),
+            _eef_twist_task(),
             _gripper_task(),
         ],
     ),
@@ -65,7 +88,7 @@ keyboard_teleop_openyam = autoconnect(
     ),
 )
 
-_openyam_keyboard_planner_hw = openyam_hardware("arm")
+_openyam_keyboard_planner_hw = openyam_hardware()
 
 keyboard_teleop_openyam_planner = autoconnect(
     KeyboardTeleopModule.blueprint(),
@@ -73,14 +96,9 @@ keyboard_teleop_openyam_planner = autoconnect(
     coordinator(
         hardware=[_openyam_keyboard_planner_hw],
         tasks=[
-            eef_twist_task(
-                _openyam_keyboard_planner_hw,
-                model_path=OPENYAM_GRAVITY_MODEL_PATH,
-                ee_joint_id=OPENYAM_DOF,
-                priority=10,
-            ),
+            _eef_twist_task(priority=10),
             _gripper_task(),
-            trajectory_task(_openyam_keyboard_planner_hw, priority=20),
+            _trajectory_task(priority=20),
         ],
     ),
 )
