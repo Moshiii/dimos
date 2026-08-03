@@ -15,9 +15,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
-from dimos.navigation.nav_3d.mls_planner.mls_planner import MLSPlanner
+
+if TYPE_CHECKING:
+    from dimos.navigation.nav_3d.evaluator.pipeline import NavPipeline
 
 
 @dataclass
@@ -64,21 +67,30 @@ class EvalConfig:
     snap_max_m: float = 1.0
 
     # An improvement must not buy score with compute. p95 over the suite.
-    plan_p95_budget_ms: float = 50.0
-    map_update_p95_budget_ms: float = 1000.0
+    # A plan is timed end to end. A pipeline is opaque, so map work it defers
+    # until asked for a route is charged here rather than hidden, and the
+    # budget has to cover both the rebuild and the search.
+    plan_p95_budget_ms: float = 200.0
+    # Per lidar frame, so a pipeline that cannot keep up with the sensor fails
+    # regardless of how it scores.
+    map_update_p95_budget_ms: float = 100.0
 
-    # Planner constructor overrides, e.g. --set planner.wall_clearance_m=0.0.
-    # Omitted keys keep the planner's own defaults, so nothing is duplicated
+    # Which pipeline is under test, by registry name.
+    pipeline: str = "mls"
+    # Pipeline constructor overrides, e.g. --set planner.wall_clearance_m=0.0.
+    # Omitted keys keep the pipeline's own defaults, so nothing is duplicated
     # here, and the report records whatever was swept.
     planner: dict[str, float] = field(default_factory=dict)
 
     def make_mapper(self) -> VoxelRayMapper:
+        """The evaluator's own mapper, which builds the occupancy every pipeline
+        is graded against. Pipelines may use it too, but nothing requires them to."""
         return VoxelRayMapper(voxel_size=self.voxel_size, max_range=self.max_range)
 
-    def make_planner(self) -> MLSPlanner:
-        return MLSPlanner(
-            voxel_size=self.voxel_size, robot_height=self.robot_height, **self.planner
-        )
+    def make_pipeline(self) -> NavPipeline:
+        from dimos.navigation.nav_3d.evaluator.pipeline import make_pipeline
+
+        return make_pipeline(self.pipeline, self)
 
     def mapper_fingerprint(self) -> dict[str, float | int]:
         """Cache key parameters for the final map.

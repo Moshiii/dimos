@@ -140,6 +140,4 @@ def load_store(dataset: str) -> tuple[CaseStore, FinalMap]:
     suite = load_suite(manifest)
     cfg = EvalConfig()
     final = load_or_build_final_map(suite.db_path(), suite, cfg)
-    planner = cfg.make_planner()
-    planner.update_global_map(final.occupied)
-    return CaseStore(suite, manifest, planner.surface_map(), cfg), final
+    return CaseStore(suite, manifest, final.standable_surface(cfg.robot_height), cfg), final

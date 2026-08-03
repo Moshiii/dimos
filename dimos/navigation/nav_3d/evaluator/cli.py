@@ -131,7 +131,7 @@ def _print_report(report: Report) -> None:
         f"fin {report.n_success_final}/{report.n_cases} | "
         f"outcomes {report.outcome_counts} | "
         f"plan p95 {report.plan_ms['p95']:.1f}ms | "
-        f"map update p95 {report.map_update_ms['p95']:.0f}ms"
+        f"ingest p95 {report.map_update_ms['p95']:.1f}ms/frame"
     )
     inc_only = [
         f"{c.dataset}/{c.id}"
@@ -218,7 +218,7 @@ def run(
     workers: int = typer.Option(
         os.cpu_count() or 1,
         "--workers",
-        help="Total parallelism: dataset processes x checkpoint threads",
+        help="Datasets evaluated in parallel processes",
     ),
     set_: list[str] = typer.Option(
         None, "--set", help="Repeatable EvalConfig override, e.g. goal_tolerance=0.4"
@@ -319,12 +319,11 @@ def ingest(
     )
     cfg = EvalConfig()
     final = load_or_build_final_map(dest, suite, cfg)
-    planner = cfg.make_planner()
-    planner.update_global_map(final.occupied)
     gen = GenerationParams(max_cases=cases or None)
     if cases:
         gen.min_cases = cases
-    suite.cases = generate_cases(trajectory, final, planner.surface_map(), cfg, gen)
+    surface = final.standable_surface(cfg.robot_height)
+    suite.cases = generate_cases(trajectory, final, surface, cfg, gen)
     if not suite.cases:
         raise typer.Exit(code=1)
     floor = min(gen.min_cases, gen.resolve_max_cases(float(arcs[-1])))

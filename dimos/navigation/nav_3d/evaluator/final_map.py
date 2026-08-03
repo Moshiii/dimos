@@ -32,7 +32,7 @@ import numpy as np
 
 from dimos.navigation.nav_3d.evaluator.metrics import timing_stats
 from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames
-from dimos.navigation.nav_3d.evaluator.voxel_keys import voxel_keys
+from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers, keys_contain, voxel_keys
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -57,6 +57,20 @@ class FinalMap:
     frames: int
     add_frame_ms: dict[str, float]
     build_ms: float
+
+    def standable_surface(self, robot_height: float) -> NDArray[np.float32]:
+        """Occupied cells with robot_height of free space directly above them.
+
+        The evaluator's own account of where a robot could stand, so case
+        geometry is fixed by the recording rather than by whichever planner is
+        under test. Deliberately cruder than a planner's surface extraction:
+        it decides where an endpoint may sit, not where a path may go.
+        """
+        keys = self.occupied_keys
+        blocked = np.zeros(len(keys), dtype=bool)
+        for dz in range(1, int(np.ceil(robot_height / self.voxel_size)) + 1):
+            blocked |= keys_contain(keys, keys + dz)
+        return key_centers(keys[~blocked], self.voxel_size)
 
 
 @dataclass

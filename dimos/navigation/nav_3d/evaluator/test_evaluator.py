@@ -40,6 +40,7 @@ from dimos.navigation.nav_3d.evaluator.generate import (
     generate_cases,
     snap_to_surface,
 )
+from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
 from dimos.navigation.nav_3d.evaluator.recording import Frame, Trajectory
 from dimos.navigation.nav_3d.evaluator.runner import (
     CaseResult,
@@ -49,13 +50,14 @@ from dimos.navigation.nav_3d.evaluator.runner import (
     _final_only,
     _no_plan,
     _run_plan,
+    _snapshot,
     score_negative,
 )
 from dimos.navigation.nav_3d.evaluator.tagging import route_tags
 from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers, keys_contain, voxel_keys
 
 if TYPE_CHECKING:
-    from dimos.navigation.nav_3d.mls_planner.mls_planner import MLSPlanner
+    from dimos.navigation.nav_3d.evaluator.pipeline import NavPipeline
 
 VOXEL = 0.1
 
@@ -253,11 +255,15 @@ def test_check_kinematics_rejects_cliff_jumps() -> None:
     assert len(result.violation_points) >= 1
 
 
-class _StubPlanner:
-    """Returns a fixed path regardless of the map, for gaming the scorer."""
+class _StubPipeline:
+    """Returns a fixed path regardless of what it was fed, for gaming the scorer."""
 
     def __init__(self, waypoints: np.ndarray | None) -> None:
         self._waypoints = waypoints
+        self.frames = 0
+
+    def add_frame(self, points: np.ndarray, origin: tuple[float, float, float], ts: float) -> None:
+        self.frames += 1
 
     def plan(
         self, start: tuple[float, float, float], goal: tuple[float, float, float]
@@ -265,8 +271,29 @@ class _StubPlanner:
         return self._waypoints
 
 
-def _stub(waypoints: np.ndarray | None) -> MLSPlanner:
-    return cast("MLSPlanner", _StubPlanner(waypoints))
+def _stub(waypoints: np.ndarray | None) -> NavPipeline:
+    return cast("NavPipeline", _StubPipeline(waypoints))
+
+
+def test_make_pipeline_rejects_unknown_name() -> None:
+    assert isinstance(make_pipeline("mls", _cfg()), PipelineIntrospection)
+    with pytest.raises(ValueError, match="unknown pipeline"):
+        make_pipeline("nope", _cfg())
+
+
+def test_graph_layers_are_optional() -> None:
+    """A pipeline that keeps its internals to itself still evaluates, it just
+    contributes no graph layers to the recording."""
+
+    class _Introspective(_StubPipeline):
+        def surface_clearance_map(self) -> np.ndarray:
+            return np.zeros((1, 4), dtype=np.float32)
+
+        def node_edges(self) -> np.ndarray:
+            return np.zeros((1, 7), dtype=np.float32)
+
+    assert _snapshot(_stub(None)) is None
+    assert _snapshot(cast("NavPipeline", _Introspective(None))) is not None
 
 
 def _floor(x_lo: float = 0.0, x_hi: float = 20.0) -> np.ndarray:
@@ -532,6 +559,50 @@ def test_route_tags_gate_excludes_detour_routes() -> None:
     assert route_tags((0.0, 0.0, 0.0), (4.0, 0.0, 0.0), detour, keys, _cfg()) == ["flat"]
 
 
+def _final_map(points: np.ndarray) -> FinalMap:
+    return FinalMap(
+        voxel_size=VOXEL,
+        occupied=points,
+        occupied_keys=np.unique(voxel_keys(points, VOXEL)),
+        frames=1,
+        add_frame_ms={"p50": 0.0, "p95": 0.0, "max": 0.0},
+        build_ms=0.0,
+    )
+
+
+def _surface_keys(points: np.ndarray, robot_height: float = 0.3) -> np.ndarray:
+    return np.unique(voxel_keys(_final_map(points).standable_surface(robot_height), VOXEL))
+
+
+def test_standable_surface_is_the_top_of_each_column() -> None:
+    """A wall contributes its cap and not its face, and the floor it stands on
+    stops being standable."""
+    floor, wall = _floor(0.0, 2.0), _wall(1.0)
+    keys = _surface_keys(np.concatenate([floor, wall]))
+
+    def probe(point: np.ndarray) -> bool:
+        return bool(keys_contain(keys, voxel_keys(point.reshape(1, 3), VOXEL))[0])
+
+    # Take one real column of the wall so the checks land on cells that exist.
+    top = wall[wall[:, 2].argmax()]
+    assert probe(top)
+    assert not probe(top - np.array([0, 0, 0.5], dtype=np.float32))
+    # Floor buried under that column, versus floor out in the open.
+    assert not probe(np.array([top[0], top[1], -0.05], dtype=np.float32))
+    assert probe(np.array([top[0] - 0.5, top[1], -0.05], dtype=np.float32))
+
+
+def test_standable_surface_keeps_floor_under_high_ceiling() -> None:
+    """Headroom is what matters: a ceiling above the robot's height leaves the
+    floor standable, one inside it does not."""
+    floor = _floor(0.0, 2.0)
+    floor_keys = np.unique(voxel_keys(floor, VOXEL))
+    high = _surface_keys(np.concatenate([floor, floor + np.array([0, 0, 1.2], dtype=np.float32)]))
+    assert keys_contain(high, floor_keys).all()
+    low = _surface_keys(np.concatenate([floor, floor + np.array([0, 0, 0.2], dtype=np.float32)]))
+    assert not keys_contain(low, floor_keys).any()
+
+
 def test_snap_to_surface() -> None:
     xs, ys = np.meshgrid(np.arange(0, 2, VOXEL), np.arange(0, 2, VOXEL))
     surface = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1, dtype=np.float32)
@@ -687,7 +758,6 @@ def _tripwire_report(spec: dict[str, dict[str, tuple[bool, bool]]]) -> dict[str,
                     tags=[],
                     l_ref=1.0,
                     online_voxels=0,
-                    map_update_ms=0.0,
                     expect_fail=False,
                     online=replace(_no_plan(0.0), success=inc),
                     final=replace(_no_plan(0.0), success=fin),
