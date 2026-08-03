@@ -116,13 +116,29 @@ class RawROS(PubSub[RawROSTopic, Any]):
                 depth=5000,
             )
 
+    # Global-context ownership: the first live instance initializes rclpy,
+    # the last one shuts it down, so the DDS participant is destroyed
+    # deterministically instead of at process exit. Signal handling stays
+    # with the application: rclpy's own SIGINT handler kills contexts
+    # before orderly module shutdown can stream its safety zeros
+    # (2026-07-28 field failure).
+    _ctx_lock = threading.Lock()
+    _ctx_users = 0
+
     def start(self) -> None:
         """Start the ROS node and executor."""
         if self._spin_thread is not None:
             return
 
-        if not rclpy.ok():  # type: ignore[attr-defined]
-            rclpy.init()
+        with RawROS._ctx_lock:
+            if not rclpy.ok():  # type: ignore[attr-defined]
+                try:
+                    from rclpy.signals import SignalHandlerOptions
+
+                    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+                except ImportError:
+                    rclpy.init()
+            RawROS._ctx_users += 1
 
         self._stop_event.clear()
         self._node = Node(self._node_name)
@@ -166,6 +182,15 @@ class RawROS(PubSub[RawROSTopic, Any]):
 
         self._executor = None
         self._spin_thread = None
+
+        with RawROS._ctx_lock:
+            RawROS._ctx_users = max(0, RawROS._ctx_users - 1)
+            if RawROS._ctx_users == 0 and rclpy.ok():  # type: ignore[attr-defined]
+                # Last user: destroy the DDS participant now, cleanly, so
+                # peers unmatch immediately instead of waiting out a
+                # liveliness lease (or leaking into a vendor stack with
+                # static allocation).
+                rclpy.try_shutdown()
 
     def _spin(self) -> None:
         """Background thread for spinning the ROS executor."""

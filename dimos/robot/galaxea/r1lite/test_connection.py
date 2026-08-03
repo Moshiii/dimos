@@ -610,6 +610,33 @@ def test_stop_zero_path_reserved_for_stop() -> None:
         c._stream_chassis_zero(0.01)
 
 
+def test_release_sensor_context_skips_dead_context(monkeypatch: Any) -> None:
+    # An external shutdown may kill the context first; the cleanup stack
+    # must not raise on the corpse (2026-07-28 teardown FAILED symptom).
+    calls: list[str] = []
+    fake_rclpy = types.ModuleType("rclpy")
+    fake_rclpy.shutdown = lambda context=None: calls.append("shutdown")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "rclpy", fake_rclpy)
+    c = _construct()
+    c._sensor_context = types.SimpleNamespace(ok=lambda: False)
+    c._release_sensor_context()
+    assert calls == []
+    assert c._sensor_context is None
+
+
+def test_release_sensor_context_swallows_shutdown_raise(monkeypatch: Any) -> None:
+    def _boom(context: Any = None) -> None:
+        raise RuntimeError("already shut down")
+
+    fake_rclpy = types.ModuleType("rclpy")
+    fake_rclpy.shutdown = _boom  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "rclpy", fake_rclpy)
+    c = _construct()
+    c._sensor_context = types.SimpleNamespace(ok=lambda: True)
+    c._release_sensor_context()
+    assert c._sensor_context is None
+
+
 def test_stop_idempotent_and_from_created() -> None:
     c = _construct()
     c.stop()

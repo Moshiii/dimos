@@ -1,0 +1,139 @@
+#!/bin/bash
+# R1 Lite session launcher. One small dispatcher over the pinned dimos
+# image and the vendor bring-up script. Installed by r1lite-setup.sh.
+#
+#   r1 up            vendor stack up + verified (vendor_up.sh)
+#   r1 shell         interactive container from the pinned image, env baked
+#   r1 run <bp>      production one-shot: entrypoint gate + blueprint
+#   r1 status        vendor gates + container + image identity + URLs
+#   r1 stop          stop the blueprint container ( --vendor: stack too )
+#   r1 update [tag]  re-pull, show digest diff, move the pin on confirm
+#   r1 logs pack     bundle newest session logs into one tarball
+#   r1 selftest      the image's internal DDS discovery check
+
+set -o pipefail
+STATE_DIR="$HOME/.config/dimos-r1lite"
+STATE="$STATE_DIR/image.env"
+LOG_DIR="$HOME/r1lite-logs"
+RUN_NAME="r1lite-dimos"
+REPO_REF="ghcr.io/dimensionalos/dimos-r1lite"
+
+say() { echo "[r1] $*"; }
+die() { say "$*" >&2; exit 1; }
+
+load_state() {
+    [ -f "$STATE" ] || die "no pinned image ($STATE missing) — run r1lite-setup.sh first"
+    # shellcheck disable=SC1090
+    source "$STATE"
+    [ -n "${IMAGE_DIGEST:-}" ] || die "state file has no IMAGE_DIGEST"
+    IMAGE="$REPO_REF@$IMAGE_DIGEST"
+}
+
+cmd_up() { exec vendor_up.sh up; }
+
+cmd_shell() {
+    load_state
+    mkdir -p "$LOG_DIR"
+    say "image $IMAGE_TAG (${IMAGE_DIGEST:7:19}…) — logs mount: $LOG_DIR -> /app/logs"
+    say "inside: dimos run <blueprint>; preflight: python3 /opt/dimos/scripts/r1lite_test/preflight.py"
+    exec docker run -it --rm --network host --ipc host --pid host \
+        -v "$LOG_DIR":/app/logs \
+        -e QUEST_RECORD="${QUEST_RECORD:-}" \
+        --entrypoint bash "$IMAGE"
+}
+
+cmd_run() {
+    load_state
+    local bp="${1:?usage: r1 run <blueprint>}"
+    mkdir -p "$LOG_DIR"
+    local log="$LOG_DIR/r1_run_$(date +%Y%m%d_%H%M%S).log"
+    say "running $bp from $IMAGE_TAG; log: $log"
+    docker run --rm --name "$RUN_NAME" --network host --ipc host --pid host \
+        -v "$LOG_DIR":/app/logs \
+        -e QUEST_RECORD="${QUEST_RECORD:-}" \
+        "$IMAGE" run "$bp" 2>&1 | tee "$log"
+}
+
+cmd_status() {
+    if [ -f "$STATE" ]; then
+        # shellcheck disable=SC1090
+        source "$STATE"
+        say "pinned image: $IMAGE_TAG"
+        say "  digest:   $IMAGE_DIGEST"
+        say "  revision: ${IMAGE_REVISION:-unknown}"
+    else
+        say "no pinned image — run r1lite-setup.sh"
+    fi
+    if docker ps --format '{{.Names}}' | grep -q "^$RUN_NAME$"; then
+        say "blueprint container: RUNNING ($RUN_NAME)"
+    else
+        say "blueprint container: not running"
+    fi
+    local ip
+    for ip in $(hostname -I 2>/dev/null); do
+        say "headset URL candidate: https://$ip:8443/teleop"
+    done
+    if command -v vendor_up.sh >/dev/null 2>&1 && [ -d "$HOME/galaxea" ]; then
+        vendor_up.sh status
+    else
+        say "vendor check skipped (no Galaxea install here — not the robot?)"
+    fi
+}
+
+cmd_stop() {
+    docker stop "$RUN_NAME" 2>/dev/null && say "blueprint container stopped" \
+        || say "blueprint container was not running"
+    if [ "${1:-}" = "--vendor" ]; then vendor_up.sh stop; fi
+}
+
+cmd_update() {
+    load_state
+    local tag="${1:-$IMAGE_TAG}"
+    say "pulling $REPO_REF:$tag"
+    docker pull "$REPO_REF:$tag" || die "pull failed"
+    local new_digest new_rev
+    new_digest=$(docker inspect "$REPO_REF:$tag" --format '{{index .RepoDigests 0}}' | cut -d@ -f2)
+    new_rev=$(docker image inspect "$REPO_REF:$tag" \
+        --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+    say "current pin: $IMAGE_DIGEST (rev ${IMAGE_REVISION:-?})"
+    say "candidate:   $new_digest (rev $new_rev)"
+    if [ "$new_digest" = "$IMAGE_DIGEST" ]; then say "already pinned to this digest"; return 0; fi
+    read -r -p "[r1] move the pin to $tag? [y/N] " a
+    [ "$a" = "y" ] || { say "pin unchanged (rollback is always: keep the old line)"; return 1; }
+    sed -i "s|^IMAGE_DIGEST=.*|IMAGE_DIGEST=$new_digest|; s|^IMAGE_TAG=.*|IMAGE_TAG=$tag|; s|^IMAGE_REVISION=.*|IMAGE_REVISION=$new_rev|" "$STATE"
+    say "pin moved; previous digest was $IMAGE_DIGEST (re-pin to roll back)"
+}
+
+cmd_logs() {
+    [ "${1:-}" = "pack" ] || die "usage: r1 logs pack"
+    [ -d "$LOG_DIR" ] || die "no $LOG_DIR yet"
+    cd "$LOG_DIR" || exit 1
+    local items out
+    items=$( { ls -t r1_run_*.log 2>/dev/null | head -2; \
+               ls -t quest_record_*.jsonl 2>/dev/null | head -1; \
+               ls -td -- */ 2>/dev/null | head -1; } | tr '\n' ' ')
+    [ -n "${items// /}" ] || die "nothing to pack in $LOG_DIR"
+    out="/tmp/r1_session_$(date +%Y%m%d_%H%M%S).tgz"
+    # shellcheck disable=SC2086
+    tar czf "$out" $items || die "tar failed"
+    say "packed: $out"
+    tar tzf "$out" | sed 's/^/[r1]   /'
+    say "laptop pull: scp <robot>:$out ."
+}
+
+cmd_selftest() {
+    load_state
+    exec docker run --rm --network host --entrypoint dds-selftest "$IMAGE"
+}
+
+case "${1:-}" in
+    up)       shift; cmd_up "$@" ;;
+    shell)    shift; cmd_shell "$@" ;;
+    run)      shift; cmd_run "$@" ;;
+    status)   shift; cmd_status "$@" ;;
+    stop)     shift; cmd_stop "$@" ;;
+    update)   shift; cmd_update "$@" ;;
+    logs)     shift; cmd_logs "$@" ;;
+    selftest) shift; cmd_selftest "$@" ;;
+    *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

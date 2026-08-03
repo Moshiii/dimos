@@ -634,9 +634,16 @@ class R1LiteConnection(Module):
         qos = _make_qos()
 
         # Isolated DDS participant: control traffic must not contend with
-        # fragmented camera UDP.
+        # fragmented camera UDP. No rclpy signal handler: SIGINT teardown
+        # ordering belongs to the runtime, not to whichever context
+        # happened to init last.
         context = Context()
-        rclpy.init(context=context)
+        try:
+            from rclpy.signals import SignalHandlerOptions
+
+            rclpy.init(context=context, signal_handler_options=SignalHandlerOptions.NO)
+        except ImportError:
+            rclpy.init(context=context)
         self._sensor_context = context
         self._cleanup_stack.append(("sensor_context", self._release_sensor_context))
         self._sensor_node = RclpyNode("r1lite_sensors", context=context)
@@ -779,11 +786,20 @@ class R1LiteConnection(Module):
         self._sensor_node = None
 
     def _release_sensor_context(self) -> None:
-        if self._sensor_context is not None:
-            import rclpy
-
-            rclpy.shutdown(context=self._sensor_context)
+        ctx = self._sensor_context
         self._sensor_context = None
+        if ctx is None:
+            return
+        import rclpy
+
+        try:
+            # An external shutdown (signal handler, interpreter teardown)
+            # may have beaten us here; releasing an already-dead context
+            # must not fail the cleanup stack.
+            if ctx.ok():
+                rclpy.shutdown(context=ctx)
+        except Exception as exc:
+            logger.warning(f"sensor context shutdown during cleanup: {exc}")
 
     def _sensor_spin(self) -> None:
         executor = self._sensor_executor

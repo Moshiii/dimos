@@ -93,6 +93,17 @@ jobs:
           cache-from: type=gha,scope=galaxea-r1lite
           cache-to: type=gha,mode=max,scope=galaxea-r1lite
 
+      # A pushed image that cannot discover its own publisher is dead on a
+      # robot; the 2026-07-28 factory-fresh session lost its last half hour
+      # to exactly that symptom. Pull the pushed artifact (buildx keeps no
+      # local copy) and prove pub/echo discovery before calling the build
+      # good.
+      - name: DDS discovery self-test
+        run: |
+          IMG="ghcr.io/dimensionalos/dimos-r1lite@${{ steps.build.outputs.digest }}"
+          docker pull -q "$IMG"
+          docker run --rm --network host --entrypoint dds-selftest "$IMG"
+
       - name: Record immutable identity
         run: |
           {
@@ -101,5 +112,6 @@ jobs:
             echo "- dev tag: \`${{ steps.tag.outputs.dev_tag }}\`"
             echo "- sha tag: \`${{ steps.tag.outputs.sha_tag }}\`"
             echo "- digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- dds-selftest: PASS"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "digest=${{ steps.build.outputs.digest }}"

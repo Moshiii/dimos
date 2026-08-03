@@ -72,6 +72,13 @@ COPY docker/galaxea-r1lite/entrypoint.sh /entrypoint.sh
 COPY docker/galaxea-r1lite/dds_selftest.sh /usr/local/bin/dds-selftest
 RUN chmod +x /entrypoint.sh /usr/local/bin/dds-selftest
 
+# Session tooling for interactive shells: preflight/arming and the test
+# helpers live under a fixed path so `r1 shell` users need no repo
+# checkout. The blueprint's log/recording paths point at /app/logs, which
+# the launcher bind-mounts host-side.
+COPY scripts/r1lite_test /opt/dimos/scripts/r1lite_test
+RUN mkdir -p /app/logs && chown -R 1000:1000 /app
+
 # uid 1000 matches the vendor stack so shared-memory DDS delivery works.
 RUN useradd --uid 1000 --user-group --create-home --shell /bin/bash dimos
 USER dimos
