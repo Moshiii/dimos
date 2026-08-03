@@ -23,6 +23,7 @@ import numpy as np
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.manipulation.candidate_filter_spec import GraspCandidateFilterSpec
 from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
 from dimos.manipulation.visualization.layers import (
     LineSetElement,
@@ -79,6 +80,7 @@ class PickNPlaceConfig(ModuleConfig):
     align_grasp_yaw: bool = False
     grasp_strategy: Literal["obb_center", "graspgenx"] = "obb_center"
     graspgenx_pregrasp_offset: float = 0.10
+    graspgenx_ik_filter_limit: int = 10
 
 
 class PickNPlaceModule(Module):
@@ -87,6 +89,7 @@ class PickNPlaceModule(Module):
     config: PickNPlaceConfig
     _scene: ObjectSceneRegistrationSpec
     _grasp_generator: GraspGenSpec | None
+    _grasp_filter: GraspCandidateFilterSpec
     _visualization: ManipulationVisualizationSpec
     objects: In[list[DetObject]]
     camera_info: In[CameraInfo]
@@ -170,8 +173,9 @@ class PickNPlaceModule(Module):
                 raise RuntimeError("GraspGenX is not configured for this pick-and-place blueprint")
             candidates = self._grasp_generator.propose_grasps(obj.pointcloud)
             self._selected_object = obj
-            self._grasp_candidates = candidates
-            if not candidates.candidates:
+            self._grasp_candidates = self._filter_graspgenx_candidates(candidates)
+            if not self._grasp_candidates.candidates:
+                self.graspgenx_candidates.publish(self._grasp_candidates)
                 return None
             return self._select_graspgenx_candidate(0)
         yaw = self._grasp_yaw(obj) if self.config.align_grasp_yaw else 0.0
@@ -207,6 +211,17 @@ class PickNPlaceModule(Module):
         )
         self._pre_grasp_pose = None
         return self._goal_pose
+
+    def _filter_graspgenx_candidates(self, candidates: GraspCandidateArray) -> GraspCandidateArray:
+        """Keep only top-ranked proposals whose TCP IK is collision-free in the live world."""
+        accepted = []
+        for candidate in candidates.candidates[: self.config.graspgenx_ik_filter_limit]:
+            result = self._grasp_filter.inverse_kinematics_single(
+                candidate.pose, "arm", check_collision=True
+            )
+            if result.is_success():
+                accepted.append(candidate)
+        return GraspCandidateArray(candidates.header, accepted)
 
     @rpc
     def get_pre_grasp_pose(self) -> PoseStamped | None:

@@ -25,6 +25,7 @@ from dimos.manipulation.picknplace import (
     PickNPlaceModule,
     _estimate_table_surface,
 )
+from dimos.manipulation.planning.spec.models import IKResult, IKStatus
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -149,6 +150,9 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
             )
         )
     )
+    module._grasp_filter = MagicMock(
+        inverse_kinematics_single=MagicMock(return_value=IKResult(IKStatus.SUCCESS))
+    )
     module.graspgenx_candidates = MagicMock()
     module._visualization = MagicMock()
 
@@ -177,6 +181,61 @@ def test_picknplace_uses_top_graspgenx_candidate() -> None:
     assert pre_grasp is not None
     assert pre_grasp.position.x == pytest.approx(selected_goal.position.x)
     assert pre_grasp.position.z == pytest.approx(selected_goal.position.z - 0.1)
+
+
+def test_picknplace_excludes_collision_or_ik_infeasible_graspgenx_candidates() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    module.config = PickNPlaceConfig(grasp_strategy="graspgenx")
+    safe = GraspCandidate(Pose(Vector3(0.4, 0.5, 0.6), Quaternion()), score=0.9)
+    unsafe = GraspCandidate(Pose(Vector3(0.2, 0.3, 0.4), Quaternion()), score=0.8)
+    module._grasp_filter = MagicMock(
+        inverse_kinematics_single=MagicMock(
+            side_effect=[IKResult(IKStatus.SUCCESS), IKResult(IKStatus.NO_SOLUTION)]
+        )
+    )
+
+    filtered = module._filter_graspgenx_candidates(
+        GraspCandidateArray(Header(2.0, "link_base"), [safe, unsafe])
+    )
+
+    assert filtered.candidates == [safe]
+    module._grasp_filter.inverse_kinematics_single.assert_any_call(
+        safe.pose, "arm", check_collision=True
+    )
+    module._grasp_filter.inverse_kinematics_single.assert_any_call(
+        unsafe.pose, "arm", check_collision=True
+    )
+
+
+def test_picknplace_clears_candidates_when_no_graspgenx_proposal_is_safe() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    module.config = PickNPlaceConfig(grasp_strategy="graspgenx")
+    obj = MagicMock(
+        ts=1.0,
+        frame_id="link_base",
+        center=Vector3(0.1, 0.2, 0.3),
+        pointcloud=MagicMock(),
+    )
+    obj.camera_transform = None
+    obj.image = None
+    obj.pose.orientation = Quaternion()
+    module._latest_objects = (obj,)
+    unsafe = GraspCandidate(Pose(Vector3(0.2, 0.3, 0.4), Quaternion()), score=0.8)
+    module._grasp_generator = MagicMock(
+        propose_grasps=MagicMock(
+            return_value=GraspCandidateArray(Header(2.0, "link_base"), [unsafe])
+        )
+    )
+    module._grasp_filter = MagicMock(
+        inverse_kinematics_single=MagicMock(return_value=IKResult(IKStatus.NO_SOLUTION))
+    )
+    module.graspgenx_candidates = MagicMock()
+
+    assert module.get_goal_pose(1) is None
+    module.graspgenx_candidates.publish.assert_called_once()
+    assert module.graspgenx_candidates.publish.call_args.args[0].candidates == []
 
 
 def test_picknplace_returns_empty_candidates_for_obb_grasps() -> None:

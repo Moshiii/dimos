@@ -1,15 +1,16 @@
 # Pick And Place
 
-This directory contains the xArm6 pick-and-place operator pipeline. It has three
+This directory contains the xArm6 pick-and-place operator pipeline. It has four
 runnable blueprints:
 
 | Blueprint | Grasp source |
 | --- | --- |
 | `picknplace` | Filtered-object OBB center, with optional principal-axis yaw |
+| `picknplace-edgetam` | Text-prompted Moondream boxes refined by EdgeTAM, then OBB-center grasp |
 | `picknplace-graspgenx` | GraspGenX proposals from the selected object's point cloud |
 | `picknplace-graspgenx-edgetam` | Text-prompted Moondream boxes refined by EdgeTAM, then GraspGenX |
 
-Both use the wrist-mounted RealSense, object-scene registration in `link_base`,
+All blueprints use the wrist-mounted RealSense and object-scene registration in `link_base`.
 
 ## Setup
 
@@ -46,6 +47,13 @@ For text-prompted Moondream identification and EdgeTAM segmentation before Grasp
 uv run --no-sync dimos run picknplace-graspgenx-edgetam --daemon
 ```
 
+For text-prompted Moondream identification and EdgeTAM segmentation with the
+simple OBB-center grasp instead:
+
+```bash
+uv run --no-sync dimos run picknplace-edgetam --daemon
+```
+
 For the OBB fallback instead:
 
 ```bash
@@ -73,6 +81,8 @@ The console intentionally keeps planning and execution separate:
 3. Select `3` and choose an object. The GraspGenX blueprint prints its top
    proposals and displays the selected grasp. Viser shows the selected object
    cloud in amber, the grasp TCP axes in red, and the pre-grasp TCP axes in green.
+   The top ten proposals are filtered through collision-aware xArm IK; after
+   table calibration, candidates intersecting the table are omitted.
 4. Select `4` to plan and preview the approach. Each Viser preview plays once
    at a slow two-second duration.
 5. Execute the approach only after inspecting the proposal and preview.
@@ -81,7 +91,11 @@ The console intentionally keeps planning and execution separate:
 8. Select `10` to execute the ascent, `11` to open, and `13` to return home.
 9. After a scene scan, select `14` to estimate and preview the tabletop. Confirm
    only when the blue Viser outline matches the table; it installs a 15 mm-clearance
-   collision slab for all subsequent IK and trajectory plans.
+   collision slab at the measured tabletop position for all subsequent IK and
+   trajectory plans. The pick-and-place blueprints do not install a fixed floor slab.
+10. After executing the approach, select `15` to collision-plan and execute the
+    descent, close the gripper, and execute the ascent without previews. It stops at
+    the first failed stage.
 
 Do not execute a learned grasp without checking its pose, the 100 mm pre-grasp
 pose, the point-cloud/overlay visualization, and the collision-free preview.

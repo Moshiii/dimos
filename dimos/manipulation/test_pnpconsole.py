@@ -105,6 +105,33 @@ def test_client_previews_descent_before_explicit_execution(monkeypatch) -> None:
     manipulation.preview_plan.assert_called_with(duration=2.0)
 
 
+def test_client_runs_grasp_and_lift_without_preview(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    goal = PoseStamped(position=Vector3(0.1, 0.2, 0.3))
+    pre_grasp = PoseStamped(position=Vector3(0.1, 0.2, 0.2))
+    pnp = MagicMock()
+    pnp.get_goal_pose.return_value = goal
+    pnp.get_grasp_candidates.return_value = GraspCandidateArray()
+    pnp.get_pre_grasp_pose.return_value = pre_grasp
+    app = MagicMock(PickNPlaceModule=pnp)
+    manipulation = app.ManipulationModule
+    manipulation.plan_to_pose.return_value = True
+    manipulation.plan_cartesian_targets.return_value = True
+    manipulation.execute_and_wait.return_value = True
+    manipulation.get_ee_pose.return_value = pre_grasp
+    manipulation.close_gripper.return_value.is_success.return_value = True
+    monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
+    monkeypatch.setattr(pnpconsole.time, "sleep", lambda _: None)
+    choices = iter(["3", "1", "4", "5", "15", "q"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
+
+    pnpconsole.main()
+
+    assert manipulation.execute_and_wait.call_count == 3
+    assert manipulation.plan_cartesian_targets.call_count == 2
+    manipulation.close_gripper.assert_called_once_with("arm")
+    manipulation.preview_plan.assert_called_once_with(duration=2.0)
+
+
 def test_client_confirms_table_collision_install(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     pnp = MagicMock()
     pnp.estimate_table_surface.return_value = {

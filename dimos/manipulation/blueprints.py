@@ -74,7 +74,6 @@ picknplace = autoconnect(
     ManipulationModule.blueprint(
         robots=[_picknplace_xarm6_model],
         visualization=ViserVisualizationConfig(port=8095),
-        floor_z=0.0,
         planning_timeout=10.0,
     ),
     RealSenseCamera.blueprint(
@@ -104,6 +103,45 @@ picknplace = autoconnect(
 ).global_config(rerun_open="web")
 
 
+picknplace_edgetam = autoconnect(
+    coordinator(
+        hardware=[_picknplace_xarm6_hardware],
+        tasks=[trajectory_task(_picknplace_xarm6_hardware)],
+    ),
+    ManipulationModule.blueprint(
+        robots=[_picknplace_xarm6_model],
+        visualization=ViserVisualizationConfig(port=8095),
+        planning_timeout=10.0,
+    ),
+    RealSenseCamera.blueprint(
+        width=848,
+        height=480,
+        fps=15,
+        camera_name="camera",
+        base_frame_id="link6",
+        base_transform=PICKNPLACE_CAMERA_TRANSFORM,
+        enable_depth=True,
+        align_depth_to_color=True,
+        enable_pointcloud=False,
+    ),
+    ObjectSceneRegistrationModule.blueprint(
+        target_frame="link_base",
+        prompt_mode=YoloePromptMode.PROMPT,
+        detector_backend="moondream",
+        segmentation_backend="edgetam",
+        register_objects=False,
+        detect_on_request=True,
+        detector_confidence=0.4,
+        object_voxel_downsample=0.001,
+    ),
+    PickNPlaceModule.blueprint(align_grasp_yaw=True),
+    vis_module(
+        global_config.viewer,
+        rerun_config=picknplace_rerun_config(),
+    ),
+).global_config(rerun_open="web")
+
+
 picknplace_graspgenx = autoconnect(
     coordinator(
         hardware=[_picknplace_xarm6_hardware],
@@ -112,7 +150,6 @@ picknplace_graspgenx = autoconnect(
     ManipulationModule.blueprint(
         robots=[_picknplace_xarm6_model],
         visualization=ViserVisualizationConfig(port=8095),
-        floor_z=0.0,
         planning_timeout=10.0,
     ),
     RealSenseCamera.blueprint(
@@ -153,7 +190,6 @@ picknplace_graspgenx_edgetam = autoconnect(
     ManipulationModule.blueprint(
         robots=[_picknplace_xarm6_model],
         visualization=ViserVisualizationConfig(port=8095),
-        floor_z=0.0,
         planning_timeout=10.0,
     ),
     RealSenseCamera.blueprint(

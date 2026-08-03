@@ -120,7 +120,9 @@ def main() -> None:
         print("\n1) Scan  2) Info  3) Select target  4) Plan/preview approach")
         print("5) Execute approach  6) Plan/preview descent  7) Execute descent  8) Close")
         print("9) Plan/preview ascent  10) Execute ascent  11) Open  12) Current EE  13) Go home")
-        print("14) Scan/estimate/install table collision  q) Quit")
+        print(
+            "14) Scan/estimate/install table collision  15) Grasp + lift now (no preview)  q) Quit"
+        )
         choice = input("Select: ").strip().lower()
         try:
             if choice == "q":
@@ -242,7 +244,9 @@ def main() -> None:
                         f"{estimate['center_y']:.3f}) m, size=({estimate['width']:.3f}, "
                         f"{estimate['depth']:.3f}) m"
                     )
-                    confirm = input("Install 15 mm-clearance table collision? [y/N]: ").strip().lower()
+                    confirm = (
+                        input("Install 15 mm-clearance table collision? [y/N]: ").strip().lower()
+                    )
                     if confirm in {"y", "yes"}:
                         print(
                             manipulation.set_table_collision(
@@ -253,8 +257,43 @@ def main() -> None:
                                 estimate["depth"],
                             )
                         )
+            elif choice == "15":
+                if goal is None or pre_grasp is None or not approach_executed:
+                    print("Execute the approach first.")
+                    continue
+                print("Executing descent, gripper close, and ascent without previews.")
+                descent_planned = False
+                if (waypoints := _cartesian_waypoints(manipulation, goal)) is not None:
+                    descent_planned = manipulation.plan_cartesian_targets(
+                        {"arm/manipulator": waypoints},
+                        RoboPlanCartesianPathConfig(max_linear_speed=0.03),
+                    )
+                if not descent_planned:
+                    print("Could not plan the descent; grasp sequence stopped.")
+                    continue
+                descent_executed = manipulation.execute_and_wait()
+                if not descent_executed:
+                    print("Descent failed; grasp sequence stopped.")
+                    continue
+                gripper_closed = manipulation.close_gripper("arm").is_success()
+                if not gripper_closed:
+                    print("Failed to close the gripper; grasp sequence stopped.")
+                    continue
+                # Gripper commands are asynchronous; wait before lifting the object.
+                time.sleep(1.5)
+                ascent_planned = False
+                if (waypoints := _cartesian_waypoints(manipulation, pre_grasp)) is not None:
+                    ascent_planned = manipulation.plan_cartesian_targets(
+                        {"arm/manipulator": waypoints},
+                        RoboPlanCartesianPathConfig(max_linear_speed=0.03),
+                    )
+                if not ascent_planned:
+                    print("Could not plan the ascent; grasp sequence stopped with gripper closed.")
+                    continue
+                ascent_executed = manipulation.execute_and_wait()
+                print(ascent_executed)
             else:
-                print("Choose 1-14 or q.")
+                print("Choose 1-15 or q.")
         except Exception as exc:
             print(f"RPC failed: {exc}")
 
