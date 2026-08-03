@@ -15,9 +15,10 @@
 from __future__ import annotations
 
 from importlib.metadata import entry_points
-from typing import Protocol
+from typing import Protocol, cast
 
 from dimos.e2e_tests.dim_sim_client import DimSimClient
+from dimos.e2e_tests.scene_contract import PlanarBounds
 
 
 class SceneControl(Protocol):
@@ -30,6 +31,8 @@ class SceneControl(Protocol):
     def add_wall(self, x1: float, y1: float, x2: float, y2: float) -> None: ...
 
     def publish_goal(self, x: float, y: float) -> None: ...
+
+    def semantic_object_bounds(self, query: str) -> PlanarBounds: ...
 
 
 def load_scene_control(simulator: str) -> SceneControl:
@@ -45,7 +48,7 @@ def load_scene_control(simulator: str) -> SceneControl:
             f"expected one scene-control provider for {simulator!r}, found {len(matches)}"
         )
     client = matches[0].load()()
-    return client
+    return cast("SceneControl", client)
 
 
-__all__ = ["SceneControl", "load_scene_control"]
+__all__ = ["PlanarBounds", "SceneControl", "load_scene_control"]

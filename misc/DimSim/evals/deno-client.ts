@@ -50,7 +50,7 @@ function _resolveWorkflowUrl(): string {
       `@dimsim/eval: workflow file must live under a 'scenes/' directory; got ${abs}`,
     );
   }
-  return abs.slice(i); // e.g. "/scenes/apartment/evals/go-to-couch.js"
+  return abs.slice(i); // e.g. "/scenes/apartment/evals/scene-smoke.js"
 }
 
 /** Open the control WebSocket, race resolve / error / 5s timeout. */

@@ -25,6 +25,7 @@ from dimos.e2e_tests.conf_types import StartPersonTrack
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
 from dimos.e2e_tests.scene_control import SceneControl, load_scene_control
+from dimos.e2e_tests.simulation_scenarios import APARTMENT_EXPLORATION_ROUTE
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
@@ -76,6 +77,17 @@ def wait_for_agent_ready(lcm_spy: LcmSpy) -> Callable[[float], None]:
     lcm_spy.save_topic(topic)
 
     def wait(timeout: float = 120.0) -> None:
+        lcm_spy.wait_for_saved_topic(topic, timeout=timeout)
+
+    return wait
+
+
+@pytest.fixture
+def wait_for_robot_odometry(lcm_spy: LcmSpy) -> Callable[[float], None]:
+    topic = "/odom#geometry_msgs.PoseStamped"
+    lcm_spy.save_topic(topic)
+
+    def wait(timeout: float = 60.0) -> None:
         lcm_spy.wait_for_saved_topic(topic, timeout=timeout)
 
     return wait
@@ -207,7 +219,13 @@ def explore_office(
 
 @pytest.fixture
 def simulator_name() -> str:
-    return os.environ.get("DIMOS_E2E_SIMULATOR", "pimsim")
+    simulator = os.environ.get("DIMOS_E2E_SIMULATOR", "pimsim")
+    if simulator == "dimsim" and global_config.transport != "lcm":
+        raise pytest.UsageError(
+            "native DimSim publishes its robot bridge over LCM; use "
+            "DIMOS_TRANSPORT=lcm for DIMOS_E2E_SIMULATOR=dimsim"
+        )
+    return simulator
 
 
 @pytest.fixture
@@ -271,34 +289,9 @@ def spawn_wall_on_pose(lcm_spy: LcmSpy, scene_control: SceneControl):
 def explore_house(
     direct_cmd_vel_explorer: DirectCmdVelExplorer,
 ) -> Callable[[], None]:
-    points = [
-        (3.881, 4.803),
-        (4.160, 1.615),
-        (1.596, 1.505),
-        (1.649, 0.137),
-        (-3.644, -0.064),
-        (-3.759, -2.661),
-        (-4.186, -4.830),
-        (-3.759, -2.661),
-        (-1.070, -3.285),
-        (-2.504, -2.452),
-        (-2.647, 5.243),
-        (-3.663, 3.591),
-        (-1.178, 1.974),
-        (-2.416, 2.629),
-        (-2.581, 0.164),
-        (1.834, 0.072),
-        (3.010, -3.883),
-        (1.756, -3.742),
-        (6.336, -4.077),
-        (8.264, -5.119),
-        (6.258, -0.964),
-        (6.453, 5.327),
-    ]
-
     direct_cmd_vel_explorer.linear_speed = 0.5
 
     def explore() -> None:
-        direct_cmd_vel_explorer.follow_points(points)
+        direct_cmd_vel_explorer.follow_points(list(APARTMENT_EXPLORATION_ROUTE))
 
     return explore

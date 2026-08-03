@@ -377,7 +377,7 @@ export class SceneEditor {
 
   // loadScript only ever serves bundled scene / eval scripts, which live under
   // /scenes/ and are plain .js / .mjs ES modules (e.g. /scenes/apartment/index.js,
-  // /scenes/apartment/evals/go-to-kitchen.js). Anything outside this allowlist is
+  // /scenes/apartment/evals/scene-smoke.js). Anything outside this allowlist is
   // refused so a malicious WS peer cannot turn loadScript into an SSRF primitive.
   static readonly _SCRIPT_PATH_ALLOWLIST = /^\/scenes\/[A-Za-z0-9._/-]+\.(?:js|mjs)$/;
 

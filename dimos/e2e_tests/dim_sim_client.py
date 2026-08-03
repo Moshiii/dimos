@@ -16,6 +16,7 @@ from typing import cast
 
 from dimos.core.transport import PubSubTransport
 from dimos.core.transport_factory import make_transport
+from dimos.e2e_tests.scene_contract import PlanarBounds
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.simulation.dimsim.scene_client import SceneClient
 
@@ -60,4 +61,17 @@ class DimSimClient:
                 orientation=(0, 0, 0, 1),
                 frame_id="world",
             ),
+        )
+
+    def semantic_object_bounds(self, query: str) -> PlanarBounds:
+        bounds = self.client.get_semantic_object_bounds(query)
+        minimum = bounds["min"]
+        maximum = bounds["max"]
+        # DimSim is Three.js Y-up. Its bridge publishes (z, x, y) as
+        # canonical DimOS (x, y, z), so apply the same mapping to the AABB.
+        return PlanarBounds(
+            min_x=float(minimum["z"]),
+            min_y=float(minimum["x"]),
+            max_x=float(maximum["z"]),
+            max_y=float(maximum["x"]),
         )

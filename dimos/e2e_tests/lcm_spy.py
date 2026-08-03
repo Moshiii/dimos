@@ -17,10 +17,11 @@ from contextlib import contextmanager
 import math
 import pickle
 import threading
-from typing import Any
+from typing import Any, cast
 
 from dimos.core.transport import PubSubTransport
 from dimos.core.transport_factory import make_transport
+from dimos.e2e_tests.scene_contract import PlanarBounds
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.helpers import resolve_msg_type
 from dimos.msgs.protocol import DimosMsg
@@ -173,6 +174,23 @@ class LcmSpy:
                 message=fail_message,
             )
 
+    def wait_for_saved_message_result(
+        self,
+        topic: str,
+        type: type[DimosMsg],
+        predicate: Callable[[Any], bool],
+        fail_message: str,
+        timeout: float = 30.0,
+    ) -> None:
+        """Wait for a matching message saved since ``save_topic`` was called."""
+
+        def condition() -> bool:
+            with self._messages_lock:
+                messages = tuple(self.messages.get(topic, ()))
+            return any(predicate(type.lcm_decode(message)) for message in messages)
+
+        wait_until(condition, timeout=timeout, message=fail_message)
+
     def wait_until_odom_position(
         self, x: float, y: float, threshold: float = 1, timeout: float = 60
     ) -> None:
@@ -186,6 +204,23 @@ class LcmSpy:
             PoseStamped,
             predicate,
             f"Failed to get to position x={x}, y={y}",
+            timeout,
+        )
+
+    def wait_until_odom_near_bounds(
+        self,
+        bounds: PlanarBounds,
+        max_distance: float,
+        timeout: float = 60.0,
+    ) -> None:
+        def predicate(msg: PoseStamped) -> bool:
+            return bounds.distance_to(msg.position.x, msg.position.y) <= max_distance
+
+        self.wait_for_message_result(
+            "/odom#geometry_msgs.PoseStamped",
+            PoseStamped,
+            predicate,
+            f"Robot did not get within {max_distance} m of semantic target bounds {bounds}",
             timeout,
         )
 
@@ -212,5 +247,5 @@ def _parse_topic(topic: str, default_type: type[Any] | None = None) -> tuple[str
 
 def _encode_message(message: Any) -> bytes:
     if hasattr(message, "lcm_encode"):
-        return message.lcm_encode()
+        return cast("bytes", message.lcm_encode())
     return pickle.dumps(message)
