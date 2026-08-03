@@ -3,9 +3,14 @@
 
 #include <doctest/doctest.h>
 
+#include <cstddef>
 #include <cmath>
+#include <iostream>
+#include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #include "dimos/native/tf.hpp"
 
@@ -37,6 +42,39 @@ void add(MultiTBuffer& buffer, const std::string& parent, const std::string& chi
 std::optional<Transform> latest(const MultiTBuffer& buffer, const std::string& parent,
                                 const std::string& child) {
     return buffer.get(parent, child, std::nullopt, std::nullopt);
+}
+
+// log::emit writes to std::cerr, so swapping its buffer captures what a lookup
+// logged without giving the SDK a logging seam nothing else needs.
+class CapturedLog {
+public:
+    CapturedLog() : previous_(std::cerr.rdbuf(captured_.rdbuf())) {}
+    ~CapturedLog() { std::cerr.rdbuf(previous_); }
+
+    CapturedLog(const CapturedLog&) = delete;
+    CapturedLog& operator=(const CapturedLog&) = delete;
+
+    bool contains(const std::string& needle) const {
+        return captured_.str().find(needle) != std::string::npos;
+    }
+
+    std::size_t count(const std::string& needle) const {
+        std::string text = captured_.str();
+        std::size_t found = 0;
+        for (std::size_t at = text.find(needle); at != std::string::npos;
+             at = text.find(needle, at + needle.size())) {
+            ++found;
+        }
+        return found;
+    }
+
+private:
+    std::ostringstream captured_;
+    std::streambuf* previous_;
+};
+
+Tf tf_with(std::shared_ptr<Graph> graph, TransformSink sink = [](const std::vector<Transform>&) {}) {
+    return Tf(std::move(graph), std::move(sink));
 }
 
 }  // namespace
@@ -263,4 +301,84 @@ TEST_CASE("adding out of order keeps samples sorted") {
     const TBuffer::Sample* s = buffer.find_closest(1.9, std::nullopt);
     REQUIRE(s != nullptr);
     CHECK(s->ts == doctest::Approx(2.0));
+}
+
+TEST_CASE("a lookup carries its time and tolerance through to the graph") {
+    auto graph = std::make_shared<Graph>(kDefaultTfWindowSecs);
+    graph->update([](MultiTBuffer& b) { b.receive("a", "b", 10.0, pose(1.0, 0.0, 0.0, 0.0)); });
+    Tf tf = tf_with(graph);
+
+    CHECK_FALSE(tf.lookup("a", "b").at(50.0).tolerance(1.0).get().has_value());
+
+    std::optional<Transform> t = tf.lookup("a", "b").at(10.5).tolerance(1.0).get();
+    REQUIRE(t.has_value());
+    CHECK(t->translation().x() == doctest::Approx(1.0));
+    CHECK(t->ts == doctest::Approx(10.0));
+
+    // An unrefined lookup is the latest sample.
+    REQUIRE(tf.get_latest("a", "b").has_value());
+    CHECK(tf.get_latest("a", "b")->ts == doctest::Approx(10.0));
+}
+
+TEST_CASE("publish feeds the local graph before it reaches the sink") {
+    auto graph = std::make_shared<Graph>(kDefaultTfWindowSecs);
+    std::vector<Transform> sent;
+    bool resolved_inside_sink = false;
+    Tf tf = tf_with(graph, [&](const std::vector<Transform>& transforms) {
+        sent = transforms;
+        // The graph is fed first, so a lookup racing the send already resolves.
+        resolved_inside_sink = graph->get("map", "base_link", std::nullopt, std::nullopt)
+                                   .has_value();
+    });
+
+    tf.publish({Transform{"map", "base_link", 7.0, pose(1.0, 2.0, 3.0, kPi / 2.0)}});
+
+    CHECK(resolved_inside_sink);
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0].parent == "map");
+    CHECK(sent[0].child == "base_link");
+
+    std::optional<Transform> t = tf.get_latest("map", "base_link");
+    REQUIRE(t.has_value());
+    CHECK(t->translation().x() == doctest::Approx(1.0));
+    CHECK(t->translation().y() == doctest::Approx(2.0));
+    CHECK(t->translation().z() == doctest::Approx(3.0));
+    CHECK(t->ts == doctest::Approx(7.0));
+    CHECK(yaw_of(*t) == doctest::Approx(kPi / 2.0));
+}
+
+TEST_CASE("a lookup that finds nothing warns with the frames") {
+    auto graph = std::make_shared<Graph>(kDefaultTfWindowSecs);
+    graph->update([](MultiTBuffer& b) { b.receive("world", "robot", 1.0, pose(1, 0, 0, 0)); });
+    Tf tf = tf_with(graph);
+
+    CapturedLog logs;
+    CHECK_FALSE(tf.get_latest("world", "gripper").has_value());
+    CHECK(logs.contains("No transform found between frames"));
+    CHECK(logs.contains("gripper"));
+}
+
+TEST_CASE("repeated misses warn once per frame pair") {
+    auto graph = std::make_shared<Graph>(kDefaultTfWindowSecs);
+    Tf tf = tf_with(graph);
+
+    CapturedLog logs;
+    for (int i = 0; i < 5; ++i) {
+        CHECK_FALSE(tf.get_latest("world", "gripper").has_value());
+    }
+    CHECK(logs.count("gripper") == 1);
+
+    // A pair that is throttled must not mute an unrelated one.
+    CHECK_FALSE(tf.get_latest("world", "camera").has_value());
+    CHECK(logs.count("camera") == 1);
+}
+
+TEST_CASE("a resolved lookup stays quiet") {
+    auto graph = std::make_shared<Graph>(kDefaultTfWindowSecs);
+    graph->update([](MultiTBuffer& b) { b.receive("world", "robot", 1.0, pose(1, 0, 0, 0)); });
+    Tf tf = tf_with(graph);
+
+    CapturedLog logs;
+    CHECK(tf.get_latest("world", "robot").has_value());
+    CHECK_FALSE(logs.contains("No transform found between frames"));
 }

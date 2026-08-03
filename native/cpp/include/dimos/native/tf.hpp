@@ -10,17 +10,25 @@
 #include <Eigen/Geometry>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "dimos/native/log.hpp"
 
 namespace dimos::native {
 
@@ -234,6 +242,140 @@ private:
 
     double window_secs_;
     std::map<Key, TBuffer> buffers_;
+};
+
+/// The shared graph behind a Tf handle, guarding it for concurrent access.
+///
+/// tf arrives on the transport receive thread while the module's own thread
+/// reads, so every read takes a shared lock and every write an exclusive one.
+class Graph {
+public:
+    explicit Graph(double window_secs) : buffer_(window_secs) {}
+
+    template <class F>
+    void update(F&& edits) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        edits(buffer_);
+    }
+
+    std::optional<Transform> get(const std::string& parent, const std::string& child,
+                                 std::optional<double> time,
+                                 std::optional<double> tolerance) const {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return buffer_.get(parent, child, time, tolerance);
+    }
+
+    /// True at most once per second for this frame pair.
+    ///
+    /// Keyed per pair rather than per call site, because one call site serves
+    /// every lookup and would otherwise mute every pair but the first to miss.
+    bool should_warn(const std::string& parent, const std::string& child) const {
+        std::lock_guard<std::mutex> lock(warn_mutex_);
+        return log::check_and_record(warned_[Key{parent, child}], log::from_secs(1));
+    }
+
+private:
+    using Key = std::pair<std::string, std::string>;
+
+    mutable std::shared_mutex mutex_;
+    MultiTBuffer buffer_;
+    mutable std::mutex warn_mutex_;
+    mutable std::map<Key, std::atomic<std::uint64_t>> warned_;
+};
+
+/// A transform lookup being built. Created by Tf::lookup.
+class Lookup {
+public:
+    Lookup(const Graph* graph, std::string parent, std::string child)
+        : graph_(graph), parent_(std::move(parent)), child_(std::move(child)) {}
+
+    /// Take the sample nearest `time` rather than the latest one.
+    Lookup& at(double time) {
+        time_ = time;
+        return *this;
+    }
+
+    /// Bound how far, in seconds, the chosen sample may sit from at().
+    Lookup& tolerance(double tolerance) {
+        tolerance_ = tolerance;
+        return *this;
+    }
+
+    /// Resolve the lookup against the transforms buffered so far.
+    ///
+    /// Null when no path connects the frames, or when the nearest sample is
+    /// outside the tolerance.
+    std::optional<Transform> get() const {
+        std::optional<Transform> found = graph_->get(parent_, child_, time_, tolerance_);
+        if (!found.has_value()) {
+            warn_unresolved();
+        }
+        return found;
+    }
+
+private:
+    // A lookup that resolves to nothing is otherwise invisible: the caller sees
+    // an empty optional, and the buffer says nothing about which frames missed.
+    void warn_unresolved() const {
+        if (!graph_->should_warn(parent_, child_)) {
+            return;
+        }
+        log::warn("No transform found between frames",
+                  {log::Field("parent", parent_), log::Field("child", child_),
+                   log::Field("at", time_.value_or(now_secs())),
+                   log::Field("tolerance",
+                              tolerance_.value_or(std::numeric_limits<double>::quiet_NaN()))});
+    }
+
+    const Graph* graph_;
+    std::string parent_;
+    std::string child_;
+    std::optional<double> time_;
+    std::optional<double> tolerance_;
+};
+
+/// Where published transforms go after they have fed the local graph.
+using TransformSink = std::function<void(const std::vector<Transform>&)>;
+
+/// A cheap-to-copy handle for querying and publishing transforms.
+///
+/// Copies share one graph, which fills in the background as tf messages arrive.
+class Tf {
+public:
+    Tf(std::shared_ptr<Graph> graph, TransformSink sink)
+        : graph_(std::move(graph)), sink_(std::move(sink)) {}
+
+    /// Start a lookup of the transform from `parent` to `child`. Refine it with
+    /// at() and tolerance(), then finish with get(). Use get_latest() when no
+    /// refinement is needed.
+    ///
+    ///     auto at_scan = tf.lookup("map", "base_link").at(scan_ts).tolerance(0.1).get();
+    Lookup lookup(const std::string& parent, const std::string& child) const {
+        return Lookup(graph_.get(), parent, child);
+    }
+
+    /// The latest transform from `parent` to `child`.
+    std::optional<Transform> get_latest(const std::string& parent,
+                                        const std::string& child) const {
+        return lookup(parent, child).get();
+    }
+
+    /// Publish transforms on the tf topic.
+    ///
+    /// They feed the local graph first, so a lookup right after sees them
+    /// without waiting for the transport round trip.
+    void publish(const std::vector<Transform>& transforms) const {
+        graph_->update([&transforms](MultiTBuffer& buffer) {
+            for (const Transform& t : transforms) {
+                buffer.receive(t.parent, t.child, t.ts, t.iso);
+            }
+        });
+        sink_(transforms);
+    }
+
+private:
+    std::shared_ptr<Graph> graph_;
+    TransformSink sink_;
 };
 
 }  // namespace dimos::native
