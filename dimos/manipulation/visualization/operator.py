@@ -207,6 +207,15 @@ class ManipulationOperator:
         result = self._module.reset()
         return result.is_success()
 
+    def go_home(self, robot_name: RobotName | None = None) -> bool:
+        return self._module.go_home(robot_name).is_success()
+
+    def open_gripper(self, robot_name: RobotName | None = None) -> bool:
+        return self._module.open_gripper(robot_name).is_success()
+
+    def close_gripper(self, robot_name: RobotName | None = None) -> bool:
+        return self._module.close_gripper(robot_name).is_success()
+
     def _validate_joint_request(
         self, request: JointTargetRequest
     ) -> tuple[tuple[PlanningGroup, ...] | None, TargetEvaluationResult | None]:

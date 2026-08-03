@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from typing import TypeAlias, cast
 
 from dimos.manipulation.planning.groups.models import PlanningGroup
@@ -255,6 +255,15 @@ class ViserPanelGui:
     def reset(self) -> bool:
         return self.operator.reset()
 
+    def go_home(self) -> bool:
+        return self.operator.go_home(self.state.selected_robot)
+
+    def open_gripper(self) -> bool:
+        return self.operator.open_gripper(self.state.selected_robot)
+
+    def close_gripper(self) -> bool:
+        return self.operator.close_gripper(self.state.selected_robot)
+
     def evaluate_joint_target_set(
         self, group_ids: Sequence[PlanningGroupID], targets: Mapping[PlanningGroupID, JointState]
     ) -> TargetEvaluationResult:
@@ -384,6 +393,7 @@ class ViserPanelGui:
             "### Planning Groups\nActive planning groups for pose goals, planning, and joint edits."
         )
         self._sync_group_selector(self.list_planning_groups())
+        self._build_operator_controls(gui)
         self._handles["target_heading"] = gui.add_markdown("### Target")
         preset_dropdown = gui.add_dropdown(
             "Preset",
@@ -420,6 +430,28 @@ class ViserPanelGui:
         joint_controls = gui.add_folder("Joint Control", expand_by_default=False)
         self._handles["joint_control_folder"] = joint_controls
         self._build_joint_sliders()
+
+    def _build_operator_controls(self, gui: GuiApi) -> None:
+        self._handles["operator_heading"] = gui.add_markdown("### Robot Controls")
+        actions: tuple[tuple[str, str, Callable[[], bool]], ...] = (
+            ("reset", "Reset", self.reset),
+            ("go_home", "Go Home", self.go_home),
+            ("open_gripper", "Open Gripper", self.open_gripper),
+            ("close_gripper", "Close Gripper", self.close_gripper),
+        )
+        for key, label, action in actions:
+            button = gui.add_button(label)
+
+            def on_click(
+                _event: object,
+                action_key: str = key,
+                action_label: str = label,
+                callback: Callable[[], bool] = action,
+            ) -> None:
+                self._submit_operator_action(action_key, action_label, callback)
+
+            button.on_click(on_click)
+            self._handles[key] = button
 
     def _sync_group_selector(self, groups: list[PlanningGroup]) -> None:
         """Render source-order group toggle buttons without a robot dropdown."""
@@ -786,11 +818,13 @@ class ViserPanelGui:
         return self._local_values_for_robot(robot_name, state)
 
     def _remove_panel_handles(self) -> None:
-        for key, handle in list(self._handles.items()):
+        for key, handle in reversed(list(self._handles.items())):
+            self._handles.pop(key, None)
+            if key.startswith("ee_control:"):
+                continue
             remove = getattr(handle, "remove", None)
             if callable(remove):
                 remove()
-            self._handles.pop(key, None)
 
     def _sync_preset_dropdown(self) -> None:
         handle = self._handles.get("preset")
@@ -1119,6 +1153,11 @@ class ViserPanelGui:
         )
 
     def _update_control_state(self) -> None:
+        operator_busy = self.state.action_status != ActionStatus.IDLE or (
+            self.state.manipulation_state in {"PLANNING", "EXECUTING"}
+        )
+        for key in ("reset", "go_home", "open_gripper", "close_gripper"):
+            self._set_disabled(key, operator_busy)
         self._set_disabled("plan", not self.state.can_plan())
         self._set_disabled("preview", not self.state.can_preview())
         self._set_disabled(
@@ -1262,6 +1301,45 @@ class ViserPanelGui:
 
         self._operation_worker.submit(
             operation, on_error=lambda message: self._set_operation_error(message, operation_id)
+        )
+
+    def _submit_operator_action(
+        self,
+        key: str,
+        label: str,
+        action: Callable[[], bool],
+    ) -> None:
+        if self._closed:
+            return
+        if self.state.action_status != ActionStatus.IDLE or self.state.manipulation_state in {
+            "PLANNING",
+            "EXECUTING",
+        }:
+            self._set_recoverable_error(f"Cannot {label.lower()} while manipulation is busy")
+            return
+        operation_id = self._next_operation_id()
+        self.state.action_status = ActionStatus.RUNNING
+        self.refresh()
+
+        def operation() -> None:
+            if not self._operation_is_current(operation_id):
+                return
+            ok = action()
+            if not self._operation_is_current(operation_id):
+                return
+            if key == "reset" and ok:
+                self.state.plan_state = PanelPlanState()
+            if not ok:
+                self.state.error = self.get_error() or f"{label} failed"
+            self._finish_operation(
+                f"{key}={ok}",
+                clear_error=ok,
+                operation_id=operation_id,
+            )
+
+        self._operation_worker.submit(
+            operation,
+            on_error=lambda message: self._set_operation_error(message, operation_id),
         )
 
     def _set_planning_mode(self, label: str) -> None:

@@ -338,6 +338,25 @@ class TestStateMachine:
         assert not result.is_success()
         assert result.error_code == "INVALID_STATE"
 
+    def test_reset_crosses_optional_episode_boundary_and_invalidates_plan(
+        self, module_factory
+    ) -> None:
+        module = module_factory()
+        episode_control = MagicMock()
+        episode_control.reset_episode.return_value = True
+        module._episode_control = episode_control
+        module._last_plan = GeneratedPlan(
+            trajectory=JointTrajectory(),
+            group_ids=("arm/manipulator",),
+            path=[],
+        )
+
+        result = module.reset()
+
+        assert result.is_success()
+        episode_control.reset_episode.assert_called_once_with()
+        assert module._last_plan is None
+
     def test_fail_sets_fault_state(self, module_factory):
         """_fail helper sets FAULT state and message."""
         module = module_factory()

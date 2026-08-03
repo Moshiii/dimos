@@ -40,6 +40,7 @@ from dimos.control.coordinator import ControlCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.hardware.simulation.episode_control import SimulationEpisodeControlSpec
 from dimos.manipulation.execution_manager import (
     ExecutionOutcome,
     ExecutionTarget,
@@ -166,6 +167,7 @@ class ManipulationModule(Module):
 
     config: ManipulationModuleConfig
     _control_coordinator: ControlCoordinator
+    _episode_control: SimulationEpisodeControlSpec | None = None
 
     # Input: Joint state from coordinator (for world sync)
     coordinator_joint_state: In[JointState]
@@ -472,8 +474,18 @@ class ManipulationModule(Module):
                 )
             if self._state == ManipulationState.PLANNING:
                 self._planning_epoch += 1
+            plan = self._last_plan
+            self._last_plan = None
             self._state = ManipulationState.IDLE
             self._error_message = ""
+        if self._episode_control is not None and not self._episode_control.reset_episode():
+            message = "Simulation provider failed to reset the episode"
+            with self._lock:
+                self._state = ManipulationState.FAULT
+                self._error_message = message
+            return SkillResult.fail("EXECUTION_FAILED", message)
+        if plan is not None:
+            self._dismiss_preview(plan.group_ids)
         return SkillResult.ok("Reset to IDLE — ready for new commands")
 
     @rpc

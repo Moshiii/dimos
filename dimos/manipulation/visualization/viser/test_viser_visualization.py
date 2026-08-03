@@ -495,6 +495,10 @@ def test_panel_contract_group_order_defaults_and_controls(
     assert [button.label for button in server.gui.buttons] == [
         "arm",
         "arm gripper",
+        "Reset",
+        "Go Home",
+        "Open Gripper",
+        "Close Gripper",
         "Plan",
         "Preview",
         "Execute",
@@ -875,6 +879,12 @@ def test_group_controls_use_source_labels_and_active_colors(
     assert group_display_name(pose) == "arm"
     assert group_display_name(auxiliary) == "arm gripper"
     assert [button.label for button in server.gui.buttons[:2]] == ["arm", "arm gripper"]
+    assert [button.label for button in server.gui.buttons[2:6]] == [
+        "Reset",
+        "Go Home",
+        "Open Gripper",
+        "Close Gripper",
+    ]
     assert [button.color for button in server.gui.buttons[:2]] == [
         ACTIVE_GROUP_COLOR,
         INACTIVE_GROUP_COLOR,
@@ -954,6 +964,10 @@ def test_panel_action_controls_are_present_in_source_order(
     _gui, _module, server = panel([selected], states("arm"))
 
     assert [button.label for button in server.gui.buttons[1:]] == [
+        "Reset",
+        "Go Home",
+        "Open Gripper",
+        "Close Gripper",
         "Plan",
         "Preview",
         "Execute",
@@ -1152,7 +1166,12 @@ def test_panel_disables_plan_preview_and_execute_until_a_feasible_target(
     selected = group("arm", "manipulator", ("j1",), pose=True)
     _gui, _module, server = panel([selected], states("arm"))
 
-    assert [button.disabled for button in server.gui.buttons[1:4]] == [True, True, True]
+    buttons = {button.label: button for button in server.gui.buttons}
+    assert [buttons[label].disabled for label in ("Plan", "Preview", "Execute")] == [
+        True,
+        True,
+        True,
+    ]
 
 
 def test_panel_status_reports_target_and_plan_defaults(
@@ -1406,6 +1425,9 @@ def test_transform_control_callback_preserves_pose_through_gui_and_backend(
     assert control.wxyz == (0.4, 0.1, 0.2, 0.3)
     assert request.pose_targets[selected.id] == gui.state.pose_targets[selected.id]
     gui.close()
+    assert control.removed is False
+    scene.close()
+    assert control.removed is True
 
 
 def test_joint_evaluation_updates_active_gizmo_from_computed_group_pose() -> None:
