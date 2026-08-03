@@ -16,18 +16,42 @@ from __future__ import annotations
 
 from dataclasses import replace
 import itertools
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
 
 from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
-from dimos.navigation.nav_3d.evaluator import metrics
-from dimos.navigation.nav_3d.evaluator.cases import Case
+from dimos.navigation.nav_3d.evaluator import metrics, tripwire
+from dimos.navigation.nav_3d.evaluator.cases import Case, Suite, load_suite, save_suite
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
-from dimos.navigation.nav_3d.evaluator.final_map import MapCheckpoints, encode_deltas, replay_frames
+from dimos.navigation.nav_3d.evaluator.final_map import (
+    FinalMap,
+    MapCheckpoints,
+    encode_deltas,
+    replay_frames,
+)
+from dimos.navigation.nav_3d.evaluator.generate import (
+    Candidate,
+    GenerationParams,
+    _select_diverse,
+    generate_cases,
+    snap_to_surface,
+)
 from dimos.navigation.nav_3d.evaluator.recording import Frame, Trajectory
-from dimos.navigation.nav_3d.evaluator.runner import _run_plan, score_negative
+from dimos.navigation.nav_3d.evaluator.runner import (
+    CaseResult,
+    DatasetResult,
+    Report,
+    _dynamic_candidate,
+    _final_only,
+    _no_plan,
+    _run_plan,
+    score_negative,
+)
+from dimos.navigation.nav_3d.evaluator.tagging import route_tags
 from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers, keys_contain, voxel_keys
 
 if TYPE_CHECKING:
@@ -43,6 +67,12 @@ def _cfg(**overrides: float) -> EvalConfig:
 def _wall(x: float) -> np.ndarray:
     ys, zs = np.meshgrid(np.arange(-1, 1, VOXEL), np.arange(0.05, 1.5, VOXEL))
     return np.stack([np.full(ys.size, x), ys.ravel(), zs.ravel()], axis=1, dtype=np.float32)
+
+
+def _ywall(y: float, x_lo: float, x_hi: float) -> np.ndarray:
+    """A wall parallel to +x travel, at constant y, spanning body height."""
+    xs, zs = np.meshgrid(np.arange(x_lo, x_hi, VOXEL), np.arange(0.05, 1.5, VOXEL))
+    return np.stack([xs.ravel(), np.full(xs.size, y), zs.ravel()], axis=1, dtype=np.float32)
 
 
 def test_voxel_key_roundtrip() -> None:
@@ -331,3 +361,398 @@ def test_meta_negative_case_scoring() -> None:
     wander = np.array([case.start, [4.0, 2.0, 0.0]], dtype=np.float32)
     partial, _ = _run_plan(_stub(wander), case, 16.0, keys, keys, cfg)
     assert score_negative(partial).success
+
+
+def test_expect_final_fail_scores_online_normally_and_refuses_final() -> None:
+    """A door-closed route: the online plan earns SPL, the final plan must refuse.
+
+    Mirrors the runner, which inverts only the final outcome for an
+    expect_final_fail case and scores the online outcome as usual.
+    """
+    keys, cfg, case = _meta_scene()
+    open_keys = np.unique(voxel_keys(_floor(), VOXEL))
+    route = _u_route()
+    l_ref = metrics.path_length(route)
+
+    # Online, before the door closed: the wall is absent and the walked route
+    # is clean, so it scores in full.
+    online, _ = _run_plan(_stub(route), case, l_ref, open_keys, open_keys, cfg)
+    assert online.success
+    assert online.spl == pytest.approx(1.0)
+
+    # Final, after the door closed: the wall is present and refusing is right.
+    refused, _ = _run_plan(_stub(None), case, l_ref, keys, keys, cfg)
+    final = score_negative(refused)
+    assert final.success
+    assert final.spl == 1.0
+
+    # Claiming a route straight through the closed door is a false positive.
+    line = np.array([case.start, case.goal], dtype=np.float32)
+    claimed, _ = _run_plan(_stub(line), case, l_ref, keys, keys, cfg)
+    assert score_negative(claimed).spl == 0.0
+
+    # Unlike a manual or infeasible case, it still replays online.
+    assert not _final_only(replace(case, tags=["auto"], expect_final_fail=True))
+
+
+def test_dynamic_candidate_flags_route_blocked_by_new_occupancy() -> None:
+    """Online success with a final failure from newly-appeared occupancy flags."""
+    _, cfg, case = _meta_scene()
+    open_keys = np.unique(voxel_keys(_floor(), VOXEL))
+    final_keys = np.unique(voxel_keys(np.concatenate([_floor(), _wall(10.0)]), VOXEL))
+    line = np.array([case.start, case.goal], dtype=np.float32)
+
+    online, wp = _run_plan(_stub(line), case, 24.0, open_keys, open_keys, cfg)
+    assert online.success
+    final, _ = _run_plan(_stub(line), case, 24.0, final_keys, final_keys, cfg)
+    assert not final.success
+
+    flagged, blocking = _dynamic_candidate(online, final, wp, open_keys, final_keys, cfg)
+    assert flagged
+    assert blocking
+
+    # No occupancy appeared between the two maps, so the final failure is not a
+    # dynamic obstacle and must not be flagged.
+    unflagged, _ = _dynamic_candidate(online, final, wp, final_keys, final_keys, cfg)
+    assert not unflagged
+
+    # A clean final plan is never a candidate.
+    assert not _dynamic_candidate(online, online, wp, open_keys, final_keys, cfg)[0]
+
+
+def test_chord_direction_spans_robot_length() -> None:
+    """Heading comes from the body-length chord, not the local step, so it is
+    steady across stepped terrain instead of flipping tread-to-riser."""
+    xs = np.arange(0, 3.0, 0.1)
+    zs = np.floor(xs / 0.2) * 0.1  # stairs: 0.1 m rise every 0.2 m, mean slope 0.5
+    path = np.stack([xs, np.zeros_like(xs), zs], axis=1).astype(np.float32)
+    fwd = metrics.chord_directions(path, span=0.7)
+    local = np.diff(path.astype(np.float64), axis=0)
+    local /= np.linalg.norm(local, axis=1, keepdims=True)
+    assert fwd[5:-5, 2].std() < 0.5 * local[:, 2].std()
+    assert fwd[5:-5, 2].mean() > 0.2  # steadily pitched up the stairs
+
+
+def test_ground_truth_route_returns_walked_slice() -> None:
+    """The route is the shortest walked slice between the endpoints, not a line."""
+    out = np.stack([np.linspace(0, 10, 101), np.zeros(101), np.full(101, 0.3)], axis=1)
+    detour = np.stack([np.full(101, 10.0), np.linspace(0, 6, 101), np.full(101, 0.3)], axis=1)
+    positions = np.concatenate([out, detour]).astype(np.float32)
+    traj = Trajectory(ts=np.linspace(0, 20, len(positions)), positions=positions)
+    route = metrics.ground_truth_route(traj, (0, 0, 0), (10, 6, 0), _cfg())
+    assert route is not None
+    # Foot level (sensor height removed) and it walks the full out-and-detour.
+    assert abs(route[0, 2]) < 1e-5
+    assert metrics.path_length(route) == pytest.approx(16.0, abs=0.2)
+    assert metrics.ground_truth_route(traj, (0, 20, 0), (10, 6, 0), _cfg()) is None
+
+
+def test_ground_truth_route_orients_start_to_goal() -> None:
+    """The route runs start-to-goal even when the start was walked later, so its
+    elevation is not read backward."""
+    xs = np.linspace(0, 10, 101)
+    positions = np.stack([xs, np.zeros(101), xs * 0.25], axis=1).astype(np.float32)
+    traj = Trajectory(ts=np.linspace(0, 10, 101), positions=positions)
+    # Start high at x=8, goal low at x=2: a downhill traverse.
+    route = metrics.ground_truth_route(traj, (8, 0, 1.7), (2, 0, 0.2), _cfg())
+    assert route is not None
+    assert route[0, 0] > 6.0 and route[-1, 0] < 4.0
+    assert route[-1, 2] < route[0, 2]
+
+
+def _tags(route: np.ndarray, keys: np.ndarray) -> list[str]:
+    """Tag a synthetic route, taking its endpoints for elevation."""
+    start = (float(route[0, 0]), float(route[0, 1]), float(route[0, 2]))
+    goal = (float(route[-1, 0]), float(route[-1, 1]), float(route[-1, 2]))
+    return route_tags(start, goal, route, keys, _cfg())
+
+
+def test_route_tags_flat_wide_has_no_shape_tags() -> None:
+    """A wide flat traverse is just flat: no narrow, doorway, or corridor."""
+    route = np.array([[0, 0, 0], [4, 0, 0]], dtype=np.float32)
+    walls = np.concatenate([_ywall(-2.0, 0, 4), _ywall(2.0, 0, 4)])
+    keys = np.unique(voxel_keys(walls, VOXEL))
+    tags = _tags(route, keys)
+    assert "flat" in tags
+    assert "narrow" not in tags and "doorway" not in tags and "corridor" not in tags
+
+
+def test_route_tags_narrow_passage() -> None:
+    """Walls under a body-plus-clearance apart the whole way make a corridor."""
+    route = np.array([[0, 0, 0], [4, 0, 0]], dtype=np.float32)
+    walls = np.concatenate([_ywall(-0.4, 0, 4), _ywall(0.4, 0, 4)])
+    keys = np.unique(voxel_keys(walls, VOXEL))
+    tags = _tags(route, keys)
+    assert "narrow" in tags and "corridor" in tags
+    assert "doorway" not in tags  # sustained squeeze, not a short pinch
+
+
+def test_route_tags_doorway_is_a_short_pinch() -> None:
+    """An open corridor that pinches briefly and reopens is a doorway."""
+    route = np.array([[0, 0, 0], [5, 0, 0]], dtype=np.float32)
+    far = np.concatenate([_ywall(-2.0, 0, 5), _ywall(2.0, 0, 5)])
+    pinch = np.concatenate([_ywall(-0.35, 2.0, 2.6), _ywall(0.35, 2.0, 2.6)])
+    keys = np.unique(voxel_keys(np.concatenate([far, pinch]), VOXEL))
+    tags = _tags(route, keys)
+    assert "doorway" in tags and "narrow" in tags
+
+
+def test_route_tags_sharp_doorway() -> None:
+    """A door frame is a sharp pinch: the narrow stretch is only a couple of
+    voxels, but flanked by open space it is still a doorway."""
+    route = np.array([[0, 0, 0], [5, 0, 0]], dtype=np.float32)
+    far = np.concatenate([_ywall(-2.0, 0, 5), _ywall(2.0, 0, 5)])
+    frame = np.concatenate([_ywall(-0.35, 2.4, 2.6), _ywall(0.35, 2.4, 2.6)])
+    keys = np.unique(voxel_keys(np.concatenate([far, frame]), VOXEL))
+    assert "doorway" in _tags(route, keys)
+
+
+def test_route_tags_stairs_from_endpoints() -> None:
+    """Elevation comes from the endpoints: a climb past the threshold is stairs,
+    and a big rise is long, whatever the route in between does."""
+    up = np.stack([np.linspace(0, 4, 40), np.zeros(40), np.linspace(0, 2.0, 40)], axis=1).astype(
+        np.float32
+    )
+    tags = _tags(up, np.array([], dtype=np.int64))
+    assert "stairs" in tags and "up" in tags and "long" in tags
+    assert "down" in _tags(up[::-1].copy(), np.array([], dtype=np.int64))
+
+
+def test_route_tags_gate_excludes_detour_routes() -> None:
+    """Shape tags need a near-direct route. Between the same endpoints, a
+    straight walk through the corridor is tagged, but a long detour is not:
+    its terrain cannot be attributed to the case, so it gets elevation only."""
+    walls = np.concatenate([_ywall(-0.4, 0, 20), _ywall(0.4, 0, 20)])
+    keys = np.unique(voxel_keys(walls, VOXEL))
+    direct = np.array([[0, 0, 0], [4, 0, 0]], dtype=np.float32)
+    assert "corridor" in route_tags((0.0, 0.0, 0.0), (4.0, 0.0, 0.0), direct, keys, _cfg())
+    # The detour runs the same corridor, so its terrain would tag identically.
+    # Only the arc-length gate can tell the two apart.
+    detour = np.array([[0, 0, 0], [20, 0, 0], [4, 0, 0]], dtype=np.float32)
+    assert route_tags((0.0, 0.0, 0.0), (4.0, 0.0, 0.0), detour, keys, _cfg()) == ["flat"]
+
+
+def test_snap_to_surface() -> None:
+    xs, ys = np.meshgrid(np.arange(0, 2, VOXEL), np.arange(0, 2, VOXEL))
+    surface = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1, dtype=np.float32)
+    snapped = snap_to_surface(np.array([1.0, 1.0, 0.4], dtype=np.float32), surface, 1.0)
+    assert snapped is not None
+    assert abs(snapped[2]) < 1e-6
+    assert np.linalg.norm(snapped[:2] - [1.0, 1.0]) < VOXEL
+    assert snap_to_surface(np.array([9.0, 9.0, 0.0], dtype=np.float32), surface, 1.0) is None
+    assert snap_to_surface(np.array([1.0, 1.0, 5.0], dtype=np.float32), surface, 1.0) is None
+
+
+def test_generate_cases_around_wall() -> None:
+    """A U-shaped walk around a wall must yield non-trivial cases spanning it."""
+    wall_pts = _wall(10.0)
+    final = FinalMap(
+        voxel_size=VOXEL,
+        occupied=wall_pts,
+        occupied_keys=np.unique(voxel_keys(wall_pts, VOXEL)),
+        frames=1,
+        add_frame_ms={"p50": 0.0, "p95": 0.0, "max": 0.0},
+        build_ms=0.0,
+    )
+    xs, ys = np.meshgrid(np.arange(0, 20, VOXEL), np.arange(-3, 6, VOXEL))
+    surface = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1, dtype=np.float32)
+
+    legs = [
+        np.stack([np.linspace(2, 8, 40), np.zeros(40)], axis=1),
+        np.stack([np.full(40, 8.0), np.linspace(0, 4, 40)], axis=1),
+        np.stack([np.linspace(8, 12, 40), np.full(40, 4.0)], axis=1),
+        np.stack([np.full(40, 12.0), np.linspace(4, 0, 40)], axis=1),
+        np.stack([np.linspace(12, 18, 40), np.zeros(40)], axis=1),
+    ]
+    xy = np.concatenate(legs)
+    positions = np.column_stack([xy, np.full(len(xy), 0.3)]).astype(np.float32)
+    traj = Trajectory(ts=np.linspace(0, 60, len(positions)), positions=positions)
+
+    cases = generate_cases(traj, final, surface, _cfg(), GenerationParams(max_cases=10))
+    assert cases
+    assert len({c.id for c in cases}) == len(cases)
+    assert [c for c in cases if (c.start[0] - 10) * (c.goal[0] - 10) < 0]
+    for c in cases:
+        assert abs(c.start[2]) < 1e-5 and abs(c.goal[2]) < 1e-5
+        assert "flat" in c.tags
+
+
+def test_select_diverse_backfills_to_min_cases() -> None:
+    """Sector caps must not starve a dataset below the case floor."""
+    candidates = [
+        Candidate(
+            start=(float(x), 0.0, 0.0),
+            goal=(float(x), 20.0, 0.0),
+            walked_m=30.0,
+            detour_ratio=1.5,
+            dz=0.0,
+        )
+        for x in np.arange(0.0, 16.0, 2.0)
+    ]
+    strict = _select_diverse(candidates, GenerationParams(min_cases=0), max_cases=12)
+    assert len(strict) == 4
+    backfilled = _select_diverse(candidates, GenerationParams(min_cases=10), max_cases=12)
+    assert len(backfilled) == 8
+    assert len({(c.start, c.goal) for c in backfilled}) == 8
+
+
+def test_pick_along_ray() -> None:
+    from dimos.navigation.nav_3d.evaluator.picker import pick_along_ray
+
+    wall = _wall(10.0)
+    origin = np.array([0.0, 0.0, 0.5])
+    target = np.array([10.0, 0.35, 0.75])
+    direction = target - origin
+    direction /= np.linalg.norm(direction)
+    picked = pick_along_ray(wall, origin, direction, VOXEL)
+    assert picked is not None
+    assert np.linalg.norm(picked - target) < 0.15
+    # The nearest surface along the ray wins over one behind it.
+    two_walls = np.concatenate([_wall(10.0), _wall(15.0)])
+    picked = pick_along_ray(two_walls, origin, direction, VOXEL)
+    assert picked is not None
+    assert abs(picked[0] - 10.0) < 0.2
+    # A ray into empty space picks nothing.
+    up = np.array([0.0, 0.0, 1.0])
+    assert pick_along_ray(wall, origin, up, VOXEL) is None
+
+
+def test_load_suite_rejects_malformed_manifests(tmp_path: Path) -> None:
+    """Manifests are hand-edited, so a wrong one must fail loudly, not silently."""
+    manifest = tmp_path / "demo.yaml"
+    manifest.write_text(
+        "dataset: demo\n"
+        "cases:\n"
+        "  - id: a\n"
+        "    start: [0, 0, 0]\n"
+        "    goal: [1, 2, 3]\n"
+        "    tags: [stairs]\n"
+    )
+    suite = load_suite(manifest)
+    assert suite.dataset == "demo"
+    assert suite.cases[0].goal == (1.0, 2.0, 3.0)
+    assert suite.cases[0].tags == ["stairs"]
+
+    manifest.write_text(
+        "dataset: demo\ncases:\n"
+        "  - {id: a, start: [0, 0, 0], goal: [1, 2, 3]}\n"
+        "  - {id: a, start: [0, 0, 0], goal: [4, 5, 6]}\n"
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        load_suite(manifest)
+
+    manifest.write_text(
+        "dataset: demo\ncases:\n"
+        "  - {id: bad, start: [0, 0, 0], goal: [1, 0, 0], "
+        "expect_fail: true, expect_final_fail: true}\n"
+    )
+    with pytest.raises(ValueError, match="exclusive"):
+        load_suite(manifest)
+
+
+def test_save_suite_roundtrip(tmp_path: Path) -> None:
+    suite = Suite(
+        dataset="demo",
+        cases=[
+            Case(id="a", start=(0.0, 0.0, 0.0), goal=(1.0, 2.0, 3.0), tags=["x"]),
+            Case(id="neg", start=(0.0, 0.0, 0.0), goal=(5.0, 5.0, 5.0), expect_fail=True),
+            Case(id="dyn", start=(0.0, 0.0, 0.0), goal=(3.0, 0.0, 0.0), expect_final_fail=True),
+        ],
+        lidar_stream="other_lidar",
+        db="~/recordings/demo.db",
+    )
+    loaded = load_suite(save_suite(suite, tmp_path / "demo.yaml"))
+    assert loaded.dataset == "demo"
+    assert loaded.lidar_stream == "other_lidar"
+    assert loaded.odom_stream == "pointlio_odometry"
+    assert loaded.db_path() == Path.home() / "recordings/demo.db"
+    assert loaded.cases[0].goal == (1.0, 2.0, 3.0)
+    assert loaded.cases[0].tags == ["x"]
+    assert not loaded.cases[0].expect_fail and not loaded.cases[0].expect_final_fail
+    assert loaded.cases[1].expect_fail
+    assert loaded.cases[2].expect_final_fail
+
+
+def _tripwire_report(spec: dict[str, dict[str, tuple[bool, bool]]]) -> dict[str, object]:
+    """Report JSON from a {dataset: {case_id: (inc, fin)}} pass/fail spec."""
+    datasets = [
+        DatasetResult(
+            dataset=dataset,
+            cases=[
+                CaseResult(
+                    id=case_id,
+                    dataset=dataset,
+                    start=(0.0, 0.0, 0.0),
+                    goal=(1.0, 0.0, 0.0),
+                    tags=[],
+                    l_ref=1.0,
+                    online_voxels=0,
+                    map_update_ms=0.0,
+                    expect_fail=False,
+                    online=replace(_no_plan(0.0), success=inc),
+                    final=replace(_no_plan(0.0), success=fin),
+                    soft_progress=0.0,
+                )
+                for case_id, (inc, fin) in cases.items()
+            ],
+            final_voxels=0,
+            map_build_ms=0.0,
+            add_frame_ms={},
+            frames=0,
+        )
+        for dataset, cases in spec.items()
+    ]
+    report = Report(
+        score=0.0,
+        score_soft=0.0,
+        final_score=0.0,
+        n_cases=0,
+        n_online=0,
+        n_success=0,
+        n_success_final=0,
+        outcome_counts={},
+        by_tag={},
+        plan_ms={},
+        map_update_ms={},
+        datasets=datasets,
+    )
+    return json.loads(json.dumps(report.to_dict()))
+
+
+def test_tripwire_diff_names_every_flip() -> None:
+    old = _tripwire_report(
+        {"office": {"a": (False, True), "b": (True, True), "gone": (True, True)}}
+    )
+    new = _tripwire_report(
+        {"office": {"a": (True, True), "b": (False, False), "fresh": (True, True)}}
+    )
+    d = tripwire.diff(old, new)
+    assert [(f.key, f.test) for f in d.fixed] == [("office/a", "inc")]
+    assert [(f.key, f.test) for f in d.broke] == [("office/b", "inc"), ("office/b", "fin")]
+    assert d.added == ["office/fresh"]
+    assert d.removed == ["office/gone"]
+
+
+def test_tripwire_exact_differences() -> None:
+    """Wall-clock fields must be ignored while any result field is caught."""
+    report = _tripwire_report({"office": {"a": (True, False)}})
+    assert tripwire.exact_differences(report, report) == []
+    changed = json.loads(json.dumps(report))
+    changed["datasets"][0]["cases"][0]["online"]["length"] = 12.34
+    changed["datasets"][0]["cases"][0]["online"]["plan_ms"] = 99.0
+    diffs = tripwire.exact_differences(report, changed)
+    assert len(diffs) == 1
+    assert "length" in diffs[0] and "12.34" in diffs[0]
+
+
+def test_tripwire_perf_violations() -> None:
+    report = _tripwire_report({"office": {"a": (True, True)}})
+    report["config"] = {"plan_p95_budget_ms": 60.0, "map_update_p95_budget_ms": 3000.0}
+    report["plan_ms"] = {"p95": 30.0}
+    report["map_update_ms"] = {"p95": 1500.0}
+    assert tripwire.perf_violations(report) == []
+    report["plan_ms"] = {"p95": 61.0}
+    violations = tripwire.perf_violations(report)
+    assert len(violations) == 1 and "plan_ms" in violations[0]
+    # Reports predating the budgets pass.
+    assert tripwire.perf_violations({"datasets": []}) == []
