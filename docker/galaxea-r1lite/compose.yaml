@@ -6,7 +6,7 @@
 # produces a new digest: take it from the build job summary and update
 # this line before the session that uses it.
 #
-# Current: run 30732894095, revision ddcc0528e, built 2026-08-01.
+# Current: run 30842093964, revision 0cc2eb44c, built 2026-08-03.
 #
 # stop_grace_period covers the connection's SIGINT stop sequence: the
 # bounded chassis zero stream plus teardown completes well inside 20s;
@@ -14,7 +14,7 @@
 # before the container exits.
 services:
   dimos:
-    image: ghcr.io/dimensionalos/dimos-r1lite@sha256:1d9c070e704372d9be600745131e0b8fdcad32026ebf09949e896b051a5076e9
+    image: ghcr.io/dimensionalos/dimos-r1lite@sha256:7eef104ca16616bc71ed1ce56bd705da6a3773af700197543348e9ebd842e4da
     network_mode: host
     ipc: host
     pid: host
