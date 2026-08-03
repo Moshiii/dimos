@@ -31,7 +31,7 @@ from dimos.simulation.providers import (
     SimulationRequest,
     load_simulation_provider,
 )
-from dimos.visualization.rerun.bridge import RerunBridgeModule
+from dimos.visualization.vis_module import vis_module
 
 
 def _resolve_xarm7_simulation() -> SimulationBinding:
@@ -68,5 +68,8 @@ xarm_perception_sim = autoconnect(
         hardware=[_xarm7_sim_hw],
         tasks=[trajectory_task(_xarm7_sim_hw)],
     ),
-    RerunBridgeModule.blueprint(),
+    vis_module(
+        viewer_backend=global_config.viewer,
+        rerun_config=_simulation.rerun_config,
+    ),
 ).requirements(_require_pimsim)
