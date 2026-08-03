@@ -1412,6 +1412,13 @@ def test_transform_control_callback_preserves_pose_through_gui_and_backend(
     submitted: list[TargetEvaluationRequest] = []
     gui._worker.submit = submitted.append  # type: ignore[method-assign]
     gui.start()
+    refresh_calls = 0
+
+    def count_refresh() -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+
+    gui.refresh = count_refresh  # type: ignore[method-assign]
     control = scene._handles[f"{selected.id}:ee_control"]
     control.position = (1.0, 2.0, 3.0)
     control.wxyz = (0.4, 0.1, 0.2, 0.3)
@@ -1424,6 +1431,7 @@ def test_transform_control_callback_preserves_pose_through_gui_and_backend(
     assert control.position == (1.0, 2.0, 3.0)
     assert control.wxyz == (0.4, 0.1, 0.2, 0.3)
     assert request.pose_targets[selected.id] == gui.state.pose_targets[selected.id]
+    assert refresh_calls == 0
     gui.close()
     assert control.removed is False
     scene.close()

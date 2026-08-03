@@ -20,8 +20,8 @@ Use factory functions from dimos.manipulation.planning.factory to create instanc
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, runtime_checkable
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -45,6 +45,10 @@ if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.sensor_msgs.JointState import JointState
     from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
+
+
+IKStepCallback: TypeAlias = Callable[["JointState", float, float, int], bool]
+"""Interactive IK progress hook: joints, position error, orientation error, attempt."""
 
 
 @runtime_checkable
@@ -261,8 +265,9 @@ class KinematicsSpec(Protocol):
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
+        on_step: IKStepCallback | None = None,
     ) -> IKResult:
-        """Solve IK with optional collision checking."""
+        """Solve IK with optional collision checking and interactive progress."""
         ...
 
     def solve_pose_targets(
@@ -275,8 +280,9 @@ class KinematicsSpec(Protocol):
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
+        on_step: IKStepCallback | None = None,
     ) -> IKResult:
-        """Solve planning-group-scoped pose targets."""
+        """Solve planning-group-scoped pose targets with optional interactive progress."""
         ...
 
 

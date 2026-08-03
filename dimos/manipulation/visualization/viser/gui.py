@@ -21,6 +21,7 @@ from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.planners.config import RoboPlanCartesianPathConfig
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.models import PlanningGroupID, PlanningSceneInfo, RobotName
+from dimos.manipulation.planning.spec.protocols import IKStepCallback
 from dimos.manipulation.visualization.operator import (
     CartesianTargetRequest,
     JointTargetRequest,
@@ -286,6 +287,7 @@ class ViserPanelGui:
         pose_targets: Mapping[PlanningGroupID, Pose],
         auxiliary_group_ids: Sequence[PlanningGroupID] = (),
         seed: JointState | None = None,
+        on_step: IKStepCallback | None = None,
     ) -> TargetEvaluationResult:
         stamped = {
             group_id: PoseStamped(
@@ -294,7 +296,8 @@ class ViserPanelGui:
             for group_id, pose in pose_targets.items()
         }
         return self.operator.evaluate_pose_target(
-            PoseTargetRequest(stamped, tuple(auxiliary_group_ids), _copy_joint_state(seed))
+            PoseTargetRequest(stamped, tuple(auxiliary_group_ids), _copy_joint_state(seed)),
+            on_step=on_step,
         )
 
     def cancel(self) -> bool:
@@ -956,7 +959,8 @@ class ViserPanelGui:
                 pose_targets=dict(self._active_pose_targets()),
             )
         )
-        self.refresh()
+        # A drag can emit tens of updates per second from the Viser client
+        # thread. The coalescing worker refreshes once for the accepted result.
 
     def _submit_joint_target_evaluation(self) -> None:
         targets = self._target_set_from_sliders()
@@ -1037,13 +1041,32 @@ class ViserPanelGui:
             self.scene.set_target_active(str(robot_id), str(robot_id) in active_robot_ids)
 
     def _handle_target_evaluation_request(
-        self, request: TargetEvaluationRequest
+        self,
+        request: TargetEvaluationRequest,
+        is_stale: Callable[[], bool],
     ) -> TargetEvaluationResult:
         if request.source == "cartesian":
             if not request.pose_targets:
                 return TargetEvaluationResult(False, "INVALID", "No pose target")
+
+            def on_step(
+                joints: JointState,
+                _position_error: float,
+                _orientation_error: float,
+                _attempt: int,
+            ) -> bool:
+                if is_stale():
+                    return True
+                targets = self._group_targets_from_joint_state(request.group_ids, joints)
+                if targets:
+                    self._move_joint_target_visuals(targets)
+                return False
+
             return self.evaluate_pose_target_set(
-                request.pose_targets, request.auxiliary_group_ids, request.joints
+                request.pose_targets,
+                request.auxiliary_group_ids,
+                request.joints,
+                on_step=on_step,
             )
         if not request.joint_targets:
             return TargetEvaluationResult(False, "INVALID", "No joint target")
@@ -1093,22 +1116,41 @@ class ViserPanelGui:
         self._move_joint_target_visuals(self.state.group_joint_targets)
 
     def _split_target_joints_by_group(self, target_joints: JointState) -> None:
+        self.state.group_joint_targets.update(
+            self._group_targets_from_joint_state(self.state.selected_group_ids, target_joints)
+        )
+
+    def _group_targets_from_joint_state(
+        self,
+        group_ids: Sequence[PlanningGroupID],
+        target_joints: JointState,
+    ) -> dict[PlanningGroupID, JointState]:
         if len(target_joints.name) != len(target_joints.position):
-            return
+            return {}
         positions = {
             str(name): float(value)
             for name, value in zip(target_joints.name, target_joints.position, strict=True)
         }
-        for group_id in self.state.selected_group_ids:
+        targets: dict[PlanningGroupID, JointState] = {}
+        for group_id in group_ids:
             group = self._groups_by_id().get(group_id)
-            if group is None or any(str(name) not in positions for name in group.joint_names):
+            if group is None:
                 continue
-            self.state.group_joint_targets[group_id] = JointState(
+            values = [
+                positions.get(str(global_name), positions.get(str(local_name)))
+                for global_name, local_name in zip(
+                    group.joint_names, group.local_joint_names, strict=True
+                )
+            ]
+            if any(value is None for value in values):
+                continue
+            targets[group_id] = JointState(
                 {
                     "name": list(group.joint_names),
-                    "position": [positions[str(name)] for name in group.joint_names],
+                    "position": [float(value) for value in values if value is not None],
                 }
             )
+        return targets
 
     def _sync_pose_targets_from_group_poses(self) -> None:
         groups = self._groups_by_id()

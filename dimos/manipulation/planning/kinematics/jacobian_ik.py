@@ -35,7 +35,7 @@ from dimos.manipulation.planning.kinematics.utils import (
 )
 from dimos.manipulation.planning.spec.enums import IKStatus
 from dimos.manipulation.planning.spec.models import IKResult, WorldRobotID
-from dimos.manipulation.planning.spec.protocols import WorldSpec
+from dimos.manipulation.planning.spec.protocols import IKStepCallback, WorldSpec
 from dimos.manipulation.planning.utils.kinematics_utils import (
     check_singularity,
     compute_error_twist,
@@ -108,6 +108,7 @@ class JacobianIK:
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
+        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         """Solve IK with multiple random restarts.
 
@@ -202,6 +203,7 @@ class JacobianIK:
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
+        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         """Solve a planning-group pose target using group FK/Jacobian."""
         if not world.is_finalized:
