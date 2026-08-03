@@ -26,8 +26,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-import rerun as rr
-import rerun.blueprint as rrb
 from scipy.spatial.transform import Rotation
 
 from dimos.navigation.nav_3d.evaluator import metrics
@@ -38,6 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from numpy.typing import NDArray
+    import rerun.blueprint as rrb
 
     from dimos.navigation.nav_3d.evaluator.cases import Suite
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
@@ -93,6 +92,8 @@ def _edge_cost_colors(costs: NDArray[np.float32]) -> NDArray[np.uint8]:
 
 
 def _log_planner(entity: str, artifacts: PlannerArtifacts | None, cfg: EvalConfig) -> None:
+    import rerun as rr
+
     if artifacts is None:
         return
     surface = artifacts.surface_clearance
@@ -137,6 +138,8 @@ def _thin_by_gap(points: NDArray[np.float32], gap: float) -> NDArray[np.int64]:
 
 
 def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig) -> None:
+    import rerun as rr
+
     if not outcome.waypoints:
         return
     rr.log(
@@ -190,6 +193,8 @@ def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig)
 def _dataset_view(root: str, case_ids: list[str]) -> rrb.Spatial3DView:
     """One view per dataset. Every case is hidden until toggled on, and the
     final planner graph edges start off."""
+    import rerun.blueprint as rrb
+
     hidden = [f"{root}/planner_final/edges"]
     hidden += [f"{root}/cases/{cid}" for cid in case_ids]
     return rrb.Spatial3DView(
@@ -200,6 +205,9 @@ def _dataset_view(root: str, case_ids: list[str]) -> rrb.Spatial3DView:
 
 
 def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -> None:
+    import rerun as rr
+    import rerun.blueprint as rrb
+
     rr.init("nav3d_eval", recording_id="nav3d_eval")
     out.parent.mkdir(parents=True, exist_ok=True)
     rr.save(str(out))
