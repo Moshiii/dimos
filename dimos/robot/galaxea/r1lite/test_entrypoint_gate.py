@@ -229,3 +229,59 @@ def test_main_passes_and_cleans_up_when_streams_deliver(monkeypatch: Any) -> Non
 def test_main_inert_invocation_never_touches_rclpy(monkeypatch: Any) -> None:
     monkeypatch.setitem(sys.modules, "rclpy", None)
     assert entrypoint_gate.main(["run", "r1lite-quest-teleop-sim"]) == 0
+
+
+class _ConcurrencyNode(_FakeNode):
+    """Tracks the maximum number of simultaneously live subscriptions."""
+
+    def __init__(self, publishers: dict[str, str]) -> None:
+        super().__init__(publishers)
+        self.max_live = 0
+
+    def create_subscription(self, msg_type: Any, topic: str, callback: Any, qos: Any) -> _FakeSub:
+        sub = super().create_subscription(msg_type, topic, callback, qos)
+        live = len(self.subs) - len(self.destroyed_subs)
+        self.max_live = max(self.max_live, live)
+        return sub
+
+
+def test_measurement_never_subscribes_concurrently(monkeypatch: Any) -> None:
+    # The vendor stack starves concurrent fresh readers (2026-07-28 field
+    # finding): the gate must hold at most ONE live subscription at any
+    # moment, like the reworked preflight.
+    fake_msgs = types.ModuleType("fake_msgs")
+    fake_msgs_msg = types.ModuleType("fake_msgs.msg")
+    fake_msgs_msg.Thing = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_msgs", fake_msgs)
+    monkeypatch.setitem(sys.modules, "fake_msgs.msg", fake_msgs_msg)
+    node = _ConcurrencyNode(
+        publishers=dict.fromkeys(entrypoint_gate.REQUIRED_TOPICS, "fake_msgs/msg/Thing")
+    )
+    _fake_rclpy(monkeypatch, node, deliver=True)
+    counts = entrypoint_gate._count_messages(node, list(entrypoint_gate.REQUIRED_TOPICS), 0.5)
+    assert all(counts[t] >= 1 for t in entrypoint_gate.REQUIRED_TOPICS)
+    assert node.max_live == 1
+    assert len(node.destroyed_subs) == len(entrypoint_gate.REQUIRED_TOPICS)
+
+
+def test_failure_distinguishes_graph_absence_from_silence(
+    monkeypatch: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_msgs = types.ModuleType("fake_msgs")
+    fake_msgs_msg = types.ModuleType("fake_msgs.msg")
+    fake_msgs_msg.Thing = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_msgs", fake_msgs)
+    monkeypatch.setitem(sys.modules, "fake_msgs.msg", fake_msgs_msg)
+    # One topic has a visible publisher that never delivers; the rest have
+    # no publisher info at all.
+    import dimos.robot.galaxea.r1lite.config as cfg_mod
+
+    node = _FakeNode(publishers={cfg_mod.FB_ARM_LEFT: "fake_msgs/msg/Thing"})
+    _fake_rclpy(monkeypatch, node, deliver=False)
+    monkeypatch.setattr(entrypoint_gate, "WAIT_WINDOW_S", 0.2)
+    monkeypatch.setattr(entrypoint_gate, "POLL_WINDOW_S", 0.1)
+    rc = entrypoint_gate.main(["run", "r1lite-coordinator"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert f"FAIL no message on {cfg_mod.FB_ARM_LEFT} — publisher seen but no data" in err
+    assert "no publisher info in the graph" in err

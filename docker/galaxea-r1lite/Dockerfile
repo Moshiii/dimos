@@ -52,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libsndfile1 \
         iproute2 \
+        tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependency layer, keyed on the lockfile via bind mount. --no-deps: each
@@ -68,7 +69,8 @@ RUN --mount=type=bind,from=builder,source=/wheels,target=/tmp/wheels \
     pip install --no-cache-dir --no-deps /tmp/wheels/dimos-*.whl
 
 COPY docker/galaxea-r1lite/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY docker/galaxea-r1lite/dds_selftest.sh /usr/local/bin/dds-selftest
+RUN chmod +x /entrypoint.sh /usr/local/bin/dds-selftest
 
 # uid 1000 matches the vendor stack so shared-memory DDS delivery works.
 RUN useradd --uid 1000 --user-group --create-home --shell /bin/bash dimos

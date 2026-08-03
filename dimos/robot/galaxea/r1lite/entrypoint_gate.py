@@ -69,27 +69,47 @@ def _import_msg_type(type_name: str) -> object:
     return getattr(module, name)
 
 
-def _count_messages(node: object, topics: Sequence[str], window_s: float) -> dict[str, int]:
+def _count_messages(
+    node: object,
+    topics: Sequence[str],
+    window_s: float,
+    graph_seen: set[str] | None = None,
+) -> dict[str, int]:
+    """Measure topics strictly one at a time, never concurrently.
+
+    The vendor stack starves concurrent fresh readers (field finding,
+    2026-07-28 — the same behavior that moved preflight to sequential
+    measurement), so each topic gets a lone subscription for its slice
+    of the window and the subscription is destroyed before the next
+    topic is tried. `graph_seen` collects topics whose publisher info
+    ever appeared, so a failure can distinguish "graph never showed a
+    publisher" from "publisher seen but no data".
+    """
     import rclpy
     from rclpy.qos import QoSProfile, ReliabilityPolicy
 
     counts = dict.fromkeys(topics, 0)
     qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-    subs = []
+    slice_s = window_s / max(1, len(topics))
     for topic in topics:
+        slice_deadline = time.monotonic() + slice_s
         infos = node.get_publishers_info_by_topic(topic)  # type: ignore[attr-defined]
         if not infos:
+            # Spin out the slice anyway: discovery needs a live executor
+            # and the next round retries this topic.
+            while time.monotonic() < slice_deadline:
+                rclpy.spin_once(node, timeout_sec=0.05)
             continue
+        if graph_seen is not None:
+            graph_seen.add(topic)
         msg_type = _import_msg_type(infos[0].topic_type)
 
         def _count(_msg: object, name: str = topic) -> None:
             counts[name] += 1
 
-        subs.append(node.create_subscription(msg_type, topic, _count, qos))  # type: ignore[attr-defined]
-    deadline = time.monotonic() + window_s
-    while time.monotonic() < deadline and any(counts[t] < 1 for t in topics):
-        rclpy.spin_once(node, timeout_sec=0.05)
-    for sub in subs:
+        sub = node.create_subscription(msg_type, topic, _count, qos)  # type: ignore[attr-defined]
+        while time.monotonic() < slice_deadline and counts[topic] < 1:
+            rclpy.spin_once(node, timeout_sec=0.05)
         node.destroy_subscription(sub)  # type: ignore[attr-defined]
     return counts
 
@@ -130,19 +150,36 @@ def main(argv: Sequence[str]) -> int:
 
     rclpy.init()
     node = rclpy.create_node("dimos_r1lite_entrypoint_gate")
+    graph_seen: set[str] = set()
+    started = time.monotonic()
+
+    def _measure(topics: Sequence[str], window: float) -> dict[str, int]:
+        counts = _count_messages(node, topics, window, graph_seen)
+        elapsed = time.monotonic() - started
+        for topic in topics:
+            if counts.get(topic, 0) > 0:
+                print(f"[entrypoint-gate] OK {topic} ({elapsed:.0f}s)")
+        silent = [t for t in topics if counts.get(t, 0) < 1]
+        if silent:
+            print(
+                f"[entrypoint-gate] {elapsed:.0f}s: {len(silent)} still silent: "
+                + ", ".join(silent)
+            )
+        return counts
+
     try:
-        missing = poll_rounds(
-            lambda topics, window: _count_messages(node, topics, window),
-            REQUIRED_TOPICS,
-            WAIT_WINDOW_S,
-            POLL_WINDOW_S,
-        )
+        missing = poll_rounds(_measure, REQUIRED_TOPICS, WAIT_WINDOW_S, POLL_WINDOW_S)
     finally:
         node.destroy_node()
         rclpy.shutdown()
     if missing:
         for topic in missing:
-            print(f"[entrypoint-gate] FAIL no message on {topic}", file=sys.stderr)
+            reason = (
+                "publisher seen but no data (reader starvation?)"
+                if topic in graph_seen
+                else "no publisher info in the graph (discovery)"
+            )
+            print(f"[entrypoint-gate] FAIL no message on {topic} — {reason}", file=sys.stderr)
         return 1
     print("[entrypoint-gate] vendor feedback healthy")
     return 0
