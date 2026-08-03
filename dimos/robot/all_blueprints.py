@@ -85,6 +85,7 @@ all_blueprints = {
     "m20-nav-3d": "dimos.robot.deeprobotics.m20.blueprints.basic:m20_nav_3d",
     "m20-simple-nav": "dimos.robot.deeprobotics.m20.nav.m20_simple_nav:m20_simple_nav",
     "m20-simple-nav-pcd-sim": "dimos.robot.deeprobotics.m20.nav.m20_simple_nav_pcd_sim:m20_simple_nav_pcd_sim",
+    "m20-pcd-builder": "dimos.robot.deeprobotics.m20.nav.m20_pcd_builder:m20_pcd_builder",
     "m20-upsample-ground-replay": "dimos.robot.deeprobotics.m20.nav.upsample_ground.replay:m20_upsample_ground_replay",
     "mid360": "dimos.hardware.sensors.lidar.livox.livox_blueprints:mid360",
     "mid360-fastlio": "dimos.hardware.sensors.lidar.fastlio2.fastlio_blueprints:mid360_fastlio",
