@@ -19,9 +19,13 @@ odometry. Both feed the same mapping, planning, control, and visualization
 modules.
 
 Usage:
-    dimos run unitree-g1-groot-wbc
+    dimos run unitree-g1-groot-wbc                 # real hardware
     dimos --simulation mujoco --simulation-provider pimsim \
         --scene-package office run unitree-g1-groot-wbc
+
+Overrides (replace the old env-var dance):
+    dimos run unitree-g1-groot-wbc \\
+        --network-interface=enp2s0
 """
 
 from __future__ import annotations
