@@ -172,7 +172,9 @@ def create_dynamic_callback():  # type: ignore[no-untyped-def]
 
 
 main.callback()(create_dynamic_callback())  # type: ignore[no-untyped-call]
-main.add_typer(can_app, name="can")
+hardware_app = typer.Typer(help="Configure and inspect robot hardware", no_args_is_help=True)
+hardware_app.add_typer(can_app, name="can")
+main.add_typer(hardware_app, name="hardware")
 main.add_typer(go2tool_app, name="go2tool")
 main.command()(shell)
 main.add_typer(cache_app, name="cache")
