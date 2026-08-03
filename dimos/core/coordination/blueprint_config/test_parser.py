@@ -413,7 +413,7 @@ def test_discriminated_union_leaf_override_preserves_default_backend() -> None:
     }
 
 
-def test_parse_overrides_nested_viser_host() -> None:
+def test_parse_nested_viser_host_returns_overridden_config() -> None:
     parsed = BlueprintConfigParser(ManipulationModule.blueprint()).parse(
         [
             "--visualization.backend",
