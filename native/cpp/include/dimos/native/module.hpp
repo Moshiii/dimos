@@ -18,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -28,6 +29,7 @@
 #include "dimos/native/config.hpp"
 #include "dimos/native/lcm_codec.hpp"
 #include "dimos/native/log.hpp"
+#include "dimos/native/tf.hpp"
 #include "dimos/native/transport.hpp"
 
 namespace dimos::native {
@@ -280,6 +282,13 @@ public:
                  [self, handler](T msg) { (self->*handler)(msg); });
     }
 
+    // Runs the dispatch on the transport receive thread instead of queueing it
+    // for the handler loop. For traffic that must stay current while the module
+    // is busy, and whose dispatch does not touch module state.
+    void raw_input(const std::string& port, Dispatch dispatch) {
+        routes_.emplace_back(topic_for(port), std::move(dispatch));
+    }
+
     /// publish() hands off to a per-channel worker, so it never blocks.
     template <class T>
     Output<T> output(const std::string& port, EncodeFn<T> encode = lcm_encode<T>) {
@@ -302,6 +311,10 @@ public:
         return it->second;
     }
 
+    // Framework use only: where make_tf caches its handle, so every call in one
+    // build shares a graph and wires the topic once.
+    std::optional<Tf>& tf_handle() { return tf_; }
+
     const std::vector<std::pair<std::string, Dispatch>>& routes() const { return routes_; }
     const std::vector<InputPort*>& input_ports() const { return input_ports_; }
     const std::vector<std::shared_ptr<PublishQueue>>& publish_queues() const {
@@ -315,6 +328,7 @@ private:
     std::vector<std::unique_ptr<InputPort>> owned_inputs_;
     std::vector<InputPort*> input_ports_;
     std::vector<std::shared_ptr<PublishQueue>> publish_queues_;
+    std::optional<Tf> tf_;
 };
 
 inline void publish_worker_loop(PublishQueue* queue, Transport* transport) {

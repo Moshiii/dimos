@@ -33,11 +33,21 @@ if(PkgConfig_FOUND)
   pkg_check_modules(LCM IMPORTED_TARGET lcm)
 endif()
 if(LCM_FOUND)
-  message(STATUS "dimos_native: liblcm found, including LcmTransport compile check")
-  target_sources(dimos_native_tests PRIVATE test_lcm_transport.cpp)
+  message(STATUS "dimos_native: liblcm found, including LcmTransport and tf codec tests")
+  # lcm_tf.hpp names tf2_msgs.TFMessage, so its tests need the generated
+  # headers. Fetched the same way each native module's CMakeLists does.
+  FetchContent_Declare(dimos_lcm
+    GIT_REPOSITORY https://github.com/dimensionalOS/dimos-lcm.git
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(dimos_lcm)
+  target_sources(dimos_native_tests PRIVATE test_lcm_transport.cpp test_tf_lcm.cpp)
+  target_include_directories(dimos_native_tests PRIVATE
+    ${dimos_lcm_SOURCE_DIR}/generated/cpp_lcm_msgs)
   target_link_libraries(dimos_native_tests PRIVATE PkgConfig::LCM)
 else()
-  message(STATUS "dimos_native: liblcm not found, skipping LcmTransport compile check")
+  message(STATUS "dimos_native: liblcm not found, skipping LcmTransport and tf codec tests")
 endif()
 
 include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)
