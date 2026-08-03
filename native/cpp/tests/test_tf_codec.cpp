@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "dimos/native/lcm_tf.hpp"
+#include "dimos/native/tf_codec.hpp"
 
 using namespace dimos::native;
 using Bytes = std::vector<uint8_t>;

@@ -32,8 +32,10 @@
 
 using dimos::native::Builder;
 using dimos::native::Config;
+using dimos::native::make_tf;
 using dimos::native::Module;
 using dimos::native::Output;
+using dimos::native::Tf;
 namespace logging = dimos::native::log;
 
 using livox_common::DATA_TYPE_CARTESIAN_HIGH;
@@ -149,6 +151,7 @@ public:
         cfg_ = config.parse<PointLioConfig>();
         lidar_ = builder.output<sensor_msgs::PointCloud2>("lidar");
         odometry_ = builder.output<nav_msgs::Odometry>("odometry");
+        tf_ = make_tf(builder);
 
         frame_interval_ =
             std::chrono::microseconds(static_cast<int64_t>(1e6 / cfg_.frequency));
@@ -439,6 +442,11 @@ private:
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();
 
+            // Every iteration, not at odom_freq: a consumer looking up the
+            // transform for a cloud should not have to reach across the gap to
+            // the nearest odometry sample.
+            publish_tf(pose, ts);
+
             // get_body_cloud is the loop's costliest step, so build it only when
             // a publish is due.
             if (now - last_pc_publish_ >= pc_interval_) {
@@ -469,6 +477,20 @@ private:
                 }
             }
         }
+    }
+
+    // Broadcast the estimate as the frame_id -> sensor_frame_id edge. get_pose
+    // reads the same odometry the odometry port publishes, so the two agree.
+    void publish_tf(const std::vector<double>& pose, double ts) {
+        Eigen::Isometry3d iso = Eigen::Isometry3d::Identity();
+        // get_pose lays the quaternion out as x, y, z, w; Eigen takes w first.
+        iso.linear() =
+            Eigen::Quaterniond(pose[6], pose[3], pose[4], pose[5]).toRotationMatrix();
+        iso.translation() = Eigen::Vector3d(pose[0], pose[1], pose[2]);
+
+        // Qualified: FAST-LIO's headers pull in Eigen::Transform unqualified.
+        tf_.publish(
+            {dimos::native::Transform{cfg_.frame_id, cfg_.sensor_frame_id, ts, iso}});
     }
 
     // Publish the undistorted scan in the sensor's own frame (get_body_cloud),
@@ -522,6 +544,7 @@ private:
     PointLioConfig cfg_;
     Output<sensor_msgs::PointCloud2> lidar_;
     Output<nav_msgs::Odometry> odometry_;
+    Tf tf_;
     std::unique_ptr<PointLio> point_lio_;
 
     // All four come from config, set in build().

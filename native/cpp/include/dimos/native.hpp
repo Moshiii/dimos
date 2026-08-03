@@ -10,6 +10,7 @@
 #include "dimos/native/lcm_transport.hpp"
 #include "dimos/native/log.hpp"
 #include "dimos/native/module.hpp"
+#include "dimos/native/tf_codec.hpp"
 #include "dimos/native/transport.hpp"
 #include "dimos/native/transport_selection.hpp"
 

@@ -1,9 +1,10 @@
 // Copyright 2026 Dimensional Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Wire adapter between the transform graph and tf2_msgs.TFMessage. Needs the
-// dimos-lcm generated headers, so a module includes this rather than tf.hpp
-// when it wants to publish or receive transforms.
+// Wire codec between the transform graph and tf2_msgs.TFMessage, plus the port
+// wiring for it. Schema, not transport: any Transport carries these bytes.
+// Split from tf.hpp because naming TFMessage pulls in the dimos-lcm generated
+// headers and liblcm, which the rest of the SDK core does not need.
 
 #pragma once
 

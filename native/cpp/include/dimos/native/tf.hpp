@@ -24,6 +24,7 @@
 #include <optional>
 #include <set>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -342,6 +343,7 @@ using TransformSink = std::function<void(const std::vector<Transform>&)>;
 /// Copies share one graph, which fills in the background as tf messages arrive.
 class Tf {
 public:
+    Tf() = default;
     Tf(std::shared_ptr<Graph> graph, TransformSink sink)
         : graph_(std::move(graph)), sink_(std::move(sink)) {}
 
@@ -351,7 +353,7 @@ public:
     ///
     ///     auto at_scan = tf.lookup("map", "base_link").at(scan_ts).tolerance(0.1).get();
     Lookup lookup(const std::string& parent, const std::string& child) const {
-        return Lookup(graph_.get(), parent, child);
+        return Lookup(&checked_graph(), parent, child);
     }
 
     /// The latest transform from `parent` to `child`.
@@ -365,7 +367,7 @@ public:
     /// They feed the local graph first, so a lookup right after sees them
     /// without waiting for the transport round trip.
     void publish(const std::vector<Transform>& transforms) const {
-        graph_->update([&transforms](MultiTBuffer& buffer) {
+        checked_graph().update([&transforms](MultiTBuffer& buffer) {
             for (const Transform& t : transforms) {
                 buffer.receive(t.parent, t.child, t.ts, t.iso);
             }
@@ -374,6 +376,15 @@ public:
     }
 
 private:
+    // A default-constructed handle is a module member waiting on build(), as
+    // with Output, so using one before make_tf wired it is the error.
+    Graph& checked_graph() const {
+        if (graph_ == nullptr) {
+            throw std::runtime_error("Tf used before build() wired it");
+        }
+        return *graph_;
+    }
+
     std::shared_ptr<Graph> graph_;
     TransformSink sink_;
 };

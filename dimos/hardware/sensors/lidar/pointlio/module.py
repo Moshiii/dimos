@@ -35,7 +35,6 @@ import os
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
-from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
@@ -53,9 +52,6 @@ from dimos.hardware.sensors.lidar.livox.ports import (
     SDK_POINT_DATA_PORT,
     SDK_PUSH_MSG_PORT,
 )
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
@@ -173,24 +169,6 @@ class PointLio(NativeModule, perception.Lidar, perception.Odometry):
     def start(self) -> None:
         self._validate_network()
         super().start()
-        self.register_disposable(
-            Disposable(self.odometry.transport.subscribe(self._on_odom_for_tf, self.odometry))
-        )
-
-    def _on_odom_for_tf(self, msg: Odometry) -> None:
-        self.tf.publish(
-            TFMessage(
-                Transform(
-                    frame_id=self.frame_id,
-                    child_frame_id=self.config.sensor_frame_id,
-                    translation=Vector3(msg.pose.position),
-                    rotation=Quaternion(msg.pose.orientation),
-                    # Match the odometry ts exactly; no `or time.time()` fallback (a
-                    # real ts of 0.0 must not become wall time).
-                    ts=msg.ts,
-                )
-            )
-        )
 
     @rpc
     def stop(self) -> None:
