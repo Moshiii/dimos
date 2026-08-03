@@ -28,6 +28,21 @@ if(NOT nlohmann_json_FOUND)
   FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
+# Rigid transforms in tf.hpp are Eigen isometries, and tf.hpp is a public SDK
+# header, so Eigen is a usage requirement of this target. Header-only, and the
+# native modules that link this one already find it through nix.
+find_package(Eigen3 3.3 QUIET NO_MODULE)
+if(NOT Eigen3_FOUND)
+  set(EIGEN_BUILD_DOC OFF)
+  set(EIGEN_BUILD_TESTING OFF)
+  set(EIGEN_BUILD_PKGCONFIG OFF)
+  FetchContent_Declare(Eigen3
+    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+    GIT_TAG d71c30c47858effcbd39967097a2d99ee48db464  # 3.4.1
+  )
+  FetchContent_MakeAvailable(Eigen3)
+endif()
+
 # module.hpp runs the dispatch loop and publish workers on std::thread.
 find_package(Threads REQUIRED)
 
@@ -40,6 +55,7 @@ target_compile_features(dimos_native INTERFACE cxx_std_20)
 target_link_libraries(dimos_native INTERFACE
   pfr
   nlohmann_json::nlohmann_json
+  Eigen3::Eigen
   Threads::Threads
 )
 

@@ -71,7 +71,7 @@
           src = ./.;
 
           nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
-          buildInputs = [ livox-sdk2 lcm pkgs.glib pkgs.nlohmann_json ];
+          buildInputs = [ livox-sdk2 lcm pkgs.glib pkgs.nlohmann_json pkgs.eigen ];
 
           cmakeFlags = [
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"

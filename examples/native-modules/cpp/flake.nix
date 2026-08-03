@@ -33,7 +33,7 @@
           src = ./.;
 
           nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
-          buildInputs = [ lcm pkgs.glib pkgs.nlohmann_json ];
+          buildInputs = [ lcm pkgs.glib pkgs.nlohmann_json pkgs.eigen ];
 
           cmakeFlags = [
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
