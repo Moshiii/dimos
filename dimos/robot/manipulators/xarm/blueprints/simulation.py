@@ -22,7 +22,8 @@ from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
-    XARM7_SIM_PATH,
+    XARM7_MODEL_PATH,
+    XARM7_TABLETOP_SCENE,
     make_xarm7_sim_hardware,
     make_xarm7_sim_robot_config,
 )
@@ -38,7 +39,8 @@ def _resolve_xarm7_simulation() -> SimulationBinding:
     binding = load_simulation_provider("pimsim").build(
         SimulationRequest(
             robot_model="xarm7",
-            model_path=XARM7_SIM_PATH,
+            model_path=XARM7_MODEL_PATH,
+            scene_package=XARM7_TABLETOP_SCENE,
         )
     )
     if binding.adapter_type != "sim_mujoco":
