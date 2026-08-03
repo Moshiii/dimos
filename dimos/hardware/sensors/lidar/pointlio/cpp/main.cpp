@@ -442,14 +442,19 @@ private:
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();
 
-            // Every iteration, not at odom_freq: a consumer looking up the
-            // transform for a cloud should not have to reach across the gap to
-            // the nearest odometry sample.
-            publish_tf(pose, ts);
+            const bool pc_due = now - last_pc_publish_ >= pc_interval_;
+            const bool odom_due = now - last_odom_publish_ >= odom_interval_;
+
+            // Ahead of the cloud and odometry that share this ts, so a consumer
+            // resolves every cloud at exactly its own stamp rather than at the
+            // nearest odometry sample some iterations away.
+            if (pc_due || odom_due) {
+                publish_tf(pose, ts);
+            }
 
             // get_body_cloud is the loop's costliest step, so build it only when
             // a publish is due.
-            if (now - last_pc_publish_ >= pc_interval_) {
+            if (pc_due) {
                 auto body_cloud = point_lio_->get_body_cloud();
                 if (body_cloud && !body_cloud->empty()) {
                     publish_pointcloud(body_cloud, ts);
@@ -466,7 +471,7 @@ private:
             }
 
             // Pose + covariance at odom_freq.
-            if (now - last_odom_publish_ >= odom_interval_) {
+            if (odom_due) {
                 publish_odometry(point_lio_->get_odometry(), ts);
                 last_odom_publish_ = now;
                 if (cfg_.debug) {

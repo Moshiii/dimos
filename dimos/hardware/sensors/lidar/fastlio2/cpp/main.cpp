@@ -352,12 +352,18 @@ private:
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();
 
-            // Every iteration, not at odom_freq: a consumer looking up the
-            // transform for a cloud should not have to reach across the gap to
-            // the nearest odometry sample.
-            publish_tf(pose, ts);
+            const bool pc_due =
+                cfg_.scan_publish_en && now - last_pc_publish_ >= pc_interval_;
+            const bool odom_due = now - last_odom_publish_ >= odom_interval_;
 
-            if (cfg_.scan_publish_en && now - last_pc_publish_ >= pc_interval_) {
+            // Ahead of the cloud and odometry that share this ts, so a consumer
+            // resolves every cloud at exactly its own stamp rather than at the
+            // nearest odometry sample some iterations away.
+            if (pc_due || odom_due) {
+                publish_tf(pose, ts);
+            }
+
+            if (pc_due) {
                 // Sensor-frame cloud. Register downstream via the odom pose.
                 // dense_publish_en false -> FAST-LIO's IESKF-downsampled scan.
                 auto cloud = cfg_.dense_publish_en ? fast_lio_->get_body_cloud()
