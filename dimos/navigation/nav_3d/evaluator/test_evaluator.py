@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
+import typer
 
 from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
 from dimos.navigation.nav_3d.evaluator import metrics, tripwire
@@ -838,7 +839,7 @@ def test_tripwire_perf_violations() -> None:
 
 def test_gate_band_follows_the_tilted_body_axis() -> None:
     """On a slope the band is measured up the body axis, so an obstacle at the
-    body centre collides and one down in the leg zone does not."""
+    body center collides and one down in the leg zone does not."""
     vox = 0.02
     cfg = _cfg(voxel_size=vox)
     t = np.arange(-3, 3.01, 0.1)
@@ -941,3 +942,97 @@ def test_cache_writes_are_atomic(tmp_path: Path) -> None:
 
 def _raise_interrupt(*args: object, **kwargs: object) -> None:
     raise KeyboardInterrupt
+
+
+def _write_recording(
+    path: Path,
+    clouds: list[tuple[float, np.ndarray, str]],
+    poses: list[tuple[float, tuple[float, float, float]]],
+) -> None:
+    """A minimal mem2 recording: sensor-frame clouds plus odometry."""
+    from dimos.memory2.store.sqlite import SqliteStore
+    from dimos.msgs.geometry_msgs.Pose import Pose
+    from dimos.msgs.nav_msgs.Odometry import Odometry
+    from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
+    with SqliteStore(path=str(path)) as store:
+        lidar = store.stream("lidar", PointCloud2)
+        for ts, pts, frame_id in clouds:
+            lidar.append(PointCloud2.from_numpy(pts, frame_id=frame_id, timestamp=ts), ts=ts)
+        odom = store.stream("odom", Odometry)
+        for ts, (x, y, z) in poses:
+            odom.append(Odometry(ts=ts, pose=Pose(x, y, z)), ts=ts)
+
+
+def test_recording_registers_clouds_and_honors_end_ts(tmp_path: Path) -> None:
+    """Clouds arrive sensor-frame and are placed by their aligned odometry."""
+    from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames, load_trajectory
+
+    local = np.array([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]], dtype=np.float32)
+    db = tmp_path / "rec.db"
+    _write_recording(
+        db,
+        [(1.0, local, "lidar"), (2.0, local, "lidar"), (3.0, local, "lidar")],
+        [(1.0, (10.0, 0.0, 0.5)), (2.0, (20.0, 0.0, 0.5)), (3.0, (30.0, 0.0, 0.5))],
+    )
+    frames = list(iter_world_frames(db, "lidar", "odom"))
+    assert [f.ts for f in frames] == [1.0, 2.0, 3.0]
+    # Translated by the odometry position, and the origin is that position.
+    assert np.allclose(frames[0].points, local + np.array([10.0, 0.0, 0.5]))
+    assert frames[1].origin == (20.0, 0.0, 0.5)
+    # end_ts drops frames at or after it.
+    assert [f.ts for f in iter_world_frames(db, "lidar", "odom", end_ts=2.5)] == [1.0, 2.0]
+
+    traj = load_trajectory(db, "odom")
+    assert len(traj.positions) == 3
+    assert np.allclose(traj.foot(0.5)[:, 2], 0.0)
+    assert load_trajectory(db, "odom", end_ts=2.5).positions.shape[0] == 2
+
+
+def test_recording_rejects_pre_registered_clouds(tmp_path: Path) -> None:
+    """World-frame clouds would be registered twice, so they are refused."""
+    from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames, load_trajectory
+
+    db = tmp_path / "legacy.db"
+    pts = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    _write_recording(db, [(1.0, pts, "world")], [(1.0, (0.0, 0.0, 0.0))])
+    with pytest.raises(ValueError, match="world-frame"):
+        list(iter_world_frames(db, "lidar", "odom"))
+    with pytest.raises(ValueError, match="no odometry"):
+        load_trajectory(db, "missing_stream")
+
+
+def test_apply_overrides_is_the_sweep_interface() -> None:
+    """--set is how a sweep varies the harness and the pipeline."""
+    from dimos.navigation.nav_3d.evaluator.cli import _apply_overrides
+
+    cfg = _apply_overrides(
+        EvalConfig(), ["goal_tolerance=0.4", "planner.wall_clearance_m=0.0", "pipeline=mls"]
+    )
+    assert cfg.goal_tolerance == pytest.approx(0.4)
+    assert isinstance(cfg.goal_tolerance, float)
+    assert cfg.planner == {"wall_clearance_m": 0.0}
+    assert cfg.pipeline == "mls"
+    for bad in (["no_equals_sign"], ["not_a_field=1"]):
+        with pytest.raises(typer.BadParameter):
+            _apply_overrides(EvalConfig(), bad)
+
+
+def test_diff_exits_nonzero_only_on_a_regression(tmp_path: Path) -> None:
+    """The tripwire is a CI gate, so its contract is the exit code."""
+    from dimos.navigation.nav_3d.evaluator.cli import diff_reports
+
+    clean = tmp_path / "a.json"
+    broken = tmp_path / "b.json"
+    clean.write_text(json.dumps(_tripwire_report({"office": {"a": (True, True)}})))
+    broken.write_text(json.dumps(_tripwire_report({"office": {"a": (False, True)}})))
+
+    diff_reports(clean, clean, exact=False)
+    with pytest.raises(typer.Exit) as regressed:
+        diff_reports(clean, broken, exact=False)
+    assert regressed.value.exit_code == 1
+    # A fix is not a regression.
+    diff_reports(broken, clean, exact=False)
+    # --exact fails on any non-timing difference, in either direction.
+    with pytest.raises(typer.Exit):
+        diff_reports(broken, clean, exact=True)

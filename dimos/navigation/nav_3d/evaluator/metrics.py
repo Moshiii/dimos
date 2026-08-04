@@ -86,13 +86,13 @@ class GateResult:
     # so a viewer can recover the exact body frames the gate tested.
     collision_indices: NDArray[np.int64]
     # Horizontal distance from the body surface to the nearest occupied
-    # voxel in the gate's band, minimised along the path. Negative is
+    # voxel in the gate's band, minimized along the path. Negative is
     # penetration depth, capped at MARGIN_CAP_M when nothing is near.
     min_clearance_m: float
 
 
 def chord_directions(samples: NDArray[np.float32], span: float) -> NDArray[np.float64]:
-    """Heading from the rear-foot to the front-foot chord, span metres apart.
+    """Heading from the rear-foot to the front-foot chord, span meters apart.
 
     Steadier than the local tangent, which flips between tread and riser.
     """
@@ -131,7 +131,7 @@ def check_path(
 ) -> GateResult:
     """Sweep the robot body box along foot-level waypoints against the map.
 
-    The box is the robot's length and width, centred mid-band up the tilted
+    The box is the robot's length and width, centered mid-band up the tilted
     body axis over each sample, so the legs and the ground never count.
     """
     voxel_size = cfg.voxel_size
@@ -302,7 +302,7 @@ def reference_length(
 ) -> Reference:
     """Shortest walked length demonstrated between start and goal.
 
-    Minimised over every start-visit to goal-visit pairing, preferring causal
+    Minimized over every start-visit to goal-visit pairing, preferring causal
     pairs. Falls back to straight-line distance when an endpoint is off the
     trajectory.
     """
