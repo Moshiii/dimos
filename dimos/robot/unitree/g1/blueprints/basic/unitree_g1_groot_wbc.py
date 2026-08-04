@@ -14,9 +14,9 @@
 
 """Unitree G1 GR00T whole-body control, mapping, and navigation.
 
-Real hardware and simulation use PointLIO to produce registered lidar and
-odometry. Both feed the same mapping, planning, control, and visualization
-modules.
+Hardware registers local-frame lidar through PointLIO and the ray-tracing
+mapper. PimSim supplies world-frame lidar and base odometry directly, matching
+the stable Go2 simulation path. Both paths converge at the global-map boundary.
 
 Usage:
     dimos run unitree-g1-groot-wbc                 # real hardware
@@ -51,6 +51,7 @@ from dimos.hardware.whole_body.spec import WholeBodyConfig
 from dimos.mapping.costmapper import CostMapper
 from dimos.mapping.pointclouds.occupancy import HeightCostConfig
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
+from dimos.mapping.voxels.module import VoxelGridMapper
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path as NavPath
 from dimos.msgs.sensor_msgs.Imu import Imu
@@ -77,7 +78,8 @@ _NAV_OVERHEAD_SAFETY_MARGIN = 0.2
 _NAV_MAX_STEP_HEIGHT = 0.10
 _NAV_ROTATION_DIAMETER = 0.8
 _NAV_PATH_WIDTH_MARGIN = 1.1
-_RERUN_ROOT = "world/odometry/g1"
+_HARDWARE_RERUN_ROOT = "world/odometry/g1"
+_SIMULATION_RERUN_ROOT = "world/odom/g1"
 _URDF_PATH = Path(__file__).resolve().parents[2] / "g1.urdf"
 _NOMINAL_PELVIS_Z = 0.74
 _pelvis_mid360_cache: list[Any] = []
@@ -94,16 +96,27 @@ _G1_JOINTS_ENTITY = f"world{_G1_JOINTS_TOPIC}"
 
 
 _platform = resolve_g1_groot_platform()
+_RERUN_ROOT = _SIMULATION_RERUN_ROOT if _platform.simulation else _HARDWARE_RERUN_ROOT
+_ODOMETRY_ENTITY = "world/odom" if _platform.simulation else "world/odometry"
 
-_navigation = autoconnect(
-    _platform.localization_source,
-    RayTracingVoxelMap.blueprint(
+_mapper = (
+    VoxelGridMapper.blueprint(
+        voxel_size=_NAV_VOXEL_RESOLUTION,
+        emit_every=5,
+    )
+    if _platform.simulation
+    else RayTracingVoxelMap.blueprint(
         voxel_size=_NAV_VOXEL_RESOLUTION,
         emit_every=0,
         global_emit_every=4,
         max_health=10,
         graze_cos=0.85,
-    ),
+    )
+)
+
+_navigation = autoconnect(
+    _platform.localization_source,
+    _mapper,
     CostMapper.blueprint(
         config=HeightCostConfig(
             resolution=_NAV_VOXEL_RESOLUTION,
@@ -199,7 +212,6 @@ _rerun_config: dict[str, Any] = {
         "world/localization_anchor": None,
         "world/lidar": _lidar_scan,
         _G1_JOINTS_ENTITY: g1_urdf_joint_state(root_path=_RERUN_ROOT),
-        "world/odometry": _real_odometry_root,
         "world/global_costmap": g1_costmap,
         "world/navigation_costmap": g1_costmap,
         "world/path": _nav_path,
@@ -209,7 +221,7 @@ _rerun_config: dict[str, Any] = {
         "world/g1/imu": 10.0,
         "world/g1/motor_states": 10.0,
         "world/g1/motor_command": 10.0,
-        "world/odometry": 15.0,
+        _ODOMETRY_ENTITY: 15.0,
         "world/lidar": 2.0,
         "world/global_map": 1.0,
         "world/global_costmap": 2.0,
@@ -238,6 +250,7 @@ for _key, _value in _platform.rerun_config.items():
         _rerun_config[_key] = _value
 
 if not _platform.simulation:
+    _rerun_config["visual_override"]["world/odometry"] = _real_odometry_root
     _rerun_config["visual_override"]["world/global_costmap"] = _real_costmap
     _rerun_config["visual_override"]["world/navigation_costmap"] = _real_costmap
 

@@ -14,9 +14,9 @@
 
 """Platform-owned control and localization inputs for the G1 GR00T stack.
 
-Hardware PointLIO and simulation providers both supply ``lidar`` and
-``odometry`` at the shared mapper boundary. Mapping and navigation remain
-outside this boundary.
+Hardware supplies local-frame lidar plus sensor odometry through PointLIO.
+Simulation providers supply world-frame lidar plus base odometry. Mapping and
+navigation remain outside this boundary.
 """
 
 from __future__ import annotations
