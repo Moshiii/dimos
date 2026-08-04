@@ -16,6 +16,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 
 import pytest
 
@@ -98,6 +99,177 @@ def test_backup_file_keep_last_zero_removes_all(tmp_path: Path) -> None:
     assert backup_file(db, keep_last=0) is None
 
     assert list(tmp_path.glob("recording_go2.*.db")) == []
+
+
+def _write_tar_gz(tar_path: Path, archive_name: str, content: bytes, staging_root: Path) -> None:
+    staging = staging_root / archive_name
+    staging.mkdir(exist_ok=True)
+    (staging / "payload.bin").write_bytes(content)
+    with tarfile.open(tar_path, "w:gz") as tar:
+        tar.add(staging, arcname=archive_name)
+
+
+def test_get_data_self_heals_legacy_extraction_without_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An extraction that predates this feature has no stamp yet.
+
+    That must not be trusted as-is: re-extract once, then it self-heals.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    lfs_dir = tmp_path / ".lfs"
+    lfs_dir.mkdir()
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir()
+
+    monkeypatch.setattr(
+        data,
+        "get_data_dir",
+        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
+    )
+    monkeypatch.setattr(data, "_get_lfs_dir", lambda: lfs_dir)
+    monkeypatch.setattr(data, "_check_git_lfs_available", lambda: True)
+
+    tar_path = data._lfs_archive_path("dataset")
+    _write_tar_gz(tar_path, "dataset", b"current", staging_root)
+
+    # extracted before stamping existed: archive and extraction both present, no stamp
+    (data_dir / "dataset").mkdir()
+    (data_dir / "dataset" / "payload.bin").write_bytes(b"stale, predates stamping")
+
+    healed = data.get_data("dataset/payload.bin")
+    assert healed.read_bytes() == b"current"
+    assert data._extraction_stamp_path("dataset").exists()
+
+    # second call is now self-healed: no further re-extraction needed
+    call_count = 0
+    original_decompress = data._decompress_archive
+
+    def counting_decompress(filename: str | Path) -> Path:
+        nonlocal call_count
+        call_count += 1
+        return original_decompress(filename)
+
+    monkeypatch.setattr(data, "_decompress_archive", counting_decompress)
+    data.get_data("dataset/payload.bin")
+    assert call_count == 0
+
+
+def test_get_data_returns_local_recording_without_backing_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(
+        data,
+        "get_data_dir",
+        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
+    )
+    monkeypatch.setattr(data, "_get_lfs_dir", lambda: tmp_path / ".lfs")
+
+    local_db = data_dir / "recording.db"
+    local_db.write_bytes(b"local only, no archive behind it")
+
+    def fail_pull(name: str) -> Path:
+        raise AssertionError("must not attempt an LFS pull for a local-only recording")
+
+    monkeypatch.setattr(data, "_pull_lfs_archive", fail_pull)
+
+    assert data.get_data("recording.db") == local_db
+
+
+def test_get_data_reextracts_when_archive_changes_then_stabilizes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    lfs_dir = tmp_path / ".lfs"
+    lfs_dir.mkdir()
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir()
+
+    monkeypatch.setattr(
+        data,
+        "get_data_dir",
+        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
+    )
+    monkeypatch.setattr(data, "_get_lfs_dir", lambda: lfs_dir)
+    monkeypatch.setattr(data, "_check_git_lfs_available", lambda: True)
+
+    tar_path = data._lfs_archive_path("dataset")
+    _write_tar_gz(tar_path, "dataset", b"v1", staging_root)
+
+    first = data.get_data("dataset/payload.bin")
+    assert first.read_bytes() == b"v1"
+
+    call_count = 0
+    original_decompress = data._decompress_archive
+
+    def counting_decompress(filename: str | Path) -> Path:
+        nonlocal call_count
+        call_count += 1
+        return original_decompress(filename)
+
+    monkeypatch.setattr(data, "_decompress_archive", counting_decompress)
+
+    # unchanged archive: no re-extraction
+    data.get_data("dataset/payload.bin")
+    assert call_count == 0
+
+    # archive re-tarred under the same name with different content
+    _write_tar_gz(tar_path, "dataset", b"v2, a longer payload than before", staging_root)
+
+    second = data.get_data("dataset/payload.bin")
+    assert second.read_bytes() == b"v2, a longer payload than before"
+    assert call_count == 1
+
+    # settles back to no re-extraction once the stamp matches again
+    data.get_data("dataset/payload.bin")
+    assert call_count == 1
+
+
+def test_get_data_reextraction_drops_members_removed_from_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-extraction must clear the old contents first.
+
+    tar.extractall only adds/overwrites, so a member dropped from a
+    re-tarred archive would otherwise survive on disk indefinitely.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    lfs_dir = tmp_path / ".lfs"
+    lfs_dir.mkdir()
+    staging = tmp_path / "staging" / "dataset"
+    staging.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        data,
+        "get_data_dir",
+        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
+    )
+    monkeypatch.setattr(data, "_get_lfs_dir", lambda: lfs_dir)
+    monkeypatch.setattr(data, "_check_git_lfs_available", lambda: True)
+
+    tar_path = data._lfs_archive_path("dataset")
+
+    (staging / "keep.bin").write_bytes(b"kept")
+    (staging / "drop.bin").write_bytes(b"dropped")
+    with tarfile.open(tar_path, "w:gz") as tar:
+        tar.add(staging, arcname="dataset")
+
+    dropped_path = data.get_data("dataset/drop.bin")
+    assert dropped_path.exists()
+
+    # re-tar without drop.bin
+    (staging / "drop.bin").unlink()
+    with tarfile.open(tar_path, "w:gz") as tar:
+        tar.add(staging, arcname="dataset")
+
+    kept_path = data.get_data("dataset/keep.bin")
+    assert kept_path.read_bytes() == b"kept"
+    assert not dropped_path.exists()
 
 
 @pytest.mark.self_hosted
