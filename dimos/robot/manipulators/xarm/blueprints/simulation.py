@@ -81,7 +81,6 @@ xarm_grasp_sim = autoconnect(
         object_scene=SimObjectScene.blueprint(objects=_XARM_GRASP_OBJECTS),
         pick_and_place_kwargs={
             "max_grasp_candidates_to_check": 30,
-            "pick_suppress_all_object_obstacles": True,
             "grasp_viz_gripper": _XARM_GRASPGENX.gripper,
             "grasp_viz_frame_to_tcp": _XARM_GRASPGENX.grasp_frame_to_tcp,
             "use_mesh_obstacles": True,
