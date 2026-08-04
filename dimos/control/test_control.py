@@ -253,6 +253,27 @@ def make_coordinator() -> Iterator[Callable[..., ControlCoordinator]]:
 
 
 class TestControlCoordinatorLifecycle:
+    def test_arm_trajectory_preserves_direct_gripper_command(self, make_coordinator, mock_adapter):
+        mock_adapter.read_gripper_position.return_value = 0.85
+        mock_adapter.write_gripper_position.return_value = True
+        component = HardwareComponent(
+            hardware_id="arm",
+            hardware_type=HardwareType.MANIPULATOR,
+            joints=make_joints("arm", 6),
+            gripper_joints=["arm/gripper"],
+        )
+        hardware = ConnectedHardware(mock_adapter, component)
+        coordinator = make_coordinator()
+        coordinator._hardware = {"arm": hardware}
+
+        assert coordinator.set_gripper_position("arm", 0.0)
+        assert hardware.write_command({"arm/joint1": 0.2}, ControlMode.POSITION)
+
+        assert [call.args[0] for call in mock_adapter.write_gripper_position.call_args_list] == [
+            0.0,
+            0.0,
+        ]
+
     def test_dispatch_routes_ee_twist_only_to_matching_frame_id(self, make_coordinator):
         coordinator = make_coordinator()
         matching_task = RecordingTask("eef")

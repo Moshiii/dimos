@@ -90,6 +90,7 @@ class PickAndPlaceModule(ManipulationModule):
         # The live detection cache is volatile (labels change every frame),
         # so pick/place use this stable snapshot instead.
         self._detection_snapshot: list[DetObject] = []
+        self._held_object_id: str | None = None
 
     @rpc
     def start(self) -> None:
@@ -300,11 +301,14 @@ class PickAndPlaceModule(ManipulationModule):
         cx, cy, cz = det.center.x, det.center.y, det.center.z
         xy_dist = (cx**2 + cy**2) ** 0.5
 
-        # Distance-adaptive occlusion offset:
-        # Near (< 0.8m): small inset — grasp shifted well toward robot (front surface)
-        # Far (>= 0.8m): larger inset — less toward-robot shift (grasp closer to true center)
-        inset = 0.01 if xy_dist < _FAR_OCCLUSION_XY_THRESHOLD else 0.05
-        gx, gy = self._occlusion_offset(det.center, det.size, inset=inset)
+        # Exact scene state has no single-viewpoint occlusion error to correct.
+        if det.identity_basis == "pimsim_scene":
+            inset = 0.0
+            gx, gy = cx, cy
+        else:
+            # Near detections need more correction toward the visible surface.
+            inset = 0.01 if xy_dist < _FAR_OCCLUSION_XY_THRESHOLD else 0.05
+            gx, gy = self._occlusion_offset(det.center, det.size, inset=inset)
 
         # For tall objects, grasp in the upper third instead of center
         # to avoid plunging deep and colliding with the object.
@@ -486,8 +490,14 @@ then refreshes perception obstacles.
         pre_grasp_offset = config.pre_grasp_offset
 
         # 1. Generate grasps (uses already-cached detections — call scan_objects first)
+        target = self._find_object_in_detections(object_name, object_id)
+        if target is None:
+            return SkillResult.fail(
+                "GRASP_GENERATION_FAILED",
+                f"No grasp poses found for '{object_name}'. Object may not be detected.",
+            )
         logger.info(f"Generating grasp poses for '{object_name}'...")
-        grasp_poses = self._generate_grasps_for_pick(object_name, object_id)
+        grasp_poses = self._generate_grasps_for_pick(object_name, target.object_id)
         if not grasp_poses:
             return SkillResult.fail(
                 "GRASP_GENERATION_FAILED",
@@ -515,7 +525,8 @@ then refreshes perception obstacles.
 
             # 3. Open gripper before approach
             logger.info("Opening gripper...")
-            self._set_gripper_position(0.85, rname)
+            if not self._set_gripper_position(0.85, rname):
+                return SkillResult.fail("GRIPPER_FAILED", "Failed to open gripper")
             time.sleep(0.5)
 
             # 4. Execute approach to pre-grasp
@@ -524,16 +535,27 @@ then refreshes perception obstacles.
                 return exec_result
 
             # 5. Move to grasp pose
+            target_removed = bool(
+                self._world_monitor and self._world_monitor.remove_object_obstacle(target.object_id)
+            )
             logger.info("Moving to grasp position...")
             if not self.plan_to_pose(grasp_pose, rname):
+                if target_removed:
+                    self.refresh_obstacles()
                 return SkillResult.fail("PLANNING_FAILED", "Grasp pose planning failed")
             exec_result = self._preview_execute_wait(rname)
             if not exec_result.is_success():
+                if target_removed:
+                    self.refresh_obstacles()
                 return exec_result
 
             # 6. Close gripper
             logger.info("Closing gripper...")
-            self._set_gripper_position(0.0, rname)
+            if not self._set_gripper_position(0.0, rname):
+                if target_removed:
+                    self.refresh_obstacles()
+                return SkillResult.fail("GRIPPER_FAILED", "Failed to close gripper")
+            self._held_object_id = target.object_id
             time.sleep(1.5)  # Wait for gripper to close
 
             # 7. Retract to pre-grasp
@@ -624,16 +646,22 @@ then refreshes perception obstacles.
 
         # 3. Release
         logger.info("Releasing object...")
-        self._set_gripper_position(0.85, rname)
+        if not self._set_gripper_position(0.85, rname):
+            return SkillResult.fail("GRIPPER_FAILED", "Failed to open gripper")
+        self._held_object_id = None
         time.sleep(1.0)
 
         # 4. Retract
         logger.info("Retracting...")
         if not self.plan_to_pose(pre_place_pose, rname):
+            self.refresh_obstacles()
             return SkillResult.fail("PLANNING_FAILED", "Retract planning failed")
         exec_result = self._preview_execute_wait(rname)
         if not exec_result.is_success():
+            self.refresh_obstacles()
             return exec_result
+
+        self.refresh_obstacles()
 
         return SkillResult.ok(f"Place complete — object released at ({x:.3f}, {y:.3f}, {z:.3f})")
 
