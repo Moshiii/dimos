@@ -393,10 +393,26 @@ class ObjectSceneRegistrationModule(Module):
             data=depth_cv, format=ImageFormat.DEPTH, frame_id=depth_msg.frame_id, ts=depth_msg.ts
         )
 
-        # Run 2D detection
+        # Log each expensive stage separately so a stalled on-demand scan can be localized.
+        t0 = time.monotonic()
+        logger.info("Object detection started", detector=self._detector_backend)
         detections_2d: ImageDetections2D[Any] = self._detector.process_image(color_image)
+        logger.info(
+            "Object detection completed",
+            detector=self._detector_backend,
+            duration_s=round(time.monotonic() - t0, 3),
+            detections=len(detections_2d.detections),
+        )
         if self._segmenter is not None:
+            t0 = time.monotonic()
+            logger.info("Object segmentation started", segmenter=self._segmentation_backend)
             detections_2d = self._segmenter.segment(detections_2d)
+            logger.info(
+                "Object segmentation completed",
+                segmenter=self._segmentation_backend,
+                duration_s=round(time.monotonic() - t0, 3),
+                detections=len(detections_2d.detections),
+            )
 
         detections_2d_msg = Detection2DArray(
             detections_length=len(detections_2d.detections),
