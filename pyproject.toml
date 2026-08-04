@@ -43,6 +43,7 @@ exclude = [
     "**/*.yml",
     "**/*.json",
     "**/*.urdf",
+    "**/*.xacro",
     "**/*.html",
     "**/*.css",
     "**/*.js",
