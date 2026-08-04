@@ -57,7 +57,7 @@ from dimos.visualization.rerun.constants import (
     RerunOpenOption,
 )
 from dimos.visualization.rerun.init import rerun_init
-from dimos.visualization.rerun.tf_tree import DEFAULT_AXIS_LENGTH, TFTreeVis
+from dimos.visualization.rerun.tf_tree import TFTreeVis
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype
@@ -204,8 +204,8 @@ class Config(ModuleConfig):
     max_hz: dict[str, float] = field(default_factory=dict)
 
     entity_prefix: str = "world"
-    # Length in meters of the triad drawn on every tf frame, 0 to draw none.
-    tf_axes: float = DEFAULT_AXIS_LENGTH
+    # Length of the triads to draw
+    tf_axes: float = 0.0
     topic_to_entity: Callable[[Any], str] | None = None
     connect_url: str | None = None
     memory_limit: str = "25%"
@@ -252,7 +252,7 @@ class RerunBridgeModule(Module):
             return None
         return TFTreeVis(
             axis_length=self.config.tf_axes,
-            root=f"{self.config.entity_prefix}/frames",
+            root=f"{self.config.entity_prefix}/tf",
         )
 
     @property
@@ -341,12 +341,14 @@ class RerunBridgeModule(Module):
 
         # TFMessage for example returns list of (entity_path, archetype) tuples
         if is_rerun_multi(rerun_data):
-            for path, archetype in rerun_data:
-                rr.log(path, archetype)
             # Bound locally: stop() clears the tree from another thread.
             tf_tree = self._tf_tree
             if tf_tree is not None and isinstance(msg, TFMessage):
-                tf_tree.log(msg)
+                # The tree re-paths these: its own layout, not the flat one.
+                tf_tree.log(msg, [archetype for _, archetype in rerun_data])
+                return
+            for path, archetype in rerun_data:
+                rr.log(path, archetype)
         else:
             rr.log(entity_path, cast("Archetype", rerun_data))
             # if source msg carries a frame_id, attach the entity to that TF frame

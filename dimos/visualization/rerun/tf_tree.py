@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
     import rerun as rr
+    from rerun._baseclasses import Archetype
 
     from dimos.memory2.stream import Stream
     from dimos.memory2.type.observation import Observation
@@ -34,7 +35,11 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-DEFAULT_FRAMES_ROOT = "world/frames"
+DEFAULT_TF_ROOT = "world/tf"
+# Where the transforms themselves are declared. Off to the side and free of
+# geometry: rerun pins a frame to the entity that declares it for the life of a
+# recording, so these cannot follow the tree when it re-roots.
+DEFAULT_LINKS_ROOT = "tf_links"
 DEFAULT_AXIS_LENGTH = 0.5
 DEFAULT_TIMELINE = "ts"
 # Each level's triad relative to its parent's.
@@ -65,34 +70,42 @@ class Placement:
 
 
 class TFTreeVis:
-    """Draws a labeled triad per tf frame, nested by entity path.
+    """Draws the tf tree, one nested entity per frame carrying a labeled triad.
 
-    Draws markers only. The transforms themselves are logged by whoever owns the
-    tf stream, at the flat paths TFMessage.to_rerun assigns.
+    Under root sits nothing but the tree. The transforms are declared apart from
+    it, under links, because a frame is pinned to its declaring entity while the
+    tree has to re-parent when a publisher starts late.
     """
 
     def __init__(
         self,
         axis_length: float = DEFAULT_AXIS_LENGTH,
-        root: str = DEFAULT_FRAMES_ROOT,
+        root: str = DEFAULT_TF_ROOT,
+        links: str = DEFAULT_LINKS_ROOT,
     ) -> None:
         self.axis_length = axis_length
         self.root = root
+        self.links = links
         self._lock = threading.Lock()
         self._parents: dict[str, str] = {}
         self._drawn: dict[str, Placement] = {}
         self._pending = False
 
-    def log(self, msg: TFMessage) -> None:
-        """Redraw once a message arrives that adds nothing new.
+    def log(self, msg: TFMessage, archetypes: Iterable[Archetype]) -> None:
+        """Declare the transforms, then redraw once a message adds nothing new.
 
         Publishers split one tree across several messages, and drawing each of
         them walks the tree through shapes it never really had, leaving a stale
         entity behind every time.
         """
+        import rerun as rr
+
         if not msg.transforms:
             return
         with self._lock:
+            for transform, archetype in zip(msg.transforms, archetypes, strict=True):
+                child = rr.escape_entity_path_part(transform.child_frame_id)
+                rr.log(f"{self.links}/{child}", archetype)
             if self._learn(msg.transforms):
                 self._pending = True
             elif self._pending:
@@ -143,11 +156,7 @@ class TFTreeVis:
         return placed
 
     def _redraw(self) -> None:
-        """Move triads to match the tree as it is now.
-
-        Rerun refuses to let the entity declaring a frame move, which is why the
-        triads carry a CoordinateFrame instead and declare nothing.
-        """
+        """Move the tree to match the shape tf has now."""
         import rerun as rr
 
         layout = self._layout()
@@ -198,6 +207,4 @@ class RerunTFTree(Transformer[T, T]):
         import rerun as rr
 
         rr.set_time(DEFAULT_TIMELINE, timestamp=tf_obs.ts)
-        for path, archetype in tf_obs.data.to_rerun():
-            rr.log(path, archetype)
-        self._vis.log(tf_obs.data)
+        self._vis.log(tf_obs.data, [archetype for _, archetype in tf_obs.data.to_rerun()])

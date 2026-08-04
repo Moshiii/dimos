@@ -183,54 +183,38 @@ def _plan_start(
     base_from_sensor: Transform | None,
     base_height: float,
     robot_height: float,
-) -> tuple[tuple[float, float, float], Transform | None]:
-    """Ground-projected planner start, plus the base pose when tf has the mount.
+) -> tuple[float, float, float]:
+    """Ground-projected planner start.
 
-    Without a tf stream the start is the sensor pose dropped by the robot height.
+    Without a tf stream this is the sensor pose dropped by the robot height.
     """
     px, py, pz, *_ = pose
     if base_from_sensor is None:
-        return (float(px), float(py), float(pz) - robot_height), None
+        return (float(px), float(py), float(pz) - robot_height)
     base = _base_pose(pose, ts, base_from_sensor)
-    start = (
+    return (
         float(base.translation.x),
         float(base.translation.y),
         float(base.translation.z) - base_height,
     )
-    return start, base
 
 
 def _log_odometry(
-    pose: tuple[float, ...],
-    ts: float,
-    trail: list[tuple[float, float, float]],
-    base: Transform | None,
+    pose: tuple[float, ...], ts: float, trail: list[tuple[float, float, float]]
 ) -> None:
-    """Trace the sensor moving throughout the scene."""
+    """Trace the sensor moving throughout the scene.
+
+    The pose itself is drawn by the tf tree, off the recorded tf stream.
+    """
     import rerun as rr
 
-    px, py, pz, qx, qy, qz, qw = pose
+    px, py, pz, *_ = pose
     rr.set_time(TIMELINE, timestamp=ts)
-    rr.log(
-        "world/mid360_link",
-        rr.Transform3D(translation=[px, py, pz], quaternion=rr.Quaternion(xyzw=[qx, qy, qz, qw])),
-    )
     trail.append((px, py, pz))
     if len(trail) > 1:
         rr.log(
             "world/mid360_path", rr.LineStrips3D([trail], colors=[SENSOR_PATH_COLOR], radii=0.015)
         )
-    if base is None:
-        return
-    rr.log(
-        "world/base_link",
-        rr.Transform3D(
-            translation=[base.translation.x, base.translation.y, base.translation.z],
-            quaternion=rr.Quaternion(
-                xyzw=[base.rotation.x, base.rotation.y, base.rotation.z, base.rotation.w]
-            ),
-        ),
-    )
 
 
 def _clearance_colors(clearance: NDArray[np.float32], clamp_m: float) -> NDArray[np.uint8]:
@@ -619,8 +603,13 @@ def main(
             else 0.0
         )
         if base_from_sensor is not None:
+            # Rides the tf frame rather than a pose of its own, so the box cannot
+            # disagree with the tree.
             rr.log(
-                "world/base_link/outline",
+                "world/robot_body", rr.Transform3D(parent_frame=f"tf#/{BASE_FRAME}"), static=True
+            )
+            rr.log(
+                "world/robot_body/outline",
                 rr.Boxes3D(
                     half_sizes=[ROBOT_LENGTH / 2, ROBOT_WIDTH / 2, robot_height / 2],
                     colors=[(0, 255, 127)],
@@ -629,7 +618,7 @@ def main(
             )
             # wall_clearance is the planner's proxy for the robot radius.
             rr.log(
-                "world/base_link/clearance",
+                "world/robot_body/clearance",
                 rr.Cylinders3D(
                     lengths=[robot_height],
                     radii=[wall_clearance],
@@ -645,7 +634,7 @@ def main(
             for ray_obs in ray_pipeline:
                 if ray_obs.pose_tuple is None:
                     continue
-                start, base = _plan_start(
+                start = _plan_start(
                     ray_obs.pose_tuple, ray_obs.ts, base_from_sensor, base_height, robot_height
                 )
                 ref_timing = _process_frame(
@@ -658,7 +647,7 @@ def main(
                     ref_clearance,
                     crop,
                 )
-                _log_odometry(ray_obs.pose_tuple, ray_obs.ts, sensor_trail, base)
+                _log_odometry(ray_obs.pose_tuple, ray_obs.ts, sensor_trail)
                 frame += 1
                 print(
                     f"frame={frame} configs={len(planners)} "

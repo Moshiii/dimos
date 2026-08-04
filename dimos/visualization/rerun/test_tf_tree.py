@@ -31,9 +31,8 @@ def paths(vis: TFTreeVis) -> dict[str, str]:
 
 def feed(vis: TFTreeVis, *messages: TFMessage) -> None:
     """tf republishes, and the tree draws once a message adds nothing new."""
-    for msg in messages:
-        vis.log(msg)
-    vis.log(messages[-1])
+    for msg in (*messages, messages[-1]):
+        vis.log(msg, [archetype for _, archetype in msg.to_rerun()])
 
 
 def test_triads_nest_along_the_tree() -> None:
@@ -41,9 +40,9 @@ def test_triads_nest_along_the_tree() -> None:
     feed(vis, TFMessage(edge("odom", "base_link"), edge("base_link", "camera/optical")))
 
     assert paths(vis) == {
-        "odom": "world/frames/odom",
-        "base_link": "world/frames/odom/base_link",
-        "camera/optical": "world/frames/odom/base_link/camera\\/optical",
+        "odom": "world/tf/odom",
+        "base_link": "world/tf/odom/base_link",
+        "camera/optical": "world/tf/odom/base_link/camera\\/optical",
     }
 
 
@@ -51,14 +50,14 @@ def test_a_late_root_re_parents_the_tree() -> None:
     """The mount tree is published seconds before the odometry that roots it."""
     vis = TFTreeVis()
     feed(vis, TFMessage(edge("mid360_link", "base_link")))
-    assert paths(vis)["base_link"] == "world/frames/mid360_link/base_link"
+    assert paths(vis)["base_link"] == "world/tf/mid360_link/base_link"
 
     feed(vis, TFMessage(edge("odom", "mid360_link")))
 
     assert paths(vis) == {
-        "odom": "world/frames/odom",
-        "mid360_link": "world/frames/odom/mid360_link",
-        "base_link": "world/frames/odom/mid360_link/base_link",
+        "odom": "world/tf/odom",
+        "mid360_link": "world/tf/odom/mid360_link",
+        "base_link": "world/tf/odom/mid360_link/base_link",
     }
 
 
