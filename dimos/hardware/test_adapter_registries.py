@@ -53,7 +53,6 @@ EXPECTED_NAMES = {
     "manipulators": {
         "a750",
         "mock",
-        "openarm",
         "piper",
         "sim_mujoco",
         "xarm",
