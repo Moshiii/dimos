@@ -37,9 +37,13 @@ cmd_shell() {
     say "image $IMAGE_TAG (${IMAGE_DIGEST:7:19}…) — logs mount: $LOG_DIR -> /app/logs"
     say "inside: dimos run <blueprint>; preflight: python3 /opt/dimos/scripts/r1lite_test/preflight.py"
     # The -c wrapper sources ROS even on images older than the baked
-    # bashrc, then hands over an interactive shell.
+    # bashrc, then hands over an interactive shell. The data-cache mount
+    # keeps runtime-downloaded assets (sim meshes via LFS) across --rm
+    # containers.
+    mkdir -p "$HOME/r1lite-cache"
     exec docker run -it --rm --network host --ipc host --pid host \
         -v "$LOG_DIR":/app/logs \
+        -v "$HOME/r1lite-cache":/home/dimos/.local/share/dimos \
         -e QUEST_RECORD="${QUEST_RECORD:-}" \
         --entrypoint bash "$IMAGE" \
         -c 'source /opt/ros/humble/setup.bash 2>/dev/null; export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-2}"; exec bash -i'
@@ -51,8 +55,10 @@ cmd_run() {
     mkdir -p "$LOG_DIR"
     local log="$LOG_DIR/r1_run_$(date +%Y%m%d_%H%M%S).log"
     say "running $bp from $IMAGE_TAG; log: $log"
+    mkdir -p "$HOME/r1lite-cache"
     docker run --rm --name "$RUN_NAME" --network host --ipc host --pid host \
         -v "$LOG_DIR":/app/logs \
+        -v "$HOME/r1lite-cache":/home/dimos/.local/share/dimos \
         -e QUEST_RECORD="${QUEST_RECORD:-}" \
         "$IMAGE" run "$bp" 2>&1 | tee "$log"
 }

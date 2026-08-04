@@ -53,6 +53,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libsndfile1 \
         iproute2 \
         tcpdump \
+        git \
+        git-lfs \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependency layer, keyed on the lockfile via bind mount. --no-deps: each
