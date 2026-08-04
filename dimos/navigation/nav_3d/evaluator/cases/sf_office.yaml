@@ -8,7 +8,7 @@ cases:
 - id: auto_01_flat
   start: [-2.84, 8.44, -0.24]
   goal: [3.64, 7.64, -0.16]
-  tags: [manual, flat, doorway, auto]
+  tags: [auto, flat, doorway]
 - id: auto_02_flat
   start: [6.44, 0.44, -0.16]
   goal: [6.68, -3.0, 0.08]

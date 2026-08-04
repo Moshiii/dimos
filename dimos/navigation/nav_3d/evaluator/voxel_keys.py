@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Voxel indices packed into sortable int64 keys.
-
-Membership tests over a map run as a sorted-array search on these keys rather
-than a per-point spatial query, which is what makes the gates cheap enough to
-sweep a whole path.
-"""
+"""Voxel indices packed into sortable int64 keys, so map membership is a
+sorted-array search rather than a spatial query."""
 
 from __future__ import annotations
 
@@ -29,18 +25,24 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 _KEY_OFFSET = 1 << 20
+_FIELD_BITS = 21
+_X_SHIFT = 2 * _FIELD_BITS
+_Y_SHIFT = _FIELD_BITS
+_FIELD_MASK = (1 << _FIELD_BITS) - 1
 
 
 def voxel_keys(points: NDArray[np.float32], voxel_size: float) -> NDArray[np.int64]:
     """Pack voxel indices into sortable int64 keys, one per point."""
     idx = np.floor(points.astype(np.float64) / voxel_size).astype(np.int64) + _KEY_OFFSET
-    return (idx[:, 0] << 42) | (idx[:, 1] << 21) | idx[:, 2]
+    return (idx[:, 0] << _X_SHIFT) | (idx[:, 1] << _Y_SHIFT) | idx[:, 2]
 
 
 def key_centers(keys: NDArray[np.int64], voxel_size: float) -> NDArray[np.float32]:
     """Voxel center positions for packed keys, the inverse of voxel_keys."""
-    mask = (1 << 21) - 1
-    idx = np.stack([keys >> 42, (keys >> 21) & mask, keys & mask], axis=1) - _KEY_OFFSET
+    idx = (
+        np.stack([keys >> _X_SHIFT, (keys >> _Y_SHIFT) & _FIELD_MASK, keys & _FIELD_MASK], axis=1)
+        - _KEY_OFFSET
+    )
     return ((idx + 0.5) * voxel_size).astype(np.float32)
 
 
@@ -65,10 +67,18 @@ def cylinder_offsets(
     return np.asarray(out, dtype=np.int64)
 
 
+def offset_deltas(offsets: NDArray[np.int64]) -> NDArray[np.int64]:
+    """Packed key deltas for integer voxel offsets.
+
+    The three index fields occupy disjoint bit ranges and sit far from their
+    bounds, so adding a packed delta carries no bits between fields and is
+    identical to packing the summed indices.
+    """
+    return np.asarray((offsets[:, 0] << _X_SHIFT) + (offsets[:, 1] << _Y_SHIFT) + offsets[:, 2])
+
+
 def offset_keys(
     points: NDArray[np.float32], offsets: NDArray[np.int64], voxel_size: float
 ) -> NDArray[np.int64]:
-    """Keys of every (point voxel + offset) pair, shape (P * O,)."""
-    idx = np.floor(points.astype(np.float64) / voxel_size).astype(np.int64) + _KEY_OFFSET
-    swept = idx[:, None, :] + offsets[None, :, :]
-    return np.asarray((swept[..., 0] << 42) | (swept[..., 1] << 21) | swept[..., 2])
+    """Keys of every (point voxel + offset) pair, shape (P, O)."""
+    return voxel_keys(points, voxel_size)[:, None] + offset_deltas(offsets)[None, :]

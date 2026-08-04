@@ -51,8 +51,13 @@ class Trajectory:
 
     def arc_lengths(self) -> NDArray[np.float64]:
         """Cumulative walked distance at each pose, starting at 0."""
-        steps = np.linalg.norm(np.diff(self.positions, axis=0), axis=1)
-        return np.concatenate([[0.0], np.cumsum(steps)])
+        from dimos.navigation.nav_3d.evaluator.metrics import arc_lengths
+
+        return arc_lengths(self.positions)
+
+    def foot(self, robot_height: float) -> NDArray[np.float32]:
+        """Poses dropped to foot level, the frame cases and paths are given in."""
+        return self.positions - np.array([0.0, 0.0, robot_height], dtype=np.float32)
 
 
 def iter_world_frames(
@@ -62,11 +67,9 @@ def iter_world_frames(
     align_tol: float = 0.05,
     end_ts: float | None = None,
 ) -> Iterator[Frame]:
-    """Yield lidar frames registered into the world by their aligned odometry pose.
+    """Yield lidar frames registered into the world by their odometry pose.
 
-    Frames at or after end_ts (seconds) are skipped. Clouds must be sensor-frame.
-    Legacy recordings with pre-registered world-frame clouds are rejected.
-    Re-record them.
+    Clouds must be sensor-frame. Frames at or after end_ts are skipped.
     """
     store = SqliteStore(path=str(db_path))
     with store:

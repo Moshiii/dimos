@@ -27,9 +27,11 @@ from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
 from dimos.navigation.nav_3d.evaluator import metrics, tripwire
 from dimos.navigation.nav_3d.evaluator.cases import Case, Suite, load_suite, save_suite
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
+from dimos.navigation.nav_3d.evaluator.curation import CaseStore, CurationError, _curated_tags
 from dimos.navigation.nav_3d.evaluator.final_map import (
     FinalMap,
     MapCheckpoints,
+    _save_npz,
     encode_deltas,
     replay_frames,
 )
@@ -40,6 +42,7 @@ from dimos.navigation.nav_3d.evaluator.generate import (
     generate_cases,
     snap_to_surface,
 )
+from dimos.navigation.nav_3d.evaluator.picker import pick_along_ray
 from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
 from dimos.navigation.nav_3d.evaluator.recording import Frame, Trajectory
 from dimos.navigation.nav_3d.evaluator.runner import (
@@ -54,7 +57,14 @@ from dimos.navigation.nav_3d.evaluator.runner import (
     score_negative,
 )
 from dimos.navigation.nav_3d.evaluator.tagging import route_tags
-from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers, keys_contain, voxel_keys
+from dimos.navigation.nav_3d.evaluator.voxel_keys import (
+    cylinder_offsets,
+    key_centers,
+    keys_contain,
+    offset_deltas,
+    offset_keys,
+    voxel_keys,
+)
 
 if TYPE_CHECKING:
     from dimos.navigation.nav_3d.evaluator.pipeline import NavPipeline
@@ -668,8 +678,6 @@ def test_select_diverse_backfills_to_min_cases() -> None:
 
 
 def test_pick_along_ray() -> None:
-    from dimos.navigation.nav_3d.evaluator.picker import pick_along_ray
-
     wall = _wall(10.0)
     origin = np.array([0.0, 0.0, 0.5])
     target = np.array([10.0, 0.35, 0.75])
@@ -826,3 +834,110 @@ def test_tripwire_perf_violations() -> None:
     assert len(violations) == 1 and "plan_ms" in violations[0]
     # Reports predating the budgets pass.
     assert tripwire.perf_violations({"datasets": []}) == []
+
+
+def test_gate_band_follows_the_tilted_body_axis() -> None:
+    """On a slope the band is measured up the body axis, so an obstacle at the
+    body centre collides and one down in the leg zone does not."""
+    vox = 0.02
+    cfg = _cfg(voxel_size=vox)
+    t = np.arange(-3, 3.01, 0.1)
+    c = 1 / np.sqrt(2)
+    path = np.stack([t * c, np.zeros_like(t), t * c], axis=1).astype(np.float32)
+    samples = metrics.densify(path, vox / 2)
+    i = len(samples) // 2
+    _, _, up = metrics.body_frames(samples, cfg.robot_length)
+    mid_h = (cfg.ground_margin + cfg.body_clearance) / 2.0
+
+    def hits(point: np.ndarray) -> bool:
+        keys = np.unique(voxel_keys(np.asarray([point], dtype=np.float32), vox))
+        return not metrics.check_path(path, keys, cfg).valid
+
+    assert hits(samples[i] + mid_h * up[i])
+    assert not hits(samples[i] + 0.15 * up[i])
+
+
+def test_offset_deltas_match_packing_the_summed_indices() -> None:
+    pts = np.array([[0.05, -3.2, 1.4], [12.0, 0.0, -2.0]], dtype=np.float32)
+    offs = cylinder_offsets(0.4, -0.2, 0.3, VOXEL)
+    idx = np.floor(pts.astype(np.float64) / VOXEL).astype(np.int64)[:, None, :] + offs[None, :, :]
+    packed = voxel_keys((idx.reshape(-1, 3) * VOXEL + VOXEL / 2).astype(np.float32), VOXEL)
+    assert np.array_equal(offset_keys(pts, offs, VOXEL).ravel(), packed)
+    assert np.array_equal(
+        offset_keys(pts, offs, VOXEL)[0], voxel_keys(pts, VOXEL)[0] + offset_deltas(offs)
+    )
+
+
+def test_spl_and_body_frames_survive_degenerate_input() -> None:
+    """A coincident start and goal must score, not divide by zero, and a
+    zero-length path must still yield a usable body frame."""
+    assert metrics.spl(True, 0.0, 0.0) == 0.0
+    point = np.array([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0]], dtype=np.float32)
+    fwd, lateral, up = metrics.body_frames(point, 0.7)
+    assert np.allclose(np.linalg.norm(fwd, axis=1), 1.0)
+    assert np.linalg.det(np.stack((fwd, lateral, up), axis=-1)[0]) > 0
+
+
+def _store(tmp_path: Path, cases: list[Case]) -> CaseStore:
+    manifest = tmp_path / "demo.yaml"
+    save_suite(Suite(dataset="demo", cases=cases), manifest)
+    xs, ys = np.meshgrid(np.arange(0, 8, VOXEL), np.arange(-2, 2, VOXEL))
+    surface = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1, dtype=np.float32)
+    return CaseStore(load_suite(manifest), manifest, surface, _cfg())
+
+
+def test_editing_a_generated_case_keeps_it_in_the_incremental_score(tmp_path: Path) -> None:
+    """Relabelling a case must not silently change what it measures."""
+    case = Case(
+        id="auto_00_flat", start=(1.0, 0.0, 0.0), goal=(5.0, 0.0, 0.0), tags=["auto", "flat"]
+    )
+    store = _store(tmp_path, [case])
+    store.update("auto_00_flat", "auto_00_flat", ["flat", "doorway"], expect_fail=False)
+    edited = store.get("auto_00_flat")
+    assert "manual" not in edited.tags
+    assert not _final_only(edited)
+    # A hand-added case is curated, and stays a final-map-only test.
+    added = store.add((1.0, 0.0, 0.0), (4.0, 0.0, 0.0), ["flat"])
+    assert added.tags[0] == "manual"
+    assert _final_only(added)
+
+
+def test_curation_rejects_bad_requests(tmp_path: Path) -> None:
+    store = _store(tmp_path, [Case(id="manual_00", start=(1.0, 0.0, 0.0), goal=(5.0, 0.0, 0.0))])
+    with pytest.raises(CurationError, match="already exists"):
+        store.add((1.0, 0.0, 0.0), (5.0, 0.0, 0.0), [], case_id="manual_00")
+    with pytest.raises(CurationError, match="standable surface"):
+        store.add((1.0, 0.0, 0.0), (400.0, 0.0, 0.0), [])
+    # An infeasible goal may sit where nothing is standable.
+    assert store.add((1.0, 0.0, 0.0), (400.0, 0.0, 0.0), [], expect_fail=True).expect_fail
+    with pytest.raises(CurationError, match="not found"):
+        store.get("nope")
+    assert _curated_tags(["flat", "negative"], True) == ["manual", "negative", "flat"]
+
+
+def test_a_curated_dynamic_case_scores_for_refusing() -> None:
+    """expect_final_fail inverts the final outcome whatever the provenance."""
+    keys, cfg, case = _meta_scene()
+    for tags in (["auto"], ["manual"]):
+        marked = replace(case, tags=tags, expect_final_fail=True)
+        refused, _ = _run_plan(_stub(None), marked, 16.0, keys, keys, cfg)
+        assert score_negative(refused).spl == 1.0
+        assert _final_only(marked) == ("auto" not in tags)
+
+
+def test_cache_writes_are_atomic(tmp_path: Path) -> None:
+    """An interrupted write must leave the previous cache loadable."""
+    cache = tmp_path / "nested" / "x.abc123.npz"
+    _save_npz(cache, frames=np.array(7))
+    assert int(np.load(cache)["frames"]) == 7
+    assert not list(cache.parent.glob("*.tmp"))
+    with pytest.raises(KeyboardInterrupt):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(np, "savez_compressed", _raise_interrupt)
+            _save_npz(cache, frames=np.array(9))
+    assert int(np.load(cache)["frames"]) == 7
+    assert not list(cache.parent.glob("*.tmp"))
+
+
+def _raise_interrupt(*args: object, **kwargs: object) -> None:
+    raise KeyboardInterrupt

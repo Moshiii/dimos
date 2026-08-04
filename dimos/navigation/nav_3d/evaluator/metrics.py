@@ -25,7 +25,9 @@ from dimos.navigation.nav_3d.evaluator.voxel_keys import (
     cylinder_offsets,
     key_centers,
     keys_contain,
+    offset_deltas,
     offset_keys,
+    voxel_keys,
 )
 
 if TYPE_CHECKING:
@@ -70,30 +72,29 @@ def goal_reached(
 # the body surface. Anything farther reports the cap.
 MARGIN_CAP_M = 0.3
 
+# Floor on any length used as a divisor or a direction.
+MIN_LENGTH_M = 1e-6
+
 
 @dataclass
 class GateResult:
-    """Collision check of a path against an obstacle key set."""
+    """Collision check of a path against a voxel map key set."""
 
     valid: bool
     collision_points: NDArray[np.float32]
     # Indices of the colliding samples in densify(waypoints, voxel_size / 2),
     # so a viewer can recover the exact body frames the gate tested.
     collision_indices: NDArray[np.int64]
-    # Horizontal distance from the body surface to the nearest obstacle in
-    # the gate's z band, minimized along the path. Negative is penetration
-    # depth, capped at MARGIN_CAP_M when nothing is near. Gives a smooth
-    # how-close-to-flipping signal next to the binary verdict.
+    # Horizontal distance from the body surface to the nearest occupied
+    # voxel in the gate's band, minimised along the path. Negative is
+    # penetration depth, capped at MARGIN_CAP_M when nothing is near.
     min_clearance_m: float
 
 
 def chord_directions(samples: NDArray[np.float32], span: float) -> NDArray[np.float64]:
-    """Unit direction from a point span/2 behind each sample to a point span/2
-    ahead, measured along the path.
+    """Heading from the rear-foot to the front-foot chord, span metres apart.
 
-    This is the rigid body's heading: the chord from the rear feet to the front
-    feet, not the local tangent between two points under the body center, which
-    on stepped terrain flips between flat treads and vertical risers.
+    Steadier than the local tangent, which flips between tread and riser.
     """
     if len(samples) < 2:
         return np.tile(np.array([1.0, 0.0, 0.0]), (len(samples), 1))
@@ -105,15 +106,18 @@ def chord_directions(samples: NDArray[np.float32], span: float) -> NDArray[np.fl
     back = np.column_stack([np.interp(back_arc, arc, pts[:, c]) for c in range(3)])
     front = np.column_stack([np.interp(front_arc, arc, pts[:, c]) for c in range(3)])
     fwd = front - back
+    norm = np.linalg.norm(fwd, axis=1, keepdims=True)
+    # A path of zero arc length has no heading, so fall back to a valid frame
+    # rather than handing a singular basis to the caller.
+    fwd = np.where(norm > MIN_LENGTH_M, fwd, np.array([1.0, 0.0, 0.0]))
     return fwd / np.maximum(np.linalg.norm(fwd, axis=1, keepdims=True), 1e-9)
 
 
 def body_frames(
     samples: NDArray[np.float32], robot_length: float
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
-    """Per-sample body axes: forward along the robot-length chord, lateral
-    horizontal, up tilted with the slope, so the box yaws and pitches with the
-    body rather than the terrain right under its center."""
+    """Per-sample body axes: forward along the chord, lateral horizontal, up
+    tilted with the slope."""
     fwd = chord_directions(samples, robot_length)
     lateral = np.cross(np.array([0.0, 0.0, 1.0]), fwd)
     ln = np.linalg.norm(lateral, axis=1, keepdims=True)
@@ -123,17 +127,12 @@ def body_frames(
 
 
 def check_path(
-    waypoints: NDArray[np.float32], obstacle_keys: NDArray[np.int64], cfg: EvalConfig
+    waypoints: NDArray[np.float32], map_keys: NDArray[np.int64], cfg: EvalConfig
 ) -> GateResult:
-    """Sweep the robot body box along foot-level waypoints against obstacles.
+    """Sweep the robot body box along foot-level waypoints against the map.
 
-    At each sample the body is a box of the robot's length and width, centered
-    over the path point and rotated in place: yawed and pitched along the
-    robot-length chord, so it stays over the path rather than sliding onto the
-    chord. Its vertical span is the ground_margin to body_clearance band up the
-    tilted body axis, so the legs and the ground below never count, only the
-    elevated body. Candidate voxels come from a padded voxelized cylinder that
-    covers the box at any orientation and are tested against the exact box.
+    The box is the robot's length and width, centred mid-band up the tilted
+    body axis over each sample, so the legs and the ground never count.
     """
     voxel_size = cfg.voxel_size
     samples = densify(waypoints, voxel_size / 2)
@@ -141,17 +140,29 @@ def check_path(
     half_len = cfg.robot_length / 2.0
     half_wid = cfg.robot_width / 2.0
     half_band = (cfg.body_clearance - cfg.ground_margin) / 2.0
-    mid = np.array([0.0, 0.0, (cfg.ground_margin + cfg.body_clearance) / 2.0])
-    circ = float(np.hypot(half_len, half_wid))
+    mid_h = (cfg.ground_margin + cfg.body_clearance) / 2.0
+    centers = samples + mid_h * up
+    pad = MARGIN_CAP_M + voxel_size
+    # The candidate cylinder only has to reach the band, so bound it by the
+    # path's own steepest pitch instead of assuming any orientation.
+    sin_p = float(np.abs(fwd[:, 2]).max())
+    cos_p = float(np.sqrt(max(1.0 - sin_p * sin_p, 0.0)))
+    reach_z = (half_len + pad) * sin_p + half_band * cos_p + voxel_size
     offsets = cylinder_offsets(
-        circ + MARGIN_CAP_M + voxel_size,
-        -(half_len + MARGIN_CAP_M + voxel_size),
-        cfg.body_clearance + half_len + MARGIN_CAP_M + voxel_size,
+        float(np.hypot(half_len, half_wid)) + pad + (mid_h + half_band) * sin_p,
+        mid_h * cos_p - reach_z,
+        mid_h * cos_p + reach_z,
         voxel_size,
     )
-    keys = offset_keys(samples, offsets, voxel_size)
-    candidate = keys_contain(obstacle_keys, keys.ravel()).reshape(keys.shape)
-    s_idx, o_idx = np.nonzero(candidate)
+    # Samples land two per voxel, so membership runs over the distinct voxels
+    # and is scattered back rather than being paid for twice.
+    base = voxel_keys(samples, voxel_size)
+    deltas = offset_deltas(offsets)
+    unique_base, inverse = np.unique(base, return_inverse=True)
+    hit = keys_contain(map_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
+        len(unique_base), len(deltas)
+    )
+    s_idx, o_idx = np.nonzero(hit[inverse])
     if len(s_idx) == 0:
         return GateResult(
             valid=True,
@@ -159,8 +170,7 @@ def check_path(
             collision_indices=np.empty(0, dtype=np.int64),
             min_clearance_m=MARGIN_CAP_M,
         )
-    # Offset from the box center, which sits mid-band directly over the sample.
-    delta = key_centers(keys[s_idx, o_idx], voxel_size) - samples[s_idx] - mid
+    delta = key_centers(base[s_idx] + deltas[o_idx], voxel_size) - centers[s_idx]
     along = (delta * fwd[s_idx]).sum(1)
     across = (delta * lateral[s_idx]).sum(1)
     vertical = (delta * up[s_idx]).sum(1)
@@ -193,10 +203,7 @@ def check_support(
 ) -> SupportResult:
     """Require occupied voxels beneath every path sample.
 
-    A path across a void collides with nothing, so the collision gate alone
-    cannot catch fabricated bridges. Each densified sample must have at least
-    one occupied voxel within radius horizontally and from depth below the
-    foot up to one voxel above it.
+    The collision gate alone cannot catch a path fabricated across a void.
     """
     voxel_size = cfg.voxel_size
     samples = densify(waypoints, voxel_size)
@@ -228,10 +235,7 @@ def _resample(waypoints: NDArray[np.float32], spacing: float) -> NDArray[np.floa
 def check_kinematics(waypoints: NDArray[np.float32], cfg: EvalConfig) -> KinematicsResult:
     """Reject paths that climb steeper than the robot can.
 
-    The profile is resampled at window_m of arc length so single-cell
-    quantization in planner waypoints does not read as a cliff. Each
-    resampled segment may rise at most max_slope times its horizontal run,
-    with a max_step_m floor so stair risers between close samples pass.
+    Resampled at window_m of arc so cell quantization does not read as a cliff.
     """
     if len(waypoints) < 2:
         return KinematicsResult(True, waypoints[:0])
@@ -259,8 +263,7 @@ class Reference:
 
 @dataclass
 class _Visits:
-    """Every trajectory pose near the start and near the goal, with the walked
-    length of each start-visit to goal-visit pairing."""
+    """Poses near each endpoint, with the walked length of every pairing."""
 
     foot: NDArray[np.float32]
     near_s: NDArray[np.int64]
@@ -275,7 +278,7 @@ def _visits(
     cfg: EvalConfig,
 ) -> _Visits | None:
     """None when either endpoint is farther than snap_max_m from the trajectory."""
-    foot = trajectory.positions - np.array([0.0, 0.0, cfg.robot_height], dtype=np.float32)
+    foot = trajectory.foot(cfg.robot_height)
     ds = np.linalg.norm(foot - np.asarray(start, dtype=np.float32), axis=1)
     dg = np.linalg.norm(foot - np.asarray(goal, dtype=np.float32), axis=1)
     if ds.min() > cfg.snap_max_m or dg.min() > cfg.snap_max_m:
@@ -297,12 +300,11 @@ def reference_length(
     goal: tuple[float, float, float],
     cfg: EvalConfig,
 ) -> Reference:
-    """Shortest walked length the trajectory demonstrates between start and goal.
+    """Shortest walked length demonstrated between start and goal.
 
-    Minimizes route length over every combination of start and goal visits,
-    not the route between single nearest poses. Only causal pairs count when
-    one exists: the goal visited before the start. Falls back to straight-line
-    distance when either endpoint is off the trajectory.
+    Minimised over every start-visit to goal-visit pairing, preferring causal
+    pairs. Falls back to straight-line distance when an endpoint is off the
+    trajectory.
     """
     visits = _visits(trajectory, start, goal, cfg)
     if visits is None:
@@ -316,7 +318,7 @@ def reference_length(
     best = np.unravel_index(totals.argmin(), totals.shape)
     i = int(visits.near_s[best[0]])
     start_ts = float(trajectory.ts[i]) if causal else float("inf")
-    return Reference(max(float(totals[best]), 1e-6), True, start_ts, causal)
+    return Reference(max(float(totals[best]), MIN_LENGTH_M), True, start_ts, causal)
 
 
 def ground_truth_route(
@@ -325,13 +327,9 @@ def ground_truth_route(
     goal: tuple[float, float, float],
     cfg: EvalConfig,
 ) -> NDArray[np.float32] | None:
-    """Foot-level polyline of the shortest walk the robot took between start and
-    goal, or None when either endpoint is off the trajectory.
+    """Foot-level polyline of the shortest walk between start and goal.
 
-    Unlike reference_length this ignores causality: it describes the terrain
-    between two places, so the nearest-in-time pass is what we want, not the
-    causal one. Picking the visit pair with the least trajectory between them
-    keeps the route local instead of a building-spanning detour.
+    Ignores causality: it describes terrain, not what the robot knew.
     """
     visits = _visits(trajectory, start, goal, cfg)
     if visits is None:
@@ -347,7 +345,7 @@ def ground_truth_route(
 def spl(success: bool, l_ref: float, p_len: float) -> float:
     if not success:
         return 0.0
-    return l_ref / max(p_len, l_ref)
+    return l_ref / max(p_len, l_ref, MIN_LENGTH_M)
 
 
 def soft_progress(

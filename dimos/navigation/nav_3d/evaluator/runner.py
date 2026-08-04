@@ -12,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run case suites through the ray tracer and MLS planner and score them.
+"""Replay case suites through a pipeline and score them.
 
-Auto cases plan twice: online on the incremental map at the case start time,
-and final on the map fed the whole recording. Manual and infeasible cases plan
-once on the final map. The final path is gated against full final occupancy,
-the online path against the incremental map at plan time. Every path must stand
-on final-map occupancy and stay within the climb envelope. The headline score
-is validity-gated SPL on the incremental map.
+Generated cases plan twice, online at their start time and again on the whole
+recording. Curated and infeasible cases plan once, on the final map. The
+headline score is validity-gated SPL on the incremental map.
 """
 
 from __future__ import annotations
@@ -38,7 +35,7 @@ from dimos.navigation.nav_3d.evaluator.final_map import (
     load_or_build_checkpoints,
     load_or_build_final_map,
 )
-from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection
+from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
 from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames, load_trajectory
 from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers
 from dimos.utils.logging_config import setup_logger
@@ -175,7 +172,7 @@ def _run_plan(
     pipeline: NavPipeline,
     case: Case,
     l_ref: float,
-    obstacle_keys: NDArray[np.int64],
+    map_keys: NDArray[np.int64],
     support_keys: NDArray[np.int64],
     cfg: EvalConfig,
 ) -> tuple[PlanOutcome, NDArray[np.float32] | None]:
@@ -186,7 +183,7 @@ def _run_plan(
         return _no_plan(plan_ms), None
 
     reached = metrics.goal_reached(waypoints, case.goal, cfg.goal_tolerance)
-    gate = metrics.check_path(waypoints, obstacle_keys, cfg)
+    gate = metrics.check_path(waypoints, map_keys, cfg)
     support = metrics.check_support(waypoints, support_keys, cfg)
     kinematics = metrics.check_kinematics(waypoints, cfg)
     length = metrics.path_length(waypoints)
@@ -279,18 +276,18 @@ def _snapshot(pipeline: NavPipeline) -> PlannerArtifacts | None:
 def _final_only(case: Case) -> bool:
     """Whether a case is scored on the final map only, with no online phase.
 
-    Manual and certified-infeasible cases have hand-placed endpoints that are
-    not tied to the recording timeline, so there is no meaningful incremental
-    map at plan time to replay against. They are pure final-map tests.
+    Hand-placed endpoints are not tied to the recording timeline, so there is
+    no meaningful incremental map to replay against. Generated cases keep their
+    online phase however their labels are later edited.
     """
-    return case.expect_fail or "manual" in case.tags
+    return case.expect_fail or "auto" not in case.tags
 
 
 def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> DatasetResult:
     db_path = suite.db_path()
     trajectory = load_trajectory(db_path, suite.odom_stream, suite.end_ts_seconds())
     final = load_or_build_final_map(db_path, suite, cfg)
-    obstacle_keys = final.occupied_keys
+    map_keys = final.occupied_keys
 
     final_only = np.array([_final_only(c) for c in suite.cases], dtype=bool)
     refs: list[metrics.Reference] = []
@@ -328,7 +325,7 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
     case_ckpt = np.searchsorted(checkpoints.times, start_ts)
     case_ckpt[final_only] = -1
 
-    pipeline = cfg.make_pipeline()
+    pipeline = make_pipeline(cfg.pipeline, cfg)
     results: list[CaseResult | None] = [None] * len(suite.cases)
     online: dict[int, tuple[PlanOutcome, NDArray[np.float32] | None, NDArray[np.int64]]] = {}
     artifacts: dict[int, PlannerArtifacts | None] = {}
@@ -357,7 +354,7 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
             # Collisions are checked against the incremental map the evaluator
             # had at plan time, not the final map. Support still uses the final
             # map, since the ground exists whether or not it was mapped yet.
-            outcome, waypoints = _run_plan(pipeline, case, ref.length, keys, obstacle_keys, cfg)
+            outcome, waypoints = _run_plan(pipeline, case, ref.length, keys, map_keys, cfg)
             online[ci] = (outcome, waypoints, keys)
             artifacts[ci] = _snapshot(pipeline) if keep_artifacts else None
             occupied_at_plan[ci] = key_centers(keys, cfg.voxel_size) if keep_artifacts else None
@@ -386,11 +383,13 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
     final_artifacts = _snapshot(pipeline) if keep_artifacts else None
     for ci, case in enumerate(suite.cases):
         ref = refs[ci]
-        final_out, _ = _run_plan(pipeline, case, ref.length, obstacle_keys, obstacle_keys, cfg)
+        final_out, _ = _run_plan(pipeline, case, ref.length, map_keys, map_keys, cfg)
+        if case.expect_fail or case.expect_final_fail:
+            # Both labels certify that the final map holds no route, so the
+            # planner passes by refusing. Applied before the final-only split
+            # so a curated case is not scored zero for being right.
+            final_out = score_negative(final_out)
         if final_only[ci]:
-            if case.expect_fail:
-                # An infeasible case is passed by refusing it.
-                final_out = score_negative(final_out)
             results[ci] = _result(
                 case,
                 ref,
@@ -402,19 +401,12 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
                 final_only=True,
             )
             continue
-        if case.expect_final_fail:
-            # A dynamic obstacle blocked the route by the final map, so the
-            # planner is right to refuse it there while the online plan, made
-            # before the closure, is scored normally.
-            final_out = score_negative(final_out)
         online_out, online_wp, online_keys = online[ci]
         end = online_wp[-1] if online_wp is not None and len(online_wp) else None
         dynamic_candidate, blocking = (
             (False, [])
             if case.expect_final_fail
-            else _dynamic_candidate(
-                online_out, final_out, online_wp, online_keys, obstacle_keys, cfg
-            )
+            else _dynamic_candidate(online_out, final_out, online_wp, online_keys, map_keys, cfg)
         )
         results[ci] = _result(
             case,

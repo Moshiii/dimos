@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Geometric tags for a case: elevation, narrow, doorway, corridor.
-
-Elevation tags come from the endpoints. Shape tags measure corridor width along
-the demonstrated route and apply only when it runs roughly straight from start
-to goal. Thresholds come from the robot's dimensions in EvalConfig.
-"""
+"""Geometric tags for a case: elevation from the endpoints, shape from the
+corridor width along the demonstrated route."""
 
 from __future__ import annotations
 
@@ -41,36 +37,26 @@ if TYPE_CHECKING:
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 
 # A pair of endpoints this far apart in z or beyond is a climb, not a flat
-# traverse. Half the body height, the smallest step the elevation tags care to
-# call stairs.
+# traverse. Half the body height.
 STAIRS_DZ_M = 0.5
-# A climb earns "long" past either bound: a tall total rise or a long walk.
+# A climb earns long past either bound: a tall rise or a long walk.
 LONG_STAIRS_DZ_M = 1.5
 LONG_STAIRS_WALKED_M = 20.0
 # A sustained narrow stretch this long is a corridor, not a doorway.
 CORRIDOR_RUN_M = 2.0
-# A doorway pinch is no longer than this. Beyond it the passage is a corridor.
 DOORWAY_MAX_RUN_M = 1.2
-# Open space must reappear within this arc on both sides of a pinch for it to be
-# a doorway rather than a dead-end narrowing.
+# Open space must reappear within this arc either side of a pinch.
 DOORWAY_FLANK_M = 1.4
-# A door frame makes the width wobble across the threshold, splitting one pinch
-# into fragments. Merge narrow runs separated by gaps this small so a sharp
-# doorway reads as one passage, not several.
+# A door frame splits one pinch into fragments, so merge runs this close.
 NARROW_MERGE_GAP_M = 0.2
-# A narrow run shorter than this is a single stray voxel, not a passage.
+# Shorter than this is a stray voxel, not a passage.
 NARROW_MIN_RUN_M = 0.15
-# Path-shape tags describe the local terrain between the endpoints, so they only
-# apply when the demonstrated route runs roughly straight from start to goal. A
-# route far longer than the straight line is a detour through the building, and
-# one far shorter is a stub that never spans the endpoints. Neither describes
-# the case. Kept strict for precision: a doorway tag the filter can trust is
-# worth more than catching every winding-route doorway.
+# Shape tags only apply to a route that runs roughly straight between the
+# endpoints, so a detour's terrain is not attributed to the case.
 LOCAL_DETOUR_MAX = 2.0
 LOCAL_SPAN_MIN_FRAC = 0.8
 
-# The tags this module owns and recomputes. Everything else on a case, such as
-# auto, manual, negative, or dynamic provenance, is left untouched by a retag.
+# The tags a retag recomputes. Provenance tags are left untouched.
 GEOMETRIC_TAGS = frozenset(
     {"flat", "up", "down", "stairs", "long", "narrow", "doorway", "corridor"}
 )

@@ -15,10 +15,7 @@
 """The unit under evaluation: lidar and odometry in, paths out.
 
 A pipeline owns whatever mapping it needs and the evaluator never looks inside
-it. Frames arrive in recording order exactly as a LIO stack produced them, and
-a plan is asked for at the point in the stream the case starts. The occupancy
-the evaluator grades against is built separately by its own mapper, so what a
-pipeline chose to keep does not decide whether it passed.
+it. Grading occupancy is built separately, by the evaluator's own mapper.
 """
 
 from __future__ import annotations
@@ -61,9 +58,8 @@ class PipelineIntrospection(Protocol):
 class MLSPipeline:
     """The voxel ray-tracing mapper feeding the MLS planner.
 
-    The accumulated map is handed to the planner on the first plan after new
-    frames rather than on every frame, so a plan following a long stretch of
-    ingest pays for the rebuild it triggers.
+    The map reaches the planner on the first plan after new frames, so that
+    plan pays for the rebuild it triggers.
     """
 
     def __init__(self, cfg: EvalConfig) -> None:

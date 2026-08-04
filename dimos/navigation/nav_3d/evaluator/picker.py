@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from dimos.core.global_config import global_config
 from dimos.navigation.nav_3d.evaluator.curation import CurationError
 from dimos.navigation.nav_3d.evaluator.tagging import elevation_tags
 
@@ -373,7 +374,9 @@ def pick_cases(
     """Serve the picker until the user exits from the panel or hits ctrl-c."""
     import viser
 
-    server = viser.ViserServer(label=f"Pair Picker - {dataset}", verbose=False)
+    server = viser.ViserServer(
+        host=global_config.listen_host, label=f"Pair Picker - {dataset}", verbose=False
+    )
     server.gui.configure_theme(dark_mode=True)
     server.scene.set_background_image(np.full((1, 1, 3), 14, dtype=np.uint8))
     server.scene.set_up_direction("+z")

@@ -12,14 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Write an evaluation report into a rerun recording.
-
-One static scene per dataset: the final voxel map, the walked path, the
-planner graph over the aggregated map, and per-case start/goal with the
-online and final planned paths colored by verdict and the gate's collision
-boxes. Each case also carries a known/ layer holding the incremental map and
-planner graph at plan time.
-"""
+"""Write an evaluation report into a rerun recording, one scene per dataset."""
 
 from __future__ import annotations
 
@@ -31,6 +24,7 @@ from scipy.spatial.transform import Rotation
 from dimos.navigation.nav_3d.evaluator import metrics
 from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
 from dimos.navigation.nav_3d.evaluator.recording import load_trajectory
+from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,6 +35,8 @@ if TYPE_CHECKING:
     from dimos.navigation.nav_3d.evaluator.cases import Suite
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
     from dimos.navigation.nav_3d.evaluator.runner import PlannerArtifacts, PlanOutcome, Report
+
+logger = setup_logger()
 
 WALKED_PATH_COLOR = [255, 255, 255]
 START_COLOR = [0, 255, 255]
@@ -148,18 +144,15 @@ def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig)
         static=True,
     )
     if outcome.collision_indices:
-        # The gate's body box at each colliding foot sample: the robot length
-        # and width, centered over the path point and rotated in place (yaw and
-        # pitch from the chord), elevated over the legs into the ground-margin
-        # to body-clearance band. Rebuilt from the gate's own sample indices so
-        # the drawn boxes are the boxes it rejected. Thinned to about a body
-        # length apart so they read as distinct bodies, not one smear.
+        # Rebuilt from the gate's own sample indices, thinned to about a body
+        # length apart so they read as distinct bodies rather than one smear.
         waypoints = np.asarray(outcome.waypoints, dtype=np.float32)
         samples = metrics.densify(waypoints, cfg.voxel_size / 2)
-        axes = np.stack(metrics.body_frames(samples, cfg.robot_length), axis=-1)
+        frames = metrics.body_frames(samples, cfg.robot_length)
+        axes = np.stack(frames, axis=-1)
         idx = np.asarray(outcome.collision_indices, dtype=np.int64)
         idx = idx[_thin_by_gap(samples[idx], cfg.robot_length)]
-        mid = np.array([0.0, 0.0, (cfg.ground_margin + cfg.body_clearance) / 2.0])
+        mid_h = (cfg.ground_margin + cfg.body_clearance) / 2.0
         half = [
             cfg.robot_length / 2.0,
             cfg.robot_width / 2.0,
@@ -169,7 +162,7 @@ def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig)
             f"{entity}/collisions",
             rr.Boxes3D(
                 half_sizes=np.tile(half, (len(idx), 1)),
-                centers=samples[idx] + mid,
+                centers=samples[idx] + mid_h * frames[2][idx],
                 quaternions=Rotation.from_matrix(axes[idx]).as_quat(),
                 colors=[[*COLLISION_COLOR, COLLISION_FILL_ALPHA]],
                 fill_mode=rr.components.FillMode.Solid,
@@ -221,7 +214,7 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
         root = dataset.dataset
 
         rr.log(
-            f"{root}/map/obstacles",
+            f"{root}/map/voxels",
             rr.Points3D(
                 final.occupied,
                 colors=turbo_by_height(final.occupied),
@@ -229,7 +222,7 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
             ),
             static=True,
         )
-        foot = trajectory.positions - np.array([0.0, 0.0, cfg.robot_height], dtype=np.float32)
+        foot = trajectory.foot(cfg.robot_height)
         rr.log(
             f"{root}/walked_path",
             rr.LineStrips3D([foot], colors=[WALKED_PATH_COLOR], radii=0.015),
@@ -281,7 +274,7 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
                 )
             if case.blocking_points:
                 rr.log(
-                    f"{base}/new_obstacle",
+                    f"{base}/new_occupancy",
                     rr.Points3D(case.blocking_points, colors=[DYNAMIC_BLOCK_COLOR], radii=0.06),
                     static=True,
                 )
@@ -291,5 +284,4 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
     views = [_dataset_view(d.dataset, [c.id for c in d.cases]) for d in report.datasets]
     rr.send_blueprint(rrb.Blueprint(rrb.Tabs(*views) if len(views) > 1 else views[0]))
 
-    print(f"wrote {out}")
-    print(f"open with: rerun {out}")
+    logger.info("wrote %s; open with: rerun %s", out, out)

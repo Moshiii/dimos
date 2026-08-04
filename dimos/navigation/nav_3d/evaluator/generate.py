@@ -14,13 +14,8 @@
 
 """Generate evaluation cases from a recorded trajectory.
 
-Candidate pairs are sampled along the walked path, so both endpoints are
-physically proven reachable, and kept only when non-trivial (the straight
-line collides, the route detours, or the pair climbs). Cases point backward
-in time so an incremental map built to the start has already seen the goal
-and a demonstrated route, with the forward direction emitted when the start
-is revisited after the goal. Endpoints snap to the final surface so drift
-cannot leave a case floating off the map. Generation is deterministic.
+Endpoint pairs come off the walked path, so both are proven reachable, and are
+kept only when non-trivial and causal. Deterministic.
 """
 
 from __future__ import annotations
@@ -40,6 +35,10 @@ if TYPE_CHECKING:
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
     from dimos.navigation.nav_3d.evaluator.final_map import FinalMap
     from dimos.navigation.nav_3d.evaluator.recording import Trajectory
+
+
+# Beyond this a near-straight flat pair is trivial whatever the map holds.
+MAX_TRIVIAL_SPAN_M = 30.0
 
 
 @dataclass
@@ -124,9 +123,9 @@ def generate_cases(
     params: GenerationParams | None = None,
 ) -> list[Case]:
     params = params or GenerationParams()
-    obstacle_keys = final.occupied_keys
+    map_keys = final.occupied_keys
     arcs = trajectory.arc_lengths()
-    foot = trajectory.positions - np.array([0.0, 0.0, cfg.robot_height], dtype=np.float32)
+    foot = trajectory.foot(cfg.robot_height)
 
     idx = _subsample_indices(trajectory, params.waypoint_spacing_m)
     snaps = np.full((len(idx), 3), np.nan, dtype=np.float32)
@@ -156,33 +155,39 @@ def generate_cases(
             sb = snaps[bi]
             dz = float(sb[2] - sa[2])
             detour = float(w / e)
-            if detour < params.detour_ratio_min and abs(dz) < STAIRS_DZ_M:
-                # A long near-straight flat pair is trivial. Not worth a sweep.
-                if e > 30.0:
-                    continue
-                # Only pairs not already qualified pay for the line sweep.
-                line = np.stack([sa, sb])
-                blocked = not metrics.check_path(line, obstacle_keys, cfg).valid
-                if not blocked:
-                    continue
             # Backward in time is always causal. Forward only when the start
             # spot is revisited after the goal visit.
             directed = [(sb, sa, -dz)]
             if last_visit_a >= float(trajectory.ts[idx[bi]]):
                 directed.append((sa, sb, dz))
-            for p_start, p_goal, d_dz in directed:
-                cand = Candidate(
-                    start=(float(p_start[0]), float(p_start[1]), float(p_start[2])),
-                    goal=(float(p_goal[0]), float(p_goal[1]), float(p_goal[2])),
-                    walked_m=float(w),
-                    detour_ratio=detour,
-                    dz=d_dz,
+            proposed = [
+                (
+                    Candidate(
+                        start=(float(p_start[0]), float(p_start[1]), float(p_start[2])),
+                        goal=(float(p_goal[0]), float(p_goal[1]), float(p_goal[2])),
+                        walked_m=float(w),
+                        detour_ratio=detour,
+                        dz=d_dz,
+                    ),
+                    _bin_key(p_start, p_goal, d_dz, params.bin_size_m),
                 )
-                bins = np.floor(np.array([*p_start[:2], *p_goal[:2]]) / params.bin_size_m).astype(
-                    int
-                )
-                dz_sign = int(np.sign(d_dz)) if abs(d_dz) >= STAIRS_DZ_M else 0
-                key = (*bins, dz_sign)
+                for p_start, p_goal, d_dz in directed
+            ]
+            # The sweep only decides admission, never priority, so a pair that
+            # cannot win any of its bins never has to pay for one.
+            if all(
+                (best := candidates.get(key)) is not None and best.priority >= cand.priority
+                for cand, key in proposed
+            ):
+                continue
+            if detour < params.detour_ratio_min and abs(dz) < STAIRS_DZ_M:
+                # A long near-straight flat pair is trivial. Not worth a sweep.
+                if e > MAX_TRIVIAL_SPAN_M:
+                    continue
+                line = np.stack([sa, sb])
+                if metrics.check_path(line, map_keys, cfg).valid:
+                    continue
+            for cand, key in proposed:
                 best = candidates.get(key)
                 if best is None or cand.priority > best.priority:
                     candidates[key] = cand
@@ -192,9 +197,16 @@ def generate_cases(
     cases = []
     for n, cand in enumerate(selected):
         route = metrics.ground_truth_route(trajectory, cand.start, cand.goal, cfg)
-        tags = route_tags(cand.start, cand.goal, route, obstacle_keys, cfg)
+        tags = route_tags(cand.start, cand.goal, route, map_keys, cfg)
         cases.append(_to_case(cand, n, tags))
     return cases
+
+
+def _bin_key(
+    start: NDArray[np.float32], goal: NDArray[np.float32], dz: float, bin_size_m: float
+) -> tuple[int, ...]:
+    bins = np.floor(np.array([*start[:2], *goal[:2]]) / bin_size_m).astype(int)
+    return (*bins, int(np.sign(dz)) if abs(dz) >= STAIRS_DZ_M else 0)
 
 
 def _is_duplicate(cand: Candidate, accepted: list[Candidate], radius: float) -> bool:
@@ -209,10 +221,8 @@ def _is_duplicate(cand: Candidate, accepted: list[Candidate], radius: float) -> 
 def _select_diverse(
     ranked: list[Candidate], params: GenerationParams, max_cases: int
 ) -> list[Candidate]:
-    """Spread-greedy selection scored by priority plus endpoint distance from
-    already-used points, with a sector cap and flat quota. A relaxed pass
-    backfills to min_cases when the strict pass falls short.
-    """
+    """Spread-greedy selection under a sector cap and flat quota, with a
+    relaxed pass to reach min_cases."""
     if not ranked:
         return []
     flat_target = int(max_cases * params.flat_fraction)

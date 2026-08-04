@@ -12,11 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Case manifests for the nav-3d evaluator.
-
-A suite is one YAML file per dataset under cases/. Start and goal are
-foot-level world coordinates, the frame the planner consumes.
-"""
+"""Case manifests, one YAML file per dataset. Endpoints are foot-level world
+coordinates."""
 
 from __future__ import annotations
 

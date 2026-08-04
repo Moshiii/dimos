@@ -48,7 +48,7 @@ class ReportDiff:
 
 
 def outcomes(report: dict[str, object]) -> Outcomes:
-    """Pass/fail of both tests for every case in a `run --json` report."""
+    """Pass/fail of both tests for every case in a run --json report."""
     out: Outcomes = {}
     for dataset in cast("list[dict[str, object]]", report["datasets"]):
         cases: dict[str, dict[str, bool]] = {}
@@ -134,11 +134,9 @@ def perf_violations(report: dict[str, object]) -> list[str]:
 
 
 def exact_differences(old_report: dict[str, object], new_report: dict[str, object]) -> list[str]:
-    """Every non-timing field that differs between two reports, at full precision.
+    """Every non-timing field that differs between two reports.
 
-    Two runs of identical code must produce an empty list. This is the
-    determinism gate: it holds for any algorithm under test, present or
-    future, because it checks the results rather than the implementation.
+    The determinism gate: two runs of identical code must return an empty list.
     """
     out: list[str] = []
     _walk("report", _strip_timing(old_report), _strip_timing(new_report), out)

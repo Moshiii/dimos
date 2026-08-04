@@ -12,21 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Nav-3d evaluation CLI.
-
-Run every suite:      python -m dimos.navigation.nav_3d.evaluator run
-One dataset:          python -m dimos.navigation.nav_3d.evaluator run --dataset mid360_athens_stairs
-Only some cases:      python -m dimos.navigation.nav_3d.evaluator run --tag stairs --tag up
-Machine output:       python -m dimos.navigation.nav_3d.evaluator run --json report.json
-Override a gate:      python -m dimos.navigation.nav_3d.evaluator run --set goal_tolerance=0.4
-Compare two runs:     python -m dimos.navigation.nav_3d.evaluator diff old.json new.json
-Determinism check:    run twice with --json, then diff a.json b.json --exact
-New dataset:          python -m dimos.navigation.nav_3d.evaluator ingest recordings/.../mem2.db --name office_a
-Pick cases by click:  python -m dimos.navigation.nav_3d.evaluator pick-case office_a
-Curate by coords:     python -m dimos.navigation.nav_3d.evaluator add-case office_a --start x y z --goal x y z
-Flag dynamic route:   python -m dimos.navigation.nav_3d.evaluator tag office_a auto_03 --final-fail
-Recompute tags:       python -m dimos.navigation.nav_3d.evaluator retag office_a
-"""
+"""Nav-3d evaluation CLI, mounted as `dimos nav-eval`."""
 
 from __future__ import annotations
 
@@ -145,7 +131,7 @@ def _print_report(report: Report) -> None:
         print(f"\nincremental-only ({len(inc_only)}) — passed online, failed final:")
         if report.dynamic_candidates:
             print(f"  dynamic-obstacle candidates: {', '.join(report.dynamic_candidates)}")
-            print("    review with --rrd, confirm: evaluator tag <dataset> <id> --final-fail")
+            print("    review with --rrd, confirm: dimos nav-eval tag <dataset> <id> --final-fail")
         if others:
             print(f"  not explained by a new obstacle, inspect final map: {', '.join(others)}")
 
@@ -336,7 +322,7 @@ def ingest(
     print(f"\n{len(suite.cases)} cases -> {path}")
     for case in suite.cases:
         print(f"  {case.id}: [{', '.join(case.tags)}]")
-    print(f"\nrun with: python -m dimos.navigation.nav_3d.evaluator run --dataset {name}")
+    print(f"\nrun with: dimos nav-eval run --dataset {name}")
 
 
 def _open(dataset: str) -> tuple[CaseStore, FinalMap]:
@@ -472,7 +458,7 @@ def pick_case(
         foot,
         store,
     )
-    print(f"\nrun with: python -m dimos.navigation.nav_3d.evaluator run --dataset {dataset}")
+    print(f"\nrun with: dimos nav-eval run --dataset {dataset}")
 
 
 @app.command("list")

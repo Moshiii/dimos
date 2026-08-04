@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Editing a case manifest: add, update, and delete curated cases.
-
-Every mutation snaps endpoints to the final map's standable surface and writes
-the manifest, so the CLI and the browser picker share one implementation and
-one set of rules.
-"""
+"""Editing a case manifest, shared by the CLI and the browser picker."""
 
 from __future__ import annotations
 
@@ -31,6 +26,7 @@ from dimos.navigation.nav_3d.evaluator.cases import CASES_DIR, Case, load_suite,
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
 from dimos.navigation.nav_3d.evaluator.generate import snap_to_surface
+from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -40,11 +36,17 @@ if TYPE_CHECKING:
     from dimos.navigation.nav_3d.evaluator.cases import Suite
     from dimos.navigation.nav_3d.evaluator.final_map import FinalMap
 
+logger = setup_logger()
+
 Point = tuple[float, float, float]
 
 
 class CurationError(Exception):
     """A curation request the manifest cannot accept."""
+
+
+def _provenance(tags: list[str]) -> str:
+    return "auto" if "auto" in tags else "manual"
 
 
 @dataclass
@@ -66,7 +68,7 @@ class CaseStore:
                     f"{label} {point} is more than {self.cfg.snap_max_m}m from a standable surface"
                 )
             # An infeasible goal may sit on geometry with no standable surface.
-            print(f"note: {label} {point} is off any standable surface; keeping it as picked")
+            logger.warning("%s %s is off any standable surface; kept as picked", label, point)
             return point
         return (float(snapped[0]), float(snapped[1]), float(snapped[2]))
 
@@ -96,7 +98,9 @@ class CaseStore:
         self.suite.cases.append(case)
         self.save()
         kind = "negative (must refuse)" if expect_fail else "positive"
-        print(f"added {kind} {case.id}: {case.start} -> {case.goal} to {self.manifest}")
+        logger.info(
+            "added %s %s: %s -> %s to %s", kind, case.id, case.start, case.goal, self.manifest
+        )
         return case
 
     def update(self, case_id: str, new_id: str, tags: list[str], expect_fail: bool) -> Case:
@@ -104,7 +108,7 @@ class CaseStore:
         if new_id != case_id and any(c.id == new_id for c in self.suite.cases):
             raise CurationError(f"case id {new_id!r} already exists")
         case.id = new_id
-        case.tags = _curated_tags(tags, expect_fail)
+        case.tags = _curated_tags(tags, expect_fail, _provenance(case.tags))
         case.expect_fail = expect_fail
         if expect_fail:
             case.expect_final_fail = False
@@ -125,11 +129,18 @@ class CaseStore:
         save_suite(self.suite, self.manifest)
 
 
-def _curated_tags(tags: list[str], expect_fail: bool) -> list[str]:
-    """Curated cases always carry manual provenance. The negative tag tracks
-    expect_fail rather than being editable text, so the two cannot drift."""
-    keep = [t for t in tags if t not in ("manual", "negative")]
-    return ["manual", *(["negative"] if expect_fail else []), *keep]
+PROVENANCE_TAGS = ("auto", "manual")
+
+
+def _curated_tags(tags: list[str], expect_fail: bool, provenance: str = "manual") -> list[str]:
+    """Rewrite a case's tags around exactly one provenance tag.
+
+    Editing a case must not change what it measures, so an auto case keeps its
+    generated provenance. The negative tag tracks expect_fail rather than being
+    editable text, so the two cannot drift.
+    """
+    keep = [t for t in tags if t not in (*PROVENANCE_TAGS, "negative")]
+    return [provenance, *(["negative"] if expect_fail else []), *keep]
 
 
 def load_store(dataset: str) -> tuple[CaseStore, FinalMap]:
