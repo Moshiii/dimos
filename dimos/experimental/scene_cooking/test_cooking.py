@@ -24,6 +24,7 @@ import pytest
 from dimos.experimental.scene_cooking import planning as plan_module
 from dimos.experimental.scene_cooking.package_config import browser_visual_spec_for_target
 from dimos.experimental.scene_cooking.sidecar import SceneCookSidecar
+from dimos.experimental.scene_cooking.source_assets.inspect import inspect_scene_asset
 from dimos.experimental.scene_cooking.source_assets.mesh import ScenePrimMesh
 from dimos.simulation.scene_assets.spec import (
     ARTIFACT_FRAMES,
@@ -190,6 +191,7 @@ def test_load_scene_package_tolerates_missing_objects_sidecar(tmp_path: Path) ->
 def test_browser_visual_profiles_are_backend_specific() -> None:
     rerun = browser_visual_spec_for_target("rerun")
     babylon = browser_visual_spec_for_target("babylon")
+    mesh = browser_visual_spec_for_target("mesh")
 
     assert rerun.artifact_name == "visual.rerun.glb"
     assert rerun.quantize is False
@@ -200,6 +202,59 @@ def test_browser_visual_profiles_are_backend_specific() -> None:
     assert babylon.quantize is True
     assert babylon.normalize_textures is False
     assert babylon.demote_required_extensions == ()
+
+    assert mesh.artifact_name == "visual.mesh.glb"
+    assert mesh.simplify_ratio == 1.0
+    assert mesh.quantize is False
+    assert mesh.normalize_textures is False
+    assert mesh.texture_format is None
+    assert mesh.max_texture_size is None
+    assert mesh.use_gpu_instancing is True
+    assert mesh.preserve_geometry is True
+
+
+def test_scene_asset_inspection_counts_gpu_instances(tmp_path: Path) -> None:
+    path = tmp_path / "instanced.gltf"
+    path.write_text(
+        json.dumps(
+            {
+                "asset": {"version": "2.0"},
+                "accessors": [
+                    {"count": 3},
+                    {"count": 3},
+                    {"count": 4},
+                ],
+                "meshes": [
+                    {
+                        "primitives": [
+                            {
+                                "attributes": {"POSITION": 0},
+                                "indices": 1,
+                            }
+                        ]
+                    }
+                ],
+                "nodes": [
+                    {
+                        "mesh": 0,
+                        "extensions": {
+                            "EXT_mesh_gpu_instancing": {"attributes": {"TRANSLATION": 2}}
+                        },
+                    }
+                ],
+                "extensionsUsed": ["EXT_mesh_gpu_instancing"],
+            }
+        )
+    )
+
+    stats = inspect_scene_asset(path)
+
+    assert stats.node_count == 1
+    assert stats.draw_count == 1
+    assert stats.instance_count == 4
+    assert stats.triangle_count == 1
+    assert stats.expanded_triangle_count == 4
+    assert stats.extensions_used == ("EXT_mesh_gpu_instancing",)
 
 
 def test_extract_scene_objects_emits_per_prim_aabb() -> None:

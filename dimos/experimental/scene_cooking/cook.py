@@ -29,7 +29,10 @@ import time
 from typing import Any
 
 from dimos.experimental.scene_cooking.browser.collision import cook_browser_collision
-from dimos.experimental.scene_cooking.browser.visuals import cook_browser_visual
+from dimos.experimental.scene_cooking.browser.visuals import (
+    BrowserVisualCookResult,
+    cook_browser_visual,
+)
 from dimos.experimental.scene_cooking.entities.collision import (
     COLLISION_DIR_NAME,
     cook_entity_collision_hulls,
@@ -60,7 +63,7 @@ logger = setup_logger()
 
 SCENE_PACKAGE_DIR = get_data_dir("scene_packages")
 _PACKAGE_KEY_LEN = 12
-_COOK_VERSION = 4
+_COOK_VERSION = 5
 #: Cap on entity id samples recorded in cook stats -- diagnostics only, not
 #: the full entity list (that lives in ``scene.meta.json``).
 _ENTITY_ID_SAMPLE_CAP = 100
@@ -74,6 +77,7 @@ def cook_scene_package(
     collision_spec: CollisionSpec | None = None,
     cook_sidecar: SceneCookSidecar | None = None,
     visual_spec: BrowserVisualSpec | None = None,
+    visual_specs: tuple[BrowserVisualSpec, ...] | None = None,
     browser_collision_spec: BrowserCollisionSpec | None = None,
     mujoco_spec: MujocoSceneSpec | None = None,
     rebake: bool = False,
@@ -90,13 +94,23 @@ def cook_scene_package(
         raise FileNotFoundError(f"scene source not found: {source}")
 
     align = alignment or SceneMeshAlignment()
-    visual = visual_spec or BrowserVisualSpec()
+    if visual_spec is not None and visual_specs is not None:
+        raise ValueError("pass visual_spec or visual_specs, not both")
+    visuals = (
+        tuple(visual_specs) if visual_specs is not None else (visual_spec or BrowserVisualSpec(),)
+    )
+    visual_targets = [visual.target_key for visual in visuals]
+    if len(visual_targets) != len(set(visual_targets)):
+        raise ValueError("visual_specs must use unique targets")
+    artifact_names = [visual.artifact_name for visual in visuals if visual.enabled]
+    if len(artifact_names) != len(set(artifact_names)):
+        raise ValueError("enabled visual_specs must use unique output names")
     browser_collision = browser_collision_spec or BrowserCollisionSpec()
     mujoco = mujoco_spec or MujocoSceneSpec()
     cook_spec = SceneCookSpec(
         source_path=source,
         alignment=align,
-        browser_visual=visual,
+        browser_visuals=visuals,
         browser_collision=browser_collision,
         mujoco=mujoco,
     )
@@ -144,7 +158,7 @@ def cook_scene_package(
     visual_source = cook_source
     # Only invoke Blender when at least one entity actually extracts from
     # the source mesh; pure-synthetic sidecars (manip rigs) don't need it.
-    needs_blender = visual.enabled and any(
+    needs_blender = any(visual.enabled for visual in visuals) and any(
         entity.visual_path is not None for entity in plan.entities
     )
     if needs_blender:
@@ -169,24 +183,28 @@ def cook_scene_package(
             if hull_counts:
                 stats["entity_collision"]["hulls_per_entity"] = hull_counts
 
-    visual_result = cook_browser_visual(
-        visual_source,
-        browser_dir,
-        spec=visual,
-        rebake=rebake,
-    )
-    if visual_result is not None:
-        visual_stats = {
+    visual_results: dict[str, BrowserVisualCookResult] = {}
+    visual_stats_by_target: dict[str, dict[str, Any]] = {}
+    for visual in visuals:
+        visual_result = cook_browser_visual(
+            visual_source,
+            browser_dir,
+            spec=visual,
+            rebake=rebake,
+        )
+        if visual_result is None:
+            continue
+        visual_results[visual.target_key] = visual_result
+        visual_stats_by_target[visual.target_key] = {
             "target": visual.target_key,
             "tool": visual_result.tool,
             **visual_result.stats,
         }
-        stats["browser_visual"] = {
-            **visual_stats,
-        }
-        stats["browser_visuals"] = {
-            visual.target_key: visual_stats,
-        }
+    if visual_stats_by_target:
+        stats["browser_visuals"] = visual_stats_by_target
+        stats["browser_visual"] = visual_stats_by_target.get(
+            "rerun", next(iter(visual_stats_by_target.values()))
+        )
 
     browser_collision_result = cook_browser_collision(
         cook_source,
@@ -219,12 +237,15 @@ def cook_scene_package(
             stats["mujoco"]["binary_path"] = str(mujoco_binary_path)
             stats["mujoco"]["binary"] = binary_stats
 
+    primary_visual = visual_results.get("rerun")
+    if primary_visual is None and visual_results:
+        primary_visual = next(iter(visual_results.values()))
     package = ScenePackage(
         package_dir=package_dir,
         source_path=source,
         alignment=align,
-        visual_path=visual_result.path if visual_result else None,
-        browser_visuals={visual.target_key: visual_result.path} if visual_result else {},
+        visual_path=primary_visual.path if primary_visual else None,
+        browser_visuals={target: result.path for target, result in visual_results.items()},
         browser_collision_path=browser_collision_result.path if browser_collision_result else None,
         objects_path=browser_collision_result.objects_path if browser_collision_result else None,
         mujoco_scene_path=mujoco_scene_path,

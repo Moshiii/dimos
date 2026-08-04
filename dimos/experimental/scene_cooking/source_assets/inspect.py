@@ -17,10 +17,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from dimos.experimental.scene_cooking.source_assets.glb import read_glb
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,11 @@ class SceneAssetStats:
     texture_count: int = 0
     vertex_count: int = 0
     triangle_count: int = 0
+    primitive_count: int = 0
+    draw_count: int = 0
+    instance_count: int = 0
+    expanded_triangle_count: int = 0
+    extensions_used: tuple[str, ...] = ()
 
     def to_json_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -54,68 +62,109 @@ def inspect_scene_asset(path: str | Path) -> SceneAssetStats:
 
 
 def _inspect_gltf(path: Path) -> SceneAssetStats:
-    import trimesh
+    gltf = read_glb(path)[0] if path.suffix.lower() == ".glb" else json.loads(path.read_text())
+    accessors = gltf.get("accessors", [])
+    meshes = gltf.get("meshes", [])
+    nodes = gltf.get("nodes", [])
+    if (
+        not isinstance(accessors, list)
+        or not isinstance(meshes, list)
+        or not isinstance(nodes, list)
+    ):
+        raise RuntimeError(f"invalid glTF scene structure: {path}")
 
-    loaded: Any = trimesh.load(str(path))
-    if isinstance(loaded, trimesh.Trimesh):
-        # visual may be ColorVisuals (no material) or TextureVisuals.
-        material = getattr(loaded.visual, "material", None)
-        material_count = 1 if material is not None else 0
-        return SceneAssetStats(
-            path=str(path),
-            bytes=path.stat().st_size,
-            format=path.suffix.lower().lstrip("."),
-            mesh_count=1,
-            node_count=1,
-            material_count=material_count,
-            texture_count=_count_material_textures([material]),
-            vertex_count=len(loaded.vertices),
-            triangle_count=len(loaded.faces),
-        )
-
-    scene = loaded
-    mesh_count = len(getattr(scene, "geometry", {}))
-    node_count = len(getattr(scene.graph, "nodes_geometry", []))
-    materials = []
+    mesh_triangle_counts: list[int] = []
+    mesh_primitive_counts: list[int] = []
     vertex_count = 0
     triangle_count = 0
-    for geom in scene.geometry.values():
-        if not isinstance(geom, trimesh.Trimesh):
+    primitive_count = 0
+    for mesh in meshes:
+        primitives = mesh.get("primitives", []) if isinstance(mesh, dict) else []
+        mesh_triangles = 0
+        for primitive in primitives:
+            if not isinstance(primitive, dict):
+                continue
+            attributes = primitive.get("attributes", {})
+            position_index = attributes.get("POSITION") if isinstance(attributes, dict) else None
+            if isinstance(position_index, int):
+                vertex_count += _accessor_count(accessors, position_index, path)
+            element_index = primitive.get("indices", position_index)
+            element_count = (
+                _accessor_count(accessors, element_index, path)
+                if isinstance(element_index, int)
+                else 0
+            )
+            triangles = _triangle_count(int(primitive.get("mode", 4)), element_count)
+            mesh_triangles += triangles
+            triangle_count += triangles
+            primitive_count += 1
+        mesh_triangle_counts.append(mesh_triangles)
+        mesh_primitive_counts.append(len(primitives))
+
+    node_count = 0
+    draw_count = 0
+    instance_count = 0
+    expanded_triangle_count = 0
+    for node in nodes:
+        mesh_index = node.get("mesh") if isinstance(node, dict) else None
+        if not isinstance(mesh_index, int):
             continue
-        vertex_count += len(geom.vertices)
-        triangle_count += len(geom.faces)
-        materials.append(getattr(geom.visual, "material", None))
-    material_keys = {repr(material) for material in materials if material is not None}
+        if mesh_index < 0 or mesh_index >= len(meshes):
+            raise RuntimeError(f"glTF node references missing mesh {mesh_index}: {path}")
+        count = _node_instance_count(node, accessors, path)
+        node_count += 1
+        draw_count += mesh_primitive_counts[mesh_index]
+        instance_count += count
+        expanded_triangle_count += mesh_triangle_counts[mesh_index] * count
+
     return SceneAssetStats(
         path=str(path),
         bytes=path.stat().st_size,
         format=path.suffix.lower().lstrip("."),
-        mesh_count=mesh_count,
+        mesh_count=len(meshes),
         node_count=node_count,
-        material_count=len(material_keys),
-        texture_count=_count_material_textures(materials),
+        material_count=len(gltf.get("materials", [])),
+        texture_count=len(gltf.get("textures", [])),
         vertex_count=vertex_count,
         triangle_count=triangle_count,
+        primitive_count=primitive_count,
+        draw_count=draw_count,
+        instance_count=instance_count,
+        expanded_triangle_count=expanded_triangle_count,
+        extensions_used=tuple(sorted(str(value) for value in gltf.get("extensionsUsed", []))),
     )
 
 
-def _count_material_textures(materials: list[Any]) -> int:
-    textures: set[int] = set()
-    for material in materials:
-        if material is None:
-            continue
-        for name in (
-            "baseColorTexture",
-            "metallicRoughnessTexture",
-            "normalTexture",
-            "emissiveTexture",
-            "occlusionTexture",
-            "image",
-        ):
-            image = getattr(material, name, None)
-            if image is not None:
-                textures.add(id(image))
-    return len(textures)
+def _accessor_count(accessors: list[Any], index: int, path: Path) -> int:
+    if index < 0 or index >= len(accessors) or not isinstance(accessors[index], dict):
+        raise RuntimeError(f"glTF references missing accessor {index}: {path}")
+    return int(accessors[index].get("count", 0))
+
+
+def _triangle_count(mode: int, element_count: int) -> int:
+    if mode == 4:
+        return element_count // 3
+    if mode in {5, 6}:
+        return max(0, element_count - 2)
+    return 0
+
+
+def _node_instance_count(node: dict[str, Any], accessors: list[Any], path: Path) -> int:
+    extensions = node.get("extensions", {})
+    instancing = extensions.get("EXT_mesh_gpu_instancing") if isinstance(extensions, dict) else None
+    if not isinstance(instancing, dict):
+        return 1
+    attributes = instancing.get("attributes")
+    if not isinstance(attributes, dict) or not attributes:
+        raise RuntimeError(f"empty EXT_mesh_gpu_instancing attributes: {path}")
+    counts = {
+        _accessor_count(accessors, index, path)
+        for index in attributes.values()
+        if isinstance(index, int)
+    }
+    if len(counts) != 1:
+        raise RuntimeError(f"inconsistent EXT_mesh_gpu_instancing accessor counts: {path}")
+    return counts.pop()
 
 
 def _inspect_usd(path: Path) -> SceneAssetStats:
