@@ -42,7 +42,7 @@ def _convert_navigation_costmap(grid: Any) -> Any:
     )
 
 
-def _static_base_link(rr: Any) -> list[Any]:
+def _static_robot_body(rr: Any) -> list[Any]:
     return [
         rr.Boxes3D(
             half_sizes=[0.35, 0.155, 0.2],
@@ -99,7 +99,7 @@ rerun_config: dict[str, Any] = {
     },
     # slapping a go2 shaped box on the base_link frame
     "static": {
-        "world/robot_body": _static_base_link,
+        "world/robot_body": _static_robot_body,
     },
 }
 

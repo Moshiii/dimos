@@ -16,11 +16,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import threading
 from typing import TYPE_CHECKING, TypeVar
 
 from dimos.memory2.transform import Transformer
-from dimos.protocol.tf.tf import MultiTBuffer
-from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -34,27 +34,18 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-logger = setup_logger()
-
-DEFAULT_TF_ROOT = "world/tf"
+DEFAULT_FRAMES_ROOT = "world/frames"
 DEFAULT_AXIS_LENGTH = 0.5
 DEFAULT_TIMELINE = "ts"
-# Seconds of tf to collect before handing out entity paths. Static mount trees
-# publish at 5 Hz, so this covers several full cycles.
-SETTLE_SECONDS = 1.0
-# Each level's triad relative to its parent's, so deeper frames read as smaller.
+# Each level's triad relative to its parent's.
 DEPTH_SCALE = 0.8
-# Arrow width in UI points. Rerun's own TransformAxes3D draws at 1.0.
+# Rerun's own TransformAxes3D draws at 1.0.
 AXIS_WIDTH_UI_POINTS = 2.0
 AXIS_COLORS = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
 
 
 def triad(length: float) -> rr.Arrows3D:
-    """XYZ arrows for one frame, red/green/blue for x/y/z.
-
-    Drawn by hand rather than with ``TransformAxes3D`` because that archetype
-    fixes its own width and carries a frame label that cannot be styled.
-    """
+    """XYZ arrows, red green blue for x y z."""
     import rerun as rr
 
     return rr.Arrows3D(
@@ -65,193 +56,148 @@ def triad(length: float) -> rr.Arrows3D:
     )
 
 
+@dataclass(frozen=True)
+class Placement:
+    """Where a frame's triad is drawn, and how big."""
+
+    path: str
+    depth: int
+
+
 class TFTreeVis:
-    """Draws each tf frame as a labeled triad, nested by entity path.
+    """Draws a labeled triad per tf frame, nested by entity path.
 
-    Placement still comes from the tf graph: every ``Transform3D`` keeps its
-    explicit ``tf#/parent`` and ``tf#/child`` frames, so anything attached to a
-    named frame is unaffected. The entity path only mirrors the tree
-    (``world/tf/odom/base_link/mid360_link``) so the viewer's entity panel shows
-    its shape.
-
-    The rerun bridge drives this off live tf. To replay a recorded stream, use
-    :class:`RerunTFTree` rather than driving it by hand.
+    Draws markers only. The transforms themselves are logged by whoever owns the
+    tf stream, at the flat paths TFMessage.to_rerun assigns.
     """
 
     def __init__(
         self,
-        buffer: MultiTBuffer | None = None,
         axis_length: float = DEFAULT_AXIS_LENGTH,
-        root: str = DEFAULT_TF_ROOT,
-        settle: float = SETTLE_SECONDS,
+        root: str = DEFAULT_FRAMES_ROOT,
     ) -> None:
-        self.buffer = buffer if buffer is not None else MultiTBuffer()
         self.axis_length = axis_length
         self.root = root
-        self.settle = settle
-        self._paths: dict[str, str] = {}
-        self._depths: dict[str, int] = {}
-        self._parents: dict[str, str | None] = {}
-        self._axes_logged: set[str] = set()
-        self._reparented: set[str] = set()
-        self._settle_deadline: float | None = None
-        self._flushed = False
+        self._lock = threading.Lock()
+        self._parents: dict[str, str] = {}
+        self._drawn: dict[str, Placement] = {}
+        self._pending = False
 
     def log(self, msg: TFMessage) -> None:
-        """Feed a tf message into the buffer, then log its transforms."""
+        """Redraw once a message arrives that adds nothing new.
+
+        Publishers split one tree across several messages, and drawing each of
+        them walks the tree through shapes it never really had, leaving a stale
+        entity behind every time.
+        """
         if not msg.transforms:
             return
-        self.buffer.receive_tfmessage(msg)
-        if not self._settled(msg.transforms):
-            return
-        transforms = msg.transforms
-        if self.settle > 0 and not self._flushed:
-            # An edge published only while the tree settled, like a root sent
-            # twice at startup, would otherwise never be drawn.
-            transforms = self.buffer.latest_transforms()
-        self._flushed = True
-        self._log_transforms(transforms)
+        with self._lock:
+            if self._learn(msg.transforms):
+                self._pending = True
+            elif self._pending:
+                self._pending = False
+                self._redraw()
 
-    def _settled(self, transforms: Iterable[Transform]) -> bool:
-        """Whether the tree has had time to fill in.
+    def flush(self) -> None:
+        """Draw a pending change that no later message arrived to trigger."""
+        with self._lock:
+            if self._pending:
+                self._pending = False
+                self._redraw()
 
-        A path is frozen the first time its frame is seen, so a frame that gets
-        its path before its own parent arrives stays a root for the session.
-        Publishers put a full tree on the wire within a few messages, and the tf
-        that falls in this window is republished right after it.
-        """
-        if self.settle <= 0:
-            return True
-        latest = max(transform.ts for transform in transforms)
-        if self._settle_deadline is None:
-            self._settle_deadline = latest + self.settle
-        return latest >= self._settle_deadline
+    def placements(self) -> dict[str, Placement]:
+        with self._lock:
+            return dict(self._drawn)
 
-    def _log_transforms(self, transforms: Iterable[Transform]) -> None:
-        import rerun as rr
-
+    def _learn(self, transforms: Iterable[Transform]) -> bool:
+        changed = False
         for transform in transforms:
-            parent_path = self.path(transform.frame_id)
-            child_path = self.path(transform.child_frame_id)
-            self._warn_on_reparent(transform)
-            self._log_axes(transform.frame_id, parent_path)
-            rr.log(child_path, transform.to_rerun())
-            self._log_axes(transform.child_frame_id, child_path)
+            if self._parents.get(transform.child_frame_id) != transform.frame_id:
+                self._parents[transform.child_frame_id] = transform.frame_id
+                changed = True
+        return changed
 
-    def frame_paths(self) -> dict[str, str]:
-        """Entity path assigned to each frame seen so far."""
-        return dict(self._paths)
+    def _layout(self) -> dict[str, Placement]:
+        import rerun as rr
 
-    def path(self, frame: str) -> str:
-        """Entity path of a frame, assigned the first time the frame is seen.
+        placed: dict[str, Placement] = {}
 
-        Rerun forbids a child frame's declaring entity from changing over time,
-        and tf trees re-root late, so a path never moves once handed out.
+        def place(frame: str, walked: frozenset[str]) -> Placement:
+            known = placed.get(frame)
+            if known is not None:
+                return known
+            parent = self._parents.get(frame)
+            if parent is None or parent in walked:
+                spot = Placement(f"{self.root}/{rr.escape_entity_path_part(frame)}", 0)
+            else:
+                above = place(parent, walked | {frame})
+                spot = Placement(
+                    f"{above.path}/{rr.escape_entity_path_part(frame)}", above.depth + 1
+                )
+            placed[frame] = spot
+            return spot
+
+        for frame in (*self._parents, *self._parents.values()):
+            place(frame, frozenset())
+        return placed
+
+    def _redraw(self) -> None:
+        """Move triads to match the tree as it is now.
+
+        Rerun refuses to let the entity declaring a frame move, which is why the
+        triads carry a CoordinateFrame instead and declare nothing.
         """
         import rerun as rr
 
-        known = self._paths.get(frame)
-        if known is not None:
-            return known
+        layout = self._layout()
 
-        chain: list[str] = []
-        base = self.root
-        depth = 0
-        node: str | None = frame
-        visited: set[str] = set()
-        while node is not None and node not in visited:
-            visited.add(node)
-            if node in self._paths:
-                base = self._paths[node]
-                depth = self._depths[node] + 1
-                break
-            chain.append(node)
-            node = self.buffer.get_parent(node)
+        for frame, was in self._drawn.items():
+            now = layout.get(frame)
+            if now is None or now.path != was.path:
+                rr.log(was.path, rr.Arrows3D(origins=[], vectors=[]), static=True)
 
-        # Whatever the walk stopped on is the parent of the top of the chain.
-        parent = node
-        for name in reversed(chain):
-            base = f"{base}/{rr.escape_entity_path_part(name)}"
-            self._paths[name] = base
-            self._depths[name] = depth
-            self._parents[name] = parent
-            parent = name
-            depth += 1
+        for frame, spot in layout.items():
+            if self._drawn.get(frame) != spot:
+                rr.log(
+                    spot.path,
+                    rr.CoordinateFrame(f"tf#/{frame}"),
+                    triad(self.axis_length * DEPTH_SCALE**spot.depth),
+                    static=True,
+                )
 
-        return self._paths[frame]
-
-    def _warn_on_reparent(self, transform: Transform) -> None:
-        child = transform.child_frame_id
-        if self._parents.get(child) == transform.frame_id or child in self._reparented:
-            return
-        self._reparented.add(child)
-        logger.warning(
-            "tf frame re-parented after its entity path was assigned, panel nesting is stale",
-            frame=child,
-            new_parent=transform.frame_id,
-            entity_path=self._paths[child],
-        )
-
-    def _log_axes(self, frame: str, path: str) -> None:
-        import rerun as rr
-
-        if path in self._axes_logged:
-            return
-        self._axes_logged.add(path)
-        if self.buffer.get_parent(frame) is None:
-            # A root is never a child_frame_id, so nothing else declares it.
-            rr.log(path, rr.Transform3D(child_frame=f"tf#/{frame}"))
-        rr.log(
-            path,
-            # Without this the arrows sit in the entity path's implicit frame,
-            # which is pinned to the parent path and never moves.
-            rr.CoordinateFrame(f"tf#/{frame}"),
-            triad(self.axis_length * DEPTH_SCALE ** self._depths[frame]),
-            static=True,
-        )
+        self._drawn = layout
 
 
 class RerunTFTree(Transformer[T, T]):
-    """Draw the tf tree's triads in step with the stream it passes through.
+    """Logs a recorded tf stream in step with the stream it passes through."""
 
-    Drop it into a replay pipeline and every tf frame gets its labeled triad,
-    each logged at its own place on the timeline rather than in one lump up
-    front::
-
-        pipeline = lidar.transform(RerunTFTree(store.stream("tf", TFMessage)))
-
-    Window the tf stream the same way as the pipeline, or the tf that predates
-    the first observation all lands on that first frame.
-    """
-
-    def __init__(
-        self,
-        tf: Stream[TFMessage],
-        axis_length: float = DEFAULT_AXIS_LENGTH,
-        timeline: str = DEFAULT_TIMELINE,
-        root: str = DEFAULT_TF_ROOT,
-    ) -> None:
+    def __init__(self, tf: Stream[TFMessage]) -> None:
         self._tf = tf
-        self._timeline = timeline
-        self._vis = TFTreeVis(axis_length=axis_length, root=root, settle=0.0)
-
-    @property
-    def vis(self) -> TFTreeVis:
-        return self._vis
+        self._vis = TFTreeVis()
 
     def __call__(self, upstream: Iterator[Observation[T]]) -> Iterator[Observation[T]]:
         import rerun as rr
 
-        # Topology first, so no frame is given a path before its parent is known.
-        for tf_obs in self._tf:
-            self._vis.buffer.receive_tfmessage(tf_obs.data)
-
         pending = iter(self._tf)
         head = next(pending, None)
+        floor: float | None = None
         for obs in upstream:
+            if floor is None:
+                # tf older than the replay would otherwise all land on frame one.
+                floor = obs.ts
             while head is not None and head.ts <= obs.ts:
-                rr.set_time(self._timeline, timestamp=head.ts)
-                self._vis.log(head.data)
+                if head.ts >= floor:
+                    self._log(head)
                 head = next(pending, None)
-            rr.set_time(self._timeline, timestamp=obs.ts)
+            rr.set_time(DEFAULT_TIMELINE, timestamp=obs.ts)
             yield obs
+        self._vis.flush()
+
+    def _log(self, tf_obs: Observation[TFMessage]) -> None:
+        import rerun as rr
+
+        rr.set_time(DEFAULT_TIMELINE, timestamp=tf_obs.ts)
+        for path, archetype in tf_obs.data.to_rerun():
+            rr.log(path, archetype)
+        self._vis.log(tf_obs.data)

@@ -29,7 +29,7 @@ import typer
 
 from dimos.mapping.ray_tracing.transformer import RayTraceMap
 from dimos.memory2.store.sqlite import SqliteStore
-from dimos.memory2.tf import StreamTF
+from dimos.memory2.tf import StreamTF, tf_stream
 from dimos.memory2.transform import FnTransformer
 from dimos.memory2.type.observation import Observation
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -46,6 +46,8 @@ from dimos.visualization.rerun.tf_tree import RerunTFTree
 
 if TYPE_CHECKING:
     import rerun.blueprint as rrb
+
+    from dimos.memory2.stream import Stream
 
 TIMELINE = "ts"
 
@@ -136,31 +138,21 @@ def _log_path_wp(waypoints: NDArray[np.float32] | None, entity: str, color: list
     rr.log(entity, rr.LineStrips3D([points], colors=[color], radii=0.05))
 
 
-def _window(stream: Any, from_time: float | None, to_time: float | None) -> Any:
-    """Clip a stream to the replay window, both bounds relative to its start."""
-    if from_time is not None:
-        stream = stream.from_time(from_time)
-    if to_time is not None:
-        stream = stream.to_time(to_time)
-    return stream
+def _tf_over(store: SqliteStore, window: Stream[Any]) -> Stream[TFMessage] | None:
+    """The recorded tf stream clipped to another stream's span.
 
-
-def _tf_over(store: SqliteStore, window: Any) -> Any:
-    """The recorded tf stream clipped to another stream's time span.
-
-    Absolute bounds, because the relative ones anchor on each stream's own
-    first observation and tf rarely starts on the same sample as the lidar.
-    Returns None when the recording has no tf, which must not be probed for
-    with ``store.stream``: that registers the stream and writes its tables.
+    Absolute bounds: the relative ones anchor on each stream's own first
+    observation, and tf rarely starts on the same sample as the lidar.
     """
-    if "tf" not in store.list_streams():
+    recorded = tf_stream(store)
+    if recorded is None:
         print("no tf stream in the recording; skipping the tf tree")
         return None
     try:
         first, last = window.first().ts, window.last().ts
     except LookupError:
         return None
-    return store.stream("tf", TFMessage).order_by("ts").time_range(first, last)
+    return recorded.order_by("ts").time_range(first, last)
 
 
 def _base_from_sensor(store: SqliteStore) -> Transform | None:
@@ -349,8 +341,7 @@ def _blueprint(crop: LocalCrop) -> rrb.Blueprint:
                 origin="world",
                 name="world",
                 contents=["+ $origin/**", "- $origin/local/**"],
-                # The graph buries the map it was built from. Tick it back on in
-                # the viewer when the question is why a path went the way it did.
+                # The graph buries the map it was built from.
                 overrides={
                     "world/nodes": rrb.EntityBehavior(visible=False),
                     "world/node_edges": rrb.EntityBehavior(visible=False),
@@ -579,7 +570,11 @@ def main(
 
     store = SqliteStore(path=str(db_path))
     with store:
-        lidar = _window(store.stream(lidar_stream, PointCloud2).order_by("ts"), from_time, to_time)
+        lidar = store.stream(lidar_stream, PointCloud2).order_by("ts")
+        if from_time is not None:
+            lidar = lidar.from_time(from_time)
+        if to_time is not None:
+            lidar = lidar.to_time(to_time)
         odom = store.stream(odom_stream, Odometry).order_by("ts")
         tf = _tf_over(store, lidar)
 
