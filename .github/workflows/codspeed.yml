@@ -52,10 +52,11 @@ jobs:
         uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
+      # uv-managed (python-build-standalone) rather than setup-python: it
+      # statically bundles a modern sqlite (>=3.45), which reading the replay
+      # DB's JSONB tags requires; setup-python links the runner's libsqlite3.
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
-        with:
-          python-version: '3.12'
+        run: uv python install 3.12
       - name: Install dependencies
         run: uv sync --group tests --frozen
       - name: Pre-extract the replay database
