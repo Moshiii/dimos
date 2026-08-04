@@ -41,9 +41,7 @@ def _round_trip(config: Config) -> Config:
 
 def test_urdf_factories_survive_config_round_trip() -> None:
     static_factory = UrdfRobotStaticRerunFactory(urdf_path="robot.urdf", root_path="world/robot")
-    joint_factory = UrdfRobotJointStateRerunFactory(
-        urdf_path="robot.urdf", root_path="world/robot"
-    )
+    joint_factory = UrdfRobotJointStateRerunFactory(urdf_path="robot.urdf", root_path="world/robot")
     config = Config.model_validate(
         {
             "static": {"world/robot": static_factory},

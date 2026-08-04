@@ -134,9 +134,7 @@ class UrdfRobotStaticRerunFactory:
         self._robot: Any = None
 
     def __repr__(self) -> str:
-        return (
-            f"{type(self).__name__}(urdf_path={self.urdf_path!r}, root_path={self.root_path!r})"
-        )
+        return f"{type(self).__name__}(urdf_path={self.urdf_path!r}, root_path={self.root_path!r})"
 
     def __call__(self, rr: Any) -> list[tuple[str, Any]]:
         robot = self._load_robot()
@@ -201,9 +199,7 @@ class UrdfRobotJointStateRerunFactory:
         self._joint_values: dict[str, float] = {}
 
     def __repr__(self) -> str:
-        return (
-            f"{type(self).__name__}(urdf_path={self.urdf_path!r}, root_path={self.root_path!r})"
-        )
+        return f"{type(self).__name__}(urdf_path={self.urdf_path!r}, root_path={self.root_path!r})"
 
     def __call__(self, msg: Any) -> list[tuple[str, Any]]:
         self._load_tree()
