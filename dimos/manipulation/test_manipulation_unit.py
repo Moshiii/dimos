@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -184,6 +185,27 @@ def _generated_plan_trajectory(joint_names: list[str], *points: list[float]) -> 
             for index, point in enumerate(points)
         ],
     )
+
+
+class _ManipulationModuleHarness(ManipulationModule):
+    """Manipulation module initialized only with state needed by unit tests."""
+
+    def __init__(self) -> None:
+        self._state = ManipulationState.IDLE
+        self._lock = threading.Lock()
+        self._error_message = ""
+        self._planning_epoch = 0
+        self._robots = {}
+        self._last_plan = None
+        self._world_monitor = None
+        self._planner = None
+        self._kinematics = None
+        self._coordinator_client = None
+        self.config = MagicMock(planning_timeout=10.0)
+
+
+def _make_module() -> ManipulationModule:
+    return _ManipulationModuleHarness()
 
 
 def _connected_sequence_module(
