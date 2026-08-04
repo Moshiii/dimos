@@ -264,6 +264,7 @@ class HumanCLIApp(App):  # type: ignore[type-arg]
         Binding("q", "quit", "Quit", show=False),
         Binding("ctrl+c", "quit", "Quit"),
         Binding("ctrl+l", "clear", "Clear chat"),
+        Binding("escape", "stop_agent", "Stop agent"),
     ]
 
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -271,6 +272,7 @@ class HumanCLIApp(App):  # type: ignore[type-arg]
         self._human_transport = make_transport("/human_input")
         self._agent_transport = make_transport("/agent")
         self._agent_idle = make_transport("/agent_idle")
+        self._agent_cancel = make_transport("/agent_cancel")
         self.chat_log: RichLog | None = None
         self.input_widget: Input | None = None
         self._subscription_thread: threading.Thread | None = None
@@ -296,7 +298,7 @@ class HumanCLIApp(App):  # type: ignore[type-arg]
 
         yield Container(id="tool-panels")
 
-        self.input_widget = Input(placeholder="Type a message...")
+        self.input_widget = Input(placeholder="Type a message...  Esc stops the current turn")
         yield self.input_widget
 
     def on_mount(self) -> None:
@@ -634,6 +636,7 @@ class HumanCLIApp(App):  # type: ignore[type-arg]
   /exit  - Exit the application
   /quit  - Exit the application
 
+Press Esc to stop the current agent turn.
 Tool calls are displayed in cyan with ▶ prefix"""
             self._add_system_message(help_text)
             return
@@ -649,6 +652,16 @@ Tool calls are displayed in cyan with ▶ prefix"""
         """Clear the chat log."""
         self._tool_call_anchors.clear()
         self.chat_log.clear()  # type: ignore[union-attr]
+
+    def action_stop_agent(self) -> None:
+        """Request cancellation of the active agent turn and return to input."""
+        if self._agent_is_idle:
+            return
+        self._agent_cancel.publish(True)
+        self._set_agent_idle(True)
+        self._add_system_message("Agent turn cancelled. You can enter a new message.")
+        if self.input_widget is not None:
+            self.input_widget.focus()
 
     def action_quit(self) -> None:  # type: ignore[override]
         """Quit the application."""
