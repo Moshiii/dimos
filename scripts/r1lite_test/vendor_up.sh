@@ -44,13 +44,15 @@ ros_env() {
 }
 
 # Measure a topic's rate over a fixed window; prints the average Hz
-# (integer, 0 when silent).
+# (integer, 0 when silent). The measurement process is ended with SIGINT
+# so rclpy destroys its DDS participant cleanly — a TERM-killed reader
+# can leak into a vendor stack with static allocation, the exact failure
+# this script exists to guard against.
 measure_hz() {
     local topic="$1"
-    local out
-    out=$(timeout $((HZ_WINDOW_S + 5)) ros2 topic hz --window 500 "$topic" 2>/dev/null &
-          local pid=$!; sleep "$HZ_WINDOW_S"; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null)
-    echo "$out" | grep -o 'average rate: [0-9.]*' | tail -1 | grep -o '[0-9.]*' | cut -d. -f1
+    timeout --signal=INT --kill-after=5 "$HZ_WINDOW_S" \
+        ros2 topic hz --window 500 "$topic" 2>/dev/null \
+        | grep -o 'average rate: [0-9.]*' | tail -1 | grep -o '[0-9.]*' | cut -d. -f1
 }
 
 hdas_pids() { pgrep -f "$HDAS_SCRIPT|hdas_r1lite" 2>/dev/null; }
@@ -153,10 +155,18 @@ do_up() {
         say "clearing duplicate HDAS before anything else"
         hdas_fallback
     elif ! tmux ls 2>/dev/null | grep -q .; then
-        say "no tmux server: full vendor boot (~45s). ARMS AND GRIPPERS WILL"
+        say "no tmux server: full vendor boot. ARMS AND GRIPPERS WILL"
         say "TWITCH — robot clear, e-stop in reach."
         ( cd "$STARTUP_SCRIPT_DIR" && ./robot_startup.sh boot "$SESSION_CFG" ) 2>&1 | tee -a "$LOG"
-        sleep 45
+        # Poll for HDAS liveness instead of the old blind 45s sleep: pass
+        # as soon as a process exists (rates still gated below), fail the
+        # wait no later than the old fixed delay.
+        local waited=0
+        while [ "$waited" -lt 45 ] && [ "$(hdas_count)" -eq 0 ]; do
+            sleep 5; waited=$((waited + 5))
+        done
+        say "boot settle: HDAS appeared after ~${waited}s (0 processes means the tmux flake)"
+        sleep 5
     fi
     kill_gello
     if gate_report; then say "PASS: vendor stack healthy"; return 0; fi
