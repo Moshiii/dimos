@@ -21,13 +21,16 @@ from collections.abc import Iterator
 import pytest
 
 from dimos.agents.code_policy import (
+    CodePolicyConfig,
     CodePolicyModule,
     CodePolicyObserverDescriptor,
     CodePolicyObserverState,
+    _bootstrap_source,
     _BoundedTextOutput,
 )
 from dimos.agents.mcp.mcp_server import handle_request
 from dimos.benchmark.agent_eval.pi_adapter import inspect_python_exec_inventory
+from dimos.memory2.store.sqlite import SqliteStore
 
 
 @pytest.fixture
@@ -42,6 +45,47 @@ def code_policy(mocker, tmp_path) -> Iterator[CodePolicyModule]:
         yield module
     finally:
         module.stop()
+
+
+def test_frozen_config_requires_cutoff_and_derived_path_together(tmp_path) -> None:
+    with pytest.raises(ValueError, match="must be set together"):
+        CodePolicyConfig(
+            recording_path=str(tmp_path / "source.db"),
+            memory_cutoff_timestamp=2.0,
+        )
+    with pytest.raises(ValueError, match="connect_app must be false"):
+        CodePolicyConfig(
+            recording_path=str(tmp_path / "source.db"),
+            derived_recording_path=str(tmp_path / "derived.db"),
+            memory_cutoff_timestamp=2.0,
+        )
+
+
+def test_frozen_bootstrap_exposes_only_bounded_read_only_memory(monkeypatch, tmp_path) -> None:
+    source_path = tmp_path / "source.db"
+    derived_path = tmp_path / "derived.db"
+    with SqliteStore(path=str(source_path)) as source:
+        stream = source.stream("messages", str)
+        stream.append("before", ts=1.0)
+        stream.append("after", ts=3.0)
+    with SqliteStore(path=str(derived_path)) as derived:
+        derived.stream("global_map", str).append("map", ts=2.0)
+
+    monkeypatch.setenv("DIMOS_CODE_POLICY_RECORDING_PATH", str(source_path))
+    monkeypatch.setenv("DIMOS_CODE_POLICY_DERIVED_RECORDING_PATH", str(derived_path))
+    monkeypatch.setenv("DIMOS_CODE_POLICY_MEMORY_CUTOFF", "2.0")
+    monkeypatch.setenv("DIMOS_CODE_POLICY_CONNECT_APP", "0")
+    namespace: dict[str, object] = {}
+    exec(_bootstrap_source(), namespace)
+    memory = namespace["memory"]
+    try:
+        assert "app" not in namespace
+        assert [item.data for item in memory.streams.messages] == ["before"]  # type: ignore[attr-defined]
+        assert memory.streams.global_map.last().data == "map"  # type: ignore[attr-defined]
+        with pytest.raises(PermissionError, match="read-only"):
+            memory.streams.messages.append("mutation")  # type: ignore[attr-defined]
+    finally:
+        memory.stop()  # type: ignore[attr-defined]
 
 
 def test_output_collector_keeps_only_bounded_plain_text() -> None:

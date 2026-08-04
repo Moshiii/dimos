@@ -25,7 +25,7 @@ import time
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
@@ -39,6 +39,9 @@ DEFAULT_STARTUP_TIMEOUT_S = 10.0
 DEFAULT_INTERRUPT_GRACE_S = 2.0
 DEFAULT_OUTPUT_LIMIT = 32_000
 _RECORDING_PATH_ENV = "DIMOS_CODE_POLICY_RECORDING_PATH"
+_DERIVED_RECORDING_PATH_ENV = "DIMOS_CODE_POLICY_DERIVED_RECORDING_PATH"
+_MEMORY_CUTOFF_ENV = "DIMOS_CODE_POLICY_MEMORY_CUTOFF"
+_CONNECT_APP_ENV = "DIMOS_CODE_POLICY_CONNECT_APP"
 _TRUNCATION_MARKER = "\n... [output truncated]"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
@@ -123,9 +126,23 @@ class CodePolicyObserverProbeReceipt(_EvidenceModel):
 
 class CodePolicyConfig(ModuleConfig):
     recording_path: str
+    derived_recording_path: str | None = None
+    memory_cutoff_timestamp: float | None = None
+    connect_app: bool = True
     output_limit: int = DEFAULT_OUTPUT_LIMIT
     startup_timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S
     interrupt_grace_s: float = DEFAULT_INTERRUPT_GRACE_S
+
+    @model_validator(mode="after")
+    def validate_frozen_memory(self) -> CodePolicyConfig:
+        frozen_values = (self.derived_recording_path, self.memory_cutoff_timestamp)
+        if (frozen_values[0] is None) != (frozen_values[1] is None):
+            raise ValueError(
+                "derived_recording_path and memory_cutoff_timestamp must be set together"
+            )
+        if frozen_values[0] is not None and self.connect_app:
+            raise ValueError("connect_app must be false for frozen memory")
+        return self
 
 
 class _BoundedTextOutput:
@@ -187,13 +204,33 @@ def _bootstrap_source() -> str:
     return f"""
 import os as _os
 from dimos.memory2.store.sqlite import SqliteStore as _SqliteStore
-from dimos.porcelain.dimos import Dimos as _Dimos
 
-app = _Dimos.connect()
-memory = _SqliteStore(path=_os.environ[{_RECORDING_PATH_ENV!r}], must_exist=True)
-memory.start()
+_cutoff = _os.environ.get({_MEMORY_CUTOFF_ENV!r})
+if _cutoff is None:
+    memory = _SqliteStore(path=_os.environ[{_RECORDING_PATH_ENV!r}], must_exist=True)
+    memory.start()
+else:
+    from dimos.memory2.store.frozen import FrozenMemoryStore as _FrozenMemoryStore
 
-del _os, _SqliteStore, _Dimos
+    _source = _SqliteStore(
+        path=_os.environ[{_RECORDING_PATH_ENV!r}], must_exist=True, read_only=True
+    )
+    _derived = _SqliteStore(
+        path=_os.environ[{_DERIVED_RECORDING_PATH_ENV!r}], must_exist=True, read_only=True
+    )
+    memory = _FrozenMemoryStore(
+        source=_source, derived=_derived, through_timestamp=float(_cutoff)
+    )
+    memory.start()
+    del _FrozenMemoryStore, _source, _derived
+
+if _os.environ.get({_CONNECT_APP_ENV!r}, "1") == "1":
+    from dimos.porcelain.dimos import Dimos as _Dimos
+
+    app = _Dimos.connect()
+    del _Dimos
+
+del _os, _SqliteStore, _cutoff
 """
 
 
@@ -225,8 +262,8 @@ class CodePolicyModule(Module):
     def python_exec(self, code: str, timeout_s: float = MAX_EXECUTION_TIMEOUT_S) -> str:
         """Execute one synchronous Python program in the persistent policy session.
 
-        The trusted, unsandboxed session preloads `app` for deployed DimOS RPCs
-        and `memory` for current and historical observations. Imports, functions,
+        The trusted, unsandboxed session preloads `memory` for observations and,
+        when configured, `app` for deployed DimOS RPCs. Imports, functions,
         variables, and mutations persist across calls until the host resets the
         session. Use this for observation processing, control flow, retries, and
         coordinated multi-RPC behavior.
@@ -545,6 +582,11 @@ class CodePolicyModule(Module):
             try:
                 env = os.environ.copy()
                 env[_RECORDING_PATH_ENV] = self.config.recording_path
+                env[_CONNECT_APP_ENV] = "1" if self.config.connect_app else "0"
+                if self.config.memory_cutoff_timestamp is not None:
+                    assert self.config.derived_recording_path is not None
+                    env[_DERIVED_RECORDING_PATH_ENV] = self.config.derived_recording_path
+                    env[_MEMORY_CUTOFF_ENV] = str(self.config.memory_cutoff_timestamp)
                 manager.start_kernel(env=env)
                 client = manager.client()
                 client.start_channels()
