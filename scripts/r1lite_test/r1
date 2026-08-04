@@ -36,10 +36,13 @@ cmd_shell() {
     mkdir -p "$LOG_DIR"
     say "image $IMAGE_TAG (${IMAGE_DIGEST:7:19}…) — logs mount: $LOG_DIR -> /app/logs"
     say "inside: dimos run <blueprint>; preflight: python3 /opt/dimos/scripts/r1lite_test/preflight.py"
+    # The -c wrapper sources ROS even on images older than the baked
+    # bashrc, then hands over an interactive shell.
     exec docker run -it --rm --network host --ipc host --pid host \
         -v "$LOG_DIR":/app/logs \
         -e QUEST_RECORD="${QUEST_RECORD:-}" \
-        --entrypoint bash "$IMAGE"
+        --entrypoint bash "$IMAGE" \
+        -c 'source /opt/ros/humble/setup.bash 2>/dev/null; export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-2}"; exec bash -i'
 }
 
 cmd_run() {

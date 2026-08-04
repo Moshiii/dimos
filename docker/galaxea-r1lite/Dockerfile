@@ -79,6 +79,11 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/dds-selftest
 COPY scripts/r1lite_test /opt/dimos/scripts/r1lite_test
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app
 
+# Every bash in this image — interactive shells, docker exec, the r1
+# launcher's dev door — gets the ROS environment without the entrypoint.
+RUN echo 'source /opt/ros/humble/setup.bash' >> /etc/bash.bashrc \
+    && echo 'export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-2}"' >> /etc/bash.bashrc
+
 # uid 1000 matches the vendor stack so shared-memory DDS delivery works.
 RUN useradd --uid 1000 --user-group --create-home --shell /bin/bash dimos
 USER dimos

@@ -476,6 +476,10 @@ r1lite-runtime = [
     "soundfile",
     "uvicorn>=0.34.0",
     "pygame>=2.6.1",
+    # The sim blueprint (offline replay/tuning without a robot) renders
+    # through the viser backend and converts meshes with trimesh.
+    "viser[urdf]>=1.0.29",
+    "trimesh>=4.0.0",
 ]
 
 # Full CI test group for the self-hosted runner. Inherits `tests` and adds
