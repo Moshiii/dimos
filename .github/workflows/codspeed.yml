@@ -42,12 +42,13 @@ jobs:
           else
             echo "archive restored from cache"
           fi
-      # portaudio/turbojpeg mirror the tests job; libgl1/libglib2.0-0 are for
-      # open3d (preinstalled on GitHub-hosted images, not necessarily here).
+      # portaudio/turbojpeg mirror the tests job; libgl1/libglib2.0-0 (open3d)
+      # and libgfortran5 (scipy) are preinstalled on GitHub-hosted images but
+      # not necessarily on this runner.
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev libturbojpeg libgl1 libglib2.0-0
+          sudo apt-get install -y portaudio19-dev libturbojpeg libgl1 libglib2.0-0 libgfortran5
       - name: Raise UDP receive buffers for LCM
         run: sudo sysctl -w net.core.rmem_max=67108864 net.core.rmem_default=67108864
       - name: Install uv
@@ -65,6 +66,11 @@ jobs:
         run: uv run python -c "from dimos.utils.data import get_data; print(get_data('go2_hongkong_office.db'))"
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v5
+        env:
+          # The benchmark process dies with SIGILL (exit 132) under the default
+          # samply-based walltime profiler on this ARM64 runner; the same stack
+          # runs clean on linux-aarch64 without it. Drop once samply behaves.
+          CODSPEED_WALLTIME_PROFILER: perf
         with:
           mode: walltime
           run: uv run pytest --codspeed -m '' --no-cov dimos/robot/unitree/go2/test_replay_benchmark.py
