@@ -28,6 +28,7 @@ from dimos.control.components import (
 from dimos.core.global_config import global_config
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.robot.manipulators._modeling import (
     base_pose,
     coordinator_joint_mapping,
@@ -71,13 +72,14 @@ XARM_GRIPPER_PARAMS = {
 XARM7_SIM_HOME = [0.0, -0.247, 0.0, 0.909, 0.0, 1.15644, 0.0]
 
 
-def make_xarm7_sim_robot_config() -> RobotModelConfig:
+def make_xarm7_sim_robot_config(robot_base_pose: PoseStamped) -> RobotModelConfig:
     return make_xarm7_model_config(
         name="arm",
         add_gripper=True,
         tf_extra_links=["link7"],
         home_joints=XARM7_SIM_HOME,
         pre_grasp_offset=0.05,
+        placement=robot_base_pose,
     )
 
 
@@ -236,6 +238,7 @@ def make_xarm_model_config(
     tf_extra_links: list[str] | None = None,
     home_joints: list[float] | None = None,
     pre_grasp_offset: float = 0.10,
+    placement: PoseStamped | None = None,
 ) -> RobotModelConfig:
     xacro_args = {
         "dof": str(dof),
@@ -251,7 +254,9 @@ def make_xarm_model_config(
     return RobotModelConfig(
         name=name,
         model_path=XARM_MODEL_PATH,
-        base_pose=base_pose(x_offset, y_offset, z_offset, pitch),
+        base_pose=(
+            placement if placement is not None else base_pose(x_offset, y_offset, z_offset, pitch)
+        ),
         joint_names=local_joint_names,
         base_link="link_base",
         planning_groups=[

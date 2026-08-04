@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from dimos.core.coordination.blueprints import Blueprint
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 ENTRY_POINT_GROUP = "dimos.simulation.providers"
 
@@ -38,6 +39,7 @@ class SimulationBinding:
     adapter_type: str
     adapter_address: str | Path
     rerun_config: dict[str, Any] = field(default_factory=dict)
+    robot_base_pose: PoseStamped = field(default_factory=PoseStamped)
 
 
 @runtime_checkable
