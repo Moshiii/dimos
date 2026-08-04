@@ -236,12 +236,19 @@ def _decompress_archive(filename: str | Path) -> Path:
         with tarfile.open(filename_path, "r:gz") as tar:
             tar.extractall(staging_dir)
 
-        # now clear the old if it's there and swap
+        # validate before touching the old extraction, so a mis-packaged
+        # archive can't delete a good copy and then fail to replace it
+        staged_path = staging_dir / extracted_name
+        if not staged_path.exists():
+            raise RuntimeError(
+                f"Archive '{filename_path.name}' has no top-level '{extracted_name}' member"
+            )
+
         if extracted_path.is_dir():
             shutil.rmtree(extracted_path)
         elif extracted_path.exists():
             extracted_path.unlink()
-        os.replace(staging_dir / extracted_name, extracted_path)
+        os.replace(staged_path, extracted_path)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 

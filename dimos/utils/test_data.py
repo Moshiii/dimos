@@ -249,6 +249,32 @@ def test_get_data_reextraction_drops_members_removed_from_archive(data_layout: D
     assert not dropped_path.exists()
 
 
+def test_get_data_mispackaged_archive_does_not_destroy_prior_extraction(
+    data_layout: DataLayout,
+) -> None:
+    """A stale-triggering archive missing its top-level member must raise
+    without deleting the still-good previous extraction."""
+    tar_path = data._lfs_archive_path("dataset")
+    _write_tar_gz(tar_path, "dataset", b"v1", data_layout.staging_root)
+
+    first = data.get_data("dataset/payload.bin")
+    assert first.read_bytes() == b"v1"
+
+    # re-tar under the wrong top-level name, so extraction succeeds but the
+    # expected "dataset" member never lands in the staging dir
+    with tarfile.open(tar_path, "w:gz") as tar:
+        info = tarfile.TarInfo("wrong_name/payload.bin")
+        payload = b"v2"
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+
+    with pytest.raises(RuntimeError, match="dataset"):
+        data.get_data("dataset/payload.bin")
+
+    assert first.exists()
+    assert first.read_bytes() == b"v1"
+
+
 def test_get_data_reextracts_when_stamp_is_corrupt(data_layout: DataLayout) -> None:
     tar_path = data._lfs_archive_path("dataset")
     _write_tar_gz(tar_path, "dataset", b"current", data_layout.staging_root)
