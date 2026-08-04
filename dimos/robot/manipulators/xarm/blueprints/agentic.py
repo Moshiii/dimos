@@ -28,6 +28,7 @@ from dimos.robot.manipulators.xarm.blueprints.graspgenx import xarm_graspgenx
 from dimos.robot.manipulators.xarm.blueprints.perception import xarm_perception
 from dimos.robot.manipulators.xarm.blueprints.simulation import (
     xarm_grasp_sim,
+    xarm_grasp_sim_perception,
     xarm_perception_sim,
 )
 
@@ -57,6 +58,12 @@ xarm_perception_sim_agent = autoconnect(
 
 xarm_grasp_sim_agent = autoconnect(
     xarm_grasp_sim,
+    McpServer.blueprint(),
+    McpClient.blueprint(system_prompt=MANIPULATION_AGENT_SYSTEM_PROMPT),
+)
+
+xarm_grasp_sim_perception_agent = autoconnect(
+    xarm_grasp_sim_perception,
     McpServer.blueprint(),
     McpClient.blueprint(system_prompt=MANIPULATION_AGENT_SYSTEM_PROMPT),
 )

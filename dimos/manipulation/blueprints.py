@@ -43,10 +43,19 @@ from dimos.robot.manipulators.xarm.blueprints.basic import (
 )
 from dimos.robot.manipulators.xarm.blueprints.perception import xarm_perception as xarm_perception
 from dimos.robot.manipulators.xarm.blueprints.simulation import (
+    XARM_GRASP_TABLE,
     xarm_perception_sim as xarm_perception_sim,
 )
-from dimos.robot.manipulators.xarm.config import make_xarm6_model_config, xarm6_hardware
+from dimos.robot.manipulators.xarm.config import (
+    XARM_GRASP_SIM_PATH,
+    make_xarm6_model_config,
+    make_xarm7_sim_hardware,
+    make_xarm7_sim_module_kwargs,
+    make_xarm7_sim_robot_config,
+    xarm6_hardware,
+)
 from dimos.robot.manipulators.xarm.grasp_config import make_xarm_graspgenx_config
+from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.visualization.vis_module import vis_module
 
 PICKNPLACE_CAMERA_TRANSFORM = Transform(
@@ -64,6 +73,7 @@ _picknplace_xarm6_model = make_xarm6_model_config(
 _picknplace_xarm6_model.max_velocity = 0.25
 _picknplace_xarm6_model.max_acceleration = 0.5
 _xarm_graspgenx = make_xarm_graspgenx_config()
+_picknplace_sim_hardware = make_xarm7_sim_hardware(XARM_GRASP_SIM_PATH)
 
 
 picknplace = autoconnect(
@@ -169,6 +179,41 @@ picknplace_graspgenx_edgetam = autoconnect(
     ),
     ObjectSceneRegistrationModule.blueprint(
         target_frame="link_base",
+        prompt_mode=YoloePromptMode.PROMPT,
+        segmentation_backend="edgetam",
+        register_objects=False,
+        detect_on_request=True,
+        detector_confidence=0.4,
+        object_voxel_downsample=0.001,
+    ),
+    PickNPlaceModule.blueprint(align_grasp_yaw=True, grasp_strategy="graspgenx"),
+    GraspGenXModule.blueprint(
+        **_xarm_graspgenx.model_dump(exclude={"rpc_transport", "tf_transport", "g"})
+    ),
+    vis_module(
+        global_config.viewer,
+        rerun_config=picknplace_rerun_config(),
+    ),
+).global_config(rerun_open="web")
+
+
+# The EdgeTAM workflow above against the MuJoCo grasp scene: the wrist camera
+# replaces the RealSense and the xArm7 sim replaces the xArm6 hardware, so the
+# prompted-segmentation path can be exercised without a robot.
+picknplace_graspgenx_edgetam_sim = autoconnect(
+    coordinator(
+        hardware=[_picknplace_sim_hardware],
+        tasks=[trajectory_task(_picknplace_sim_hardware)],
+    ),
+    ManipulationModule.blueprint(
+        robots=[make_xarm7_sim_robot_config()],
+        visualization=ViserVisualizationConfig(port=8095),
+        static_box_obstacles=[XARM_GRASP_TABLE],
+        planning_timeout=10.0,
+    ),
+    MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(XARM_GRASP_SIM_PATH)),
+    ObjectSceneRegistrationModule.blueprint(
+        target_frame="world",
         prompt_mode=YoloePromptMode.PROMPT,
         segmentation_backend="edgetam",
         register_objects=False,
