@@ -69,6 +69,7 @@ class McpClient(Module):
     agent: Out[BaseMessage]
     human_input: In[str]
     agent_idle: Out[bool]
+    agent_cancel: In[bool]
 
     _lock: RLock
     _state_graph: CompiledStateGraph[Any, Any, Any, Any] | None
@@ -77,6 +78,7 @@ class McpClient(Module):
     _history: list[BaseMessage]
     _thread: Thread
     _stop_event: Event
+    _cancel_event: Event
     _http_client: requests.Session
     _seq_ids: SequentialIds
     _tool_stream_cleanup: Callable[[], None] | None
@@ -94,6 +96,7 @@ class McpClient(Module):
             daemon=True,
         )
         self._stop_event = Event()
+        self._cancel_event = Event()
         self._http_client = requests.Session()
         self._seq_ids = SequentialIds()
         self._tool_stream_cleanup = None
@@ -217,6 +220,12 @@ class McpClient(Module):
 
         self.register_disposable(Disposable(self.human_input.subscribe(_on_human_input)))
 
+        def _on_agent_cancel(_cancel: bool) -> None:
+            self._cancel_event.set()
+            self.agent_idle.publish(True)
+
+        self.register_disposable(Disposable(self.agent_cancel.subscribe(_on_agent_cancel)))
+
         # Subscribe directly over LCM rather than through the server's GET
         # /mcp SSE channel.  HTTP would add a startup race: the first few
         # updates of a short-lived stream can fire before the SSE connection
@@ -330,6 +339,7 @@ class McpClient(Module):
             with self._lock:
                 if not self._state_graph:
                     raise ValueError("No state graph initialized")
+                self._cancel_event.clear()
                 self._process_message(self._state_graph, message)
 
     def _process_message(
@@ -341,13 +351,18 @@ class McpClient(Module):
         self.agent.publish(message)
 
         for update in state_graph.stream({"messages": self._history}, stream_mode="updates"):
+            if self._cancel_event.is_set():
+                break
             for node_output in update.values():
                 for msg in node_output.get("messages", []):
                     self._history.append(msg)
                     pretty_print_langchain_message(msg)
                     self.agent.publish(msg)
 
-        if self._message_queue.empty():
+            if self._cancel_event.is_set():
+                break
+
+        if self._cancel_event.is_set() or self._message_queue.empty():
             self.agent_idle.publish(True)
 
 
