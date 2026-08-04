@@ -22,17 +22,17 @@ from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, planner
 from dimos.robot.manipulators.common.topics import DEFAULT_TRAJECTORY_TASK_NAME
 from dimos.robot.manipulators.openarm.config import (
+    OPENARM_ARM_JOINTS,
     OPENARM_DOF,
-    OPENARM_GRIPPER_JOINTS,
     OPENARM_LEFT_MODEL,
     OPENARM_RIGHT_MODEL,
     openarm_arm_joints,
+    openarm_bimanual_model_config,
     openarm_hardware,
-    openarm_model_config,
 )
 from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
 
-# The keyboard publishes twists to one task by name; the other arm's task
+# The keyboard publishes twists to one task by name; the right arm's task
 # keeps holding its anchor pose.
 KEYBOARD_EEF_TASK_NAME = "eef_twist_left_arm"
 
@@ -56,37 +56,23 @@ def _trajectory_task(*, priority: int = 10) -> TaskConfig:
     return TaskConfig(
         name=DEFAULT_TRAJECTORY_TASK_NAME,
         type="trajectory",
-        joint_names=[*openarm_arm_joints("left"), *openarm_arm_joints("right")],
+        joint_names=list(OPENARM_ARM_JOINTS),
         priority=priority,
         params={"start_position_tolerance": 0.05},
     )
 
 
-def _gripper_task() -> TaskConfig:
-    return TaskConfig(
-        name="servo_grippers",
-        type="servo",
-        joint_names=list(OPENARM_GRIPPER_JOINTS),
-        priority=20,
-        params={"timeout": 0.0},
-    )
-
-
 keyboard_teleop_openarm = autoconnect(
-    KeyboardTeleopModule.blueprint(
-        task_name=KEYBOARD_EEF_TASK_NAME,
-        gripper_joint_names=list(OPENARM_GRIPPER_JOINTS),
-    ),
+    KeyboardTeleopModule.blueprint(task_name=KEYBOARD_EEF_TASK_NAME),
     ControlCoordinator.blueprint(
         hardware=[_openarm_keyboard_hw],
         tasks=[
             _eef_twist_task("left"),
             _eef_twist_task("right"),
-            _gripper_task(),
         ],
     ),
     ManipulationModule.blueprint(
-        robots=[openarm_model_config("left"), openarm_model_config("right")],
+        robots=[openarm_bimanual_model_config()],
         visualization={"backend": "viser"},
     ),
 )
@@ -94,17 +80,13 @@ keyboard_teleop_openarm = autoconnect(
 _openarm_keyboard_planner_hw = openarm_hardware()
 
 keyboard_teleop_openarm_planner = autoconnect(
-    KeyboardTeleopModule.blueprint(
-        task_name=KEYBOARD_EEF_TASK_NAME,
-        gripper_joint_names=list(OPENARM_GRIPPER_JOINTS),
-    ),
-    planner(robots=[openarm_model_config("left"), openarm_model_config("right")]),
+    KeyboardTeleopModule.blueprint(task_name=KEYBOARD_EEF_TASK_NAME),
+    planner(robots=[openarm_bimanual_model_config()]),
     coordinator(
         hardware=[_openarm_keyboard_planner_hw],
         tasks=[
             _eef_twist_task("left", priority=10),
             _eef_twist_task("right", priority=10),
-            _gripper_task(),
             _trajectory_task(priority=20),
         ],
     ),
