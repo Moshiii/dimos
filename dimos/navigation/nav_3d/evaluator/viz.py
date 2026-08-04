@@ -46,6 +46,17 @@ logger = setup_logger()
 # Voxels are drawn well inside their cell so the surface reads as a grid.
 VOXEL_RADIUS_SCALE = 0.25
 ENDPOINT_RADIUS = 0.05
+EDGE_RADIUS = 0.008
+WALKED_RADIUS = 0.015
+BLOCKING_RADIUS = 0.06
+# The online path is drawn over the final one, so it is the thicker of the two.
+ONLINE_PATH_RADIUS = 0.04
+FINAL_PATH_RADIUS = 0.02
+# A refusal is reviewed on its own, an unreachable goal only against its path.
+NEGATIVE_INTENT_RADIUS = 0.006
+FAILED_INTENT_RADIUS = 0.003
+# Gate violations are drawn as points on their path, wide enough to spot.
+VIOLATION_RADIUS_SCALE = 3.0
 WALKED_PATH_COLOR = [255, 255, 255]
 START_COLOR = [0, 255, 255]
 GOAL_COLOR = [255, 140, 0]
@@ -116,7 +127,7 @@ def _log_planner(entity: str, artifacts: PlannerArtifacts | None, cfg: EvalConfi
             rr.LineStrips3D(
                 edges[:, :6].reshape(-1, 2, 3),
                 colors=_edge_cost_colors(edges[:, 6]),
-                radii=0.008,
+                radii=EDGE_RADIUS,
             ),
             static=True,
         )
@@ -178,13 +189,21 @@ def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig)
     if outcome.unsupported:
         rr.log(
             f"{entity}/unsupported",
-            rr.Points3D(outcome.unsupported, colors=[UNSUPPORTED_COLOR], radii=radius * 3),
+            rr.Points3D(
+                outcome.unsupported,
+                colors=[UNSUPPORTED_COLOR],
+                radii=radius * VIOLATION_RADIUS_SCALE,
+            ),
             static=True,
         )
     if outcome.steep:
         rr.log(
             f"{entity}/steep",
-            rr.Points3D(outcome.steep, colors=[STEEP_COLOR], radii=radius * 3),
+            rr.Points3D(
+                outcome.steep,
+                colors=[STEEP_COLOR],
+                radii=radius * VIOLATION_RADIUS_SCALE,
+            ),
             static=True,
         )
 
@@ -221,13 +240,19 @@ def _log_case(base: str, case: CaseResult, cfg: EvalConfig) -> None:
         # Always visible, so a correct refusal is reviewable too.
         rr.log(
             f"{base}/intent",
-            rr.LineStrips3D([[case.start, case.goal]], colors=[NEGATIVE_INTENT_COLOR], radii=0.006),
+            rr.LineStrips3D(
+                [[case.start, case.goal]],
+                colors=[NEGATIVE_INTENT_COLOR],
+                radii=NEGATIVE_INTENT_RADIUS,
+            ),
             static=True,
         )
     elif not case.online.success:
         rr.log(
             f"{base}/intent",
-            rr.LineStrips3D([[case.start, case.goal]], colors=[INVALID_PATH_COLOR], radii=0.003),
+            rr.LineStrips3D(
+                [[case.start, case.goal]], colors=[INVALID_PATH_COLOR], radii=FAILED_INTENT_RADIUS
+            ),
             static=True,
         )
     # The incremental map at plan time, saved for every case.
@@ -245,11 +270,11 @@ def _log_case(base: str, case: CaseResult, cfg: EvalConfig) -> None:
     if case.blocking_points:
         rr.log(
             f"{base}/new_occupancy",
-            rr.Points3D(case.blocking_points, colors=[DYNAMIC_BLOCK_COLOR], radii=0.06),
+            rr.Points3D(case.blocking_points, colors=[DYNAMIC_BLOCK_COLOR], radii=BLOCKING_RADIUS),
             static=True,
         )
-    _log_path(f"{base}/online", case.online, radius=0.04, cfg=cfg)
-    _log_path(f"{base}/final", case.final, radius=0.02, cfg=cfg)
+    _log_path(f"{base}/online", case.online, radius=ONLINE_PATH_RADIUS, cfg=cfg)
+    _log_path(f"{base}/final", case.final, radius=FINAL_PATH_RADIUS, cfg=cfg)
 
 
 def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -> None:
@@ -279,7 +304,7 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
         foot = trajectory.foot(cfg.robot_height)
         rr.log(
             f"{root}/walked_path",
-            rr.LineStrips3D([foot], colors=[WALKED_PATH_COLOR], radii=0.015),
+            rr.LineStrips3D([foot], colors=[WALKED_PATH_COLOR], radii=WALKED_RADIUS),
             static=True,
         )
 

@@ -238,9 +238,14 @@ def generate_cases(
 
 def _bin_key(
     start: NDArray[np.float32], goal: NDArray[np.float32], dz: float, bin_size_m: float
-) -> tuple[int, ...]:
-    bins = np.floor(np.array([*start[:2], *goal[:2]]) / bin_size_m).astype(int)
-    return (*bins, int(np.sign(dz)) if abs(dz) >= STAIRS_DZ_M else 0)
+) -> tuple[int, int, int, int, int]:
+    return (
+        int(start[0] // bin_size_m),
+        int(start[1] // bin_size_m),
+        int(goal[0] // bin_size_m),
+        int(goal[1] // bin_size_m),
+        (1 if dz > 0 else -1) if abs(dz) >= STAIRS_DZ_M else 0,
+    )
 
 
 def _is_duplicate(cand: Candidate, accepted: list[Candidate], radius: float) -> bool:

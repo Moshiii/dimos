@@ -376,18 +376,6 @@ def _score_final(
 ) -> list[CaseResult]:
     """Plan every case against the completed map and combine both phases."""
     map_keys = final.occupied_keys
-
-    def result(case: Case, ref: metrics.Reference, **rest: object) -> CaseResult:
-        return CaseResult(
-            id=case.id,
-            dataset=suite.dataset,
-            start=case.start,
-            goal=case.goal,
-            tags=case.tags,
-            l_ref=ref.length,
-            **rest,  # type: ignore[arg-type]
-        )
-
     results: list[CaseResult] = []
     for ci, case in enumerate(suite.cases):
         ref = refs[ci]
@@ -398,9 +386,13 @@ def _score_final(
             final_out = score_negative(final_out)
         if final_only[ci]:
             results.append(
-                result(
-                    case,
-                    ref,
+                CaseResult(
+                    id=case.id,
+                    dataset=suite.dataset,
+                    start=case.start,
+                    goal=case.goal,
+                    tags=case.tags,
+                    l_ref=ref.length,
                     online_voxels=len(final.occupied),
                     expect_fail=case.expect_fail,
                     online=final_out,
@@ -420,9 +412,13 @@ def _score_final(
             )
         )
         results.append(
-            result(
-                case,
-                ref,
+            CaseResult(
+                id=case.id,
+                dataset=suite.dataset,
+                start=case.start,
+                goal=case.goal,
+                tags=case.tags,
+                l_ref=ref.length,
                 online_voxels=len(run.map_keys),
                 expect_fail=False,
                 online=run.outcome,

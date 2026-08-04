@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.utils.data import resolve_named_path
 
 if TYPE_CHECKING:
@@ -146,6 +147,12 @@ def load_suites(paths: list[Path] | None = None) -> list[Suite]:
 def save_suite(suite: Suite, path: Path) -> Path:
     """Write the suite manifest as YAML."""
     import yaml
+
+    if path.is_relative_to(MANIFEST_DIR) and not (DIMOS_PROJECT_ROOT / ".git").exists():
+        raise RuntimeError(
+            f"case manifests live in the dimos source tree ({MANIFEST_DIR}); "
+            "run ingest and curation from a git checkout"
+        )
 
     doc: dict[str, object] = {"dataset": suite.dataset}
     if suite.db is not None:
