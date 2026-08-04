@@ -104,6 +104,30 @@ jobs:
           docker pull -q "$IMG"
           docker run --rm --network host --entrypoint dds-selftest "$IMG"
 
+      # The import gate cannot see module-START failures (missing runtime
+      # deps, unwritable paths, absent data files): the 2026-08-04
+      # rehearsal found five of those in a row. Boot the sim blueprint —
+      # ungated, no vendor stack — and require every module to reach
+      # 'started' with the process still alive afterward. Root + NET_ADMIN
+      # lets the LCM configurator fix lo multicast inside the container's
+      # own netns.
+      - name: Sim blueprint boot test
+        run: |
+          IMG="ghcr.io/dimensionalos/dimos-r1lite@${{ steps.build.outputs.digest }}"
+          docker rm -f r1lite-sim-boot 2>/dev/null || true
+          docker run -d --name r1lite-sim-boot --user root --cap-add NET_ADMIN \
+            "$IMG" run r1lite-quest-teleop-sim
+          sleep 90
+          docker logs r1lite-sim-boot > sim_boot.log 2>&1 || true
+          alive=$(docker inspect -f '{{.State.Running}}' r1lite-sim-boot 2>/dev/null || echo false)
+          docker rm -f r1lite-sim-boot >/dev/null 2>&1 || true
+          grep -q "Quest Teleoperation Module started" sim_boot.log \
+            && grep -q "ManipulationModule started" sim_boot.log \
+            && grep -q "ControlCoordinator started" sim_boot.log \
+            || { echo "sim boot did not reach started modules"; tail -40 sim_boot.log; exit 1; }
+          [ "$alive" = "true" ] || { echo "sim exited early"; tail -40 sim_boot.log; exit 1; }
+          echo "sim blueprint boot: PASS"
+
       - name: Record immutable identity
         run: |
           {
