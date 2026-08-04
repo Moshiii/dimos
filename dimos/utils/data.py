@@ -25,7 +25,6 @@ import sys
 import tarfile
 import tempfile
 import time
-import uuid
 
 from filelock import FileLock
 
@@ -230,8 +229,7 @@ def _decompress_archive(filename: str | Path) -> Path:
     extracted_path = target_dir / extracted_name
 
     # extract the file to a temp location first, then swap if that worked
-    staging_dir = target_dir / f".{extracted_name}.staging-{uuid.uuid4().hex}"
-    staging_dir.mkdir(parents=True)
+    staging_dir = Path(tempfile.mkdtemp(dir=target_dir, prefix=f".{extracted_name}.staging-"))
     try:
         with tarfile.open(filename_path, "r:gz") as tar:
             tar.extractall(staging_dir)
@@ -302,7 +300,7 @@ def _extraction_is_current(archive_name: str | Path) -> bool:
         stamp = json.loads(stamp_path.read_text())
         return stamp == _archive_identity(archive_path)
     except (json.JSONDecodeError, OSError):
-        # Corrupt or vanished stamp: treat as stale, don't raise.
+        # if we can't load the stamp, just treat it as stale
         return False
 
 
@@ -389,8 +387,6 @@ def get_data(name: str | Path) -> Path:
     if is_ready():
         return file_path
 
-    # Serialize extraction per archive; re-check after acquiring the lock
-    # in case another caller already refreshed it.
     with _archive_lock(archive_name):
         if not is_ready():
             archive_tar_path = _pull_lfs_archive(archive_name)
