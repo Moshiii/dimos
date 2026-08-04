@@ -80,11 +80,8 @@ def elevation_tags(
 def _corridor_width(
     samples: NDArray[np.float32], occupied_keys: NDArray[np.int64], cfg: EvalConfig
 ) -> NDArray[np.float64]:
-    """Free lateral width at each densified sample, at body height.
-
-    Left-plus-right distance to the nearest occupied voxel, capped when the
-    passage is open. The room the body has to pass, not the feet to stand.
-    """
+    """Free lateral width at each densified sample, at body height: the room
+    the body has to pass, not the room the feet have to stand."""
     _, lateral, _ = body_frames(samples, cfg.robot_length)
     mid_z = (cfg.ground_margin + cfg.body_clearance) / 2.0
     origin = samples.astype(np.float64) + np.array([0.0, 0.0, mid_z])
@@ -182,12 +179,8 @@ def route_tags(
     occupied_keys: NDArray[np.int64],
     cfg: EvalConfig,
 ) -> list[str]:
-    """Geometric tags for a case, in a stable order.
-
-    Elevation comes from the endpoints. Shape tags describe the terrain between
-    them and are skipped unless the walked route runs roughly straight. The
-    caller prepends the provenance tag.
-    """
+    """Geometric tags for a case, in a stable order. Shape tags are skipped
+    unless the walked route runs roughly straight from start to goal."""
     tags = elevation_tags(start, goal)
     if route is not None and len(route) >= 2 and _is_local(route, start, goal, cfg):
         tags += _corridor_tags(route, occupied_keys, cfg)

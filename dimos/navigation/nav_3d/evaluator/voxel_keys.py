@@ -21,29 +21,28 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from dimos.mapping.voxels.keys import (
+    KEY_OFFSET,
+    X_SHIFT,
+    Y_SHIFT,
+    pack_indices,
+    unpack_keys,
+)
+
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-_KEY_OFFSET = 1 << 20
-_FIELD_BITS = 21
-_X_SHIFT = 2 * _FIELD_BITS
-_Y_SHIFT = _FIELD_BITS
-_FIELD_MASK = (1 << _FIELD_BITS) - 1
-
 
 def voxel_keys(points: NDArray[np.float32], voxel_size: float) -> NDArray[np.int64]:
-    """Pack voxel indices into sortable int64 keys, one per point."""
-    idx = np.floor(points.astype(np.float64) / voxel_size).astype(np.int64) + _KEY_OFFSET
-    return (idx[:, 0] << _X_SHIFT) | (idx[:, 1] << _Y_SHIFT) | idx[:, 2]
+    """Pack voxel indices into sortable int64 keys, one per point. Quantizes in
+    float64 so no point lands in a neighboring voxel to float32 rounding."""
+    idx = np.floor(points.astype(np.float64) / voxel_size).astype(np.int64) + KEY_OFFSET
+    return pack_indices(idx)
 
 
 def key_centers(keys: NDArray[np.int64], voxel_size: float) -> NDArray[np.float32]:
     """Voxel center positions for packed keys, the inverse of voxel_keys."""
-    idx = (
-        np.stack([keys >> _X_SHIFT, (keys >> _Y_SHIFT) & _FIELD_MASK, keys & _FIELD_MASK], axis=1)
-        - _KEY_OFFSET
-    )
-    return ((idx + 0.5) * voxel_size).astype(np.float32)
+    return ((unpack_keys(keys) + 0.5) * voxel_size).astype(np.float32)
 
 
 def keys_contain(sorted_keys: NDArray[np.int64], query: NDArray[np.int64]) -> NDArray[np.bool_]:
@@ -71,16 +70,6 @@ def cylinder_offsets(
 
 
 def offset_deltas(offsets: NDArray[np.int64]) -> NDArray[np.int64]:
-    """Packed key deltas for integer voxel offsets.
-
-    Valid because the fields sit far from their bounds, so a packed add carries
-    no bits between them.
-    """
-    return np.asarray((offsets[:, 0] << _X_SHIFT) + (offsets[:, 1] << _Y_SHIFT) + offsets[:, 2])
-
-
-def offset_keys(
-    points: NDArray[np.float32], offsets: NDArray[np.int64], voxel_size: float
-) -> NDArray[np.int64]:
-    """Keys of every (point voxel + offset) pair, shape (P, O)."""
-    return voxel_keys(points, voxel_size)[:, None] + offset_deltas(offsets)[None, :]
+    """Packed key deltas for integer voxel offsets. Valid because the fields sit
+    far from their bounds, so a packed add carries no bits between them."""
+    return np.asarray((offsets[:, 0] << X_SHIFT) + (offsets[:, 1] << Y_SHIFT) + offsets[:, 2])

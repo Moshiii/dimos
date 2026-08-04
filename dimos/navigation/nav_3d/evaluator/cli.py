@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Nav-3d evaluation CLI, mounted as `dimos nav-eval`."""
+"""Nav-3d evaluation CLI, mounted as the dimos nav-eval sub-command."""
 
 from __future__ import annotations
 
@@ -42,7 +42,6 @@ from dimos.navigation.nav_3d.evaluator.generate import (
     resolve_max_cases,
 )
 from dimos.navigation.nav_3d.evaluator.metrics import ground_truth_route
-from dimos.navigation.nav_3d.evaluator.recording import load_trajectory
 from dimos.navigation.nav_3d.evaluator.runner import Report, evaluate
 from dimos.navigation.nav_3d.evaluator.tagging import GEOMETRIC_TAGS, route_tags
 from dimos.utils.data import get_data_dir
@@ -68,9 +67,15 @@ def _apply_overrides(cfg: EvalConfig, overrides: list[str]) -> EvalConfig:
         if name not in fields:
             raise typer.BadParameter(f"unknown config field {name!r}")
         current = getattr(cfg, name)
-        if not isinstance(current, (bool, int, float, str)):
-            raise typer.BadParameter(f"{name!r} is not a scalar field; set its members instead")
+        # bool is left out on purpose: bool("false") is True, so a boolean
+        # override would silently mean the opposite of what was asked.
+        if not isinstance(current, (int, float, str)) or isinstance(current, bool):
+            raise typer.BadParameter(f"{name!r} cannot be set from the command line")
         setattr(cfg, name, type(current)(value))
+    try:
+        cfg.validate()
+    except ValueError as err:
+        raise typer.BadParameter(str(err)) from err
     return cfg
 
 
@@ -139,21 +144,23 @@ def _print_report(report: Report) -> None:
 
 @app.command()
 def run(
-    manifests: list[Path] = typer.Argument(
+    manifests: list[Path] | None = typer.Argument(
         None, help="Suite YAMLs; defaults to every manifest under case_manifests/"
     ),
-    dataset: str = typer.Option(None, "--dataset", help="Only run suites for this dataset"),
-    tag: list[str] = typer.Option(
+    dataset: str | None = typer.Option(None, "--dataset", help="Only run suites for this dataset"),
+    tag: list[str] | None = typer.Option(
         None, "--tag", help="Only run cases carrying every given tag, e.g. --tag stairs --tag up"
     ),
-    json_out: Path = typer.Option(None, "--json", help="Write the full report as JSON"),
-    rrd_out: Path = typer.Option(None, "--rrd", help="Write a rerun recording of every case"),
+    json_out: Path | None = typer.Option(None, "--json", help="Write the full report as JSON"),
+    rrd_out: Path | None = typer.Option(
+        None, "--rrd", help="Write a rerun recording of every case"
+    ),
     workers: int = typer.Option(
         os.cpu_count() or 1,
         "--workers",
         help="Datasets evaluated in parallel processes",
     ),
-    set_: list[str] = typer.Option(
+    set_: list[str] | None = typer.Option(
         None, "--set", help="Repeatable EvalConfig override, e.g. goal_tolerance=0.4"
     ),
 ) -> None:
@@ -241,7 +248,7 @@ def ingest(
         odom_stream=odom_stream,
         db=str(dest) if external else None,
     )
-    trajectory = load_trajectory(dest, odom_stream)
+    trajectory = suite.trajectory()
     arcs = trajectory.arc_lengths()
     print(
         f"trajectory: {len(trajectory.positions)} poses, "
@@ -249,7 +256,7 @@ def ingest(
         f"z [{trajectory.positions[:, 2].min():.2f}, {trajectory.positions[:, 2].max():.2f}]"
     )
     cfg = EvalConfig()
-    final = load_or_build_final_map(dest, suite, cfg)
+    final = load_or_build_final_map(suite, cfg)
     max_cases = cases or None
     min_cases = cases or MIN_CASES
     surface = final.standable_surface(cfg.robot_height)
@@ -269,7 +276,7 @@ def ingest(
     print(f"\nrun with: dimos nav-eval run --dataset {name}")
 
 
-def _open(dataset: str) -> CaseStore:
+def _open_store(dataset: str) -> CaseStore:
     try:
         return load_store(dataset)
     except CurationError as err:
@@ -288,14 +295,14 @@ def add_case(
     dataset: str = typer.Argument(..., help="Dataset whose manifest gets the case"),
     start: tuple[float, float, float] = typer.Option(..., "--start", help="Foot-level xyz"),
     goal: tuple[float, float, float] = typer.Option(..., "--goal", help="Foot-level xyz"),
-    case_id: str = typer.Option(None, "--id", help="Case id; default manual_<n> or neg_<n>"),
-    tags: str = typer.Option(None, "--tags", help="Comma-separated tags"),
+    case_id: str | None = typer.Option(None, "--id", help="Case id; default manual_<n> or neg_<n>"),
+    tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags"),
     expect_fail: bool = typer.Option(
         False, "--expect-fail", help="Certified-infeasible pair; the planner must refuse"
     ),
 ) -> None:
     """Append a curated case, with endpoints snapped to the final surface."""
-    store = _open(dataset)
+    store = _open_store(dataset)
     try:
         store.add(
             start,
@@ -318,12 +325,7 @@ def tag_case(
         help="Mark a dynamic-obstacle route: online path expected, final path expected refused",
     ),
 ) -> None:
-    """Flag an auto case as a dynamic-obstacle route, e.g. a door that closed.
-
-    The online plan is still scored normally, the final plan is scored 1.0
-    for refusing. Use it on a case that shows up as incremental-only because a
-    real obstacle blocked the route by the final map, not a planner bug.
-    """
+    """Flag an auto case as a dynamic-obstacle route, e.g. a door that closed."""
     suite, manifest = _load_manifest(dataset)
     case = next((c for c in suite.cases if c.id == case_id), None)
     if case is None:
@@ -344,17 +346,11 @@ def tag_case(
 def retag(
     dataset: str = typer.Argument(..., help="Dataset whose manifest gets retagged"),
 ) -> None:
-    """Recompute geometric tags for auto-generated cases from the final map.
-
-    Only the geometric tags (flat, stairs, narrow, switchback, and the rest)
-    are replaced, so improving the tagger never churns start/goal pairs. The
-    auto provenance tag survives. Manually curated cases are left untouched:
-    their tags are human intent, not something to recompute.
-    """
+    """Recompute geometric tags for auto cases. Curated cases keep their tags."""
     suite, manifest = _load_manifest(dataset)
     cfg = EvalConfig()
-    final = load_or_build_final_map(suite.db_path(), suite, cfg)
-    trajectory = load_trajectory(suite.db_path(), suite.odom_stream, suite.end_ts_seconds())
+    final = load_or_build_final_map(suite, cfg)
+    trajectory = suite.trajectory()
     changed = 0
     for case in suite.cases:
         if "auto" not in case.tags:
@@ -379,30 +375,14 @@ def retag(
 def pick_case(
     dataset: str = typer.Argument(..., help="Dataset whose manifest gets the cases"),
 ) -> None:
-    """Pick and edit cases by shift+clicking the map in a browser viewer.
-
-    Serves the final map, the walked path, and every case already in the
-    manifest as an editable panel entry. Shift+click picks new start/goal
-    pairs. Any case can be renamed, retagged, flipped negative, or deleted.
-    New pairs save to the manifest snapped like add-case.
-    """
+    """Pick and edit cases by shift+clicking the map in a browser viewer."""
     # Lazy: picker/viz pull in viser and matplotlib, only needed for pick-case.
     from dimos.navigation.nav_3d.evaluator.picker import pick_cases
-    from dimos.navigation.nav_3d.evaluator.viz import turbo_by_height
 
-    store = _open(dataset)
-    trajectory = load_trajectory(
-        store.suite.db_path(), store.suite.odom_stream, store.suite.end_ts_seconds()
-    )
+    store = _open_store(dataset)
+    trajectory = store.suite.trajectory()
     foot = trajectory.foot(store.cfg.robot_height)
-    pick_cases(
-        dataset,
-        store.final.occupied,
-        turbo_by_height(store.final.occupied),
-        store.final.voxel_size,
-        foot,
-        store,
-    )
+    pick_cases(store, foot)
     print(f"\nrun with: dimos nav-eval run --dataset {dataset}")
 
 

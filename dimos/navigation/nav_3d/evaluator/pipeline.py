@@ -12,11 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The unit under evaluation: lidar and odometry in, paths out.
-
-A pipeline owns whatever mapping it needs and the evaluator never looks inside
-it. Grading occupancy is built separately, by the evaluator's own mapper.
-"""
+"""The unit under evaluation: lidar and odometry in, paths out. A pipeline owns
+whatever mapping it needs, and grading occupancy is built separately."""
 
 from __future__ import annotations
 

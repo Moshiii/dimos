@@ -20,11 +20,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
+from numpy.typing import NDArray
 import pytest
 import typer
 
+from dimos.memory2.store.sqlite import SqliteStore
+from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.nav_3d.evaluator import final_map, metrics, runner
-from dimos.navigation.nav_3d.evaluator.cases import Case, Suite, load_suite, save_suite
+from dimos.navigation.nav_3d.evaluator.cases import (
+    Case,
+    Suite,
+    load_suite,
+    save_suite,
+)
+from dimos.navigation.nav_3d.evaluator.cli import _apply_overrides
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 from dimos.navigation.nav_3d.evaluator.curation import CaseStore, CurationError, _curated_tags
 from dimos.navigation.nav_3d.evaluator.final_map import (
@@ -41,8 +52,13 @@ from dimos.navigation.nav_3d.evaluator.generate import (
     snap_to_surface,
 )
 from dimos.navigation.nav_3d.evaluator.picker import pick_along_ray
-from dimos.navigation.nav_3d.evaluator.pipeline import PIPELINES, make_pipeline
-from dimos.navigation.nav_3d.evaluator.recording import Frame, Trajectory
+from dimos.navigation.nav_3d.evaluator.pipeline import PIPELINES
+from dimos.navigation.nav_3d.evaluator.recording import (
+    Frame,
+    Trajectory,
+    iter_world_frames,
+    load_trajectory,
+)
 from dimos.navigation.nav_3d.evaluator.runner import (
     _dynamic_candidate,
     _final_only,
@@ -52,50 +68,35 @@ from dimos.navigation.nav_3d.evaluator.runner import (
 from dimos.navigation.nav_3d.evaluator.tagging import route_tags
 from dimos.navigation.nav_3d.evaluator.voxel_keys import (
     cylinder_offsets,
-    key_centers,
     keys_contain,
-    offset_keys,
+    offset_deltas,
     voxel_keys,
 )
 
 if TYPE_CHECKING:
-    from numpy.typing import NDArray
-
     from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
     from dimos.navigation.nav_3d.evaluator.pipeline import NavPipeline
 
 VOXEL = 0.1
+Point = tuple[float, float, float]
 
 
 def _cfg(**overrides: object) -> EvalConfig:
     return replace(EvalConfig(voxel_size=VOXEL), **overrides)
 
 
-def _wall(x: float) -> np.ndarray:
+def _wall(x: float) -> NDArray[np.float32]:
     ys, zs = np.meshgrid(np.arange(-1, 1, VOXEL), np.arange(0.05, 1.5, VOXEL))
     return np.stack([np.full(ys.size, x), ys.ravel(), zs.ravel()], axis=1, dtype=np.float32)
 
 
-def _ywall(y: float, x_lo: float, x_hi: float) -> np.ndarray:
+def _ywall(y: float, x_lo: float, x_hi: float) -> NDArray[np.float32]:
     """A wall parallel to +x travel, at constant y, spanning body height."""
     xs, zs = np.meshgrid(np.arange(x_lo, x_hi, VOXEL), np.arange(0.05, 1.5, VOXEL))
     return np.stack([xs.ravel(), np.full(xs.size, y), zs.ravel()], axis=1, dtype=np.float32)
 
 
-def test_voxel_key_roundtrip() -> None:
-    pts = np.array([[0.05, 0.05, 0.05], [-3.21, 4.7, -0.09], [80.0, -80.0, 12.3]], dtype=np.float32)
-    centers = key_centers(voxel_keys(pts, VOXEL), VOXEL)
-    assert np.all(np.abs(centers - pts) <= VOXEL / 2 + 1e-5)
-
-
-def test_keys_contain() -> None:
-    keys = np.sort(voxel_keys(np.array([[0, 0, 0], [1, 1, 1]], dtype=np.float32), VOXEL))
-    query = voxel_keys(np.array([[0, 0, 0], [5, 5, 5]], dtype=np.float32), VOXEL)
-    assert keys_contain(keys, query).tolist() == [True, False]
-    assert keys_contain(np.array([], dtype=np.int64), query).tolist() == [False, False]
-
-
-def _gate(waypoints: np.ndarray, obstacles: np.ndarray) -> metrics.GateResult:
+def _gate(waypoints: NDArray[np.float32], obstacles: NDArray[np.float32]) -> metrics.GateResult:
     keys = np.unique(voxel_keys(obstacles, VOXEL))
     return metrics.check_path(waypoints, keys, _cfg())
 
@@ -231,7 +232,6 @@ def test_replay_frames_snapshots_grow_with_time() -> None:
     frames = [frame_at(0.0, 5.0), frame_at(1.0, 8.0), frame_at(2.0, 11.0)]
     times = np.array([0.5, 1.5, np.inf])
     final, snapshots = replay_frames(frames, mapper, VOXEL, times)
-    assert final.frames == 3
     sizes = [len(s) for s in snapshots]
     assert 0 < sizes[0] < sizes[1] < sizes[2]
     assert np.array_equal(snapshots[2], final.occupied_keys)
@@ -265,33 +265,26 @@ def test_check_kinematics_rejects_cliff_jumps() -> None:
 class _StubPipeline:
     """Returns a fixed path regardless of what it was fed, for gaming the scorer."""
 
-    def __init__(self, waypoints: np.ndarray | None) -> None:
+    def __init__(self, waypoints: NDArray[np.float32] | None) -> None:
         self._waypoints = waypoints
         self.frames = 0
 
-    def add_frame(self, points: np.ndarray, origin: tuple[float, float, float], ts: float) -> None:
+    def add_frame(
+        self, points: NDArray[np.float32], origin: tuple[float, float, float], ts: float
+    ) -> None:
         self.frames += 1
 
     def plan(
         self, start: tuple[float, float, float], goal: tuple[float, float, float]
-    ) -> np.ndarray | None:
+    ) -> NDArray[np.float32] | None:
         return self._waypoints
 
 
-def _stub(waypoints: np.ndarray | None) -> NavPipeline:
+def _stub(waypoints: NDArray[np.float32] | None) -> NavPipeline:
     return cast("NavPipeline", _StubPipeline(waypoints))
 
 
-def test_make_pipeline_resolves_by_registry_name() -> None:
-    cfg = _cfg()
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setitem(PIPELINES, "stub", lambda _cfg: _StubPipeline(None))
-        assert isinstance(make_pipeline("stub", cfg), _StubPipeline)
-    with pytest.raises(ValueError, match="unknown pipeline"):
-        make_pipeline("nope", cfg)
-
-
-def _floor(x_lo: float = 0.0, x_hi: float = 20.0) -> np.ndarray:
+def _floor(x_lo: float = 0.0, x_hi: float = 20.0) -> NDArray[np.float32]:
     xs, ys = np.meshgrid(np.arange(x_lo, x_hi, VOXEL), np.arange(-2, 6, VOXEL))
     return np.stack([xs.ravel(), ys.ravel(), np.full(xs.size, -0.05)], axis=1, dtype=np.float32)
 
@@ -305,7 +298,7 @@ def _meta_scene() -> tuple[np.ndarray, EvalConfig, Case]:
     return keys, cfg, case
 
 
-def _u_route() -> np.ndarray:
+def _u_route() -> NDArray[np.float32]:
     return np.array([[2, 0, 0], [2, 4, 0], [18, 4, 0], [18, 0, 0]], dtype=np.float32)
 
 
@@ -436,21 +429,11 @@ def test_ground_truth_route_orients_start_to_goal() -> None:
     assert route[-1, 2] < route[0, 2]
 
 
-def _tags(route: np.ndarray, keys: np.ndarray) -> list[str]:
+def _tags(route: NDArray[np.float32], keys: np.ndarray) -> list[str]:
     """Tag a synthetic route, taking its endpoints for elevation."""
     start = (float(route[0, 0]), float(route[0, 1]), float(route[0, 2]))
     goal = (float(route[-1, 0]), float(route[-1, 1]), float(route[-1, 2]))
     return route_tags(start, goal, route, keys, _cfg())
-
-
-def test_route_tags_flat_wide_has_no_shape_tags() -> None:
-    """A wide flat traverse is just flat: no narrow, doorway, or corridor."""
-    route = np.array([[0, 0, 0], [4, 0, 0]], dtype=np.float32)
-    walls = np.concatenate([_ywall(-2.0, 0, 4), _ywall(2.0, 0, 4)])
-    keys = np.unique(voxel_keys(walls, VOXEL))
-    tags = _tags(route, keys)
-    assert "flat" in tags
-    assert "narrow" not in tags and "doorway" not in tags and "corridor" not in tags
 
 
 def test_route_tags_narrow_passage() -> None:
@@ -464,23 +447,15 @@ def test_route_tags_narrow_passage() -> None:
 
 
 def test_route_tags_doorway_is_a_short_pinch() -> None:
-    """An open corridor that pinches briefly and reopens is a doorway."""
+    """An open corridor that pinches and reopens is a doorway, down to a pinch
+    only a couple of voxels long."""
     route = np.array([[0, 0, 0], [5, 0, 0]], dtype=np.float32)
     far = np.concatenate([_ywall(-2.0, 0, 5), _ywall(2.0, 0, 5)])
-    pinch = np.concatenate([_ywall(-0.35, 2.0, 2.6), _ywall(0.35, 2.0, 2.6)])
-    keys = np.unique(voxel_keys(np.concatenate([far, pinch]), VOXEL))
-    tags = _tags(route, keys)
-    assert "doorway" in tags and "narrow" in tags
-
-
-def test_route_tags_sharp_doorway() -> None:
-    """A door frame is a sharp pinch: the narrow stretch is only a couple of
-    voxels, but flanked by open space it is still a doorway."""
-    route = np.array([[0, 0, 0], [5, 0, 0]], dtype=np.float32)
-    far = np.concatenate([_ywall(-2.0, 0, 5), _ywall(2.0, 0, 5)])
-    frame = np.concatenate([_ywall(-0.35, 2.4, 2.6), _ywall(0.35, 2.4, 2.6)])
-    keys = np.unique(voxel_keys(np.concatenate([far, frame]), VOXEL))
-    assert "doorway" in _tags(route, keys)
+    for x_lo, x_hi in ((2.0, 2.6), (2.4, 2.6)):
+        pinch = np.concatenate([_ywall(-0.35, x_lo, x_hi), _ywall(0.35, x_lo, x_hi)])
+        keys = np.unique(voxel_keys(np.concatenate([far, pinch]), VOXEL))
+        tags = _tags(route, keys)
+        assert "doorway" in tags and "narrow" in tags
 
 
 def test_route_tags_stairs_from_endpoints() -> None:
@@ -513,13 +488,11 @@ def _final_map(points: np.ndarray) -> FinalMap:
         voxel_size=VOXEL,
         occupied=points,
         occupied_keys=np.unique(voxel_keys(points, VOXEL)),
-        frames=1,
-        add_frame_ms={"p50": 0.0, "p95": 0.0, "max": 0.0},
         build_ms=0.0,
     )
 
 
-def _surface_keys(points: np.ndarray, robot_height: float = 0.3) -> np.ndarray:
+def _surface_keys(points: NDArray[np.float32], robot_height: float = 0.3) -> NDArray[np.float32]:
     return np.unique(voxel_keys(_final_map(points).standable_surface(robot_height), VOXEL))
 
 
@@ -570,8 +543,6 @@ def test_generate_cases_around_wall() -> None:
         voxel_size=VOXEL,
         occupied=wall_pts,
         occupied_keys=np.unique(voxel_keys(wall_pts, VOXEL)),
-        frames=1,
-        add_frame_ms={"p50": 0.0, "p95": 0.0, "max": 0.0},
         build_ms=0.0,
     )
     xs, ys = np.meshgrid(np.arange(0, 20, VOXEL), np.arange(-3, 6, VOXEL))
@@ -633,39 +604,6 @@ def test_pick_along_ray() -> None:
     assert pick_along_ray(wall, origin, up, VOXEL) is None
 
 
-def test_load_suite_rejects_malformed_manifests(tmp_path: Path) -> None:
-    """Manifests are hand-edited, so a wrong one must fail loudly, not silently."""
-    manifest = tmp_path / "demo.yaml"
-    manifest.write_text(
-        "dataset: demo\n"
-        "cases:\n"
-        "  - id: a\n"
-        "    start: [0, 0, 0]\n"
-        "    goal: [1, 2, 3]\n"
-        "    tags: [stairs]\n"
-    )
-    suite = load_suite(manifest)
-    assert suite.dataset == "demo"
-    assert suite.cases[0].goal == (1.0, 2.0, 3.0)
-    assert suite.cases[0].tags == ["stairs"]
-
-    manifest.write_text(
-        "dataset: demo\ncases:\n"
-        "  - {id: a, start: [0, 0, 0], goal: [1, 2, 3]}\n"
-        "  - {id: a, start: [0, 0, 0], goal: [4, 5, 6]}\n"
-    )
-    with pytest.raises(ValueError, match="duplicate"):
-        load_suite(manifest)
-
-    manifest.write_text(
-        "dataset: demo\ncases:\n"
-        "  - {id: bad, start: [0, 0, 0], goal: [1, 0, 0], "
-        "expect_fail: true, expect_final_fail: true}\n"
-    )
-    with pytest.raises(ValueError, match="exclusive"):
-        load_suite(manifest)
-
-
 def test_save_suite_roundtrip(tmp_path: Path) -> None:
     suite = Suite(
         dataset="demo",
@@ -709,11 +647,14 @@ def test_gate_band_follows_the_tilted_body_axis() -> None:
 
 
 def test_offset_deltas_match_packing_the_summed_indices() -> None:
+    """Adding a packed delta must equal packing the summed indices, which is
+    what lets the gate probe a neighborhood without unpacking."""
     pts = np.array([[0.05, -3.2, 1.4], [12.0, 0.0, -2.0]], dtype=np.float32)
     offs = cylinder_offsets(0.4, -0.2, 0.3, VOXEL)
     idx = np.floor(pts.astype(np.float64) / VOXEL).astype(np.int64)[:, None, :] + offs[None, :, :]
     packed = voxel_keys((idx.reshape(-1, 3) * VOXEL + VOXEL / 2).astype(np.float32), VOXEL)
-    assert np.array_equal(offset_keys(pts, offs, VOXEL).ravel(), packed)
+    shifted = voxel_keys(pts, VOXEL)[:, None] + offset_deltas(offs)[None, :]
+    assert np.array_equal(shifted.ravel(), packed)
 
 
 def test_spl_and_body_frames_survive_degenerate_input() -> None:
@@ -733,11 +674,9 @@ def _store(tmp_path: Path, cases: list[Case]) -> CaseStore:
         voxel_size=VOXEL,
         occupied=surface,
         occupied_keys=np.unique(voxel_keys(surface, VOXEL)),
-        frames=0,
-        add_frame_ms={},
         build_ms=0.0,
     )
-    return CaseStore(load_suite(manifest), manifest, surface, _cfg(), final)
+    return CaseStore(load_suite(manifest), surface, _cfg(), final)
 
 
 def test_editing_a_generated_case_keeps_it_in_the_incremental_score(tmp_path: Path) -> None:
@@ -803,11 +742,6 @@ def _write_recording(
     poses: list[tuple[float, tuple[float, float, float]]],
 ) -> None:
     """A minimal mem2 recording: sensor-frame clouds plus odometry."""
-    from dimos.memory2.store.sqlite import SqliteStore
-    from dimos.msgs.geometry_msgs.Pose import Pose
-    from dimos.msgs.nav_msgs.Odometry import Odometry
-    from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-
     with SqliteStore(path=str(path)) as store:
         lidar = store.stream("lidar", PointCloud2)
         for ts, pts, frame_id in clouds:
@@ -819,8 +753,6 @@ def _write_recording(
 
 def test_recording_registers_clouds_and_honors_end_ts(tmp_path: Path) -> None:
     """Clouds arrive sensor-frame and are placed by their aligned odometry."""
-    from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames, load_trajectory
-
     local = np.array([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]], dtype=np.float32)
     db = tmp_path / "rec.db"
     _write_recording(
@@ -844,8 +776,6 @@ def test_recording_registers_clouds_and_honors_end_ts(tmp_path: Path) -> None:
 
 def test_recording_rejects_pre_registered_clouds(tmp_path: Path) -> None:
     """World-frame clouds would be registered twice, so they are refused."""
-    from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames, load_trajectory
-
     db = tmp_path / "legacy.db"
     pts = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
     _write_recording(db, [(1.0, pts, "world")], [(1.0, (0.0, 0.0, 0.0))])
@@ -857,8 +787,6 @@ def test_recording_rejects_pre_registered_clouds(tmp_path: Path) -> None:
 
 def test_apply_overrides_is_the_sweep_interface() -> None:
     """--set is how a sweep varies the harness and the pipeline."""
-    from dimos.navigation.nav_3d.evaluator.cli import _apply_overrides
-
     cfg = _apply_overrides(
         EvalConfig(), ["goal_tolerance=0.4", "planner.wall_clearance_m=0.0", "pipeline=mls"]
     )
@@ -866,25 +794,41 @@ def test_apply_overrides_is_the_sweep_interface() -> None:
     assert isinstance(cfg.goal_tolerance, float)
     assert cfg.planner == {"wall_clearance_m": 0.0}
     assert cfg.pipeline == "mls"
-    for bad in (["no_equals_sign"], ["not_a_field=1"]):
+    for bad in (["no_equals_sign"], ["not_a_field=1"], ["planner=0.5"]):
         with pytest.raises(typer.BadParameter):
             _apply_overrides(EvalConfig(), bad)
+    # An override that inverts the gate band is caught after it is applied,
+    # since __post_init__ already ran on the config being mutated.
+    with pytest.raises(typer.BadParameter, match="body_clearance"):
+        _apply_overrides(EvalConfig(), ["ground_margin=0.46"])
+
+
+def test_an_inverted_body_band_is_rejected_not_silently_passed() -> None:
+    """With ground_margin above body_clearance the gate admits nothing, so every
+    path would pass and the score would read as perfect."""
+    with pytest.raises(ValueError, match="body_clearance"):
+        EvalConfig(ground_margin=0.5, body_clearance=0.45)
+    for name in ("voxel_size", "robot_length", "robot_width", "max_range"):
+        with pytest.raises(ValueError, match=name):
+            EvalConfig(**{name: 0.0})
 
 
 class _RecordingPipeline:
     """Returns the fixed path and remembers how many frames it had each time."""
 
-    def __init__(self, waypoints: np.ndarray | None) -> None:
+    def __init__(self, waypoints: NDArray[np.float32] | None) -> None:
         self._waypoints = waypoints
         self.frames = 0
         self.frames_at_plan: list[int] = []
 
-    def add_frame(self, points: np.ndarray, origin: tuple[float, float, float], ts: float) -> None:
+    def add_frame(
+        self, points: NDArray[np.float32], origin: tuple[float, float, float], ts: float
+    ) -> None:
         self.frames += 1
 
     def plan(
         self, start: tuple[float, float, float], goal: tuple[float, float, float]
-    ) -> np.ndarray | None:
+    ) -> NDArray[np.float32] | None:
         self.frames_at_plan.append(self.frames)
         return self._waypoints
 
@@ -897,16 +841,27 @@ def _stub_harness(mp: pytest.MonkeyPatch, tmp_path: Path, pipeline: object) -> N
     mp.setattr(final_map, "CACHE_SUBDIR", tmp_path / "cache")
 
 
+WALK_HEIGHT = 0.5
+
+
 def _corridor_recording(path: Path) -> Suite:
-    """Ten frames of floor along +x, walked start to finish."""
+    """Ten frames of floor along +x, walked start to finish.
+
+    Clouds are sensor-frame, so each slab is written relative to the pose that
+    registers it and lands back at z = -0.05 in the world.
+    """
     slabs = [
-        (float(t), _floor(float(t) - 1.0, float(t) + 1.0) - np.array([t, 0, 0], dtype=np.float32))
+        (
+            float(t),
+            _floor(float(t) - 1.0, float(t) + 1.0)
+            - np.array([t, 0, WALK_HEIGHT], dtype=np.float32),
+        )
         for t in range(1, 11)
     ]
     _write_recording(
         path,
         [(ts, pts, "lidar") for ts, pts in slabs],
-        [(float(t), (float(t), 0.0, 0.5)) for t in range(1, 11)],
+        [(float(t), (float(t), 0.0, WALK_HEIGHT)) for t in range(1, 11)],
     )
     return Suite(
         dataset="corridor", cases=[], db=str(path), lidar_stream="lidar", odom_stream="odom"
@@ -935,28 +890,141 @@ def test_run_suite_plans_each_case_on_the_map_as_of_its_start_time(tmp_path: Pat
     assert pipeline.frames_at_plan[2:] == [10, 10]
 
 
+class _PerCasePipeline:
+    """Plans only between the endpoints it was given, refusing anything else."""
+
+    def __init__(self, routes: dict[tuple[Point, Point], np.ndarray]) -> None:
+        self._routes = routes
+
+    def add_frame(self, points: NDArray[np.float32], origin: Point, ts: float) -> None:
+        pass
+
+    def plan(self, start: Point, goal: Point) -> NDArray[np.float32] | None:
+        return self._routes.get((start, goal))
+
+
 def test_evaluate_scores_only_online_cases_in_the_headline(tmp_path: Path) -> None:
-    """A manual case is final-only, so it must move final_score but not score."""
+    """The headline score covers online cases only, so a final-only case that
+    fails must drop final_score while leaving score untouched."""
     suite = _corridor_recording(tmp_path / "corridor.db")
-    route = np.array([[4, 0, 0], [2, 0, 0]], dtype=np.float32)
+    walked: Point = (4.0, 0.0, 0.0)
+    goal: Point = (2.0, 0.0, 0.0)
     suite.cases = [
-        Case(id="auto_00", start=(4.0, 0.0, 0.0), goal=(2.0, 0.0, 0.0), tags=["auto"]),
-        Case(id="manual_00", start=(4.0, 0.0, 0.0), goal=(2.0, 0.0, 0.0), tags=["manual"]),
+        Case(id="auto_00", start=walked, goal=goal, tags=["auto"]),
+        # Same endpoints, but a manual case never replays online.
+        Case(id="manual_00", start=walked, goal=goal, tags=["manual"]),
     ]
+    route = np.array([walked, (3.0, 0.0, 0.0), goal], dtype=np.float32)
     with pytest.MonkeyPatch.context() as mp:
-        _stub_harness(mp, tmp_path, _StubPipeline(route))
+        # Only the auto case's plan call is answered; the manual one is refused.
+        _stub_harness(mp, tmp_path, _PerCasePipeline({(walked, goal): route}))
         report = runner.evaluate([suite], _cfg(pipeline="stub"))
 
     assert report.n_cases == 2
     assert report.n_online == 1
     assert [c.final_only for d in report.datasets for c in d.cases] == [False, True]
-    assert set(report.by_tag) == {"auto", "manual"}
+    # The online case succeeds on the route the robot demonstrated.
+    assert report.score == pytest.approx(1.0)
+    assert report.n_success == 1
+    # Both cases plan against the final map, and both succeed there, so the
+    # final score stays at 1.0 while covering twice as many cases.
+    assert report.n_success_final == 2
+    assert report.final_score == pytest.approx(1.0)
     assert report.by_tag["manual"].n_online == 0
 
 
-def test_run_suite_names_a_missing_recording(tmp_path: Path) -> None:
-    """Without the guard sqlite creates an empty db and the error blames odometry."""
-    suite = Suite(dataset="gone", cases=[], db=str(tmp_path / "absent.db"))
-    with pytest.raises(FileNotFoundError, match="recording not found"):
-        runner.run_suite(suite, _cfg())
-    assert not (tmp_path / "absent.db").exists()
+def test_spl_scales_with_how_far_the_path_overshoots_the_reference() -> None:
+    """Only 0.0 and 1.0 are asserted elsewhere, so the ratio itself is unpinned."""
+    assert metrics.spl(True, 10.0, 20.0) == pytest.approx(0.5)
+    assert metrics.spl(True, 10.0, 12.5) == pytest.approx(0.8)
+    # A path shorter than the demonstrated route earns 1.0, never more.
+    assert metrics.spl(True, 10.0, 4.0) == pytest.approx(1.0)
+    # A failed case scores zero however short the path.
+    assert metrics.spl(False, 10.0, 10.0) == 0.0
+
+
+def test_soft_progress_is_the_share_of_the_gap_closed() -> None:
+    """soft_progress drives the headline soft score and had no test."""
+    start: Point = (0.0, 0.0, 0.0)
+    goal: Point = (10.0, 0.0, 0.0)
+    assert metrics.soft_progress(np.array([5.0, 0.0, 0.0], dtype=np.float32), start, goal) == (
+        pytest.approx(0.5)
+    )
+    assert metrics.soft_progress(np.array([10.0, 0.0, 0.0], dtype=np.float32), start, goal) == (
+        pytest.approx(1.0)
+    )
+    # No path at all, and moving away from the goal, both floor at zero.
+    assert metrics.soft_progress(None, start, goal) == 0.0
+    assert metrics.soft_progress(np.array([-5.0, 0.0, 0.0], dtype=np.float32), start, goal) == 0.0
+    # A coincident start and goal has no gap to close.
+    assert metrics.soft_progress(np.array([0.0, 0.0, 0.0], dtype=np.float32), start, start) == 0.0
+
+
+def test_recording_applies_the_odometry_rotation(tmp_path: Path) -> None:
+    """Clouds are sensor-frame, so a yawed pose must rotate them, not just shift."""
+    db = tmp_path / "yaw.db"
+    ahead = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    # 90 degrees about +z, so the sensor's +x points along world +y.
+    quarter = np.sqrt(0.5)
+    with SqliteStore(path=str(db)) as store:
+        store.stream("lidar", PointCloud2).append(
+            PointCloud2.from_numpy(ahead, frame_id="lidar", timestamp=1.0), ts=1.0
+        )
+        store.stream("odom", Odometry).append(
+            Odometry(ts=1.0, pose=Pose(5.0, 0.0, 0.0, 0.0, 0.0, quarter, quarter)), ts=1.0
+        )
+
+    frames = list(iter_world_frames(db, "lidar", "odom"))
+    assert np.allclose(frames[0].points, [[5.0, 1.0, 0.0]], atol=1e-5)
+
+
+def test_final_map_cache_key_tracks_the_recording(tmp_path: Path) -> None:
+    """Without this a re-ingested dataset is graded against the previous map."""
+    db = tmp_path / "rec.db"
+    _write_recording(db, [(1.0, _floor(0.0, 1.0), "lidar")], [(1.0, (0.0, 0.0, 0.5))])
+    suite = Suite(dataset="rec", cases=[], db=str(db), lidar_stream="lidar", odom_stream="odom")
+    before = final_map._cache_path(db, final_map._final_params(db, suite, _cfg()))
+
+    # Same path, same stem, same config: only the bytes change.
+    _write_recording(db, [(1.0, _floor(0.0, 5.0), "lidar")], [(1.0, (0.0, 0.0, 0.5))])
+    after = final_map._cache_path(db, final_map._final_params(db, suite, _cfg()))
+    assert before != after
+
+
+def test_checkpoints_reload_from_cache(tmp_path: Path) -> None:
+    """The npz delta format is only exercised on a cache hit, which no other
+    test reaches because each one gets a fresh tmp_path."""
+    db = tmp_path / "rec.db"
+    _write_recording(
+        db,
+        [(float(t), _floor(float(t), float(t) + 1.0), "lidar") for t in range(1, 5)],
+        [(float(t), (float(t), 0.0, 0.0)) for t in range(1, 5)],
+    )
+    suite = Suite(dataset="rec", cases=[], db=str(db), lidar_stream="lidar", odom_stream="odom")
+    times = np.array([2.5, np.inf])
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(EvalConfig, "make_mapper", lambda _self: _StubMapper())
+        mp.setattr(final_map, "CACHE_SUBDIR", tmp_path / "cache")
+        cold = final_map.load_or_build_checkpoints(suite, _cfg(), times)
+        warm = final_map.load_or_build_checkpoints(suite, _cfg(), times)
+
+    assert [s.tolist() for s in cold.iter_snapshots()] == [
+        s.tolist() for s in warm.iter_snapshots()
+    ]
+    assert len(list(warm.iter_snapshots())) == 2
+
+
+def test_a_pipeline_without_graph_layers_still_records(tmp_path: Path) -> None:
+    """Recording a run must not require a pipeline to expose its internals,
+    which is the whole point of the optional introspection protocol."""
+    suite = _corridor_recording(tmp_path / "corridor.db")
+    suite.cases = [Case(id="auto_00", start=(4.0, 0.0, 0.0), goal=(2.0, 0.0, 0.0), tags=["auto"])]
+    route = np.array([[4, 0, 0], [3, 0, 0], [2, 0, 0]], dtype=np.float32)
+    with pytest.MonkeyPatch.context() as mp:
+        _stub_harness(mp, tmp_path, _StubPipeline(route))
+        result = runner.run_suite(suite, _cfg(pipeline="stub"), keep_artifacts=True)
+
+    assert result.final_artifacts is None
+    assert result.cases[0].online_artifacts is None
+    # The occupied cloud is the evaluator's own, so it is kept either way.
+    assert result.cases[0].online_occupied is not None

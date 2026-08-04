@@ -59,10 +59,15 @@ class CaseStore:
     """Mutable view of one dataset's manifest, saved after every change."""
 
     suite: Suite
-    manifest: Path
     surface: NDArray[np.float32]
     cfg: EvalConfig
     final: FinalMap
+
+    @property
+    def path(self) -> Path:
+        """The manifest this store saves to, set when the suite was loaded."""
+        assert self.suite.path is not None, "a curated suite is always loaded from a file"
+        return self.suite.path
 
     def _snap(self, label: str, point: Point, *, required: bool = True) -> Point:
         snapped = snap_to_surface(
@@ -102,7 +107,7 @@ class CaseStore:
             expect_fail=expect_fail,
         )
         if any(c.id == case.id for c in self.suite.cases):
-            raise CurationError(f"case id {case.id!r} already exists in {self.manifest}")
+            raise CurationError(f"case id {case.id!r} already exists in {self.path}")
         self.suite.cases.append(case)
         self.save()
         kind = "negative (must refuse)" if expect_fail else "positive"
@@ -112,7 +117,7 @@ class CaseStore:
             case=case.id,
             start=case.start,
             goal=case.goal,
-            manifest=self.manifest,
+            manifest=self.path,
         )
         return case
 
@@ -135,11 +140,11 @@ class CaseStore:
     def get(self, case_id: str) -> Case:
         case = next((c for c in self.suite.cases if c.id == case_id), None)
         if case is None:
-            raise CurationError(f"case {case_id!r} not found in {self.manifest}")
+            raise CurationError(f"case {case_id!r} not found in {self.path}")
         return case
 
     def save(self) -> None:
-        save_suite(self.suite, self.manifest)
+        save_suite(self.suite, self.path)
 
 
 PROVENANCE_TAGS = ("auto", "manual")
@@ -159,5 +164,5 @@ def load_store(dataset: str) -> CaseStore:
         raise CurationError(f"no manifest {manifest}; run ingest first")
     suite = load_suite(manifest)
     cfg = EvalConfig()
-    final = load_or_build_final_map(suite.db_path(), suite, cfg)
-    return CaseStore(suite, manifest, final.standable_surface(cfg.robot_height), cfg, final)
+    final = load_or_build_final_map(suite, cfg)
+    return CaseStore(suite, final.standable_surface(cfg.robot_height), cfg, final)

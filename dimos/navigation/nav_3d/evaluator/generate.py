@@ -12,11 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate evaluation cases from a recorded trajectory.
-
-Endpoint pairs come off the walked path, so both are proven reachable, and are
-kept only when non-trivial and causal. Deterministic.
-"""
+"""Generate evaluation cases from a recorded trajectory. Endpoint pairs come off
+the walked path, so both are proven reachable."""
 
 from __future__ import annotations
 
@@ -62,16 +59,28 @@ SECTOR_Z_M = 1.5
 # A sector may anchor at most this many selected cases, which prevents a
 # single high-priority spot from becoming the hub of every case.
 ENDPOINT_REUSE_MAX = 2
+# Endpoint spread stops earning score past this distance, and is worth this
+# much next to a candidate's own priority.
+SPREAD_CAP_M = 2.0 * SECTOR_SIZE_M
+SPREAD_WEIGHT = 0.4
+# Snapping prefers a horizontally near cell. A cell further in z is still
+# eligible up to MAX_SNAP_DZ_M, at this much penalty per meter.
+MAX_SNAP_DZ_M = 1.0
+SNAP_Z_PENALTY = 0.5
 # Floor on the case count. When strict selection falls short, a relaxed pass
 # ignores the sector caps and the flat quota to reach it.
 MIN_CASES = 10
+# An unpinned case count scales with the walk, between these bounds.
+METERS_PER_CASE = 25.0
+MIN_AUTO_CASES = 16
+MAX_AUTO_CASES = 48
 
 
 def resolve_max_cases(max_cases: int | None, walked_total_m: float) -> int:
     """Case count, scaled with the walked distance when not pinned."""
     if max_cases is not None:
         return max_cases
-    return int(np.clip(walked_total_m / 25.0, 16, 48))
+    return int(np.clip(walked_total_m / METERS_PER_CASE, MIN_AUTO_CASES, MAX_AUTO_CASES))
 
 
 @dataclass
@@ -102,9 +111,11 @@ def snap_to_surface(
         return None
     hd = np.linalg.norm(surface[:, :2] - point[:2], axis=1)
     zd = np.abs(surface[:, 2] - point[2])
-    score = hd + np.where(zd < 1.0, zd * 0.5, np.inf)
+    # Reachability filters the candidates. Scoring first would let an unreachable
+    # cell with no z offset beat a reachable one that carries the z penalty.
+    score = np.where((hd <= snap_max_m) & (zd < MAX_SNAP_DZ_M), hd + zd * SNAP_Z_PENALTY, np.inf)
     best = int(score.argmin())
-    if not np.isfinite(score[best]) or hd[best] > snap_max_m:
+    if not np.isfinite(score[best]):
         return None
     return np.asarray(surface[best], dtype=np.float32)
 
@@ -115,27 +126,34 @@ def _subsample_indices(trajectory: Trajectory, spacing_m: float) -> NDArray[np.i
     return np.unique(np.searchsorted(arcs, targets))
 
 
-def generate_cases(
-    trajectory: Trajectory,
-    final: FinalMap,
-    surface: NDArray[np.float32],
-    cfg: EvalConfig,
-    max_cases: int | None = None,
-    min_cases: int = MIN_CASES,
-) -> list[Case]:
-    map_keys = final.occupied_keys
-    arcs = trajectory.arc_lengths()
+def _waypoint_snaps(
+    trajectory: Trajectory, surface: NDArray[np.float32], cfg: EvalConfig
+) -> tuple[NDArray[np.int64], NDArray[np.float32], NDArray[np.bool_]]:
+    """Trajectory waypoints snapped onto the standable surface, with a mask of
+    the ones that landed."""
     foot = trajectory.foot(cfg.robot_height)
-
     idx = _subsample_indices(trajectory, WAYPOINT_SPACING_M)
     snaps = np.full((len(idx), 3), np.nan, dtype=np.float32)
     for n, i in enumerate(idx):
         hit = snap_to_surface(foot[i], surface, cfg.snap_max_m)
         if hit is not None:
             snaps[n] = hit
-    ok = np.isfinite(snaps[:, 0])
-    way_arcs = arcs[idx]
+    return idx, snaps, np.isfinite(snaps[:, 0])
 
+
+def _candidates(
+    trajectory: Trajectory,
+    idx: NDArray[np.int64],
+    snaps: NDArray[np.float32],
+    ok: NDArray[np.bool_],
+    arcs: NDArray[np.float64],
+    map_keys: NDArray[np.int64],
+    cfg: EvalConfig,
+) -> dict[tuple[int, ...], Candidate]:
+    """The best candidate pair per spatial bin, over every ordered waypoint pair
+    the walk demonstrates."""
+    foot = trajectory.foot(cfg.robot_height)
+    way_arcs = arcs[idx]
     candidates: dict[tuple[int, ...], Candidate] = {}
     for ai in range(len(idx)):
         if not ok[ai]:
@@ -191,7 +209,23 @@ def generate_cases(
                 best = candidates.get(key)
                 if best is None or cand.priority > best.priority:
                     candidates[key] = cand
+    return candidates
 
+
+def generate_cases(
+    trajectory: Trajectory,
+    final: FinalMap,
+    surface: NDArray[np.float32],
+    cfg: EvalConfig,
+    max_cases: int | None = None,
+    min_cases: int = MIN_CASES,
+) -> list[Case]:
+    """Snap the walk onto the surface, pair up waypoints, and keep a diverse
+    spread of the demonstrated routes."""
+    map_keys = final.occupied_keys
+    arcs = trajectory.arc_lengths()
+    idx, snaps, ok = _waypoint_snaps(trajectory, surface, cfg)
+    candidates = _candidates(trajectory, idx, snaps, ok, arcs, map_keys, cfg)
     ranked = sorted(candidates.values(), key=lambda c: (-c.priority, c.start, c.goal))
     selected = _select_diverse(ranked, resolve_max_cases(max_cases, float(arcs[-1])), min_cases)
     cases = []
@@ -218,6 +252,86 @@ def _is_duplicate(cand: Candidate, accepted: list[Candidate], radius: float) -> 
     return False
 
 
+class _DiverseSelector:
+    """Spread-greedy selection state: availability, sector usage, and distance
+    to the nearest already-selected endpoint."""
+
+    def __init__(self, ranked: list[Candidate], max_cases: int) -> None:
+        self.ranked = ranked
+        self.flat_target = int(max_cases * FLAT_FRACTION)
+        self.stairs_cap = max_cases - self.flat_target
+        self.starts = np.array([c.start for c in ranked], dtype=np.float32)
+        self.goals = np.array([c.goal for c in ranked], dtype=np.float32)
+        self.priorities = np.array([c.priority for c in ranked], dtype=np.float32)
+        self.is_stairs = np.array([abs(c.dz) >= STAIRS_DZ_M for c in ranked])
+        self.alive = np.ones(len(ranked), dtype=bool)
+        self.usage: dict[tuple[int, ...], int] = {}
+        self.sector_capped: list[int] = []
+        self.stairs: list[Candidate] = []
+        self.flats: list[Candidate] = []
+        # Running minima over the selected endpoints. Seeded to infinity so the
+        # first pick sees the uniform spread an empty selection gives.
+        self.d_start = np.full(len(ranked), np.inf, dtype=np.float32)
+        self.d_goal = np.full(len(ranked), np.inf, dtype=np.float32)
+
+    @property
+    def selected(self) -> list[Candidate]:
+        return self.stairs + self.flats
+
+    def _sector(self, p: NDArray[np.float32]) -> tuple[int, ...]:
+        return (
+            int(np.floor(p[0] / SECTOR_SIZE_M)),
+            int(np.floor(p[1] / SECTOR_SIZE_M)),
+            round(float(p[2]) / SECTOR_Z_M),
+        )
+
+    def _accept(self, n: int) -> None:
+        """Record a selection and fold its endpoints into the running minima."""
+        for point in (self.starts[n], self.goals[n]):
+            sector = self._sector(point)
+            self.usage[sector] = self.usage.get(sector, 0) + 1
+            np.minimum(self.d_start, _distance_to(self.starts, point), out=self.d_start)
+            np.minimum(self.d_goal, _distance_to(self.goals, point), out=self.d_goal)
+        bucket = self.stairs if self.is_stairs[n] else self.flats
+        bucket.append(self.ranked[n])
+
+    def _scores(self, relax: bool) -> NDArray[np.float32]:
+        spread = np.minimum(self.d_start, SPREAD_CAP_M) + np.minimum(self.d_goal, SPREAD_CAP_M)
+        score = self.priorities + SPREAD_WEIGHT * spread
+        score[~self.alive] = -np.inf
+        if not relax and len(self.stairs) >= self.stairs_cap:
+            score[self.is_stairs] = -np.inf
+        return np.asarray(score, dtype=np.float32)
+
+    def fill(self, target: int, relax: bool) -> None:
+        """Take the highest-scoring live candidate until target is reached."""
+        while self.alive.any() and len(self.selected) < target:
+            score = self._scores(relax)
+            if not np.isfinite(score).any():
+                break
+            n = int(score.argmax())
+            self.alive[n] = False
+            sa, sb = self._sector(self.starts[n]), self._sector(self.goals[n])
+            if not relax and (
+                self.usage.get(sa, 0) >= ENDPOINT_REUSE_MAX
+                or self.usage.get(sb, 0) >= ENDPOINT_REUSE_MAX
+            ):
+                self.sector_capped.append(n)
+                continue
+            bucket = self.stairs if self.is_stairs[n] else self.flats
+            if _is_duplicate(self.ranked[n], bucket, DEDUPE_RADIUS_M):
+                continue
+            self._accept(n)
+
+    def revive_sector_capped(self) -> None:
+        self.alive[self.sector_capped] = True
+
+
+def _distance_to(points: NDArray[np.float32], target: NDArray[np.float32]) -> NDArray[np.float32]:
+    dist: NDArray[np.float32] = np.linalg.norm(points - target, axis=1)
+    return dist
+
+
 def _select_diverse(
     ranked: list[Candidate], max_cases: int, min_cases: int = MIN_CASES
 ) -> list[Candidate]:
@@ -225,69 +339,12 @@ def _select_diverse(
     relaxed pass to reach min_cases."""
     if not ranked:
         return []
-    flat_target = int(max_cases * FLAT_FRACTION)
-    stairs_cap = max_cases - flat_target
-
-    starts = np.array([c.start for c in ranked], dtype=np.float32)
-    goals = np.array([c.goal for c in ranked], dtype=np.float32)
-    priorities = np.array([c.priority for c in ranked], dtype=np.float32)
-    is_stairs = np.array([abs(c.dz) >= STAIRS_DZ_M for c in ranked])
-    spread_cap = 2.0 * SECTOR_SIZE_M
-
-    def sector(p: NDArray[np.float32]) -> tuple[int, ...]:
-        return (
-            int(np.floor(p[0] / SECTOR_SIZE_M)),
-            int(np.floor(p[1] / SECTOR_SIZE_M)),
-            round(float(p[2]) / SECTOR_Z_M),
-        )
-
-    usage: dict[tuple[int, ...], int] = {}
-    used_points: list[NDArray[np.float32]] = []
-    alive = np.ones(len(ranked), dtype=bool)
-    sector_capped: list[int] = []
-    stairs: list[Candidate] = []
-    flats: list[Candidate] = []
-
-    def fill(target: int, relax: bool) -> None:
-        while alive.any() and len(stairs) + len(flats) < target:
-            if used_points:
-                used = np.stack(used_points)
-                d_start = np.linalg.norm(starts[:, None] - used[None], axis=2).min(axis=1)
-                d_goal = np.linalg.norm(goals[:, None] - used[None], axis=2).min(axis=1)
-                spread = np.minimum(d_start, spread_cap) + np.minimum(d_goal, spread_cap)
-            else:
-                spread = np.full(len(ranked), 2.0 * spread_cap, dtype=np.float32)
-            score = priorities + 0.4 * spread
-            score[~alive] = -np.inf
-            if not relax and len(stairs) >= stairs_cap:
-                score[is_stairs] = -np.inf
-            if not np.isfinite(score).any():
-                break
-            n = int(score.argmax())
-            alive[n] = False
-            cand = ranked[n]
-            sa, sb = sector(starts[n]), sector(goals[n])
-            if not relax and (
-                usage.get(sa, 0) >= ENDPOINT_REUSE_MAX or usage.get(sb, 0) >= ENDPOINT_REUSE_MAX
-            ):
-                sector_capped.append(n)
-                continue
-            bucket = stairs if is_stairs[n] else flats
-            if _is_duplicate(cand, bucket, DEDUPE_RADIUS_M):
-                continue
-            usage[sa] = usage.get(sa, 0) + 1
-            usage[sb] = usage.get(sb, 0) + 1
-            used_points.append(starts[n])
-            used_points.append(goals[n])
-            bucket.append(cand)
-
-    fill(max_cases, relax=False)
-    min_cases = min(min_cases, max_cases)
-    if len(stairs) + len(flats) < min_cases:
-        alive[sector_capped] = True
-        fill(min_cases, relax=True)
-
-    return (stairs + flats)[:max_cases]
+    selector = _DiverseSelector(ranked, max_cases)
+    selector.fill(max_cases, relax=False)
+    if len(selector.selected) < min(min_cases, max_cases):
+        selector.revive_sector_capped()
+        selector.fill(min(min_cases, max_cases), relax=True)
+    return selector.selected[:max_cases]
 
 
 def _to_case(cand: Candidate, n: int, tags: list[str]) -> Case:

@@ -27,6 +27,7 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.navigation.nav_3d.evaluator.metrics import arc_lengths
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -51,8 +52,6 @@ class Trajectory:
 
     def arc_lengths(self) -> NDArray[np.float64]:
         """Cumulative walked distance at each pose, starting at 0."""
-        from dimos.navigation.nav_3d.evaluator.metrics import arc_lengths
-
         return arc_lengths(self.positions)
 
     def foot(self, robot_height: float) -> NDArray[np.float32]:

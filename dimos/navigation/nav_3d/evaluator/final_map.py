@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The evaluator's own map of a recording, and the checkpoints along it.
-
-Not ground truth, just the most complete occupancy the mapper produces.
-"""
+"""The evaluator's own map of a recording, and the checkpoints along it."""
 
 from __future__ import annotations
 
@@ -29,8 +26,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from dimos.constants import CACHE_DIR
-from dimos.navigation.nav_3d.evaluator.metrics import timing_stats
-from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames
 from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers, keys_contain, voxel_keys
 from dimos.utils.logging_config import setup_logger
 
@@ -53,8 +48,6 @@ class FinalMap:
     voxel_size: float
     occupied: NDArray[np.float32]
     occupied_keys: NDArray[np.int64]
-    frames: int
-    add_frame_ms: dict[str, float]
     build_ms: float
 
     def standable_surface(self, robot_height: float) -> NDArray[np.float32]:
@@ -84,8 +77,8 @@ class MapCheckpoints:
             yield keys
 
 
-CACHE_VERSION = 3
-CHECKPOINT_CACHE_VERSION = 3
+CACHE_VERSION = 4
+CHECKPOINT_CACHE_VERSION = 4
 
 
 def _save_npz(cache: Path, **arrays: Any) -> None:
@@ -137,14 +130,11 @@ def replay_frames(
     """Feed frames through the mapper in order, snapshotting at each requested
     time. A snapshot holds exactly the frames with ts <= its time."""
     snapshots: list[NDArray[np.int64]] = []
-    add_ms: list[float] = []
     t0 = perf_counter()
     for frame in frames:
         while len(snapshots) < len(times) and frame.ts > times[len(snapshots)]:
             snapshots.append(np.unique(voxel_keys(mapper.global_map(), voxel_size)))
-        t1 = perf_counter()
         mapper.add_frame(frame.points, frame.origin)
-        add_ms.append((perf_counter() - t1) * 1000)
     build_ms = (perf_counter() - t0) * 1000
     occupied = mapper.global_map()
     occupied_keys = np.unique(voxel_keys(occupied, voxel_size))
@@ -154,8 +144,6 @@ def replay_frames(
         voxel_size=voxel_size,
         occupied=occupied,
         occupied_keys=occupied_keys,
-        frames=len(add_ms),
-        add_frame_ms=timing_stats(add_ms),
         build_ms=build_ms,
     )
     return final, snapshots
@@ -166,13 +154,12 @@ def _save_final(cache: Path, final: FinalMap) -> None:
         cache,
         occupied=final.occupied,
         occupied_keys=final.occupied_keys,
-        frames=final.frames,
-        **{f"add_{k}": v for k, v in final.add_frame_ms.items()},
     )
     logger.info("final map cached", cache=cache.name, voxels=len(final.occupied))
 
 
-def load_or_build_final_map(db_path: Path, suite: Suite, cfg: EvalConfig) -> FinalMap:
+def load_or_build_final_map(suite: Suite, cfg: EvalConfig) -> FinalMap:
+    db_path = suite.db_path()
     cache = _cache_path(db_path, _final_params(db_path, suite, cfg))
     if cache.exists():
         data = np.load(cache)
@@ -180,16 +167,12 @@ def load_or_build_final_map(db_path: Path, suite: Suite, cfg: EvalConfig) -> Fin
             voxel_size=cfg.voxel_size,
             occupied=data["occupied"],
             occupied_keys=data["occupied_keys"],
-            frames=int(data["frames"]),
-            add_frame_ms={k: float(data[f"add_{k}"]) for k in ("p50", "p95", "max")},
             build_ms=0.0,
         )
 
     logger.info("building final map (cache miss)", recording=db_path.name)
     final, _ = replay_frames(
-        iter_world_frames(
-            db_path, suite.lidar_stream, suite.odom_stream, cfg.align_tol, suite.end_ts_seconds()
-        ),
+        suite.world_frames(cfg.align_tol),
         cfg.make_mapper(),
         cfg.voxel_size,
         np.array([], dtype=np.float64),
@@ -212,12 +195,11 @@ def encode_deltas(
 
 
 def load_or_build_checkpoints(
-    db_path: Path, suite: Suite, cfg: EvalConfig, times: NDArray[np.float64]
+    suite: Suite, cfg: EvalConfig, times: NDArray[np.float64]
 ) -> MapCheckpoints:
-    """Occupied key sets at the requested times, deduped and sorted.
-
-    A cache miss replays the recording once and fills the final cache too.
-    """
+    """Occupied key sets at the requested times, deduped and sorted. A cache
+    miss replays the recording once and fills the final cache too."""
+    db_path = suite.db_path()
     times = np.unique(np.asarray(times, dtype=np.float64))
     params: dict[str, float | int | str] = {
         **_final_params(db_path, suite, cfg),
@@ -237,9 +219,7 @@ def load_or_build_checkpoints(
 
     logger.info("building map checkpoints (cache miss)", n=len(times), recording=db_path.name)
     final, snapshots = replay_frames(
-        iter_world_frames(
-            db_path, suite.lidar_stream, suite.odom_stream, cfg.align_tol, suite.end_ts_seconds()
-        ),
+        suite.world_frames(cfg.align_tol),
         cfg.make_mapper(),
         cfg.voxel_size,
         times,

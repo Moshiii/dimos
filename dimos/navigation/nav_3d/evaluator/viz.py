@@ -23,7 +23,7 @@ from scipy.spatial.transform import Rotation
 
 from dimos.navigation.nav_3d.evaluator import metrics
 from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
-from dimos.navigation.nav_3d.evaluator.recording import load_trajectory
+from dimos.navigation.nav_3d.mls_planner.viz import clearance_colors
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -34,10 +34,18 @@ if TYPE_CHECKING:
 
     from dimos.navigation.nav_3d.evaluator.cases import Suite
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
-    from dimos.navigation.nav_3d.evaluator.runner import PlannerArtifacts, PlanOutcome, Report
+    from dimos.navigation.nav_3d.evaluator.runner import (
+        CaseResult,
+        PlannerArtifacts,
+        PlanOutcome,
+        Report,
+    )
 
 logger = setup_logger()
 
+# Voxels are drawn well inside their cell so the surface reads as a grid.
+VOXEL_RADIUS_SCALE = 0.25
+ENDPOINT_RADIUS = 0.05
 WALKED_PATH_COLOR = [255, 255, 255]
 START_COLOR = [0, 255, 255]
 GOAL_COLOR = [255, 140, 0]
@@ -71,10 +79,8 @@ def turbo_by_height(points: NDArray[np.float32]) -> NDArray[np.uint8]:
 
 
 def _clearance_colors(clearance: NDArray[np.float32], hard_clearance: float) -> NDArray[np.uint8]:
-    norm = np.clip(np.nan_to_num(clearance / CLEARANCE_CLAMP_M, nan=1.0, posinf=1.0), 0.0, 1.0)
-    blocked = np.array([4.0, 8.0, 48.0])
-    clear = np.array([150.0, 200.0, 255.0])
-    out = np.asarray(blocked + norm[:, None] * (clear - blocked), dtype=np.uint8)
+    """The planner's clearance ramp, with cells below the hard limit called out."""
+    out: NDArray[np.uint8] = clearance_colors(clearance, CLEARANCE_CLAMP_M)
     out[clearance < hard_clearance] = NEAR_WALL_COLOR
     return out
 
@@ -99,7 +105,7 @@ def _log_planner(entity: str, artifacts: PlannerArtifacts | None, cfg: EvalConfi
             rr.Points3D(
                 surface[:, :3],
                 colors=_clearance_colors(surface[:, 3], CLEARANCE_NEAR_WALL_M),
-                radii=cfg.voxel_size / 4,
+                radii=cfg.voxel_size * VOXEL_RADIUS_SCALE,
             ),
             static=True,
         )
@@ -197,6 +203,55 @@ def _dataset_view(root: str, case_ids: list[str]) -> rrb.Spatial3DView:
     )
 
 
+def _log_case(base: str, case: CaseResult, cfg: EvalConfig) -> None:
+    """Endpoints, intent line, the map known at plan time, and both paths."""
+    import rerun as rr
+
+    rr.log(
+        f"{base}/start",
+        rr.Points3D([case.start], colors=[START_COLOR], radii=ENDPOINT_RADIUS),
+        static=True,
+    )
+    rr.log(
+        f"{base}/goal",
+        rr.Points3D([case.goal], colors=[GOAL_COLOR], radii=ENDPOINT_RADIUS),
+        static=True,
+    )
+    if case.expect_fail:
+        # Always visible, so a correct refusal is reviewable too.
+        rr.log(
+            f"{base}/intent",
+            rr.LineStrips3D([[case.start, case.goal]], colors=[NEGATIVE_INTENT_COLOR], radii=0.006),
+            static=True,
+        )
+    elif not case.online.success:
+        rr.log(
+            f"{base}/intent",
+            rr.LineStrips3D([[case.start, case.goal]], colors=[INVALID_PATH_COLOR], radii=0.003),
+            static=True,
+        )
+    # The incremental map at plan time, saved for every case.
+    _log_planner(f"{base}/known", case.online_artifacts, cfg)
+    if case.online_occupied is not None and len(case.online_occupied):
+        rr.log(
+            f"{base}/known/voxels",
+            rr.Points3D(
+                case.online_occupied,
+                colors=turbo_by_height(case.online_occupied),
+                radii=cfg.voxel_size * VOXEL_RADIUS_SCALE,
+            ),
+            static=True,
+        )
+    if case.blocking_points:
+        rr.log(
+            f"{base}/new_occupancy",
+            rr.Points3D(case.blocking_points, colors=[DYNAMIC_BLOCK_COLOR], radii=0.06),
+            static=True,
+        )
+    _log_path(f"{base}/online", case.online, radius=0.04, cfg=cfg)
+    _log_path(f"{base}/final", case.final, radius=0.02, cfg=cfg)
+
+
 def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -> None:
     import rerun as rr
     import rerun.blueprint as rrb
@@ -208,9 +263,8 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
     suites_by_dataset = {suite.dataset: suite for suite in suites}
     for dataset in report.datasets:
         suite = suites_by_dataset[dataset.dataset]
-        db_path = suite.db_path()
-        final = load_or_build_final_map(db_path, suite, cfg)
-        trajectory = load_trajectory(db_path, suite.odom_stream, suite.end_ts_seconds())
+        final = load_or_build_final_map(suite, cfg)
+        trajectory = suite.trajectory()
         root = dataset.dataset
 
         rr.log(
@@ -218,7 +272,7 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
             rr.Points3D(
                 final.occupied,
                 colors=turbo_by_height(final.occupied),
-                radii=cfg.voxel_size / 4,
+                radii=cfg.voxel_size * VOXEL_RADIUS_SCALE,
             ),
             static=True,
         )
@@ -232,54 +286,7 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
         _log_planner(f"{root}/planner_final", dataset.final_artifacts, cfg)
 
         for case in dataset.cases:
-            base = f"{root}/cases/{case.id}"
-            rr.log(
-                f"{base}/start",
-                rr.Points3D([case.start], colors=[START_COLOR], radii=0.05),
-                static=True,
-            )
-            rr.log(
-                f"{base}/goal",
-                rr.Points3D([case.goal], colors=[GOAL_COLOR], radii=0.05),
-                static=True,
-            )
-            if case.expect_fail:
-                # Always visible, so a correct refusal is reviewable too.
-                rr.log(
-                    f"{base}/intent",
-                    rr.LineStrips3D(
-                        [[case.start, case.goal]], colors=[NEGATIVE_INTENT_COLOR], radii=0.006
-                    ),
-                    static=True,
-                )
-            elif not case.online.success:
-                rr.log(
-                    f"{base}/intent",
-                    rr.LineStrips3D(
-                        [[case.start, case.goal]], colors=[INVALID_PATH_COLOR], radii=0.003
-                    ),
-                    static=True,
-                )
-            # The incremental map at plan time, saved for every case.
-            _log_planner(f"{base}/known", case.online_artifacts, cfg)
-            if case.online_occupied is not None and len(case.online_occupied):
-                rr.log(
-                    f"{base}/known/voxels",
-                    rr.Points3D(
-                        case.online_occupied,
-                        colors=turbo_by_height(case.online_occupied),
-                        radii=cfg.voxel_size / 4,
-                    ),
-                    static=True,
-                )
-            if case.blocking_points:
-                rr.log(
-                    f"{base}/new_occupancy",
-                    rr.Points3D(case.blocking_points, colors=[DYNAMIC_BLOCK_COLOR], radii=0.06),
-                    static=True,
-                )
-            _log_path(f"{base}/online", case.online, radius=0.04, cfg=cfg)
-            _log_path(f"{base}/final", case.final, radius=0.02, cfg=cfg)
+            _log_case(f"{root}/cases/{case.id}", case, cfg)
 
     views = [_dataset_view(d.dataset, [c.id for c in d.cases]) for d in report.datasets]
     rr.send_blueprint(rrb.Blueprint(rrb.Tabs(*views) if len(views) > 1 else views[0]))

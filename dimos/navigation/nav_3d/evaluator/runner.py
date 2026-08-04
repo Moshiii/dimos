@@ -12,17 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Replay case suites through a pipeline and score them.
-
-Generated cases plan twice, online at their start time and again on the whole
-recording. Curated and infeasible cases plan once, on the final map.
-"""
+"""Replay case suites through a pipeline and score them. Generated cases plan
+twice, online at their start time and again on the whole recording."""
 
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 import itertools
+import multiprocessing
 from time import perf_counter
 from typing import TYPE_CHECKING
 
@@ -35,13 +33,10 @@ from dimos.navigation.nav_3d.evaluator.final_map import (
     load_or_build_final_map,
 )
 from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
-from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames, load_trajectory
 from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from numpy.typing import NDArray
 
     from dimos.navigation.nav_3d.evaluator.cases import Case, Suite
@@ -61,14 +56,12 @@ class PlanOutcome:
     valid: bool
     # Every sample stands on final-map occupancy. Fabricated bridges fail.
     supported: bool
-    # For an ordinary case: all of the above. For an expect_fail case: the
-    # planner correctly refused the infeasible goal.
+    # All of the above, or for an infeasible case, that the planner refused.
     success: bool
     length: float
     plan_ms: float
     spl: float
-    # Gate margin along the path (see GateResult.min_clearance_m). None when
-    # no path was planned.
+    # Gate margin along the path. None when no path was planned.
     min_clearance: float | None
     waypoints: list[list[float]]
     # Indices of the colliding samples along the densified path, so a viewer
@@ -304,12 +297,21 @@ def _references(
 
 
 @dataclass
+class _OnlineCase:
+    """One case's online plan and the map it was planned against."""
+
+    outcome: PlanOutcome
+    waypoints: NDArray[np.float32] | None
+    map_keys: NDArray[np.int64]
+    artifacts: PlannerArtifacts | None = None
+    occupied: NDArray[np.float32] | None = None
+
+
+@dataclass
 class _OnlinePass:
     """Everything the single replay pass produced, keyed by case index."""
 
-    outcomes: dict[int, tuple[PlanOutcome, NDArray[np.float32] | None, NDArray[np.int64]]]
-    artifacts: dict[int, PlannerArtifacts | None]
-    occupied: dict[int, NDArray[np.float32] | None]
+    cases: dict[int, _OnlineCase]
     add_ms: list[float]
     final_artifacts: PlannerArtifacts | None
 
@@ -317,7 +319,6 @@ class _OnlinePass:
 def _replay_online(
     pipeline: NavPipeline,
     suite: Suite,
-    db_path: Path,
     cfg: EvalConfig,
     checkpoints: MapCheckpoints,
     case_ckpt: NDArray[np.int64],
@@ -326,30 +327,29 @@ def _replay_online(
     keep_artifacts: bool,
 ) -> _OnlinePass:
     """Feed the recording to the pipeline once, planning each case where its
-    start time falls, so the pipeline has seen what the robot had seen by then.
-
-    A pipeline's state cannot be snapshotted from outside, hence one pass.
-    """
-    out = _OnlinePass({}, {}, {}, [], None)
+    start time falls, so the pipeline has seen what the robot had seen by then."""
+    out = _OnlinePass({}, [], None)
 
     def plan_at(k: int, keys: NDArray[np.int64]) -> None:
         for ci in np.flatnonzero(case_ckpt == k):
             case, ref = suite.cases[ci], refs[ci]
             if not len(keys):
-                out.outcomes[ci] = (_no_plan(0.0), None, keys)
+                out.cases[ci] = _OnlineCase(_no_plan(0.0), None, keys)
                 continue
             # Collisions use the incremental map as of plan time. Support uses
             # the final map, since ground exists whether or not it was mapped.
             outcome, waypoints = _run_plan(pipeline, case, ref.length, keys, map_keys, cfg)
-            out.outcomes[ci] = (outcome, waypoints, keys)
-            out.artifacts[ci] = _snapshot(pipeline) if keep_artifacts else None
-            out.occupied[ci] = key_centers(keys, cfg.voxel_size) if keep_artifacts else None
+            out.cases[ci] = _OnlineCase(
+                outcome,
+                waypoints,
+                keys,
+                artifacts=_snapshot(pipeline) if keep_artifacts else None,
+                occupied=key_centers(keys, cfg.voxel_size) if keep_artifacts else None,
+            )
 
     snapshots = checkpoints.iter_snapshots()
     k = 0
-    for frame in iter_world_frames(
-        db_path, suite.lidar_stream, suite.odom_stream, cfg.align_tol, suite.end_ts_seconds()
-    ):
+    for frame in suite.world_frames(cfg.align_tol):
         while k < len(checkpoints.times) and frame.ts > checkpoints.times[k]:
             plan_at(k, next(snapshots))
             k += 1
@@ -410,26 +410,28 @@ def _score_final(
                 )
             )
             continue
-        online_out, online_wp, online_keys = online.outcomes[ci]
-        end = online_wp[-1] if online_wp is not None and len(online_wp) else None
+        run = online.cases[ci]
+        end = run.waypoints[-1] if run.waypoints is not None and len(run.waypoints) else None
         dynamic_candidate, blocking = (
             (False, [])
             if case.expect_final_fail
-            else _dynamic_candidate(online_out, final_out, online_wp, online_keys, map_keys, cfg)
+            else _dynamic_candidate(
+                run.outcome, final_out, run.waypoints, run.map_keys, map_keys, cfg
+            )
         )
         results.append(
             result(
                 case,
                 ref,
-                online_voxels=len(online_keys),
+                online_voxels=len(run.map_keys),
                 expect_fail=False,
-                online=online_out,
+                online=run.outcome,
                 final=final_out,
                 soft_progress=metrics.soft_progress(end, case.start, case.goal),
                 dynamic_candidate=dynamic_candidate,
                 blocking_points=blocking,
-                online_artifacts=online.artifacts.get(ci),
-                online_occupied=online.occupied.get(ci),
+                online_artifacts=run.artifacts,
+                online_occupied=run.occupied,
             )
         )
     return results
@@ -441,7 +443,7 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
         # sqlite would otherwise create an empty db here and the failure would
         # surface as a missing odometry stream.
         raise FileNotFoundError(f"{suite.dataset}: recording not found at {db_path}")
-    trajectory = load_trajectory(db_path, suite.odom_stream, suite.end_ts_seconds())
+    trajectory = suite.trajectory()
 
     final_only = np.array([_final_only(c) for c in suite.cases], dtype=bool)
     refs = _references(suite, trajectory, final_only, cfg)
@@ -453,8 +455,8 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
     )
     # Before the final map, because a cold checkpoint build replays the whole
     # recording and fills the final cache on its way through.
-    checkpoints = load_or_build_checkpoints(db_path, suite, cfg, start_ts)
-    final = load_or_build_final_map(db_path, suite, cfg)
+    checkpoints = load_or_build_checkpoints(suite, cfg, start_ts)
+    final = load_or_build_final_map(suite, cfg)
     case_ckpt = np.searchsorted(checkpoints.times, start_ts)
     case_ckpt[final_only] = -1
 
@@ -462,7 +464,6 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
     online = _replay_online(
         pipeline,
         suite,
-        db_path,
         cfg,
         checkpoints,
         case_ckpt,
@@ -491,7 +492,12 @@ def evaluate(
     so workers only spreads datasets across processes."""
     cfg = cfg or EvalConfig()
     if workers > 1 and len(suites) > 1:
-        with ProcessPoolExecutor(max_workers=min(workers, len(suites))) as pool:
+        # Spawn, not fork: the mapper and planner carry a native thread pool, and
+        # a forked child inherits its mutexes locked if the parent ever built one.
+        with ProcessPoolExecutor(
+            max_workers=min(workers, len(suites)),
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as pool:
             datasets = list(
                 pool.map(run_suite, suites, itertools.repeat(cfg), itertools.repeat(keep_artifacts))
             )
@@ -520,13 +526,13 @@ def evaluate(
 
     by_tag: dict[str, TagStats] = {}
     for tag in sorted({t for c in cases for t in c.tags}):
-        tc = [c for c in cases if tag in c.tags]
-        oc = [c for c in tc if not c.final_only]
+        tagged = [c for c in cases if tag in c.tags]
+        online_tagged = [c for c in tagged if not c.final_only]
         by_tag[tag] = TagStats(
-            n=len(tc),
-            n_online=len(oc),
-            inc_score=mean([c.online.spl for c in oc]),
-            fin_score=mean([c.final.spl for c in tc]),
+            n=len(tagged),
+            n_online=len(online_tagged),
+            inc_score=mean([c.online.spl for c in online_tagged]),
+            fin_score=mean([c.final.spl for c in tagged]),
         )
 
     return Report(

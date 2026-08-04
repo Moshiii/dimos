@@ -19,12 +19,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import yaml
+from typing import TYPE_CHECKING
 
 from dimos.utils.data import resolve_named_path
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from dimos.navigation.nav_3d.evaluator.recording import Frame, Trajectory
+
 MANIFEST_DIR = Path(__file__).parent / "case_manifests"
+
+# Default mem2 streams a recording is read from.
+LIDAR_STREAM = "pointlio_lidar"
+ODOM_STREAM = "pointlio_odometry"
 
 
 def manifest_path(dataset: str) -> Path:
@@ -49,8 +57,8 @@ class Case:
 class Suite:
     dataset: str
     cases: list[Case]
-    lidar_stream: str = "pointlio_lidar"
-    odom_stream: str = "pointlio_odometry"
+    lidar_stream: str = LIDAR_STREAM
+    odom_stream: str = ODOM_STREAM
     # Recording location override, defaulting to data/<dataset>.db.
     # Set this to keep a recording outside data/, in case you don't want it to be tracked.
     db: str | None = None
@@ -67,8 +75,26 @@ class Suite:
         """end_ts in the recording's second-based observation timestamps."""
         return None if self.end_ts is None else self.end_ts / 1e9
 
+    def trajectory(self) -> Trajectory:
+        """The walked path this suite's cases are scored against."""
+        from dimos.navigation.nav_3d.evaluator.recording import load_trajectory
+
+        return load_trajectory(self.db_path(), self.odom_stream, self.end_ts_seconds())
+
+    def world_frames(self, align_tol: float) -> Iterator[Frame]:
+        """Lidar frames registered into the world by their odometry pose."""
+        from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames
+
+        return iter_world_frames(
+            self.db_path(), self.lidar_stream, self.odom_stream, align_tol, self.end_ts_seconds()
+        )
+
 
 def load_suite(path: Path) -> Suite:
+    # Lazy: pyyaml is not in the base install, and mounting the CLI must not
+    # require it until a manifest is actually read.
+    import yaml
+
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, dict) or "dataset" not in raw or "cases" not in raw:
         raise ValueError(f"{path}: suite needs 'dataset' and 'cases' keys")
@@ -100,8 +126,8 @@ def load_suite(path: Path) -> Suite:
     return Suite(
         dataset=str(raw["dataset"]),
         cases=cases,
-        lidar_stream=str(raw.get("lidar_stream", "pointlio_lidar")),
-        odom_stream=str(raw.get("odom_stream", "pointlio_odometry")),
+        lidar_stream=str(raw.get("lidar_stream", LIDAR_STREAM)),
+        odom_stream=str(raw.get("odom_stream", ODOM_STREAM)),
         db=str(raw["db"]) if "db" in raw else None,
         end_ts=int(raw["end_ts"]) if "end_ts" in raw else None,
         path=path,
@@ -109,7 +135,7 @@ def load_suite(path: Path) -> Suite:
 
 
 def load_suites(paths: list[Path] | None = None) -> list[Suite]:
-    """Load the given manifests, or every manifest under cases/."""
+    """Load the given manifests, or every manifest under case_manifests/."""
     if paths is None:
         paths = sorted(MANIFEST_DIR.glob("*.yaml"))
     if not paths:
@@ -117,15 +143,16 @@ def load_suites(paths: list[Path] | None = None) -> list[Suite]:
     return [load_suite(p) for p in paths]
 
 
-def save_suite(suite: Suite, path: Path | None = None) -> Path:
-    """Write the suite manifest as YAML. Defaults to cases/<dataset>.yaml."""
-    path = path or suite.path or manifest_path(suite.dataset)
+def save_suite(suite: Suite, path: Path) -> Path:
+    """Write the suite manifest as YAML."""
+    import yaml
+
     doc: dict[str, object] = {"dataset": suite.dataset}
     if suite.db is not None:
         doc["db"] = suite.db
-    if suite.lidar_stream != "pointlio_lidar":
+    if suite.lidar_stream != LIDAR_STREAM:
         doc["lidar_stream"] = suite.lidar_stream
-    if suite.odom_stream != "pointlio_odometry":
+    if suite.odom_stream != ODOM_STREAM:
         doc["odom_stream"] = suite.odom_stream
     if suite.end_ts is not None:
         doc["end_ts"] = suite.end_ts

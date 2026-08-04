@@ -82,8 +82,8 @@ class GateResult:
 
     valid: bool
     collision_points: NDArray[np.float32]
-    # Indices of the colliding samples in densify(waypoints, voxel_size / 2),
-    # so a viewer can recover the exact body frames the gate tested.
+    # Indices of the colliding samples along the densified path, so a viewer
+    # can recover the exact body frames the gate tested.
     collision_indices: NDArray[np.int64]
     # Distance from the body surface to the nearest occupied voxel in the band,
     # minimized along the path. Negative is penetration, capped at MARGIN_CAP_M.
@@ -131,10 +131,8 @@ def body_frames(
 def check_path(
     waypoints: NDArray[np.float32], map_keys: NDArray[np.int64], cfg: EvalConfig
 ) -> GateResult:
-    """Sweep the robot body box along foot-level waypoints against the map.
-
-    The box sits mid-band up the tilted body axis, so legs and ground never count.
-    """
+    """Sweep the robot body box along foot-level waypoints against the map. The
+    box sits mid-band up the tilted body axis, so legs and ground never count."""
     voxel_size = cfg.voxel_size
     samples = densify(waypoints, voxel_size / 2)
     fwd, lateral, up = body_frames(samples, cfg.robot_length)
@@ -149,10 +147,12 @@ def check_path(
     sin_p = float(np.abs(fwd[:, 2]).max())
     cos_p = float(np.sqrt(max(1.0 - sin_p * sin_p, 0.0)))
     reach_z = (half_len + pad) * sin_p + half_band * cos_p + voxel_size
+    # Union with the level window: a steep segment lowers the pitched window,
+    # which would otherwise let a flat stretch of the same path hide a collision.
     offsets = cylinder_offsets(
         float(np.hypot(half_len, half_wid)) + pad + (mid_h + half_band) * sin_p,
-        mid_h * cos_p - reach_z,
-        mid_h * cos_p + reach_z,
+        min(mid_h * cos_p - reach_z, mid_h - half_band - voxel_size),
+        max(mid_h * cos_p + reach_z, mid_h + half_band + voxel_size),
         voxel_size,
     )
     # Samples land two per voxel, so membership runs over the distinct voxels
@@ -314,10 +314,8 @@ def reference_length(
     cfg: EvalConfig,
 ) -> Reference:
     """Shortest walked length demonstrated between start and goal, minimized
-    over every visit pairing and preferring causal ones.
-
-    Falls back to straight-line distance when an endpoint is off the trajectory.
-    """
+    over every visit pairing and preferring causal ones. Falls back to
+    straight-line distance when an endpoint is off the trajectory."""
     visits = _visits(trajectory, start, goal, cfg)
     if visits is None:
         straight = float(np.linalg.norm(np.asarray(goal) - np.asarray(start)))
