@@ -58,7 +58,7 @@ from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
 # PCD map loader
 # ---------------------------------------------------------------------------
 
-PCD_PATH = str(Path(__file__).resolve().parents[1] / "m20_global_map.pcd")
+PCD_PATH = str(Path(__file__).resolve().parent / "pcd" / "m20_global_map.pcd")
 
 
 class PCDMapConfig(ModuleConfig):
@@ -201,6 +201,11 @@ def _load_pcd(path: str) -> np.ndarray:
 # Rerun visualization
 # ---------------------------------------------------------------------------
 
+# Set to True for per-layer debug view (danger_cells, edge_cells,
+# nodes_nms / nodes_add).  False = clean view (surface_map only).
+DEBUG_VIZ = False
+
+
 def _render_global_map(msg: Any) -> Any:
     return msg.to_rerun()
 
@@ -226,7 +231,8 @@ def _render_nodes(msg: Any) -> Any:
 def _static_scene(rr: Any) -> list[tuple[str, Any]]:
     return [
         ("world/tf/map", rr.TransformAxes3D(axis_length=1.0)),
-        ("world/tf/base_link", rr.TransformAxes3D(axis_length=0.5)),
+        ("world/tf/base_link", rr.TransformAxes3D(axis_length=0.3)),
+        ("world/tf/base_footprint", rr.TransformAxes3D(axis_length=0.4)),
     ]
 
 
@@ -253,7 +259,12 @@ rerun_sim = autoconnect(
         max_hz={
             "world/global_map": 2.0,
             "world/surface_map": 2.0,
-            "world/nodes": 2.0,
+            **({} if not DEBUG_VIZ else {
+                "world/danger_cells": 2.0,
+                "world/edge_cells": 2.0,
+                "world/nodes_nms": 2.0,
+                "world/nodes_add": 2.0,
+            }),
             "world/node_edges": 2.0,
             "world/path": 0,
         },
@@ -262,7 +273,12 @@ rerun_sim = autoconnect(
             "world/color_image": None,
             "world/global_map": _render_global_map,
             "world/surface_map": _render_surface,
-            "world/nodes": _render_nodes,
+            **({} if not DEBUG_VIZ else {
+                "world/danger_cells": _render_danger_cells,
+                "world/edge_cells": _render_edge_cells,
+                "world/nodes_nms": _render_nodes_nms,
+                "world/nodes_add": _render_nodes_add,
+            }),
             "world/node_edges": _render_node_edges,
             "world/path": _render_path,
         },
@@ -329,7 +345,9 @@ m20_mls_3Dnav_pcd_sim = autoconnect(
     ).remappings([(MLSPlannerNative, "local_map", "local_map_unused")]),
 
     # --- Goal relay: odometry -> start_pose, clicked goal -> goal_pose ---
-    GoalRelay.blueprint().remappings([(GoalRelay, "odometry", "slam_odom")]),
+    # Uses planner_odom (body-height z) so the planner's start_pose
+    # ground-projection subtracts robot_height back to the correct surface z.
+    GoalRelay.blueprint().remappings([(GoalRelay, "odometry", "planner_odom")]),
 
     # --- Path following ---
     BasicPathFollower.blueprint(
@@ -346,7 +364,10 @@ m20_mls_3Dnav_pcd_sim = autoconnect(
         initial_x=FAKE_ROBOT_START_X,
         initial_y=FAKE_ROBOT_START_Y,
         initial_yaw=FAKE_ROBOT_START_YAW,
-    ).remappings([(FakeRobotSim, "slam_odom", "slam_odom")]),
+    ).remappings([
+        (FakeRobotSim3D, "slam_odom", "slam_odom"),
+        (FakeRobotSim3D, "planner_odom", "planner_odom"),
+    ]),
 
     # --- TF tree: odometry -> map->base_link ---
     M20TF.blueprint().remappings([(M20TF, "odometry", "slam_odom")]),

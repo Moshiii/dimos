@@ -39,6 +39,7 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 
 FRONT_CAMERA_OPTICAL_FRAME = "camera_optical"
 REAR_CAMERA_OPTICAL_FRAME = "rear_camera_optical"
+M20_BODY_HEIGHT = 0.6  # base_link → ground
 
 # Static camera mount chains. Front optical +Z points along base_link +X;
 # rear optical +Z points along base_link -X from an origin 0.3 m behind it.
@@ -150,10 +151,17 @@ class M20TF(Module):
             child_frame_id="base_link",
             ts=odom.ts,
         )
+        base_footprint = Transform(
+            translation=Vector3(0.0, 0.0, -M20_BODY_HEIGHT),
+            rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
+            frame_id="base_link",
+            child_frame_id="base_footprint",
+            ts=odom.ts,
+        )
         # Keep the fixed edges on /tf for consumers that cannot receive a
         # latched /tf_static stream. The Rerun blueprint logs these edges as
         # timeless data and filters these repeated copies from its dynamic view.
-        return [base_link, *camera_mount_transforms(odom.ts)]
+        return [base_link, base_footprint, *camera_mount_transforms(odom.ts)]
 
     def _publish_tf(self, odom: Odometry) -> None:
         self.tf.publish(*self._odom_to_tf(odom))
