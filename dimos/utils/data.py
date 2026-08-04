@@ -297,7 +297,7 @@ def _extraction_is_current(archive_name: str | Path) -> bool:
         return False
 
     try:
-        stamp = json.loads(stamp_path.read_text())
+        stamp: dict[str, int] = json.loads(stamp_path.read_text())
         return stamp == _archive_identity(archive_path)
     except (json.JSONDecodeError, OSError):
         # if we can't load the stamp, just treat it as stale
