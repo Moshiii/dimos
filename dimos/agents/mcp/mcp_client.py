@@ -21,7 +21,7 @@ import uuid
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.messages.base import BaseMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -340,7 +340,12 @@ class McpClient(Module):
                 if not self._state_graph:
                     raise ValueError("No state graph initialized")
                 self._cancel_event.clear()
-                self._process_message(self._state_graph, message)
+                try:
+                    self._process_message(self._state_graph, message)
+                except Exception:
+                    self._close_cancelled_tool_calls()
+                    logger.exception("Agent turn failed")
+                    self.agent_idle.publish(True)
 
     def _process_message(
         self, state_graph: CompiledStateGraph[Any, Any, Any, Any], message: BaseMessage
@@ -352,6 +357,7 @@ class McpClient(Module):
 
         for update in state_graph.stream({"messages": self._history}, stream_mode="updates"):
             if self._cancel_event.is_set():
+                self._close_cancelled_tool_calls()
                 break
             for node_output in update.values():
                 for msg in node_output.get("messages", []):
@@ -360,10 +366,28 @@ class McpClient(Module):
                     self.agent.publish(msg)
 
             if self._cancel_event.is_set():
+                self._close_cancelled_tool_calls()
                 break
 
         if self._cancel_event.is_set() or self._message_queue.empty():
             self.agent_idle.publish(True)
+
+    def _close_cancelled_tool_calls(self) -> None:
+        """Give every retained tool call a result before sending history to the model again."""
+        pending: dict[str, str] = {}
+        for message in self._history:
+            for tool_call in getattr(message, "tool_calls", []):
+                if call_id := tool_call.get("id"):
+                    pending[call_id] = tool_call.get("name", "tool")
+            if isinstance(message, ToolMessage):
+                pending.pop(message.tool_call_id, None)
+        for call_id, name in pending.items():
+            self._history.append(
+                ToolMessage(
+                    content=f"{name} was cancelled before a result was available.",
+                    tool_call_id=call_id,
+                )
+            )
 
 
 def _append_image_to_history(
