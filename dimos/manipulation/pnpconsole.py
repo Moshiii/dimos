@@ -244,19 +244,27 @@ def main() -> None:
                         f"{estimate['center_y']:.3f}) m, size=({estimate['width']:.3f}, "
                         f"{estimate['depth']:.3f}) m"
                     )
-                    confirm = (
-                        input("Install 15 mm-clearance table collision? [y/N]: ").strip().lower()
-                    )
-                    if confirm in {"y", "yes"}:
-                        print(
-                            manipulation.set_table_collision(
-                                estimate["center_x"],
-                                estimate["center_y"],
-                                estimate["tabletop_z"],
-                                estimate["width"],
-                                estimate["depth"],
-                            )
+                    clearance_text = input(
+                        "Table clearance in mm [10 recommended, 0 = no clearance]: "
+                    ).strip()
+                    try:
+                        clearance_mm = 10.0 if not clearance_text else float(clearance_text)
+                    except ValueError:
+                        print("Enter a non-negative clearance in millimeters.")
+                        continue
+                    if clearance_mm < 0.0:
+                        print("Enter a non-negative clearance in millimeters.")
+                        continue
+                    print(
+                        manipulation.set_table_collision(
+                            estimate["center_x"],
+                            estimate["center_y"],
+                            estimate["tabletop_z"],
+                            estimate["width"],
+                            estimate["depth"],
+                            safety_margin=clearance_mm / 1000.0,
                         )
+                    )
             elif choice == "15":
                 if goal is None or pre_grasp is None or not approach_executed:
                     print("Execute the approach first.")

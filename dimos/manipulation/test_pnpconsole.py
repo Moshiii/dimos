@@ -132,7 +132,7 @@ def test_client_runs_grasp_and_lift_without_preview(monkeypatch) -> None:  # typ
     manipulation.preview_plan.assert_called_once_with(duration=2.0)
 
 
-def test_client_confirms_table_collision_install(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_client_installs_table_collision_with_recommended_clearance(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     pnp = MagicMock()
     pnp.estimate_table_surface.return_value = {
         "center_x": 0.5,
@@ -144,13 +144,37 @@ def test_client_confirms_table_collision_install(monkeypatch) -> None:  # type: 
     app = MagicMock(pnp=pnp)
     manipulation = app.ManipulationModule
     monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
-    choices = iter(["14", "y", "q"])
+    choices = iter(["14", "", "q"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
 
     pnpconsole.main()
 
     pnp.scan_scene.assert_called_once_with()
-    manipulation.set_table_collision.assert_called_once_with(0.5, 0.0, 0.35, 0.8, 1.0)
+    manipulation.set_table_collision.assert_called_once_with(
+        0.5, 0.0, 0.35, 0.8, 1.0, safety_margin=0.01
+    )
+
+
+def test_client_accepts_zero_table_clearance(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    pnp = MagicMock()
+    pnp.estimate_table_surface.return_value = {
+        "center_x": 0.5,
+        "center_y": 0.0,
+        "tabletop_z": 0.35,
+        "width": 0.8,
+        "depth": 1.0,
+    }
+    app = MagicMock(pnp=pnp)
+    manipulation = app.ManipulationModule
+    monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
+    choices = iter(["14", "0", "q"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
+
+    pnpconsole.main()
+
+    manipulation.set_table_collision.assert_called_once_with(
+        0.5, 0.0, 0.35, 0.8, 1.0, safety_margin=0.0
+    )
 
 
 def test_preview_plays_once_slowly() -> None:

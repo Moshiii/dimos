@@ -79,10 +79,12 @@ The console intentionally keeps planning and execution separate:
 6. Select `6` to plan and preview descent, then select `7` to execute it.
 7. Close the gripper with `8`, then select `9` to plan and preview ascent.
 8. Select `10` to execute the ascent, `11` to open, and `13` to return home.
-9. After a scene scan, select `14` to estimate and preview the tabletop. Confirm
-   only when the blue Viser outline matches the table; it installs a 15 mm-clearance
-   collision slab at the measured tabletop position for all subsequent IK and
-   trajectory plans. The pick-and-place blueprints do not install a fixed floor slab.
+9. After a scene scan, select `14` to estimate and preview the tabletop. Once
+   the blue Viser outline matches the table, enter a collision clearance in
+   millimeters. The recommended clearance is 10 mm; enter `0` for no extra clearance.
+   The manual action installs the collision slab at the measured tabletop position for
+   all subsequent IK and trajectory plans. The pick-and-place blueprints do not install
+   a fixed floor slab.
 10. After executing the approach, select `15` to collision-plan and execute the
     descent, close the gripper, and execute the ascent without previews. It stops at
     the first failed stage.
