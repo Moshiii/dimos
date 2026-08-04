@@ -39,7 +39,11 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.perception.detection.type.detection3d.object import Object as DetObject
+from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
+from dimos.perception.detection.type.detection3d.object import (
+    Object as DetObject,
+    to_detection3d_array,
+)
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.utils.logging_config import setup_logger
 
@@ -70,6 +74,7 @@ class SimObjectScene(Module):
         self._samples: dict[str, NDArray[np.float64]] = {}
         self._extents: dict[str, NDArray[np.float64]] = {}
         self._clouds: dict[str, PointCloud2] = {}
+        self._prompts: tuple[str, ...] = ()
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -137,6 +142,8 @@ class SimObjectScene(Module):
             )
             cloud.ts = now
             clouds[name] = cloud
+            if not self._matches(name):
+                continue
             extent = self._extents[name]
             detections.append(
                 DetObject(
@@ -158,6 +165,32 @@ class SimObjectScene(Module):
         with self._lock:
             self._clouds = clouds
         return detections
+
+    def _matches(self, name: str) -> bool:
+        lowered = name.lower()
+        return not self._prompts or any(p in lowered or lowered in p for p in self._prompts)
+
+    @rpc
+    def set_prompts(self, text: list[str] | None = None) -> None:
+        """Restrict published detections to objects whose name matches a prompt.
+
+        Ground truth has no detector to prompt, so the prompts filter by name
+        substring instead. Scene and per-object clouds stay complete, matching a
+        real detector whose prompts never affect the raw depth cloud.
+        """
+        self._prompts = tuple(prompt.lower() for prompt in text or ())
+
+    @rpc
+    def scan_scene(self) -> Detection3DArray:
+        """Publish and return one ground-truth detection pass."""
+        detections = self._build_detections()
+        if detections:
+            self.objects.publish(detections)
+        return to_detection3d_array(
+            detections,
+            frame_id=self.config.frame_id,
+            ts=detections[0].ts if detections else time.time(),
+        )
 
     def _stamped(self, cloud: PointCloud2 | None) -> PointCloud2 | None:
         # Callers reject clouds older than a few seconds; the geometry is exact
