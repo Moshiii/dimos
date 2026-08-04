@@ -170,10 +170,6 @@ class ManipulationModuleConfig(ModuleConfig):
     # to prevent the planner from routing trajectories below this height.
     # Set to None to disable.
     floor_z: float | None = None
-    # Joint drift (rad) tolerated between planning and executing a stored plan.
-    # A PD-held arm sags under gravity while the preview animation runs, which
-    # is not the stale-plan case this guards against. 0 disables the check.
-    execution_start_tolerance: float = 0.05
     # Static box obstacles added at startup, for scene furniture the planner
     # must always respect (e.g. a table). Center and size are world-frame,
     # axis-aligned, full extents.
