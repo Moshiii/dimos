@@ -15,7 +15,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from enum import StrEnum
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python 3.10: StrEnum arrived in 3.11
+    from enum import Enum
+
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
+        def __str__(self) -> str:
+            return str(self.value)
+
+
 import hashlib
 import math
 import os

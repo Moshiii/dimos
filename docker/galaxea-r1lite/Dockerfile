@@ -81,6 +81,13 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/dds-selftest
 COPY scripts/r1lite_test /opt/dimos/scripts/r1lite_test
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app
 
+# The teleop web server generates its self-signed TLS certs under the
+# package's assets dir (a repo-checkout assumption); pre-create it
+# writable for the runtime user so the headset endpoint can start from a
+# wheel install.
+RUN mkdir -p /usr/local/lib/python3.10/dist-packages/assets/teleop_certs \
+    && chown -R 1000:1000 /usr/local/lib/python3.10/dist-packages/assets
+
 # Every bash in this image — interactive shells, docker exec, the r1
 # launcher's dev door — gets the ROS environment without the entrypoint.
 RUN echo 'source /opt/ros/humble/setup.bash' >> /etc/bash.bashrc \
