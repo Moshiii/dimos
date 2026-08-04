@@ -155,7 +155,11 @@ class PickNPlaceModule(Module):
 
     @skill
     def scan(self, prompt: str) -> SkillResult:
-        """Detect a prompted object with the configured RGB-D perception pipeline."""
+        """Detect a prompted object from one RGB-D frame without moving the robot.
+
+        Returns numbered objects. Use a returned number with ``select_object`` to create a grasp target
+        or ``get_object_geometry`` to inspect a container target.
+        """
         if not prompt.strip():
             return SkillResult.fail("INVALID_INPUT", "A nonempty object prompt is required")
         try:
@@ -182,12 +186,19 @@ class PickNPlaceModule(Module):
 
     @skill
     def describe_scene(self, question: str = "What objects are visible on the table?") -> str:
-        """Answer an open-ended question about the latest camera frame."""
+        """Answer an open-ended question about the latest camera image without moving the robot.
+
+        Requires ``osr.det=moondream`` and is descriptive only; use ``scan`` for numbered 3D objects.
+        """
         return self._scene.describe_scene(question)
 
     @skill
     def get_object_geometry(self, number: int) -> dict[str, object] | None:
-        """Return one current object's center and OBB dimensions in the planning frame."""
+        """Return a scanned object's center and OBB size without moving the robot.
+
+        ``number`` must come from the latest ``scan`` result. ``center`` and ``size`` are ``[x, y, z]``
+        lists in meters in the returned planning frame; use this to derive a container placement target.
+        """
         with self._objects_condition:
             if number < 1 or number > len(self._latest_objects):
                 return None
@@ -232,7 +243,11 @@ class PickNPlaceModule(Module):
 
     @skill
     def select_object(self, number: int) -> SkillResult:
-        """Select an object and return its collision-free grasp and pre-grasp target coordinates."""
+        """Select a scanned object and return grasp and pre-grasp targets without moving the robot.
+
+        ``number`` must come from the latest ``scan`` result. Returned target values are XYZ in meters and
+        roll/pitch/yaw in radians. Call ``move_to_pose`` for each target; it validates collision-free motion.
+        """
         goal = self.get_goal_pose(number)
         if goal is None:
             return SkillResult.fail("INVALID_INPUT", f"No selectable object numbered {number}")
@@ -403,7 +418,11 @@ class PickNPlaceModule(Module):
 
     @skill
     def estimate_table(self) -> SkillResult:
-        """Estimate the current tabletop and return its planning-frame footprint in meters."""
+        """Estimate the tabletop without moving the robot and return its planning-frame footprint in meters.
+
+        Pass the returned ``center_x``, ``center_y``, ``tabletop_z``, ``width``, and ``depth`` directly to
+        ``set_table_collision`` before requesting motion near the table.
+        """
         estimate = self.estimate_table_surface()
         if estimate is None:
             return SkillResult.fail(

@@ -1701,12 +1701,16 @@ class ManipulationModule(Module):
         safety_margin: float = 0.015,
         thickness: float = 0.20,
     ) -> bool:
-        """Install or update a conservative horizontal table collision slab."""
+        """Install or update a horizontal table collision slab.
+
+        All dimensions are meters. ``tabletop_z`` is the measured physical tabletop height; a positive
+        ``safety_margin`` raises the slab above it to preserve clearance for collision planning.
+        """
         if self._world_monitor is None:
             return False
         if width <= 0.0 or depth <= 0.0 or thickness <= 0.0 or safety_margin < 0.0:
             raise ValueError("table dimensions must be positive and safety_margin non-negative")
-        protected_top = tabletop_z - safety_margin
+        protected_top = tabletop_z + safety_margin
         table = Obstacle(
             name="calibrated-table",
             obstacle_type=ObstacleType.BOX,

@@ -31,4 +31,4 @@ def test_table_collision_is_a_conservative_slab() -> None:
     obstacle = monitor.add_obstacle.call_args.args[0]
     assert obstacle.name == "calibrated-table"
     assert obstacle.dimensions == (0.8, 1.0, 0.2)
-    assert obstacle.pose.position.z == pytest.approx(0.235)
+    assert obstacle.pose.position.z == pytest.approx(0.265)
