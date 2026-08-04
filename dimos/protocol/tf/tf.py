@@ -117,6 +117,24 @@ class MultiTBuffer:
                 frames.add(child)
         return frames
 
+    def latest_transforms(self) -> list[Transform]:
+        """Most recent transform on each edge of the tree."""
+        with self._cv:
+            latest = [buffer.last() for buffer in self.buffers.values()]
+        return [transform for transform in latest if transform is not None]
+
+    def get_parent(self, frame_id: str) -> str | None:
+        """Parent of a frame, or None if it is a root of the tree.
+
+        A frame with more than one parent is a graph, not a tree. The first
+        parent seen wins so the answer stays stable once given.
+        """
+        with self._cv:
+            for parent, child in self.buffers:
+                if child == frame_id:
+                    return parent
+        return None
+
     def get_connections(self, frame_id: str) -> set[str]:
         """Get all frames connected to the given frame (both as parent and child)."""
         connections = set()

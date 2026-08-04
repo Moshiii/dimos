@@ -97,9 +97,9 @@ rerun_config: dict[str, Any] = {
         "world/global_costmap": 0,  # publishes at ~7.6 Hz
         "world/lidar": 1,  # publishes at ~7.7 Hz; hidden by default in the blueprint
     },
-    # slapping a go2 shaped box on top of tf/base_link
+    # slapping a go2 shaped box on the base_link frame
     "static": {
-        "world/tf/base_link": _static_base_link,
+        "world/robot_body": _static_base_link,
     },
 }
 

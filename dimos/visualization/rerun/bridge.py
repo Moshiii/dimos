@@ -41,6 +41,7 @@ from toolz import pipe  # type: ignore[import-untyped]
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.zenohpubsub import Zenoh
 from dimos.protocol.pubsub.patterns import Glob, pattern_matches
@@ -56,6 +57,7 @@ from dimos.visualization.rerun.constants import (
     RerunOpenOption,
 )
 from dimos.visualization.rerun.init import rerun_init
+from dimos.visualization.rerun.tf_tree import TFTreeVis
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype
@@ -78,29 +80,6 @@ if TYPE_CHECKING:
 # to define custom visualizations for specific topics
 #
 # as well as pubsubs={} to specify which protocols to listen to.
-
-# TODO better TF processing
-#
-# this is rerun bridge specific, rerun has a specific (better) way of handling TFs
-# using entity path conventions, each of these nodes in a path are TF frames:
-#
-# /world/robot1/base_link/camera/optical
-#
-# While here since we are just listening on TFMessage messages which optionally contain
-# just a subset of full TF tree we don't know the full tree structure to build full entity
-# path for a transform being published
-#
-# This is easy to reconstruct but a service/tf.py already does this so should be integrated here
-#
-# we have decoupled entity paths and actual transforms (like ROS TF frames)
-# https://rerun.io/docs/concepts/logging-and-ingestion/transforms
-#
-# tf#/world
-# tf#/base_link
-# tf#/camera
-#
-# In order to solve this, bridge needs to own it's own tf service
-# and render it's tf tree into correct rerun entity paths
 
 logger = setup_logger()
 
@@ -225,6 +204,10 @@ class Config(ModuleConfig):
     max_hz: dict[str, float] = field(default_factory=dict)
 
     entity_prefix: str = "world"
+    # Length in meters of the labeled triad drawn on every tf frame. 0 disables.
+    # Frames nest under `world/tf` mirroring the tree, so keep other entities out
+    # of that path and attach them to `tf#/<frame>` instead.
+    tf_axes: float = 0.5
     topic_to_entity: Callable[[Any], str] | None = None
     connect_url: str | None = None
     memory_limit: str = "25%"
@@ -264,6 +247,15 @@ class RerunBridgeModule(Module):
         self._last_log = {}
         self._override_cache: dict[str, Callable[[Any], RerunData | None]] = {}
         self._frame_attached: dict[str, str] = {}
+        self._tf_tree = self._new_tf_tree()
+
+    def _new_tf_tree(self) -> TFTreeVis | None:
+        if self.config.tf_axes <= 0:
+            return None
+        return TFTreeVis(
+            axis_length=self.config.tf_axes,
+            root=f"{self.config.entity_prefix}/tf",
+        )
 
     @property
     def host(self) -> str:
@@ -351,6 +343,11 @@ class RerunBridgeModule(Module):
 
         # TFMessage for example returns list of (entity_path, archetype) tuples
         if is_rerun_multi(rerun_data):
+            # Bound locally: stop() clears the tree from another thread.
+            tf_tree = self._tf_tree
+            if tf_tree is not None and isinstance(msg, TFMessage):
+                tf_tree.log(msg)
+                return
             for path, archetype in rerun_data:
                 rr.log(path, archetype)
         else:
@@ -373,6 +370,7 @@ class RerunBridgeModule(Module):
 
         self._last_log = {}
         self._frame_attached = {}
+        self._tf_tree = self._new_tf_tree()
         self._min_intervals: dict[str, float] = {
             entity: 1.0 / hz for entity, hz in self.config.max_hz.items() if hz > 0
         }
@@ -600,6 +598,7 @@ class RerunBridgeModule(Module):
     def stop(self) -> None:
         self._override_cache.clear()
         self._frame_attached.clear()
+        self._tf_tree = None
         super().stop()
 
 

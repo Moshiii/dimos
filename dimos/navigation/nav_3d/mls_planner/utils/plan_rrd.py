@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path as FsPath
 from time import perf_counter
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -37,18 +37,17 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.navigation.nav_3d.mls_planner.mls_planner import MLSPlanner
 from dimos.navigation.tf_pose import base_height_above_ground
 from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
 from dimos.utils.data import resolve_named_path
+from dimos.visualization.rerun.tf_tree import RerunTFTree
 
 if TYPE_CHECKING:
     import rerun.blueprint as rrb
 
 TIMELINE = "ts"
-
-AXIS_LEN = 0.5
-AXIS_RADIUS_RATIO = 25
 
 # Mount frames as recorded on the tf stream.
 BASE_FRAME = "base_link"
@@ -135,6 +134,33 @@ def _log_path_wp(waypoints: NDArray[np.float32] | None, entity: str, color: list
         return
     points = [(float(p[0]), float(p[1]), float(p[2])) for p in waypoints]
     rr.log(entity, rr.LineStrips3D([points], colors=[color], radii=0.05))
+
+
+def _window(stream: Any, from_time: float | None, to_time: float | None) -> Any:
+    """Clip a stream to the replay window, both bounds relative to its start."""
+    if from_time is not None:
+        stream = stream.from_time(from_time)
+    if to_time is not None:
+        stream = stream.to_time(to_time)
+    return stream
+
+
+def _tf_over(store: SqliteStore, window: Any) -> Any:
+    """The recorded tf stream clipped to another stream's time span.
+
+    Absolute bounds, because the relative ones anchor on each stream's own
+    first observation and tf rarely starts on the same sample as the lidar.
+    Returns None when the recording has no tf, which must not be probed for
+    with ``store.stream``: that registers the stream and writes its tables.
+    """
+    if "tf" not in store.list_streams():
+        print("no tf stream in the recording; skipping the tf tree")
+        return None
+    try:
+        first, last = window.first().ts, window.last().ts
+    except LookupError:
+        return None
+    return store.stream("tf", TFMessage).order_by("ts").time_range(first, last)
 
 
 def _base_from_sensor(store: SqliteStore) -> Transform | None:
@@ -323,6 +349,12 @@ def _blueprint(crop: LocalCrop) -> rrb.Blueprint:
                 origin="world",
                 name="world",
                 contents=["+ $origin/**", "- $origin/local/**"],
+                # The graph buries the map it was built from. Tick it back on in
+                # the viewer when the question is why a path went the way it did.
+                overrides={
+                    "world/nodes": rrb.EntityBehavior(visible=False),
+                    "world/node_edges": rrb.EntityBehavior(visible=False),
+                },
             ),
             rrb.Vertical(
                 rrb.Spatial3DView(
@@ -547,12 +579,9 @@ def main(
 
     store = SqliteStore(path=str(db_path))
     with store:
-        lidar = store.stream(lidar_stream, PointCloud2).order_by("ts")
-        if from_time is not None:
-            lidar = lidar.from_time(from_time)
-        if to_time is not None:
-            lidar = lidar.to_time(to_time)
+        lidar = _window(store.stream(lidar_stream, PointCloud2).order_by("ts"), from_time, to_time)
         odom = store.stream(odom_stream, Odometry).order_by("ts")
+        tf = _tf_over(store, lidar)
 
         pose_tagged = lidar.align(odom, tolerance=align_tol).transform(
             FnTransformer(_attach_pose_from_odom)
@@ -570,6 +599,8 @@ def main(
                 support_min=support_min,
             )
         )
+        if tf is not None:
+            ray_pipeline = ray_pipeline.transform(RerunTFTree(tf))
 
         configs = _parse_configs(config, wall_clearance, wall_buffer, wall_buffer_weight)
         ref_clearance = configs[0][0]
@@ -592,24 +623,6 @@ def main(
             if base_from_sensor is not None
             else 0.0
         )
-        entities = ["world/mid360_link/axes"] + (
-            ["world/base_link/axes"] if base_from_sensor else []
-        )
-        for entity in entities:
-            rr.log(
-                entity,
-                rr.Arrows3D(
-                    origins=[[0.0, 0.0, 0.0]] * 3,
-                    vectors=[
-                        [AXIS_LEN, 0.0, 0.0],
-                        [0.0, AXIS_LEN, 0.0],
-                        [0.0, 0.0, AXIS_LEN],
-                    ],
-                    colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]],
-                    radii=AXIS_LEN / AXIS_RADIUS_RATIO,
-                ),
-                static=True,
-            )
         if base_from_sensor is not None:
             rr.log(
                 "world/base_link/outline",
