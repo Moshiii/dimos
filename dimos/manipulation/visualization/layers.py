@@ -87,6 +87,29 @@ def _validate_size(value: float | None, *, name: str) -> float | None:
     return result
 
 
+def _snapshot_triangles(value: NDArray[np.generic], *, vertex_count: int) -> NDArray[np.int32]:
+    source = np.asarray(value)
+    if source.ndim != 2 or source.shape[1:] != (3,):
+        raise ValueError("triangles must have shape (M, 3)")
+    if not np.issubdtype(source.dtype, np.number):
+        raise ValueError("triangles must contain integer indices")
+    numeric = np.asarray(source, dtype=np.float64)
+    if not np.all(np.isfinite(numeric)) or not np.all(numeric == np.rint(numeric)):
+        raise ValueError("triangles must contain finite integer indices")
+    if np.any(numeric < 0) or (numeric.size and np.any(numeric >= vertex_count)):
+        raise ValueError("triangles contain an out-of-range vertex index")
+    result = np.array(numeric, dtype=np.int32, copy=True)
+    result.setflags(write=False)
+    return result
+
+
+def _validate_opacity(value: float) -> float:
+    result = float(value)
+    if not math.isfinite(result) or not 0.0 < result <= 1.0:
+        raise ValueError("opacity must be finite and in (0, 1]")
+    return result
+
+
 @dataclass(frozen=True)
 class PointCloudElement:
     """A generic colored point cloud with no planning authority."""
@@ -148,7 +171,33 @@ class LineSetElement:
         object.__setattr__(self, "line_width", _validate_size(self.line_width, name="line_width"))
 
 
-VisualizationElement: TypeAlias = PointCloudElement | LineSetElement
+@dataclass(frozen=True)
+class MeshElement:
+    """Indexed triangle mesh with a uniform RGB color and opacity."""
+
+    id: str
+    vertices: NDArray[np.generic]
+    triangles: NDArray[np.generic]
+    color: NDArray[np.generic]
+    opacity: float = 1.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _validate_id(self.id, hierarchical=False))
+        vertices = _snapshot_positions(self.vertices, name="vertices")
+        object.__setattr__(self, "vertices", vertices)
+        object.__setattr__(
+            self,
+            "triangles",
+            _snapshot_triangles(self.triangles, vertex_count=len(vertices)),
+        )
+        color = _snapshot_colors(self.color, count=1, allow_uniform=True)
+        if color is None or color.ndim != 1:
+            raise ValueError("color must have shape (3,)")
+        object.__setattr__(self, "color", color)
+        object.__setattr__(self, "opacity", _validate_opacity(self.opacity))
+
+
+VisualizationElement: TypeAlias = PointCloudElement | LineSetElement | MeshElement
 
 
 @dataclass(frozen=True)
@@ -166,8 +215,11 @@ class VisualizationLayer:
             raise ValueError("frame_id must be a nonempty string")
         object.__setattr__(self, "frame_id", self.frame_id.strip())
         elements = tuple(self.elements)
-        if any(not isinstance(item, (PointCloudElement, LineSetElement)) for item in elements):
-            raise TypeError("elements must be point-cloud or line-set elements")
+        if any(
+            not isinstance(item, (PointCloudElement, LineSetElement, MeshElement))
+            for item in elements
+        ):
+            raise TypeError("elements must be point-cloud, line-set, or mesh elements")
         ids = [item.id for item in elements]
         if len(ids) != len(set(ids)):
             raise ValueError("element IDs must be unique within a layer")

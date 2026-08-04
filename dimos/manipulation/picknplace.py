@@ -28,6 +28,7 @@ from dimos.manipulation.candidate_filter_spec import GraspCandidateFilterSpec
 from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
 from dimos.manipulation.visualization.layers import (
     LineSetElement,
+    MeshElement,
     PointCloudElement,
     VisualizationLayer,
 )
@@ -321,6 +322,13 @@ class PickNPlaceModule(Module):
                 "picknplace/table-estimate",
                 "world",
                 (
+                    MeshElement(
+                        "tabletop-fill",
+                        vertices,
+                        np.asarray([[0, 1, 2], [0, 2, 3]]),
+                        color=np.asarray([80, 180, 255]),
+                        opacity=1.0,
+                    ),
                     LineSetElement(
                         "tabletop",
                         vertices,

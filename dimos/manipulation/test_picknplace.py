@@ -26,6 +26,7 @@ from dimos.manipulation.picknplace import (
     _estimate_table_surface,
 )
 from dimos.manipulation.planning.spec.models import IKResult, IKStatus
+from dimos.manipulation.visualization.layers import MeshElement
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -125,6 +126,25 @@ def test_table_surface_estimate_ignores_objects_above_the_table() -> None:
     assert estimate["tabletop_z"] == pytest.approx(0.35, abs=0.01)
     assert estimate["width"] >= 0.8
     assert estimate["depth"] >= 1.0
+
+
+def test_table_surface_estimate_displays_filled_tabletop() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    x, y = np.meshgrid(np.linspace(0.2, 0.8, 20), np.linspace(-0.4, 0.4, 20))
+    scene_cloud = MagicMock()
+    scene_cloud.points_f32.return_value = np.column_stack(
+        (x.ravel(), y.ravel(), np.full(x.size, 0.35))
+    )
+    module._scene = MagicMock(get_full_scene_pointcloud=MagicMock(return_value=scene_cloud))
+    module._visualization = MagicMock()
+
+    assert module.estimate_table_surface() is not None
+
+    layer = module._visualization.set_visualization_layer.call_args.args[0]
+    assert isinstance(layer.elements[0], MeshElement)
+    assert layer.elements[0].opacity == pytest.approx(1.0)
+    np.testing.assert_array_equal(layer.elements[0].triangles, [[0, 1, 2], [0, 2, 3]])
 
 
 def test_picknplace_uses_top_graspgenx_candidate() -> None:

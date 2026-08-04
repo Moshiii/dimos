@@ -21,6 +21,7 @@ import pytest
 
 from dimos.manipulation.visualization.layers import (
     LineSetElement,
+    MeshElement,
     PointCloudElement,
     VisualizationLayer,
 )
@@ -62,6 +63,36 @@ def test_line_set_accepts_uniform_and_per_line_colors() -> None:
     np.testing.assert_array_equal(per_line.colors, [[0, 255, 0], [255, 128, 0]])
     assert per_line.edges.dtype == np.int32
     assert per_line.edges.flags.writeable is False
+
+
+def test_mesh_snapshots_triangles_color_and_opacity() -> None:
+    vertices = np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    triangles = np.asarray([[0, 1, 2]])
+
+    element = MeshElement("surface", vertices, triangles, np.asarray([0.0, 0.5, 1.0]), 0.65)
+    vertices[:] = 9.0
+    triangles[:] = 0
+
+    np.testing.assert_array_equal(element.vertices[1], [1.0, 0.0, 0.0])
+    np.testing.assert_array_equal(element.triangles, [[0, 1, 2]])
+    np.testing.assert_array_equal(element.color, [0, 128, 255])
+    assert element.opacity == pytest.approx(0.65)
+
+
+@pytest.mark.parametrize(
+    ("triangles", "color", "opacity", "message"),
+    [
+        (np.asarray([[0, 1]]), np.asarray([0, 0, 0]), 1.0, "shape"),
+        (np.asarray([[0, 1, 3]]), np.asarray([0, 0, 0]), 1.0, "out-of-range"),
+        (np.asarray([[0, 1, 2]]), np.asarray([[0, 0, 0]]), 1.0, "color"),
+        (np.asarray([[0, 1, 2]]), np.asarray([0, 0, 0]), 0.0, "opacity"),
+    ],
+)
+def test_mesh_rejects_invalid_geometry(
+    triangles: np.ndarray, color: np.ndarray, opacity: float, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        MeshElement("surface", np.zeros((3, 3)), triangles, color, opacity)
 
 
 @pytest.mark.parametrize("value", ["", "/grasp", "grasp/", "grasp//cloud", "grasp cloud"])

@@ -40,6 +40,7 @@ from dimos.manipulation.planning.spec.models import DEFAULT_OBSTACLE_RGBA, Obsta
 from dimos.manipulation.planning.utils.mesh_utils import prepare_urdf_for_drake
 from dimos.manipulation.visualization.layers import (
     LineSetElement,
+    MeshElement,
     PointCloudElement,
     VisualizationLayer,
 )
@@ -207,6 +208,8 @@ class ViserManipulationScene:
                         handle = self._render_point_cloud_element(path, element)
                     elif isinstance(element, LineSetElement):
                         handle = self._render_line_set_element(path, element)
+                    elif isinstance(element, MeshElement):
+                        handle = self._render_mesh_element(path, element)
                     else:
                         raise TypeError(f"unsupported visualization element: {type(element)!r}")
                     if handle is not None:
@@ -282,6 +285,18 @@ class ViserManipulationScene:
             points=points,
             colors=colors,
             line_width=element.line_width or VISUALIZATION_DEFAULT_LINE_WIDTH,
+            visible=False,
+        )
+
+    def _render_mesh_element(self, path: str, element: MeshElement) -> Any | None:
+        if len(element.triangles) == 0:
+            return None
+        return self.server.scene.add_mesh_simple(
+            path,
+            vertices=element.vertices,
+            faces=element.triangles,
+            color=tuple(int(value) for value in element.color),
+            opacity=element.opacity,
             visible=False,
         )
 

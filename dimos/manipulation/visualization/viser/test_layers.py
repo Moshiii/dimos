@@ -29,6 +29,7 @@ pytest.importorskip("viser", reason="Viser optional dependency is not installed"
 
 from dimos.manipulation.visualization.layers import (
     LineSetElement,
+    MeshElement,
     PointCloudElement,
     VisualizationLayer,
 )
@@ -117,6 +118,11 @@ class SceneApi:
 
     def add_line_segments(self, name: str, **kwargs: object) -> Handle:
         return self._add("line_segments", name, kwargs)
+
+    def add_mesh_simple(
+        self, name: str, vertices: np.ndarray, faces: np.ndarray, **kwargs: object
+    ) -> Handle:
+        return self._add("mesh", name, {"vertices": vertices, "faces": faces, **kwargs})
 
     def _add(self, kind: str, name: str, kwargs: dict[str, object]) -> Handle:
         if self.fail_on_name is not None and self.fail_on_name in name:
@@ -239,6 +245,26 @@ def test_scene_renders_indexed_line_set_and_encodes_logical_ids(
         ),
     )
     assert kwargs["line_width"] == pytest.approx(2.5)
+
+
+def test_scene_renders_filled_mesh(scene: ViserManipulationScene) -> None:
+    element = MeshElement(
+        "tabletop-fill",
+        np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]),
+        np.asarray([[0, 1, 2], [0, 2, 3]]),
+        np.asarray([80, 180, 255]),
+        opacity=0.65,
+    )
+
+    scene.replace_visualization_layer(
+        VisualizationLayer("pick/table", "world", (element,)), generation=1, visible=True
+    )
+
+    kind, _name, kwargs = scene.server.scene.calls[-1]
+    assert kind == "mesh"
+    np.testing.assert_array_equal(kwargs["faces"], [[0, 1, 2], [0, 2, 3]])
+    assert kwargs["color"] == (80, 180, 255)
+    assert kwargs["opacity"] == pytest.approx(0.65)
 
 
 def test_scene_failed_replacement_retains_previous_generation(
