@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -101,6 +106,37 @@ def test_backup_file_keep_last_zero_removes_all(tmp_path: Path) -> None:
     assert list(tmp_path.glob("recording_go2.*.db")) == []
 
 
+@dataclass
+class DataLayout:
+    data_dir: Path
+    lfs_dir: Path
+    state_dir: Path
+    staging_root: Path
+
+
+@pytest.fixture
+def data_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DataLayout:
+    layout = DataLayout(
+        data_dir=tmp_path / "data",
+        lfs_dir=tmp_path / "data" / ".lfs",
+        state_dir=tmp_path / "state",
+        staging_root=tmp_path / "staging",
+    )
+    layout.data_dir.mkdir()
+    layout.lfs_dir.mkdir()
+    layout.staging_root.mkdir()
+
+    monkeypatch.setattr(
+        data,
+        "get_data_dir",
+        lambda extra_path=None: layout.data_dir / extra_path if extra_path else layout.data_dir,
+    )
+    monkeypatch.setattr(data, "_get_lfs_dir", lambda: layout.lfs_dir)
+    monkeypatch.setattr(data, "_lfs_extraction_state_dir", lambda: layout.state_dir)
+    monkeypatch.setattr(data, "_check_git_lfs_available", lambda: True)
+    return layout
+
+
 def _write_tar_gz(tar_path: Path, archive_name: str, content: bytes, staging_root: Path) -> None:
     staging = staging_root / archive_name
     staging.mkdir(exist_ok=True)
@@ -109,40 +145,17 @@ def _write_tar_gz(tar_path: Path, archive_name: str, content: bytes, staging_roo
         tar.add(staging, arcname=archive_name)
 
 
-def test_get_data_self_heals_legacy_extraction_without_stamp(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An extraction that predates this feature has no stamp yet.
+def _write_single_file_tar_gz(tar_path: Path, member_name: str, content: bytes) -> None:
+    with tarfile.open(tar_path, "w:gz") as tar:
+        info = tarfile.TarInfo(member_name)
+        info.size = len(content)
+        tar.addfile(info, io.BytesIO(content))
 
-    That must not be trusted as-is: re-extract once, then it self-heals.
-    """
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    lfs_dir = tmp_path / ".lfs"
-    lfs_dir.mkdir()
-    staging_root = tmp_path / "staging"
-    staging_root.mkdir()
 
-    monkeypatch.setattr(
-        data,
-        "get_data_dir",
-        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
-    )
-    monkeypatch.setattr(data, "_get_lfs_dir", lambda: lfs_dir)
-    monkeypatch.setattr(data, "_check_git_lfs_available", lambda: True)
-
-    tar_path = data._lfs_archive_path("dataset")
-    _write_tar_gz(tar_path, "dataset", b"current", staging_root)
-
-    # extracted before stamping existed: archive and extraction both present, no stamp
-    (data_dir / "dataset").mkdir()
-    (data_dir / "dataset" / "payload.bin").write_bytes(b"stale, predates stamping")
-
-    healed = data.get_data("dataset/payload.bin")
-    assert healed.read_bytes() == b"current"
-    assert data._extraction_stamp_path("dataset").exists()
-
-    # second call is now self-healed: no further re-extraction needed
+def _counting_decompress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], int]:
+    """Wrap _decompress_archive and return its running call count."""
     call_count = 0
     original_decompress = data._decompress_archive
 
@@ -152,23 +165,27 @@ def test_get_data_self_heals_legacy_extraction_without_stamp(
         return original_decompress(filename)
 
     monkeypatch.setattr(data, "_decompress_archive", counting_decompress)
-    data.get_data("dataset/payload.bin")
-    assert call_count == 0
+    return lambda: call_count
+
+
+def test_get_data_self_heals_legacy_extraction_without_stamp(data_layout: DataLayout) -> None:
+    """No stamp file means not trusted: re-extracts once, then self-heals."""
+    tar_path = data._lfs_archive_path("dataset")
+    _write_tar_gz(tar_path, "dataset", b"current", data_layout.staging_root)
+
+    # archive and extraction both present, but no stamp
+    (data_layout.data_dir / "dataset").mkdir()
+    (data_layout.data_dir / "dataset" / "payload.bin").write_bytes(b"stale")
+
+    healed = data.get_data("dataset/payload.bin")
+    assert healed.read_bytes() == b"current"
+    assert data._extraction_stamp_path("dataset").exists()
 
 
 def test_get_data_returns_local_recording_without_backing_archive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    data_layout: DataLayout, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    monkeypatch.setattr(
-        data,
-        "get_data_dir",
-        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
-    )
-    monkeypatch.setattr(data, "_get_lfs_dir", lambda: tmp_path / ".lfs")
-
-    local_db = data_dir / "recording.db"
+    local_db = data_layout.data_dir / "recording.db"
     local_db.write_bytes(b"local only, no archive behind it")
 
     def fail_pull(name: str) -> Path:
@@ -180,78 +197,38 @@ def test_get_data_returns_local_recording_without_backing_archive(
 
 
 def test_get_data_reextracts_when_archive_changes_then_stabilizes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    data_layout: DataLayout, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    lfs_dir = tmp_path / ".lfs"
-    lfs_dir.mkdir()
-    staging_root = tmp_path / "staging"
-    staging_root.mkdir()
-
-    monkeypatch.setattr(
-        data,
-        "get_data_dir",
-        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
-    )
-    monkeypatch.setattr(data, "_get_lfs_dir", lambda: lfs_dir)
-    monkeypatch.setattr(data, "_check_git_lfs_available", lambda: True)
-
     tar_path = data._lfs_archive_path("dataset")
-    _write_tar_gz(tar_path, "dataset", b"v1", staging_root)
+    _write_tar_gz(tar_path, "dataset", b"v1", data_layout.staging_root)
 
     first = data.get_data("dataset/payload.bin")
     assert first.read_bytes() == b"v1"
 
-    call_count = 0
-    original_decompress = data._decompress_archive
-
-    def counting_decompress(filename: str | Path) -> Path:
-        nonlocal call_count
-        call_count += 1
-        return original_decompress(filename)
-
-    monkeypatch.setattr(data, "_decompress_archive", counting_decompress)
+    call_count = _counting_decompress(monkeypatch)
 
     # unchanged archive: no re-extraction
     data.get_data("dataset/payload.bin")
-    assert call_count == 0
+    assert call_count() == 0
 
     # archive re-tarred under the same name with different content
-    _write_tar_gz(tar_path, "dataset", b"v2, a longer payload than before", staging_root)
+    _write_tar_gz(
+        tar_path, "dataset", b"v2, a longer payload than before", data_layout.staging_root
+    )
 
     second = data.get_data("dataset/payload.bin")
     assert second.read_bytes() == b"v2, a longer payload than before"
-    assert call_count == 1
+    assert call_count() == 1
 
     # settles back to no re-extraction once the stamp matches again
     data.get_data("dataset/payload.bin")
-    assert call_count == 1
+    assert call_count() == 1
 
 
-def test_get_data_reextraction_drops_members_removed_from_archive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Re-extraction must clear the old contents first.
-
-    tar.extractall only adds/overwrites, so a member dropped from a
-    re-tarred archive would otherwise survive on disk indefinitely.
-    """
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    lfs_dir = tmp_path / ".lfs"
-    lfs_dir.mkdir()
-    staging = tmp_path / "staging" / "dataset"
+def test_get_data_reextraction_drops_members_removed_from_archive(data_layout: DataLayout) -> None:
+    """Members dropped from a re-tarred archive must not survive on disk."""
+    staging = data_layout.staging_root / "dataset"
     staging.mkdir(parents=True)
-
-    monkeypatch.setattr(
-        data,
-        "get_data_dir",
-        lambda extra_path=None: data_dir / extra_path if extra_path else data_dir,
-    )
-    monkeypatch.setattr(data, "_get_lfs_dir", lambda: lfs_dir)
-    monkeypatch.setattr(data, "_check_git_lfs_available", lambda: True)
-
     tar_path = data._lfs_archive_path("dataset")
 
     (staging / "keep.bin").write_bytes(b"kept")
@@ -270,6 +247,53 @@ def test_get_data_reextraction_drops_members_removed_from_archive(
     kept_path = data.get_data("dataset/keep.bin")
     assert kept_path.read_bytes() == b"kept"
     assert not dropped_path.exists()
+
+
+def test_get_data_reextracts_when_stamp_is_corrupt(data_layout: DataLayout) -> None:
+    tar_path = data._lfs_archive_path("dataset")
+    _write_tar_gz(tar_path, "dataset", b"current", data_layout.staging_root)
+
+    stamp_path = data._extraction_stamp_path("dataset")
+    stamp_path.parent.mkdir(parents=True, exist_ok=True)
+    stamp_path.write_text("not valid json")
+    (data_layout.data_dir / "dataset").mkdir()
+    (data_layout.data_dir / "dataset" / "payload.bin").write_bytes(b"stale")
+
+    result = data.get_data("dataset/payload.bin")
+
+    assert result.read_bytes() == b"current"
+    assert json.loads(stamp_path.read_text())
+
+
+def test_get_data_reextracts_single_file_archive(data_layout: DataLayout) -> None:
+    """A prior extraction that is a bare file, not a directory, must also be replaced."""
+    tar_path = data._lfs_archive_path("cafe.jpg")
+    _write_single_file_tar_gz(tar_path, "cafe.jpg", b"v1")
+
+    first = data.get_data("cafe.jpg")
+    assert first.is_file()
+    assert first.read_bytes() == b"v1"
+
+    _write_single_file_tar_gz(tar_path, "cafe.jpg", b"v2, a longer payload than before")
+
+    second = data.get_data("cafe.jpg")
+    assert second.read_bytes() == b"v2, a longer payload than before"
+
+
+def test_get_data_serializes_concurrent_extraction_of_same_archive(
+    data_layout: DataLayout, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent callers must not race: only one extraction happens."""
+    tar_path = data._lfs_archive_path("dataset")
+    _write_tar_gz(tar_path, "dataset", b"v1", data_layout.staging_root)
+
+    call_count = _counting_decompress(monkeypatch)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: data.get_data("dataset/payload.bin"), range(8)))
+
+    assert all(result.read_bytes() == b"v1" for result in results)
+    assert call_count() == 1
 
 
 @pytest.mark.self_hosted

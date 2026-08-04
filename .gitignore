@@ -56,8 +56,6 @@ CLAUDE.MD
 # Test data: ignore data/ but keep the compressed LFS archives
 data/*
 !data/.lfs/
-# Per-archive extraction stamps (local machine state, not part of the archive)
-data/.lfs/.extracted/
 
 # Runtime output
 /logs
