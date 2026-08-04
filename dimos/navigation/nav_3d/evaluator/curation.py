@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dimos.navigation.nav_3d.evaluator.cases import CASES_DIR, Case, load_suite, save_suite
+from dimos.navigation.nav_3d.evaluator.cases import (
+    Case,
+    load_suite,
+    manifest_path,
+    save_suite,
+)
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
 from dimos.navigation.nav_3d.evaluator.generate import snap_to_surface
@@ -57,6 +62,7 @@ class CaseStore:
     manifest: Path
     surface: NDArray[np.float32]
     cfg: EvalConfig
+    final: FinalMap
 
     def _snap(self, label: str, point: Point, *, required: bool = True) -> Point:
         snapped = snap_to_surface(
@@ -68,7 +74,9 @@ class CaseStore:
                     f"{label} {point} is more than {self.cfg.snap_max_m}m from a standable surface"
                 )
             # An infeasible goal may sit on geometry with no standable surface.
-            logger.warning("%s %s is off any standable surface; kept as picked", label, point)
+            logger.warning(
+                "point is off any standable surface, kept as picked", label=label, point=point
+            )
             return point
         return (float(snapped[0]), float(snapped[1]), float(snapped[2]))
 
@@ -99,11 +107,16 @@ class CaseStore:
         self.save()
         kind = "negative (must refuse)" if expect_fail else "positive"
         logger.info(
-            "added %s %s: %s -> %s to %s", kind, case.id, case.start, case.goal, self.manifest
+            "added case",
+            kind=kind,
+            case=case.id,
+            start=case.start,
+            goal=case.goal,
+            manifest=self.manifest,
         )
         return case
 
-    def update(self, case_id: str, new_id: str, tags: list[str], expect_fail: bool) -> Case:
+    def update(self, case_id: str, new_id: str, tags: list[str], *, expect_fail: bool) -> Case:
         case = self.get(case_id)
         if new_id != case_id and any(c.id == new_id for c in self.suite.cases):
             raise CurationError(f"case id {new_id!r} already exists")
@@ -133,22 +146,18 @@ PROVENANCE_TAGS = ("auto", "manual")
 
 
 def _curated_tags(tags: list[str], expect_fail: bool, provenance: str = "manual") -> list[str]:
-    """Rewrite a case's tags around exactly one provenance tag.
-
-    Editing a case must not change what it measures, so an auto case keeps its
-    generated provenance. The negative tag tracks expect_fail rather than being
-    editable text, so the two cannot drift.
-    """
+    """Rewrite a case's tags around exactly one provenance tag. An auto case
+    keeps its generated provenance so editing never changes what it measures."""
     keep = [t for t in tags if t not in (*PROVENANCE_TAGS, "negative")]
     return [provenance, *(["negative"] if expect_fail else []), *keep]
 
 
-def load_store(dataset: str) -> tuple[CaseStore, FinalMap]:
+def load_store(dataset: str) -> CaseStore:
     """Open a dataset's manifest with the final map and surface it snaps to."""
-    manifest = CASES_DIR / f"{dataset}.yaml"
+    manifest = manifest_path(dataset)
     if not manifest.exists():
         raise CurationError(f"no manifest {manifest}; run ingest first")
     suite = load_suite(manifest)
     cfg = EvalConfig()
     final = load_or_build_final_map(suite.db_path(), suite, cfg)
-    return CaseStore(suite, manifest, final.standable_surface(cfg.robot_height), cfg), final
+    return CaseStore(suite, manifest, final.standable_surface(cfg.robot_height), cfg, final)

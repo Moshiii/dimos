@@ -56,13 +56,11 @@ class PipelineIntrospection(Protocol):
 
 
 class MLSPipeline:
-    """The voxel ray-tracing mapper feeding the MLS planner.
-
-    The map reaches the planner on the first plan after new frames, so that
-    plan pays for the rebuild it triggers.
-    """
+    """The voxel ray-tracing mapper feeding the MLS planner. The map reaches
+    the planner on the first plan after new frames, which pays for the rebuild."""
 
     def __init__(self, cfg: EvalConfig) -> None:
+        # Lazy: the planner is a native module, only needed by this pipeline.
         from dimos.navigation.nav_3d.mls_planner.mls_planner import MLSPlanner
 
         self._mapper = cfg.make_mapper()

@@ -24,7 +24,12 @@ import yaml
 
 from dimos.utils.data import resolve_named_path
 
-CASES_DIR = Path(__file__).parent / "cases"
+MANIFEST_DIR = Path(__file__).parent / "case_manifests"
+
+
+def manifest_path(dataset: str) -> Path:
+    """Where a dataset's case manifest lives."""
+    return MANIFEST_DIR / f"{dataset}.yaml"
 
 
 @dataclass
@@ -106,15 +111,15 @@ def load_suite(path: Path) -> Suite:
 def load_suites(paths: list[Path] | None = None) -> list[Suite]:
     """Load the given manifests, or every manifest under cases/."""
     if paths is None:
-        paths = sorted(CASES_DIR.glob("*.yaml"))
+        paths = sorted(MANIFEST_DIR.glob("*.yaml"))
     if not paths:
-        raise FileNotFoundError(f"no case manifests found under {CASES_DIR}")
+        raise FileNotFoundError(f"no case manifests found under {MANIFEST_DIR}")
     return [load_suite(p) for p in paths]
 
 
 def save_suite(suite: Suite, path: Path | None = None) -> Path:
     """Write the suite manifest as YAML. Defaults to cases/<dataset>.yaml."""
-    path = path or suite.path or CASES_DIR / f"{suite.dataset}.yaml"
+    path = path or suite.path or manifest_path(suite.dataset)
     doc: dict[str, object] = {"dataset": suite.dataset}
     if suite.db is not None:
         doc["db"] = suite.db

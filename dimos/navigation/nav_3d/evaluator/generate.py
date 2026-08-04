@@ -41,34 +41,37 @@ if TYPE_CHECKING:
 MAX_TRIVIAL_SPAN_M = 30.0
 
 
-@dataclass
-class GenerationParams:
-    min_separation_m: float = 3.0
-    min_euclid_m: float = 2.0
-    detour_ratio_min: float = 1.3
-    bin_size_m: float = 2.0
-    waypoint_spacing_m: float = 1.0
-    # None scales the case count with the walked distance.
-    max_cases: int | None = None
-    # Two cases are duplicates when both endpoints land within this radius.
-    dedupe_radius_m: float = 1.5
-    # Share of slots reserved for flat cases when the recording has them.
-    flat_fraction: float = 0.25
-    # Coverage sectors: a case earns a slot first by connecting a sector pair
-    # no accepted case connects yet.
-    sector_size_m: float = 8.0
-    sector_z_m: float = 1.5
-    # A sector may anchor at most this many selected cases, which prevents a
-    # single high-priority spot from becoming the hub of every case.
-    endpoint_reuse_max: int = 2
-    # Floor on the case count. When strict selection falls short, a relaxed
-    # pass ignores the sector caps and the flat quota to reach it.
-    min_cases: int = 10
+# Candidate pairs must be this far apart along the walk and in a straight line.
+MIN_SEPARATION_M = 3.0
+MIN_EUCLID_M = 2.0
+# A flat pair is only interesting if the walk detoured this much over the
+# straight line.
+DETOUR_RATIO_MIN = 1.3
+# Endpoint pairs are binned this coarsely before ranking, so near-identical
+# pairs compete for one slot.
+BIN_SIZE_M = 2.0
+WAYPOINT_SPACING_M = 1.0
+# Two cases are duplicates when both endpoints land within this radius.
+DEDUPE_RADIUS_M = 1.5
+# Share of slots reserved for flat cases when the recording has them.
+FLAT_FRACTION = 0.25
+# Coverage sectors: a case earns a slot first by connecting a sector pair
+# no accepted case connects yet.
+SECTOR_SIZE_M = 8.0
+SECTOR_Z_M = 1.5
+# A sector may anchor at most this many selected cases, which prevents a
+# single high-priority spot from becoming the hub of every case.
+ENDPOINT_REUSE_MAX = 2
+# Floor on the case count. When strict selection falls short, a relaxed pass
+# ignores the sector caps and the flat quota to reach it.
+MIN_CASES = 10
 
-    def resolve_max_cases(self, walked_total_m: float) -> int:
-        if self.max_cases is not None:
-            return self.max_cases
-        return int(np.clip(walked_total_m / 25.0, 16, 48))
+
+def resolve_max_cases(max_cases: int | None, walked_total_m: float) -> int:
+    """Case count, scaled with the walked distance when not pinned."""
+    if max_cases is not None:
+        return max_cases
+    return int(np.clip(walked_total_m / 25.0, 16, 48))
 
 
 @dataclass
@@ -94,10 +97,7 @@ def snap_to_surface(
     snap_max_m: float,
 ) -> NDArray[np.float32] | None:
     """Nearest standable surface cell, or None when the point is off the map.
-
-    Horizontal distance dominates so drift in z between passes does not pull
-    the snap onto another floor.
-    """
+    Horizontal distance dominates so z drift cannot snap onto another floor."""
     if len(surface) == 0:
         return None
     hd = np.linalg.norm(surface[:, :2] - point[:2], axis=1)
@@ -120,14 +120,14 @@ def generate_cases(
     final: FinalMap,
     surface: NDArray[np.float32],
     cfg: EvalConfig,
-    params: GenerationParams | None = None,
+    max_cases: int | None = None,
+    min_cases: int = MIN_CASES,
 ) -> list[Case]:
-    params = params or GenerationParams()
     map_keys = final.occupied_keys
     arcs = trajectory.arc_lengths()
     foot = trajectory.foot(cfg.robot_height)
 
-    idx = _subsample_indices(trajectory, params.waypoint_spacing_m)
+    idx = _subsample_indices(trajectory, WAYPOINT_SPACING_M)
     snaps = np.full((len(idx), 3), np.nan, dtype=np.float32)
     for n, i in enumerate(idx):
         hit = snap_to_surface(foot[i], surface, cfg.snap_max_m)
@@ -150,7 +150,7 @@ def generate_cases(
         walked = way_arcs[later] - way_arcs[ai]
         deltas = snaps[later] - sa
         euclid = np.linalg.norm(deltas, axis=1)
-        keep = (walked >= params.min_separation_m) & (euclid >= params.min_euclid_m)
+        keep = (walked >= MIN_SEPARATION_M) & (euclid >= MIN_EUCLID_M)
         for bi, w, e in zip(later[keep], walked[keep], euclid[keep], strict=True):
             sb = snaps[bi]
             dz = float(sb[2] - sa[2])
@@ -169,7 +169,7 @@ def generate_cases(
                         detour_ratio=detour,
                         dz=d_dz,
                     ),
-                    _bin_key(p_start, p_goal, d_dz, params.bin_size_m),
+                    _bin_key(p_start, p_goal, d_dz, BIN_SIZE_M),
                 )
                 for p_start, p_goal, d_dz in directed
             ]
@@ -180,7 +180,7 @@ def generate_cases(
                 for cand, key in proposed
             ):
                 continue
-            if detour < params.detour_ratio_min and abs(dz) < STAIRS_DZ_M:
+            if detour < DETOUR_RATIO_MIN and abs(dz) < STAIRS_DZ_M:
                 # A long near-straight flat pair is trivial. Not worth a sweep.
                 if e > MAX_TRIVIAL_SPAN_M:
                     continue
@@ -193,7 +193,7 @@ def generate_cases(
                     candidates[key] = cand
 
     ranked = sorted(candidates.values(), key=lambda c: (-c.priority, c.start, c.goal))
-    selected = _select_diverse(ranked, params, params.resolve_max_cases(float(arcs[-1])))
+    selected = _select_diverse(ranked, resolve_max_cases(max_cases, float(arcs[-1])), min_cases)
     cases = []
     for n, cand in enumerate(selected):
         route = metrics.ground_truth_route(trajectory, cand.start, cand.goal, cfg)
@@ -219,26 +219,26 @@ def _is_duplicate(cand: Candidate, accepted: list[Candidate], radius: float) -> 
 
 
 def _select_diverse(
-    ranked: list[Candidate], params: GenerationParams, max_cases: int
+    ranked: list[Candidate], max_cases: int, min_cases: int = MIN_CASES
 ) -> list[Candidate]:
     """Spread-greedy selection under a sector cap and flat quota, with a
     relaxed pass to reach min_cases."""
     if not ranked:
         return []
-    flat_target = int(max_cases * params.flat_fraction)
+    flat_target = int(max_cases * FLAT_FRACTION)
     stairs_cap = max_cases - flat_target
 
     starts = np.array([c.start for c in ranked], dtype=np.float32)
     goals = np.array([c.goal for c in ranked], dtype=np.float32)
     priorities = np.array([c.priority for c in ranked], dtype=np.float32)
     is_stairs = np.array([abs(c.dz) >= STAIRS_DZ_M for c in ranked])
-    spread_cap = 2.0 * params.sector_size_m
+    spread_cap = 2.0 * SECTOR_SIZE_M
 
     def sector(p: NDArray[np.float32]) -> tuple[int, ...]:
         return (
-            int(np.floor(p[0] / params.sector_size_m)),
-            int(np.floor(p[1] / params.sector_size_m)),
-            round(float(p[2]) / params.sector_z_m),
+            int(np.floor(p[0] / SECTOR_SIZE_M)),
+            int(np.floor(p[1] / SECTOR_SIZE_M)),
+            round(float(p[2]) / SECTOR_Z_M),
         )
 
     usage: dict[tuple[int, ...], int] = {}
@@ -268,13 +268,12 @@ def _select_diverse(
             cand = ranked[n]
             sa, sb = sector(starts[n]), sector(goals[n])
             if not relax and (
-                usage.get(sa, 0) >= params.endpoint_reuse_max
-                or usage.get(sb, 0) >= params.endpoint_reuse_max
+                usage.get(sa, 0) >= ENDPOINT_REUSE_MAX or usage.get(sb, 0) >= ENDPOINT_REUSE_MAX
             ):
                 sector_capped.append(n)
                 continue
             bucket = stairs if is_stairs[n] else flats
-            if _is_duplicate(cand, bucket, params.dedupe_radius_m):
+            if _is_duplicate(cand, bucket, DEDUPE_RADIUS_M):
                 continue
             usage[sa] = usage.get(sa, 0) + 1
             usage[sb] = usage.get(sb, 0) + 1
@@ -283,7 +282,7 @@ def _select_diverse(
             bucket.append(cand)
 
     fill(max_cases, relax=False)
-    min_cases = min(params.min_cases, max_cases)
+    min_cases = min(min_cases, max_cases)
     if len(stairs) + len(flats) < min_cases:
         alive[sector_capped] = True
         fill(min_cases, relax=True)

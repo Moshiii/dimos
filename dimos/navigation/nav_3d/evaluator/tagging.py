@@ -65,11 +65,8 @@ GEOMETRIC_TAGS = frozenset(
 def elevation_tags(
     start: tuple[float, float, float], goal: tuple[float, float, float]
 ) -> list[str]:
-    """Elevation from the case endpoints, matching how generation labels them.
-
-    Endpoints, not the recovered route: the route can wander far off the
-    straight line, and a case's climb is defined by where it starts and ends.
-    """
+    """Elevation from the case endpoints, not the recovered route: a case's
+    climb is defined by where it starts and ends."""
     dz = goal[2] - start[2]
     euclid = float(np.linalg.norm(np.asarray(goal) - np.asarray(start)))
     if abs(dz) < STAIRS_DZ_M:
@@ -85,10 +82,8 @@ def _corridor_width(
 ) -> NDArray[np.float64]:
     """Free lateral width at each densified sample, at body height.
 
-    Probes outward along both body-lateral directions from a point chest-high
-    over the path and returns left-plus-right distance to the nearest occupied
-    voxel, capped when the passage is open. This is the room the body has to
-    pass, not the room the feet have to stand.
+    Left-plus-right distance to the nearest occupied voxel, capped when the
+    passage is open. The room the body has to pass, not the feet to stand.
     """
     _, lateral, _ = body_frames(samples, cfg.robot_length)
     mid_z = (cfg.ground_margin + cfg.body_clearance) / 2.0
@@ -140,9 +135,8 @@ def _corridor_tags(
     tight = cfg.robot_width + 2.0 * MARGIN_CAP_M
     roomy = cfg.robot_width + 2.0 * cfg.robot_length
     arc = arc_lengths(samples)
-    # A real passage is at least the robot's own body wide. Anything tighter is
-    # furniture or map noise the robot could not have walked through, so it does
-    # not count as a passage.
+    # A real passage is at least a body wide. Anything tighter is furniture or
+    # map noise the robot could not have walked through.
     narrow = (width >= cfg.robot_width) & (width < tight)
     runs = [
         (lo, hi)
@@ -172,11 +166,8 @@ def _is_local(
     goal: tuple[float, float, float],
     cfg: EvalConfig,
 ) -> bool:
-    """True when the route runs roughly straight from start to goal.
-
-    Endpoints closer than a body length have no terrain to describe. Otherwise
-    the walked route must span the straight line without detouring far past it.
-    """
+    """True when the route runs roughly straight from start to goal, so its
+    terrain can be attributed to the case."""
     eucl = float(np.linalg.norm(np.asarray(goal) - np.asarray(start)))
     if eucl < cfg.robot_length:
         return False
@@ -193,11 +184,9 @@ def route_tags(
 ) -> list[str]:
     """Geometric tags for a case, in a stable order.
 
-    Elevation comes from the endpoints. Path-shape tags describe the local
-    terrain between them and need a walked route that runs roughly straight from
-    start to goal, so they are skipped when the route is off the trajectory or a
-    long detour. Deterministic and free of provenance: the caller prepends auto
-    or manual.
+    Elevation comes from the endpoints. Shape tags describe the terrain between
+    them and are skipped unless the walked route runs roughly straight. The
+    caller prepends the provenance tag.
     """
     tags = elevation_tags(start, goal)
     if route is not None and len(route) >= 2 and _is_local(route, start, goal, cfg):

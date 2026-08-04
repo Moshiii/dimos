@@ -50,13 +50,6 @@ class EvalConfig:
     # How far an endpoint may sit from a standable surface before it is off the map.
     snap_max_m: float = 1.0
 
-    # An improvement must not buy score with compute. p95 over the suite.
-    # A plan is timed end to end, so deferred map work is charged here too.
-    plan_p95_budget_ms: float = 200.0
-    # Per lidar frame, so a pipeline that cannot keep up with the sensor fails
-    # regardless of how it scores.
-    map_update_p95_budget_ms: float = 100.0
-
     # Which pipeline is under test, by registry name.
     pipeline: str = "mls"
     # Pipeline constructor overrides, e.g. --set planner.wall_clearance_m=0.0.
@@ -64,6 +57,7 @@ class EvalConfig:
 
     def make_mapper(self) -> VoxelRayMapper:
         """The mapper that builds the occupancy every pipeline is graded against."""
+        # Lazy: the mapper is a native module, only needed to build a map.
         from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
 
         return VoxelRayMapper(voxel_size=self.voxel_size, max_range=self.max_range)

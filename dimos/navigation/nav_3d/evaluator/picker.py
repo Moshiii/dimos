@@ -15,9 +15,7 @@
 """Browser point-picking for case curation, served by viser.
 
 Serves the final map, the walked path, and every existing case as an editable
-panel entry. Shift+click picks new start/goal pairs. Each entry exposes the
-coordinates, a name field, tag checkboxes, a negative toggle, and save/delete
-buttons, so any case can be renamed, retagged, flipped, or removed.
+panel entry. Shift+click picks new start/goal pairs.
 """
 
 from __future__ import annotations
@@ -66,9 +64,8 @@ Plain drag orbits, scroll zooms, right-drag pans.
 """
 
 
-# three.js ACES filmic tone mapping, the fitted curve and its color
-# matrices. Applied by the viewer to mesh materials but not to the point
-# and line shaders.
+# three.js ACES filmic tone mapping. The viewer applies it to mesh materials
+# but not to the point and line shaders.
 _ACES_INPUT = np.array(
     [
         [0.59719, 0.35458, 0.04823],
@@ -83,9 +80,8 @@ _ACES_OUTPUT = np.array(
         [-0.00327, -0.07276, 1.07602],
     ]
 )
-# White scene lights, bright enough that inverse-tone-mapped albedos fit
-# in [0, 1]. LIGHT_REFERENCE is the ambient plus directional total on a
-# typical face. Faces above or below it shade brighter or darker.
+# White scene lights, bright enough that inverse-tone-mapped albedos fit in
+# [0, 1]. LIGHT_REFERENCE is the ambient plus directional total on a typical face.
 _AMBIENT_INTENSITY = 3.5
 _DIRECTIONAL_INTENSITY = 2.0
 _LIGHT_REFERENCE = 4.6
@@ -94,10 +90,8 @@ _LIGHT_REFERENCE = 4.6
 def _prelit_albedo(srgb: NDArray[np.uint8]) -> NDArray[np.float64]:
     """Linear albedo that tone-maps back to the wanted sRGB color when lit.
 
-    Voxel cubes are lit meshes, so the viewer runs them through ACES tone
-    mapping and would desaturate the height colormap. Feeding the inverse
-    curve through the material albedo cancels that out at the reference
-    light level.
+    Cancels the viewer's ACES pass, which would otherwise desaturate the
+    height colormap on lit meshes.
     """
     c = srgb.astype(np.float64) / 255.0
     lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
@@ -107,7 +101,8 @@ def _prelit_albedo(srgb: NDArray[np.uint8]) -> NDArray[np.float64]:
     a0 = -0.000090537 - 0.238081 * t
     v = (-a1 + np.sqrt(a1 * a1 - 4.0 * a2 * a0)) / (2.0 * a2)
     x = 0.6 * (v @ np.linalg.inv(_ACES_INPUT).T)
-    return np.clip(x / _LIGHT_REFERENCE, 0.0, 1.0)
+    albedo: NDArray[np.float64] = np.clip(x / _LIGHT_REFERENCE, 0.0, 1.0)
+    return albedo
 
 
 def _cube_colors(srgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
@@ -135,9 +130,8 @@ def pick_along_ray(
 ) -> NDArray[np.float32] | None:
     """Nearest cloud point inside a tube of the given radius around the click ray.
 
-    A physical perpendicular radius, not an angular cone: an angular cone widens
-    with distance, so it would pick a voxel far down the ray over the near one
-    the click landed on. With a fixed tube the nearest voxel along the ray wins.
+    A fixed perpendicular radius, not a cone: a cone widens with distance and
+    would pick a far voxel over the near one the click landed on.
     """
     rel = points.astype(np.float64) - origin
     t = rel @ direction
@@ -152,6 +146,15 @@ def pick_along_ray(
             idx = np.flatnonzero(ahead)[hit]
             return np.asarray(points[idx[np.argmin(t[hit])]])
     return None
+
+
+@dataclass
+class _PairMarkers:
+    """The three scene nodes drawn for one start/goal pair."""
+
+    start: viser.IcosphereHandle
+    goal: viser.IcosphereHandle
+    line: viser.LineSegmentsHandle
 
 
 @dataclass
@@ -175,7 +178,7 @@ class _PairEntry:
         start: NDArray[np.float32],
         goal: NDArray[np.float32],
         hooks: _Hooks,
-        markers: list[viser.SceneNodeHandle],
+        markers: _PairMarkers,
         case: Case | None = None,
     ) -> None:
         self._server = server
@@ -200,9 +203,8 @@ class _PairEntry:
             self._status = "in manifest"
         self.removed = False
         self._build(expanded=case is None, order=None)
-        for marker in markers:
-            if hasattr(marker, "on_click"):
-                marker.on_click(self._on_marker_click)
+        markers.start.on_click(self._on_marker_click)
+        markers.goal.on_click(self._on_marker_click)
 
     def _on_marker_click(self, _event: object) -> None:
         with self._hooks.lock:
@@ -220,36 +222,27 @@ class _PairEntry:
     def set_highlight(self, on: bool) -> None:
         if self.removed:
             return
-        for marker in self.markers:
-            if hasattr(marker, "radius"):
-                marker.radius = HIGHLIGHT_MARKER_RADIUS if on else MARKER_RADIUS
-            elif hasattr(marker, "line_width"):
-                marker.line_width = HIGHLIGHT_LINE_WIDTH if on else LINE_WIDTH
-                marker.colors = np.array(HIGHLIGHT_LINE_COLOR if on else PAIR_COLOR, dtype=np.uint8)
+        for ball in (self.markers.start, self.markers.goal):
+            ball.radius = HIGHLIGHT_MARKER_RADIUS if on else MARKER_RADIUS
+        self.markers.line.line_width = HIGHLIGHT_LINE_WIDTH if on else LINE_WIDTH
+        self.markers.line.colors = np.array(
+            HIGHLIGHT_LINE_COLOR if on else PAIR_COLOR, dtype=np.uint8
+        )
 
     def _mark_saved(self) -> None:
         """Repaint the pick markers to the standard saved look, so only pairs
         not yet in the manifest wear the distinct new-pick colors and line."""
-        sphere_colors = [START_COLOR, GOAL_COLOR]
-        for marker in self.markers:
-            if hasattr(marker, "radius"):
-                color = _marker_color(sphere_colors.pop(0))
-                if hasattr(marker, "color"):
-                    marker.color = color
-            elif hasattr(marker, "line_width"):
-                marker.line_width = LINE_WIDTH
-                marker.colors = np.array(PAIR_COLOR, dtype=np.uint8)
+        self.markers.start.color = _marker_color(START_COLOR)
+        self.markers.goal.color = _marker_color(GOAL_COLOR)
+        self.markers.line.line_width = LINE_WIDTH
+        self.markers.line.colors = np.array(PAIR_COLOR, dtype=np.uint8)
 
     def _label(self) -> str:
         return self.saved_id or f"pair {self._n}"
 
     def _sync_tags(self, tags: list[str]) -> None:
-        """Split a manifest tag list into checkbox and custom-text state.
-
-        The negative tag is owned by the checkbox. Everything not in the
-        suggested set (auto, manual, ...) lands in the custom text so it
-        stays visible and round-trips verbatim.
-        """
+        """Split a manifest tag list into checkbox and custom-text state, so
+        unsuggested tags stay visible and round-trip verbatim."""
         self._checked = {t for t in tags if t in SUGGESTED_TAGS}
         self._custom = ", ".join(t for t in tags if t not in SUGGESTED_TAGS and t != "negative")
 
@@ -284,23 +277,23 @@ class _PairEntry:
             self.button = server.gui.add_button("save / update")
             self.delete_button = server.gui.add_button("delete")
 
-            @self.button.on_click
-            def _(_event: object) -> None:
-                # save_unsaved calls save_or_update already holding the lock.
-                # The button path runs on a bare viser callback thread and must
-                # take it to serialize suite/manifest mutation.
+            # Button callbacks run on bare viser threads, so they take the lock
+            # that save_unsaved already holds on its own path.
+            def _on_save(_event: object) -> None:
                 with self._hooks.lock:
                     self.save_or_update()
 
-            @self.delete_button.on_click
-            def _(_event: object) -> None:
+            def _on_delete(_event: object) -> None:
                 with self._hooks.lock:
                     self.delete()
+
+            self.button.on_click(_on_save)
+            self.delete_button.on_click(_on_delete)
 
     def remove(self) -> None:
         self.removed = True
         self.panel.remove()
-        for marker in self.markers:
+        for marker in (self.markers.start, self.markers.goal, self.markers.line):
             marker.remove()
 
     def delete(self) -> None:
@@ -341,7 +334,10 @@ class _PairEntry:
                 )
             else:
                 case = store.update(
-                    self.saved_id, name or self.saved_id, self.extra_tags(), negative
+                    self.saved_id,
+                    name or self.saved_id,
+                    self.extra_tags(),
+                    expect_fail=negative,
                 )
         except CurationError as err:
             print(err)
@@ -372,6 +368,7 @@ def pick_cases(
     store: CaseStore,
 ) -> None:
     """Serve the picker until the user exits from the panel or hits ctrl-c."""
+    # Lazy: viser is an optional extra, only needed by this command.
     import viser
 
     server = viser.ViserServer(
@@ -432,10 +429,11 @@ def pick_cases(
     center = map_points.mean(axis=0)
     span = float(np.ptp(map_points[:, :2]))
 
-    @server.on_client_connect
-    def _(client: viser.ClientHandle) -> None:
+    def _on_client_connect(client: viser.ClientHandle) -> None:
         client.camera.position = tuple(center + np.array([0.6 * span, 0.6 * span, 0.45 * span]))
         client.camera.look_at = tuple(center)
+
+    server.on_client_connect(_on_client_connect)
 
     server.gui.add_markdown(INSTRUCTIONS)
     selected_line = server.gui.add_markdown("selected: —")
@@ -461,7 +459,7 @@ def pick_cases(
     hooks = _Hooks(store, lock, lambda entry: pairs.remove(entry), announce, highlight)
     marker_seq = 0
 
-    def sphere(point: NDArray[np.float32], color: tuple[int, int, int]) -> viser.SceneNodeHandle:
+    def sphere(point: NDArray[np.float32], color: tuple[int, int, int]) -> viser.IcosphereHandle:
         nonlocal marker_seq
         marker_seq += 1
         return server.scene.add_icosphere(
@@ -476,7 +474,7 @@ def pick_cases(
         goal: NDArray[np.float32],
         color: tuple[int, int, int] = PAIR_COLOR,
         width: float = LINE_WIDTH,
-    ) -> viser.SceneNodeHandle:
+    ) -> viser.LineSegmentsHandle:
         nonlocal marker_seq
         marker_seq += 1
         return server.scene.add_line_segments(
@@ -486,10 +484,10 @@ def pick_cases(
             line_width=width,
         )
 
-    def pair_markers(
-        start: NDArray[np.float32], goal: NDArray[np.float32]
-    ) -> list[viser.SceneNodeHandle]:
-        return [sphere(start, START_COLOR), sphere(goal, GOAL_COLOR), pair_line(start, goal)]
+    def pair_markers(start: NDArray[np.float32], goal: NDArray[np.float32]) -> _PairMarkers:
+        return _PairMarkers(
+            sphere(start, START_COLOR), sphere(goal, GOAL_COLOR), pair_line(start, goal)
+        )
 
     for case in store.suite.cases:
         start = np.asarray(case.start, dtype=np.float32)
@@ -498,11 +496,10 @@ def pick_cases(
             _PairEntry(server, 0, start, goal, hooks, pair_markers(start, goal), case=case)
         )
 
-    pending: list[tuple[viser.SceneNodeHandle, NDArray[np.float32]]] = []
+    pending: list[tuple[viser.IcosphereHandle, NDArray[np.float32]]] = []
     pair_count = 0
 
-    @server.scene.on_click(modifier="shift")
-    def _(event: viser.SceneClickEvent) -> None:
+    def _on_scene_click(event: viser.SceneClickEvent) -> None:
         nonlocal pair_count
         point = pick_along_ray(
             map_points, np.asarray(event.ray_origin), np.asarray(event.ray_direction), voxel_size
@@ -514,23 +511,21 @@ def pick_cases(
                 pending.append((sphere(point, NEW_START_COLOR), point))
                 return
             start_marker, start = pending.pop()
-            markers = [
+            markers = _PairMarkers(
                 start_marker,
                 sphere(point, NEW_GOAL_COLOR),
                 pair_line(start, point, NEW_PAIR_COLOR, NEW_LINE_WIDTH),
-            ]
+            )
             pair_count += 1
             pairs.append(_PairEntry(server, pair_count, start, point, hooks, markers))
 
-    @undo_button.on_click
-    def _(_event: object) -> None:
+    def _on_undo(_event: object) -> None:
         with lock:
             if pending:
                 pending.pop()[0].remove()
             elif pairs and not pairs[-1].preloaded:
-                # Saved cases stay in the manifest, only the panel entry and
-                # markers go away. Deleting from the manifest is the per-pair
-                # delete button.
+                # Only the panel entry and markers go away. The per-pair delete
+                # button is what removes it from the manifest.
                 entry = pairs.pop()
                 entry.remove()
                 if entry.saved_id is not None:
@@ -540,14 +535,17 @@ def pick_cases(
         with lock:
             return sum(not pair.save_or_update() for pair in pairs if pair.saved_id is None)
 
-    @save_all_button.on_click
-    def _(_event: object) -> None:
+    def _on_save_all(_event: object) -> None:
         save_unsaved()
 
-    @exit_button.on_click
-    def _(_event: object) -> None:
+    def _on_exit(_event: object) -> None:
         if save_unsaved() == 0:
             stop.set()
+
+    server.scene.on_click(modifier="shift")(_on_scene_click)
+    undo_button.on_click(_on_undo)
+    save_all_button.on_click(_on_save_all)
+    exit_button.on_click(_on_exit)
 
     print("picker running; ctrl-c to exit (unsaved pairs are discarded)")
     try:

@@ -284,4 +284,4 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
     views = [_dataset_view(d.dataset, [c.id for c in d.cases]) for d in report.datasets]
     rr.send_blueprint(rrb.Blueprint(rrb.Tabs(*views) if len(views) > 1 else views[0]))
 
-    logger.info("wrote %s; open with: rerun %s", out, out)
+    logger.info("wrote rerun recording", path=out)

@@ -68,9 +68,7 @@ def iter_world_frames(
     end_ts: float | None = None,
 ) -> Iterator[Frame]:
     """Yield lidar frames registered into the world by their odometry pose.
-
-    Clouds must be sensor-frame. Frames at or after end_ts are skipped.
-    """
+    Clouds must be sensor-frame. Frames at or after end_ts are skipped."""
     store = SqliteStore(path=str(db_path))
     with store:
         lidar = store.stream(lidar_stream, PointCloud2).order_by("ts")

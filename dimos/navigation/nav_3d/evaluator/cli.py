@@ -24,21 +24,23 @@ from pathlib import Path
 import sqlite3
 from typing import TYPE_CHECKING
 
-import numpy as np
 import typer
 
-from dimos.navigation.nav_3d.evaluator import tripwire
 from dimos.navigation.nav_3d.evaluator.cases import (
-    CASES_DIR,
     Suite,
     load_suite,
     load_suites,
+    manifest_path,
     save_suite,
 )
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 from dimos.navigation.nav_3d.evaluator.curation import CurationError, load_store
 from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
-from dimos.navigation.nav_3d.evaluator.generate import GenerationParams, generate_cases
+from dimos.navigation.nav_3d.evaluator.generate import (
+    MIN_CASES,
+    generate_cases,
+    resolve_max_cases,
+)
 from dimos.navigation.nav_3d.evaluator.metrics import ground_truth_route
 from dimos.navigation.nav_3d.evaluator.recording import load_trajectory
 from dimos.navigation.nav_3d.evaluator.runner import Report, evaluate
@@ -47,7 +49,6 @@ from dimos.utils.data import get_data_dir
 
 if TYPE_CHECKING:
     from dimos.navigation.nav_3d.evaluator.curation import CaseStore
-    from dimos.navigation.nav_3d.evaluator.final_map import FinalMap
     from dimos.navigation.nav_3d.evaluator.runner import PlanOutcome
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -67,13 +68,13 @@ def _apply_overrides(cfg: EvalConfig, overrides: list[str]) -> EvalConfig:
         if name not in fields:
             raise typer.BadParameter(f"unknown config field {name!r}")
         current = getattr(cfg, name)
+        if not isinstance(current, (bool, int, float, str)):
+            raise typer.BadParameter(f"{name!r} is not a scalar field; set its members instead")
         setattr(cfg, name, type(current)(value))
     return cfg
 
 
 def _score_cell(outcome: PlanOutcome) -> str:
-    """No path at all shows x. A planned path shows its SPL, which is 0.00 when
-    the path is invalid and higher when it is valid."""
     return "x" if not outcome.planned and not outcome.success else f"{outcome.spl:.2f}"
 
 
@@ -136,64 +137,10 @@ def _print_report(report: Report) -> None:
             print(f"  not explained by a new obstacle, inspect final map: {', '.join(others)}")
 
 
-@app.command("diff")
-def diff_reports(
-    old: Path = typer.Argument(..., help="Baseline report JSON from `run --json`"),
-    new: Path = typer.Argument(..., help="Candidate report JSON from `run --json`"),
-    exact: bool = typer.Option(
-        False,
-        "--exact",
-        help="Require bit-identical results (ignoring timings); "
-        "two runs of the same code must pass",
-    ),
-) -> None:
-    """Name every case whose pass/fail flipped between two runs.
-
-    Exits 1 when any case regressed, so a CI check or before/after comparison
-    can gate on it. Perf budget breaches always print but only exit 1 with
-    --exact, which also exits 1 on any non-timing difference. Running the suite
-    twice and exact-diffing the reports is the determinism check.
-    """
-    old_report = json.loads(old.read_text())
-    new_report = json.loads(new.read_text())
-    print(
-        f"score {old_report['score']:.3f} -> {new_report['score']:.3f} | "
-        f"final {old_report['final_score']:.3f} -> {new_report['final_score']:.3f}"
-    )
-    d = tripwire.diff(old_report, new_report)
-    print(f"{len(d.fixed)} fixed, {len(d.broke)} broke")
-    for flip in d.fixed:
-        print(f"  fixed: {flip.key} ({flip.test})")
-    for flip in d.broke:
-        print(f"  BROKE: {flip.key} ({flip.test}: pass -> fail)")
-    for key in d.added:
-        print(f"  new case: {key}")
-    for key in d.removed:
-        print(f"  case gone: {key}")
-    violations = tripwire.perf_violations(new_report)
-    for violation in violations:
-        print(f"PERF BUDGET EXCEEDED: {violation}")
-    if violations and not exact:
-        print("  advisory here; the --exact confirmation run is the binding perf gate")
-    if exact:
-        differences = tripwire.exact_differences(old_report, new_report)
-        if differences:
-            shown = 20
-            print(f"{len(differences)} exact difference(s):")
-            for line in differences[:shown]:
-                print(f"  {line}")
-            if len(differences) > shown:
-                print(f"  ... and {len(differences) - shown} more")
-            raise typer.Exit(code=1)
-        print("exact: reports identical")
-    if d.broke or (exact and violations):
-        raise typer.Exit(code=1)
-
-
 @app.command()
 def run(
     manifests: list[Path] = typer.Argument(
-        None, help="Suite YAMLs; defaults to every manifest under cases/"
+        None, help="Suite YAMLs; defaults to every manifest under case_manifests/"
     ),
     dataset: str = typer.Option(None, "--dataset", help="Only run suites for this dataset"),
     tag: list[str] = typer.Option(
@@ -231,8 +178,6 @@ def run(
     cfg = _apply_overrides(EvalConfig(), set_ or [])
     report = evaluate(suites, cfg, workers=workers, keep_artifacts=rrd_out is not None)
     _print_report(report)
-    for violation in tripwire.perf_violations(report.to_dict()):
-        print(f"PERF BUDGET EXCEEDED: {violation}")
     if json_out is not None:
         json_out.parent.mkdir(parents=True, exist_ok=True)
         json_out.write_text(json.dumps(report.to_dict(), indent=2))
@@ -276,7 +221,7 @@ def ingest(
     src = source / "mem2.db" if source.is_dir() else source
     if not src.exists():
         raise typer.BadParameter(f"{src} does not exist")
-    manifest = CASES_DIR / f"{name}.yaml"
+    manifest = manifest_path(name)
     if manifest.exists() and not force:
         raise typer.BadParameter(f"{manifest} already exists; pass --force to regenerate")
     if external:
@@ -305,14 +250,13 @@ def ingest(
     )
     cfg = EvalConfig()
     final = load_or_build_final_map(dest, suite, cfg)
-    gen = GenerationParams(max_cases=cases or None)
-    if cases:
-        gen.min_cases = cases
+    max_cases = cases or None
+    min_cases = cases or MIN_CASES
     surface = final.standable_surface(cfg.robot_height)
-    suite.cases = generate_cases(trajectory, final, surface, cfg, gen)
+    suite.cases = generate_cases(trajectory, final, surface, cfg, max_cases, min_cases)
     if not suite.cases:
         raise typer.Exit(code=1)
-    floor = min(gen.min_cases, gen.resolve_max_cases(float(arcs[-1])))
+    floor = min(min_cases, resolve_max_cases(max_cases, float(arcs[-1])))
     if len(suite.cases) < floor:
         print(
             f"WARNING: only {len(suite.cases)} cases generated; the recording "
@@ -325,11 +269,18 @@ def ingest(
     print(f"\nrun with: dimos nav-eval run --dataset {name}")
 
 
-def _open(dataset: str) -> tuple[CaseStore, FinalMap]:
+def _open(dataset: str) -> CaseStore:
     try:
         return load_store(dataset)
     except CurationError as err:
         raise typer.BadParameter(str(err)) from err
+
+
+def _load_manifest(dataset: str) -> tuple[Suite, Path]:
+    manifest = manifest_path(dataset)
+    if not manifest.exists():
+        raise typer.BadParameter(f"no manifest {manifest}; run ingest first")
+    return load_suite(manifest), manifest
 
 
 @app.command("add-case")
@@ -344,7 +295,7 @@ def add_case(
     ),
 ) -> None:
     """Append a curated case, with endpoints snapped to the final surface."""
-    store, _ = _open(dataset)
+    store = _open(dataset)
     try:
         store.add(
             start,
@@ -373,10 +324,7 @@ def tag_case(
     for refusing. Use it on a case that shows up as incremental-only because a
     real obstacle blocked the route by the final map, not a planner bug.
     """
-    manifest = CASES_DIR / f"{dataset}.yaml"
-    if not manifest.exists():
-        raise typer.BadParameter(f"no manifest {manifest}")
-    suite = load_suite(manifest)
+    suite, manifest = _load_manifest(dataset)
     case = next((c for c in suite.cases if c.id == case_id), None)
     if case is None:
         raise typer.BadParameter(f"case {case_id!r} not found in {manifest}")
@@ -403,10 +351,7 @@ def retag(
     auto provenance tag survives. Manually curated cases are left untouched:
     their tags are human intent, not something to recompute.
     """
-    manifest = CASES_DIR / f"{dataset}.yaml"
-    if not manifest.exists():
-        raise typer.BadParameter(f"no manifest {manifest}; run ingest first")
-    suite = load_suite(manifest)
+    suite, manifest = _load_manifest(dataset)
     cfg = EvalConfig()
     final = load_or_build_final_map(suite.db_path(), suite, cfg)
     trajectory = load_trajectory(suite.db_path(), suite.odom_stream, suite.end_ts_seconds())
@@ -445,16 +390,16 @@ def pick_case(
     from dimos.navigation.nav_3d.evaluator.picker import pick_cases
     from dimos.navigation.nav_3d.evaluator.viz import turbo_by_height
 
-    store, final = _open(dataset)
+    store = _open(dataset)
     trajectory = load_trajectory(
         store.suite.db_path(), store.suite.odom_stream, store.suite.end_ts_seconds()
     )
-    foot = trajectory.positions - np.array([0.0, 0.0, store.cfg.robot_height], dtype=np.float32)
+    foot = trajectory.foot(store.cfg.robot_height)
     pick_cases(
         dataset,
-        final.occupied,
-        turbo_by_height(final.occupied),
-        final.voxel_size,
+        store.final.occupied,
+        turbo_by_height(store.final.occupied),
+        store.final.voxel_size,
         foot,
         store,
     )

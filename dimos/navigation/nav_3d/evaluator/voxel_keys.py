@@ -49,6 +49,9 @@ def key_centers(keys: NDArray[np.int64], voxel_size: float) -> NDArray[np.float3
 def keys_contain(sorted_keys: NDArray[np.int64], query: NDArray[np.int64]) -> NDArray[np.bool_]:
     if len(sorted_keys) == 0:
         return np.zeros(len(query), dtype=bool)
+    # Unsorted keys would report almost nothing occupied, which passes every
+    # gate and inflates the score instead of failing.
+    assert np.all(sorted_keys[:-1] <= sorted_keys[1:]), "map keys must be sorted"
     pos = np.clip(np.searchsorted(sorted_keys, query), 0, len(sorted_keys) - 1)
     return np.asarray(sorted_keys[pos] == query)
 
@@ -70,9 +73,8 @@ def cylinder_offsets(
 def offset_deltas(offsets: NDArray[np.int64]) -> NDArray[np.int64]:
     """Packed key deltas for integer voxel offsets.
 
-    The three index fields occupy disjoint bit ranges and sit far from their
-    bounds, so adding a packed delta carries no bits between fields and is
-    identical to packing the summed indices.
+    Valid because the fields sit far from their bounds, so a packed add carries
+    no bits between them.
     """
     return np.asarray((offsets[:, 0] << _X_SHIFT) + (offsets[:, 1] << _Y_SHIFT) + offsets[:, 2])
 

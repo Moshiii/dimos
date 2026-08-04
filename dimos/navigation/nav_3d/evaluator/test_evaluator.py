@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 import itertools
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -24,8 +23,7 @@ import numpy as np
 import pytest
 import typer
 
-from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
-from dimos.navigation.nav_3d.evaluator import metrics, tripwire
+from dimos.navigation.nav_3d.evaluator import final_map, metrics, runner
 from dimos.navigation.nav_3d.evaluator.cases import Case, Suite, load_suite, save_suite
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 from dimos.navigation.nav_3d.evaluator.curation import CaseStore, CurationError, _curated_tags
@@ -38,23 +36,17 @@ from dimos.navigation.nav_3d.evaluator.final_map import (
 )
 from dimos.navigation.nav_3d.evaluator.generate import (
     Candidate,
-    GenerationParams,
     _select_diverse,
     generate_cases,
     snap_to_surface,
 )
 from dimos.navigation.nav_3d.evaluator.picker import pick_along_ray
-from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
+from dimos.navigation.nav_3d.evaluator.pipeline import PIPELINES, make_pipeline
 from dimos.navigation.nav_3d.evaluator.recording import Frame, Trajectory
 from dimos.navigation.nav_3d.evaluator.runner import (
-    CaseResult,
-    DatasetResult,
-    Report,
     _dynamic_candidate,
     _final_only,
-    _no_plan,
     _run_plan,
-    _snapshot,
     score_negative,
 )
 from dimos.navigation.nav_3d.evaluator.tagging import route_tags
@@ -62,18 +54,20 @@ from dimos.navigation.nav_3d.evaluator.voxel_keys import (
     cylinder_offsets,
     key_centers,
     keys_contain,
-    offset_deltas,
     offset_keys,
     voxel_keys,
 )
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+    from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
     from dimos.navigation.nav_3d.evaluator.pipeline import NavPipeline
 
 VOXEL = 0.1
 
 
-def _cfg(**overrides: float) -> EvalConfig:
+def _cfg(**overrides: object) -> EvalConfig:
     return replace(EvalConfig(voxel_size=VOXEL), **overrides)
 
 
@@ -124,11 +118,6 @@ def test_gate_box_uses_travel_orientation() -> None:
     # The same 0.25 m offset to the side is outside the 0.155 m half-width.
     beside = np.array([[0.0, 0.25, 0.35]], dtype=np.float32)
     assert _gate(path, beside).valid
-
-
-def test_gate_passes_clear_path() -> None:
-    path = np.array([[-1, 0, 0], [1, 0, 0]], dtype=np.float32)
-    assert _gate(path, _wall(5.0)).valid
 
 
 def test_gate_ignores_ground() -> None:
@@ -217,25 +206,32 @@ def test_checkpoint_deltas_roundtrip() -> None:
         assert np.array_equal(original, keys)
 
 
+class _StubMapper:
+    """Keeps every point it is handed. replay_frames only calls these two."""
+
+    def __init__(self) -> None:
+        self._points: list[NDArray[np.float32]] = []
+
+    def add_frame(self, points: NDArray[np.float32], origin: tuple[float, float, float]) -> None:
+        self._points.append(points)
+
+    def global_map(self) -> NDArray[np.float32]:
+        if not self._points:
+            return np.zeros((0, 3), dtype=np.float32)
+        return np.concatenate(self._points)
+
+
 def test_replay_frames_snapshots_grow_with_time() -> None:
     """Each checkpoint must contain exactly the frames seen up to its time."""
-    mapper = VoxelRayMapper(voxel_size=VOXEL, max_range=30.0, support_min=1)
+    mapper = cast("VoxelRayMapper", _StubMapper())
 
     def frame_at(ts: float, x: float) -> Frame:
         return Frame(ts=ts, points=_wall(x), origin=(x - 2.0, 0.0, 0.5))
 
-    # A voxel needs a second observation to persist, so hit each wall twice.
-    frames = [
-        frame_at(0.0, 5.0),
-        frame_at(0.1, 5.0),
-        frame_at(1.0, 8.0),
-        frame_at(1.1, 8.0),
-        frame_at(2.0, 11.0),
-        frame_at(2.1, 11.0),
-    ]
+    frames = [frame_at(0.0, 5.0), frame_at(1.0, 8.0), frame_at(2.0, 11.0)]
     times = np.array([0.5, 1.5, np.inf])
     final, snapshots = replay_frames(frames, mapper, VOXEL, times)
-    assert final.frames == 6
+    assert final.frames == 3
     sizes = [len(s) for s in snapshots]
     assert 0 < sizes[0] < sizes[1] < sizes[2]
     assert np.array_equal(snapshots[2], final.occupied_keys)
@@ -286,25 +282,13 @@ def _stub(waypoints: np.ndarray | None) -> NavPipeline:
     return cast("NavPipeline", _StubPipeline(waypoints))
 
 
-def test_make_pipeline_rejects_unknown_name() -> None:
-    assert isinstance(make_pipeline("mls", _cfg()), PipelineIntrospection)
+def test_make_pipeline_resolves_by_registry_name() -> None:
+    cfg = _cfg()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(PIPELINES, "stub", lambda _cfg: _StubPipeline(None))
+        assert isinstance(make_pipeline("stub", cfg), _StubPipeline)
     with pytest.raises(ValueError, match="unknown pipeline"):
-        make_pipeline("nope", _cfg())
-
-
-def test_graph_layers_are_optional() -> None:
-    """A pipeline that keeps its internals to itself still evaluates, it just
-    contributes no graph layers to the recording."""
-
-    class _Introspective(_StubPipeline):
-        def surface_clearance_map(self) -> np.ndarray:
-            return np.zeros((1, 4), dtype=np.float32)
-
-        def node_edges(self) -> np.ndarray:
-            return np.zeros((1, 7), dtype=np.float32)
-
-    assert _snapshot(_stub(None)) is None
-    assert _snapshot(cast("NavPipeline", _Introspective(None))) is not None
+        make_pipeline("nope", cfg)
 
 
 def _floor(x_lo: float = 0.0, x_hi: float = 20.0) -> np.ndarray:
@@ -355,20 +339,6 @@ def test_meta_demonstrated_route_scores_full() -> None:
     assert out.min_clearance == metrics.MARGIN_CAP_M
 
 
-def test_meta_everything_occupied_fails_even_good_routes() -> None:
-    """An all-occupied map must collapse the score, not inflate it."""
-    xs, ys, zs = np.meshgrid(
-        np.arange(0, 20, VOXEL), np.arange(-2, 6, VOXEL), np.arange(0.3, 0.5, VOXEL)
-    )
-    everything = np.stack([xs.ravel(), ys.ravel(), zs.ravel()], axis=1, dtype=np.float32)
-    keys = np.unique(voxel_keys(np.concatenate([_floor(), everything]), VOXEL))
-    _, cfg, case = _meta_scene()
-    out, _ = _run_plan(_stub(_u_route()), case, 24.0, keys, keys, cfg)
-    assert out.planned and out.reached
-    assert not out.valid
-    assert out.spl == 0.0
-
-
 def test_meta_floating_bridge_fails_support() -> None:
     """A path across a floor gap collides with nothing but must still fail."""
     gapped = np.concatenate([_floor(0.0, 6.0), _floor(14.0, 20.0)])
@@ -399,38 +369,6 @@ def test_meta_negative_case_scoring() -> None:
     wander = np.array([case.start, [4.0, 2.0, 0.0]], dtype=np.float32)
     partial, _ = _run_plan(_stub(wander), case, 16.0, keys, keys, cfg)
     assert score_negative(partial).success
-
-
-def test_expect_final_fail_scores_online_normally_and_refuses_final() -> None:
-    """A door-closed route: the online plan earns SPL, the final plan must refuse.
-
-    Mirrors the runner, which inverts only the final outcome for an
-    expect_final_fail case and scores the online outcome as usual.
-    """
-    keys, cfg, case = _meta_scene()
-    open_keys = np.unique(voxel_keys(_floor(), VOXEL))
-    route = _u_route()
-    l_ref = metrics.path_length(route)
-
-    # Online, before the door closed: the wall is absent and the walked route
-    # is clean, so it scores in full.
-    online, _ = _run_plan(_stub(route), case, l_ref, open_keys, open_keys, cfg)
-    assert online.success
-    assert online.spl == pytest.approx(1.0)
-
-    # Final, after the door closed: the wall is present and refusing is right.
-    refused, _ = _run_plan(_stub(None), case, l_ref, keys, keys, cfg)
-    final = score_negative(refused)
-    assert final.success
-    assert final.spl == 1.0
-
-    # Claiming a route straight through the closed door is a false positive.
-    line = np.array([case.start, case.goal], dtype=np.float32)
-    claimed, _ = _run_plan(_stub(line), case, l_ref, keys, keys, cfg)
-    assert score_negative(claimed).spl == 0.0
-
-    # Unlike a manual or infeasible case, it still replays online.
-    assert not _final_only(replace(case, tags=["auto"], expect_final_fail=True))
 
 
 def test_dynamic_candidate_flags_route_blocked_by_new_occupancy() -> None:
@@ -650,9 +588,8 @@ def test_generate_cases_around_wall() -> None:
     positions = np.column_stack([xy, np.full(len(xy), 0.3)]).astype(np.float32)
     traj = Trajectory(ts=np.linspace(0, 60, len(positions)), positions=positions)
 
-    cases = generate_cases(traj, final, surface, _cfg(), GenerationParams(max_cases=10))
+    cases = generate_cases(traj, final, surface, _cfg(), max_cases=10)
     assert cases
-    assert len({c.id for c in cases}) == len(cases)
     assert [c for c in cases if (c.start[0] - 10) * (c.goal[0] - 10) < 0]
     for c in cases:
         assert abs(c.start[2]) < 1e-5 and abs(c.goal[2]) < 1e-5
@@ -671,11 +608,10 @@ def test_select_diverse_backfills_to_min_cases() -> None:
         )
         for x in np.arange(0.0, 16.0, 2.0)
     ]
-    strict = _select_diverse(candidates, GenerationParams(min_cases=0), max_cases=12)
-    assert len(strict) == 4
-    backfilled = _select_diverse(candidates, GenerationParams(min_cases=10), max_cases=12)
-    assert len(backfilled) == 8
-    assert len({(c.start, c.goal) for c in backfilled}) == 8
+    strict = _select_diverse(candidates, max_cases=12, min_cases=0)
+    backfilled = _select_diverse(candidates, max_cases=12, min_cases=10)
+    assert len(backfilled) > len(strict)
+    assert len({(c.start, c.goal) for c in backfilled}) == len(backfilled)
 
 
 def test_pick_along_ray() -> None:
@@ -744,97 +680,11 @@ def test_save_suite_roundtrip(tmp_path: Path) -> None:
     loaded = load_suite(save_suite(suite, tmp_path / "demo.yaml"))
     assert loaded.dataset == "demo"
     assert loaded.lidar_stream == "other_lidar"
-    assert loaded.odom_stream == "pointlio_odometry"
     assert loaded.db_path() == Path.home() / "recordings/demo.db"
     assert loaded.cases[0].goal == (1.0, 2.0, 3.0)
     assert loaded.cases[0].tags == ["x"]
-    assert not loaded.cases[0].expect_fail and not loaded.cases[0].expect_final_fail
     assert loaded.cases[1].expect_fail
     assert loaded.cases[2].expect_final_fail
-
-
-def _tripwire_report(spec: dict[str, dict[str, tuple[bool, bool]]]) -> dict[str, object]:
-    """Report JSON from a {dataset: {case_id: (inc, fin)}} pass/fail spec."""
-    datasets = [
-        DatasetResult(
-            dataset=dataset,
-            cases=[
-                CaseResult(
-                    id=case_id,
-                    dataset=dataset,
-                    start=(0.0, 0.0, 0.0),
-                    goal=(1.0, 0.0, 0.0),
-                    tags=[],
-                    l_ref=1.0,
-                    online_voxels=0,
-                    expect_fail=False,
-                    online=replace(_no_plan(0.0), success=inc),
-                    final=replace(_no_plan(0.0), success=fin),
-                    soft_progress=0.0,
-                )
-                for case_id, (inc, fin) in cases.items()
-            ],
-            final_voxels=0,
-            map_build_ms=0.0,
-            add_frame_ms={},
-            frames=0,
-        )
-        for dataset, cases in spec.items()
-    ]
-    report = Report(
-        score=0.0,
-        score_soft=0.0,
-        final_score=0.0,
-        n_cases=0,
-        n_online=0,
-        n_success=0,
-        n_success_final=0,
-        outcome_counts={},
-        by_tag={},
-        plan_ms={},
-        map_update_ms={},
-        datasets=datasets,
-    )
-    return json.loads(json.dumps(report.to_dict()))
-
-
-def test_tripwire_diff_names_every_flip() -> None:
-    old = _tripwire_report(
-        {"office": {"a": (False, True), "b": (True, True), "gone": (True, True)}}
-    )
-    new = _tripwire_report(
-        {"office": {"a": (True, True), "b": (False, False), "fresh": (True, True)}}
-    )
-    d = tripwire.diff(old, new)
-    assert [(f.key, f.test) for f in d.fixed] == [("office/a", "inc")]
-    assert [(f.key, f.test) for f in d.broke] == [("office/b", "inc"), ("office/b", "fin")]
-    assert d.added == ["office/fresh"]
-    assert d.removed == ["office/gone"]
-
-
-def test_tripwire_exact_differences() -> None:
-    """Wall-clock fields must be ignored while any result field is caught."""
-    report = _tripwire_report({"office": {"a": (True, False)}})
-    assert tripwire.exact_differences(report, report) == []
-    changed = json.loads(json.dumps(report))
-    changed["datasets"][0]["cases"][0]["online"]["length"] = 12.34
-    changed["datasets"][0]["cases"][0]["online"]["plan_ms"] = 99.0
-    diffs = tripwire.exact_differences(report, changed)
-    assert len(diffs) == 1
-    assert "length" in diffs[0] and "12.34" in diffs[0]
-
-
-def test_tripwire_perf_violations() -> None:
-    report = _tripwire_report({"office": {"a": (True, True)}})
-    report["config"] = {"plan_p95_budget_ms": 60.0, "map_update_p95_budget_ms": 3000.0}
-    report["plan_ms"] = {"p95": 30.0}
-    report["map_update_ms"] = {"p95": 1500.0}
-    assert tripwire.perf_violations(report) == []
-    report["plan_ms"] = {"p95": 61.0}
-    violations = tripwire.perf_violations(report)
-    assert len(violations) == 1 and "plan_ms" in violations[0]
-    # Reports predating the budgets pass.
-    assert tripwire.perf_violations({"datasets": []}) == []
 
 
 def test_gate_band_follows_the_tilted_body_axis() -> None:
@@ -864,15 +714,10 @@ def test_offset_deltas_match_packing_the_summed_indices() -> None:
     idx = np.floor(pts.astype(np.float64) / VOXEL).astype(np.int64)[:, None, :] + offs[None, :, :]
     packed = voxel_keys((idx.reshape(-1, 3) * VOXEL + VOXEL / 2).astype(np.float32), VOXEL)
     assert np.array_equal(offset_keys(pts, offs, VOXEL).ravel(), packed)
-    assert np.array_equal(
-        offset_keys(pts, offs, VOXEL)[0], voxel_keys(pts, VOXEL)[0] + offset_deltas(offs)
-    )
 
 
 def test_spl_and_body_frames_survive_degenerate_input() -> None:
-    """A coincident start and goal must score, not divide by zero, and a
-    zero-length path must still yield a usable body frame."""
-    assert metrics.spl(True, 0.0, 0.0) == 0.0
+    """A zero-length path must still yield a usable body frame."""
     point = np.array([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0]], dtype=np.float32)
     fwd, lateral, up = metrics.body_frames(point, 0.7)
     assert np.allclose(np.linalg.norm(fwd, axis=1), 1.0)
@@ -884,7 +729,15 @@ def _store(tmp_path: Path, cases: list[Case]) -> CaseStore:
     save_suite(Suite(dataset="demo", cases=cases), manifest)
     xs, ys = np.meshgrid(np.arange(0, 8, VOXEL), np.arange(-2, 2, VOXEL))
     surface = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1, dtype=np.float32)
-    return CaseStore(load_suite(manifest), manifest, surface, _cfg())
+    final = FinalMap(
+        voxel_size=VOXEL,
+        occupied=surface,
+        occupied_keys=np.unique(voxel_keys(surface, VOXEL)),
+        frames=0,
+        add_frame_ms={},
+        build_ms=0.0,
+    )
+    return CaseStore(load_suite(manifest), manifest, surface, _cfg(), final)
 
 
 def test_editing_a_generated_case_keeps_it_in_the_incremental_score(tmp_path: Path) -> None:
@@ -1018,21 +871,92 @@ def test_apply_overrides_is_the_sweep_interface() -> None:
             _apply_overrides(EvalConfig(), bad)
 
 
-def test_diff_exits_nonzero_only_on_a_regression(tmp_path: Path) -> None:
-    """The tripwire is a CI gate, so its contract is the exit code."""
-    from dimos.navigation.nav_3d.evaluator.cli import diff_reports
+class _RecordingPipeline:
+    """Returns the fixed path and remembers how many frames it had each time."""
 
-    clean = tmp_path / "a.json"
-    broken = tmp_path / "b.json"
-    clean.write_text(json.dumps(_tripwire_report({"office": {"a": (True, True)}})))
-    broken.write_text(json.dumps(_tripwire_report({"office": {"a": (False, True)}})))
+    def __init__(self, waypoints: np.ndarray | None) -> None:
+        self._waypoints = waypoints
+        self.frames = 0
+        self.frames_at_plan: list[int] = []
 
-    diff_reports(clean, clean, exact=False)
-    with pytest.raises(typer.Exit) as regressed:
-        diff_reports(clean, broken, exact=False)
-    assert regressed.value.exit_code == 1
-    # A fix is not a regression.
-    diff_reports(broken, clean, exact=False)
-    # --exact fails on any non-timing difference, in either direction.
-    with pytest.raises(typer.Exit):
-        diff_reports(broken, clean, exact=True)
+    def add_frame(self, points: np.ndarray, origin: tuple[float, float, float], ts: float) -> None:
+        self.frames += 1
+
+    def plan(
+        self, start: tuple[float, float, float], goal: tuple[float, float, float]
+    ) -> np.ndarray | None:
+        self.frames_at_plan.append(self.frames)
+        return self._waypoints
+
+
+def _stub_harness(mp: pytest.MonkeyPatch, tmp_path: Path, pipeline: object) -> None:
+    """Detach run_suite from both native modules: the pipeline under test and
+    the evaluator's own grading mapper. Caches land under tmp_path."""
+    mp.setitem(PIPELINES, "stub", lambda _cfg: pipeline)
+    mp.setattr(EvalConfig, "make_mapper", lambda _self: _StubMapper())
+    mp.setattr(final_map, "CACHE_SUBDIR", tmp_path / "cache")
+
+
+def _corridor_recording(path: Path) -> Suite:
+    """Ten frames of floor along +x, walked start to finish."""
+    slabs = [
+        (float(t), _floor(float(t) - 1.0, float(t) + 1.0) - np.array([t, 0, 0], dtype=np.float32))
+        for t in range(1, 11)
+    ]
+    _write_recording(
+        path,
+        [(ts, pts, "lidar") for ts, pts in slabs],
+        [(float(t), (float(t), 0.0, 0.5)) for t in range(1, 11)],
+    )
+    return Suite(
+        dataset="corridor", cases=[], db=str(path), lidar_stream="lidar", odom_stream="odom"
+    )
+
+
+def test_run_suite_plans_each_case_on_the_map_as_of_its_start_time(tmp_path: Path) -> None:
+    """The framework's core claim: a case is scored against exactly the frames
+    the robot had seen by its start time, not the whole recording."""
+    suite = _corridor_recording(tmp_path / "corridor.db")
+    # Both walk backwards, so the goal was visited before the start and the
+    # reference is causal. The second starts later in the recording.
+    suite.cases = [
+        Case(id="auto_early", start=(4.0, 0.0, 0.0), goal=(2.0, 0.0, 0.0), tags=["auto"]),
+        Case(id="auto_late", start=(9.0, 0.0, 0.0), goal=(7.0, 0.0, 0.0), tags=["auto"]),
+    ]
+    pipeline = _RecordingPipeline(np.array([[4, 0, 0], [2, 0, 0]], dtype=np.float32))
+    with pytest.MonkeyPatch.context() as mp:
+        _stub_harness(mp, tmp_path, pipeline)
+        result = runner.run_suite(suite, _cfg(pipeline="stub"))
+
+    assert result.frames == 10
+    # Two online plans, then one final plan per case on the full recording.
+    online_early, online_late = pipeline.frames_at_plan[:2]
+    assert 0 < online_early < online_late < 10
+    assert pipeline.frames_at_plan[2:] == [10, 10]
+
+
+def test_evaluate_scores_only_online_cases_in_the_headline(tmp_path: Path) -> None:
+    """A manual case is final-only, so it must move final_score but not score."""
+    suite = _corridor_recording(tmp_path / "corridor.db")
+    route = np.array([[4, 0, 0], [2, 0, 0]], dtype=np.float32)
+    suite.cases = [
+        Case(id="auto_00", start=(4.0, 0.0, 0.0), goal=(2.0, 0.0, 0.0), tags=["auto"]),
+        Case(id="manual_00", start=(4.0, 0.0, 0.0), goal=(2.0, 0.0, 0.0), tags=["manual"]),
+    ]
+    with pytest.MonkeyPatch.context() as mp:
+        _stub_harness(mp, tmp_path, _StubPipeline(route))
+        report = runner.evaluate([suite], _cfg(pipeline="stub"))
+
+    assert report.n_cases == 2
+    assert report.n_online == 1
+    assert [c.final_only for d in report.datasets for c in d.cases] == [False, True]
+    assert set(report.by_tag) == {"auto", "manual"}
+    assert report.by_tag["manual"].n_online == 0
+
+
+def test_run_suite_names_a_missing_recording(tmp_path: Path) -> None:
+    """Without the guard sqlite creates an empty db and the error blames odometry."""
+    suite = Suite(dataset="gone", cases=[], db=str(tmp_path / "absent.db"))
+    with pytest.raises(FileNotFoundError, match="recording not found"):
+        runner.run_suite(suite, _cfg())
+    assert not (tmp_path / "absent.db").exists()

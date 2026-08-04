@@ -14,8 +14,7 @@
 
 """The evaluator's own map of a recording, and the checkpoints along it.
 
-Not ground truth, just the most complete occupancy the mapper produces, which
-is what returned paths are graded against.
+Not ground truth, just the most complete occupancy the mapper produces.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ import hashlib
 import json
 import os
 from time import perf_counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -60,9 +59,7 @@ class FinalMap:
 
     def standable_surface(self, robot_height: float) -> NDArray[np.float32]:
         """Occupied cells with robot_height of free space directly above them.
-
-        Decides where an endpoint may sit, not where a path may go.
-        """
+        Decides where an endpoint may sit, not where a path may go."""
         keys = self.occupied_keys
         blocked = np.zeros(len(keys), dtype=bool)
         for dz in range(1, int(np.ceil(robot_height / self.voxel_size)) + 1):
@@ -91,14 +88,14 @@ CACHE_VERSION = 3
 CHECKPOINT_CACHE_VERSION = 3
 
 
-def _save_npz(cache: Path, **arrays: object) -> None:
+def _save_npz(cache: Path, **arrays: Any) -> None:
     """Publish a cache atomically, so an interrupted build cannot poison later runs."""
     cache.parent.mkdir(parents=True, exist_ok=True)
     tmp = cache.with_name(f"{cache.name}.{os.getpid()}.tmp")
     try:
         # Written through a handle because savez appends .npz to a bare path.
         with tmp.open("wb") as fh:
-            np.savez_compressed(fh, **arrays)  # type: ignore[arg-type]
+            np.savez_compressed(fh, **arrays)
         os.replace(tmp, cache)
     finally:
         tmp.unlink(missing_ok=True)
@@ -112,13 +109,19 @@ def _cache_path(db_path: Path, params: dict[str, float | int | str]) -> Path:
     return CACHE_SUBDIR / f"{db_path.stem}.{digest}.npz"
 
 
-def _final_params(suite: Suite, cfg: EvalConfig) -> dict[str, float | int | str]:
+def _final_params(db_path: Path, suite: Suite, cfg: EvalConfig) -> dict[str, float | int | str]:
+    # The recording is part of the key. Without it a re-ingested dataset keeps
+    # its stem, and the stale map silently becomes the grading occupancy.
+    stat = db_path.stat()
     params: dict[str, float | int | str] = {
         **cfg.mapper_fingerprint(),
         "align_tol": cfg.align_tol,
         "lidar_stream": suite.lidar_stream,
         "odom_stream": suite.odom_stream,
         "cache_version": CACHE_VERSION,
+        "db": str(db_path.resolve()),
+        "db_size": stat.st_size,
+        "db_mtime_ns": stat.st_mtime_ns,
     }
     if suite.end_ts is not None:
         params["end_ts"] = suite.end_ts
@@ -132,9 +135,7 @@ def replay_frames(
     times: NDArray[np.float64],
 ) -> tuple[FinalMap, list[NDArray[np.int64]]]:
     """Feed frames through the mapper in order, snapshotting at each requested
-    time. A snapshot holds exactly the frames with ts <= its time. Returns the
-    final map and the occupied-key snapshots.
-    """
+    time. A snapshot holds exactly the frames with ts <= its time."""
     snapshots: list[NDArray[np.int64]] = []
     add_ms: list[float] = []
     t0 = perf_counter()
@@ -168,11 +169,11 @@ def _save_final(cache: Path, final: FinalMap) -> None:
         frames=final.frames,
         **{f"add_{k}": v for k, v in final.add_frame_ms.items()},
     )
-    logger.info("final map cached: %s (%d voxels)", cache.name, len(final.occupied))
+    logger.info("final map cached", cache=cache.name, voxels=len(final.occupied))
 
 
 def load_or_build_final_map(db_path: Path, suite: Suite, cfg: EvalConfig) -> FinalMap:
-    cache = _cache_path(db_path, _final_params(suite, cfg))
+    cache = _cache_path(db_path, _final_params(db_path, suite, cfg))
     if cache.exists():
         data = np.load(cache)
         return FinalMap(
@@ -184,7 +185,7 @@ def load_or_build_final_map(db_path: Path, suite: Suite, cfg: EvalConfig) -> Fin
             build_ms=0.0,
         )
 
-    logger.info("building final map for %s (cache miss)", db_path.name)
+    logger.info("building final map (cache miss)", recording=db_path.name)
     final, _ = replay_frames(
         iter_world_frames(
             db_path, suite.lidar_stream, suite.odom_stream, cfg.align_tol, suite.end_ts_seconds()
@@ -215,12 +216,11 @@ def load_or_build_checkpoints(
 ) -> MapCheckpoints:
     """Occupied key sets at the requested times, deduped and sorted.
 
-    A cache miss replays the whole recording once. The replay's final state
-    also fills the final cache when that is missing.
+    A cache miss replays the recording once and fills the final cache too.
     """
     times = np.unique(np.asarray(times, dtype=np.float64))
     params: dict[str, float | int | str] = {
-        **_final_params(suite, cfg),
+        **_final_params(db_path, suite, cfg),
         "kind": "checkpoints",
         "times_sha": hashlib.sha1(times.tobytes()).hexdigest()[:10],
         "checkpoint_version": CHECKPOINT_CACHE_VERSION,
@@ -235,7 +235,7 @@ def load_or_build_checkpoints(
             removed=[data[f"rem_{i}"] for i in range(n)],
         )
 
-    logger.info("building %d map checkpoints for %s (cache miss)", len(times), db_path.name)
+    logger.info("building map checkpoints (cache miss)", n=len(times), recording=db_path.name)
     final, snapshots = replay_frames(
         iter_world_frames(
             db_path, suite.lidar_stream, suite.odom_stream, cfg.align_tol, suite.end_ts_seconds()
@@ -244,7 +244,7 @@ def load_or_build_checkpoints(
         cfg.voxel_size,
         times,
     )
-    final_cache = _cache_path(db_path, _final_params(suite, cfg))
+    final_cache = _cache_path(db_path, _final_params(db_path, suite, cfg))
     if not final_cache.exists():
         _save_final(final_cache, final)
     added, removed = encode_deltas(snapshots)
@@ -252,5 +252,5 @@ def load_or_build_checkpoints(
     arrays |= {f"add_{i}": a for i, a in enumerate(added)}
     arrays |= {f"rem_{i}": r for i, r in enumerate(removed)}
     _save_npz(cache, **arrays)
-    logger.info("checkpoints cached: %s", cache.name)
+    logger.info("checkpoints cached", cache=cache.name)
     return MapCheckpoints(times=times, added=added, removed=removed)

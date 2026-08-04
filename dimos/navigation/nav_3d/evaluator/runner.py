@@ -15,8 +15,7 @@
 """Replay case suites through a pipeline and score them.
 
 Generated cases plan twice, online at their start time and again on the whole
-recording. Curated and infeasible cases plan once, on the final map. The
-headline score is validity-gated SPL on the incremental map.
+recording. Curated and infeasible cases plan once, on the final map.
 """
 
 from __future__ import annotations
@@ -41,10 +40,14 @@ from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from numpy.typing import NDArray
 
     from dimos.navigation.nav_3d.evaluator.cases import Case, Suite
+    from dimos.navigation.nav_3d.evaluator.final_map import FinalMap, MapCheckpoints
     from dimos.navigation.nav_3d.evaluator.pipeline import NavPipeline
+    from dimos.navigation.nav_3d.evaluator.recording import Trajectory
 
 logger = setup_logger()
 
@@ -225,12 +228,8 @@ def _no_plan(plan_ms: float) -> PlanOutcome:
 
 
 def score_negative(raw: PlanOutcome) -> PlanOutcome:
-    """Invert an outcome for a human-certified infeasible case.
-
-    The planner succeeds by refusing. Any goal-reaching path it returns is a
-    false positive scored zero, whether or not the gates would have caught
-    it, because the planner claimed a route that does not exist.
-    """
+    """Invert an outcome for a human-certified infeasible case: the planner
+    succeeds by refusing, and any goal-reaching path it returns scores zero."""
     refused = not (raw.planned and raw.reached)
     return replace(raw, success=refused, spl=1.0 if refused else 0.0)
 
@@ -243,13 +242,8 @@ def _dynamic_candidate(
     final_keys: NDArray[np.int64],
     cfg: EvalConfig,
 ) -> tuple[bool, list[list[float]]]:
-    """Flag a case whose online route is blocked only by new final occupancy.
-
-    An online success with a final failure is either a dynamic obstacle that
-    appeared after the robot passed or a planner or mapping bug. Gating the
-    online path against the voxels gained since plan time tells them apart. A
-    human confirms before labeling the case.
-    """
+    """Flag a case whose online route is blocked only by occupancy gained
+    since plan time, which separates a dynamic obstacle from a planner bug."""
     if online_wp is None or not online.success or final.success:
         return False, []
     # Both come from np.unique, so the sort in setdiff1d is pure waste.
@@ -274,22 +268,15 @@ def _snapshot(pipeline: NavPipeline) -> PlannerArtifacts | None:
 
 
 def _final_only(case: Case) -> bool:
-    """Whether a case is scored on the final map only, with no online phase.
-
-    Hand-placed endpoints are not tied to the recording timeline, so there is
-    no meaningful incremental map to replay against. Generated cases keep their
-    online phase however their labels are later edited.
-    """
+    """Whether a case is scored on the final map only. Hand-placed endpoints
+    are not tied to the recording timeline, so they have no incremental map."""
     return case.expect_fail or "auto" not in case.tags
 
 
-def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> DatasetResult:
-    db_path = suite.db_path()
-    trajectory = load_trajectory(db_path, suite.odom_stream, suite.end_ts_seconds())
-    final = load_or_build_final_map(db_path, suite, cfg)
-    map_keys = final.occupied_keys
-
-    final_only = np.array([_final_only(c) for c in suite.cases], dtype=bool)
+def _references(
+    suite: Suite, trajectory: Trajectory, final_only: NDArray[np.bool_], cfg: EvalConfig
+) -> list[metrics.Reference]:
+    """The demonstrated route length each case is scored against."""
     refs: list[metrics.Reference] = []
     for i, case in enumerate(suite.cases):
         if case.expect_fail:
@@ -302,37 +289,95 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
             # Only online-replayed cases need a causal snap onto the trajectory.
             if not ref.snapped:
                 logger.warning(
-                    "%s/%s: start or goal is off the walked trajectory; "
-                    "using straight-line reference and the full map",
-                    suite.dataset,
-                    case.id,
+                    "endpoint off the walked trajectory, using a straight-line reference",
+                    dataset=suite.dataset,
+                    case=case.id,
                 )
             elif not ref.causal:
                 logger.warning(
-                    "%s/%s: goal is never visited before the start; planning on the full map",
-                    suite.dataset,
-                    case.id,
+                    "goal never visited before the start, planning on the full map",
+                    dataset=suite.dataset,
+                    case=case.id,
                 )
         refs.append(ref)
+    return refs
 
-    # Final-only cases never replay online, so they take no checkpoint and their
-    # plan time drops out of the schedule.
-    start_ts = np.array(
-        [float("inf") if final_only[i] else r.start_ts for i, r in enumerate(refs)],
-        dtype=np.float64,
-    )
-    checkpoints = load_or_build_checkpoints(db_path, suite, cfg, start_ts)
-    case_ckpt = np.searchsorted(checkpoints.times, start_ts)
-    case_ckpt[final_only] = -1
 
-    pipeline = make_pipeline(cfg.pipeline, cfg)
-    results: list[CaseResult | None] = [None] * len(suite.cases)
-    online: dict[int, tuple[PlanOutcome, NDArray[np.float32] | None, NDArray[np.int64]]] = {}
-    artifacts: dict[int, PlannerArtifacts | None] = {}
-    occupied_at_plan: dict[int, NDArray[np.float32] | None] = {}
+@dataclass
+class _OnlinePass:
+    """Everything the single replay pass produced, keyed by case index."""
 
-    def _result(case: Case, ref: metrics.Reference, **rest: object) -> CaseResult:
-        """Fill the fields every case copies straight from its case and reference."""
+    outcomes: dict[int, tuple[PlanOutcome, NDArray[np.float32] | None, NDArray[np.int64]]]
+    artifacts: dict[int, PlannerArtifacts | None]
+    occupied: dict[int, NDArray[np.float32] | None]
+    add_ms: list[float]
+    final_artifacts: PlannerArtifacts | None
+
+
+def _replay_online(
+    pipeline: NavPipeline,
+    suite: Suite,
+    db_path: Path,
+    cfg: EvalConfig,
+    checkpoints: MapCheckpoints,
+    case_ckpt: NDArray[np.int64],
+    refs: list[metrics.Reference],
+    map_keys: NDArray[np.int64],
+    keep_artifacts: bool,
+) -> _OnlinePass:
+    """Feed the recording to the pipeline once, planning each case where its
+    start time falls, so the pipeline has seen what the robot had seen by then.
+
+    A pipeline's state cannot be snapshotted from outside, hence one pass.
+    """
+    out = _OnlinePass({}, {}, {}, [], None)
+
+    def plan_at(k: int, keys: NDArray[np.int64]) -> None:
+        for ci in np.flatnonzero(case_ckpt == k):
+            case, ref = suite.cases[ci], refs[ci]
+            if not len(keys):
+                out.outcomes[ci] = (_no_plan(0.0), None, keys)
+                continue
+            # Collisions use the incremental map as of plan time. Support uses
+            # the final map, since ground exists whether or not it was mapped.
+            outcome, waypoints = _run_plan(pipeline, case, ref.length, keys, map_keys, cfg)
+            out.outcomes[ci] = (outcome, waypoints, keys)
+            out.artifacts[ci] = _snapshot(pipeline) if keep_artifacts else None
+            out.occupied[ci] = key_centers(keys, cfg.voxel_size) if keep_artifacts else None
+
+    snapshots = checkpoints.iter_snapshots()
+    k = 0
+    for frame in iter_world_frames(
+        db_path, suite.lidar_stream, suite.odom_stream, cfg.align_tol, suite.end_ts_seconds()
+    ):
+        while k < len(checkpoints.times) and frame.ts > checkpoints.times[k]:
+            plan_at(k, next(snapshots))
+            k += 1
+        t0 = perf_counter()
+        pipeline.add_frame(frame.points, frame.origin, frame.ts)
+        out.add_ms.append((perf_counter() - t0) * 1000)
+    while k < len(checkpoints.times):
+        plan_at(k, next(snapshots))
+        k += 1
+
+    # The stream is exhausted, so the pipeline now holds the whole recording.
+    out.final_artifacts = _snapshot(pipeline) if keep_artifacts else None
+    return out
+
+
+def _score_final(
+    pipeline: NavPipeline,
+    suite: Suite,
+    cfg: EvalConfig,
+    refs: list[metrics.Reference],
+    final: FinalMap,
+    final_only: NDArray[np.bool_],
+    online: _OnlinePass,
+) -> list[CaseResult]:
+    """Plan every case against the completed map and combine both phases."""
+    map_keys = final.occupied_keys
+
+    def result(case: Case, ref: metrics.Reference, **rest: object) -> CaseResult:
         return CaseResult(
             id=case.id,
             dataset=suite.dataset,
@@ -343,96 +388,96 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
             **rest,  # type: ignore[arg-type]
         )
 
-    def plan_online(k: int, keys: NDArray[np.int64]) -> None:
-        """Plan every case whose start time this checkpoint covers, against the
-        pipeline as it stands after the frames seen so far."""
-        for ci in np.flatnonzero(case_ckpt == k):
-            case, ref = suite.cases[ci], refs[ci]
-            if not len(keys):
-                online[ci] = (_no_plan(0.0), None, keys)
-                continue
-            # Collisions are checked against the incremental map the evaluator
-            # had at plan time, not the final map. Support still uses the final
-            # map, since the ground exists whether or not it was mapped yet.
-            outcome, waypoints = _run_plan(pipeline, case, ref.length, keys, map_keys, cfg)
-            online[ci] = (outcome, waypoints, keys)
-            artifacts[ci] = _snapshot(pipeline) if keep_artifacts else None
-            occupied_at_plan[ci] = key_centers(keys, cfg.voxel_size) if keep_artifacts else None
-
-    # One pass. Frames go to the pipeline in recording order and each case is
-    # planned at the point in the stream its start time falls, so the pipeline
-    # has seen exactly what the robot had seen by then. A pipeline's state
-    # cannot be snapshotted from outside, which is why this is sequential.
-    snapshots = checkpoints.iter_snapshots()
-    add_ms: list[float] = []
-    k = 0
-    for frame in iter_world_frames(
-        db_path, suite.lidar_stream, suite.odom_stream, cfg.align_tol, suite.end_ts_seconds()
-    ):
-        while k < len(checkpoints.times) and frame.ts > checkpoints.times[k]:
-            plan_online(k, next(snapshots))
-            k += 1
-        t0 = perf_counter()
-        pipeline.add_frame(frame.points, frame.origin, frame.ts)
-        add_ms.append((perf_counter() - t0) * 1000)
-    while k < len(checkpoints.times):
-        plan_online(k, next(snapshots))
-        k += 1
-
-    # The stream is exhausted, so the pipeline now holds the whole recording.
-    final_artifacts = _snapshot(pipeline) if keep_artifacts else None
+    results: list[CaseResult] = []
     for ci, case in enumerate(suite.cases):
         ref = refs[ci]
         final_out, _ = _run_plan(pipeline, case, ref.length, map_keys, map_keys, cfg)
         if case.expect_fail or case.expect_final_fail:
-            # Both labels certify that the final map holds no route, so the
-            # planner passes by refusing. Applied before the final-only split
-            # so a curated case is not scored zero for being right.
+            # Both labels certify the final map holds no route, so the planner
+            # passes by refusing. Before the split, so a curated case scores.
             final_out = score_negative(final_out)
         if final_only[ci]:
-            results[ci] = _result(
-                case,
-                ref,
-                online_voxels=len(final.occupied),
-                expect_fail=case.expect_fail,
-                online=final_out,
-                final=final_out,
-                soft_progress=final_out.spl,
-                final_only=True,
+            results.append(
+                result(
+                    case,
+                    ref,
+                    online_voxels=len(final.occupied),
+                    expect_fail=case.expect_fail,
+                    online=final_out,
+                    final=final_out,
+                    soft_progress=final_out.spl,
+                    final_only=True,
+                )
             )
             continue
-        online_out, online_wp, online_keys = online[ci]
+        online_out, online_wp, online_keys = online.outcomes[ci]
         end = online_wp[-1] if online_wp is not None and len(online_wp) else None
         dynamic_candidate, blocking = (
             (False, [])
             if case.expect_final_fail
             else _dynamic_candidate(online_out, final_out, online_wp, online_keys, map_keys, cfg)
         )
-        results[ci] = _result(
-            case,
-            ref,
-            online_voxels=len(online_keys),
-            expect_fail=False,
-            online=online_out,
-            final=final_out,
-            soft_progress=metrics.soft_progress(end, case.start, case.goal),
-            dynamic_candidate=dynamic_candidate,
-            blocking_points=blocking,
-            online_artifacts=artifacts.get(ci),
-            online_occupied=occupied_at_plan.get(ci),
+        results.append(
+            result(
+                case,
+                ref,
+                online_voxels=len(online_keys),
+                expect_fail=False,
+                online=online_out,
+                final=final_out,
+                soft_progress=metrics.soft_progress(end, case.start, case.goal),
+                dynamic_candidate=dynamic_candidate,
+                blocking_points=blocking,
+                online_artifacts=online.artifacts.get(ci),
+                online_occupied=online.occupied.get(ci),
+            )
         )
+    return results
 
-    done = [r for r in results if r is not None]
-    if len(done) != len(suite.cases):
-        raise RuntimeError(f"{suite.dataset}: {len(suite.cases) - len(done)} cases not planned")
+
+def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> DatasetResult:
+    db_path = suite.db_path()
+    if not db_path.exists():
+        # sqlite would otherwise create an empty db here and the failure would
+        # surface as a missing odometry stream.
+        raise FileNotFoundError(f"{suite.dataset}: recording not found at {db_path}")
+    trajectory = load_trajectory(db_path, suite.odom_stream, suite.end_ts_seconds())
+
+    final_only = np.array([_final_only(c) for c in suite.cases], dtype=bool)
+    refs = _references(suite, trajectory, final_only, cfg)
+    # Final-only cases never replay online, so they take no checkpoint and their
+    # plan time drops out of the schedule.
+    start_ts = np.array(
+        [float("inf") if final_only[i] else r.start_ts for i, r in enumerate(refs)],
+        dtype=np.float64,
+    )
+    # Before the final map, because a cold checkpoint build replays the whole
+    # recording and fills the final cache on its way through.
+    checkpoints = load_or_build_checkpoints(db_path, suite, cfg, start_ts)
+    final = load_or_build_final_map(db_path, suite, cfg)
+    case_ckpt = np.searchsorted(checkpoints.times, start_ts)
+    case_ckpt[final_only] = -1
+
+    pipeline = make_pipeline(cfg.pipeline, cfg)
+    online = _replay_online(
+        pipeline,
+        suite,
+        db_path,
+        cfg,
+        checkpoints,
+        case_ckpt,
+        refs,
+        final.occupied_keys,
+        keep_artifacts,
+    )
     return DatasetResult(
         dataset=suite.dataset,
-        cases=done,
+        cases=_score_final(pipeline, suite, cfg, refs, final, final_only, online),
         final_voxels=len(final.occupied),
         map_build_ms=final.build_ms,
-        add_frame_ms=metrics.timing_stats(add_ms),
-        frames=len(add_ms),
-        final_artifacts=final_artifacts,
+        add_frame_ms=metrics.timing_stats(online.add_ms),
+        frames=len(online.add_ms),
+        final_artifacts=online.final_artifacts,
     )
 
 
@@ -443,8 +488,7 @@ def evaluate(
     keep_artifacts: bool = False,
 ) -> Report:
     """Score every suite. A dataset is one sequential pass over its recording,
-    so workers only spreads datasets across processes. keep_artifacts snapshots
-    each pipeline's graph for the rerun recording."""
+    so workers only spreads datasets across processes."""
     cfg = cfg or EvalConfig()
     if workers > 1 and len(suites) > 1:
         with ProcessPoolExecutor(max_workers=min(workers, len(suites))) as pool:
