@@ -42,10 +42,12 @@ jobs:
           else
             echo "archive restored from cache"
           fi
+      # portaudio/turbojpeg mirror the tests job; libgl1/libglib2.0-0 are for
+      # open3d (preinstalled on GitHub-hosted images, not necessarily here).
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y portaudio19-dev libturbojpeg
+          sudo apt-get install -y portaudio19-dev libturbojpeg libgl1 libglib2.0-0
       - name: Raise UDP receive buffers for LCM
         run: sudo sysctl -w net.core.rmem_max=67108864 net.core.rmem_default=67108864
       - name: Install uv
