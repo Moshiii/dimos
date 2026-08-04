@@ -284,16 +284,15 @@ def test_inference_failure_is_wrapped(runtime: Any) -> None:
         module.stop()
 
 
-def test_not_started_and_missing_metadata_are_rejected(runtime: Any) -> None:
+def test_lazy_runtime_loading_and_missing_metadata_are_rejected(runtime: Any) -> None:
     module = GraspGenXModule(**module_args())
     missing_frame = cloud()
     missing_frame.frame_id = ""
     missing_timestamp = cloud()
     missing_timestamp.ts = None
     try:
-        with pytest.raises(GraspGenXError, match="not been started"):
-            module.propose_grasps(cloud())
-        module.start()
+        assert len(module.propose_grasps(cloud())) == 1
+        runtime.assert_called_once_with(module.config)
         with pytest.raises(ValueError, match="frame_id"):
             module.propose_grasps(missing_frame)
         with pytest.raises(ValueError, match="timestamp"):

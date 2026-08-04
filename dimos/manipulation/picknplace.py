@@ -19,6 +19,7 @@ import threading
 from typing import Literal
 
 import numpy as np
+from pydantic import AliasChoices, Field
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -78,7 +79,9 @@ class PickNPlaceConfig(ModuleConfig):
     """Configuration for PickNPlaceModule."""
 
     align_grasp_yaw: bool = False
-    grasp_strategy: Literal["obb_center", "graspgenx"] = "obb_center"
+    grasp: Literal["obb_center", "graspgenx"] = Field(
+        default="obb_center", validation_alias=AliasChoices("grasp", "grasp_strategy")
+    )
     graspgenx_pregrasp_offset: float = 0.10
     graspgenx_ik_filter_limit: int = 10
 
@@ -168,7 +171,7 @@ class PickNPlaceModule(Module):
         if selection is None:
             return None
         grasp, obj = selection
-        if self.config.grasp_strategy == "graspgenx":
+        if self.config.grasp == "graspgenx":
             if self._grasp_generator is None:
                 raise RuntimeError("GraspGenX is not configured for this pick-and-place blueprint")
             candidates = self._grasp_generator.propose_grasps(obj.pointcloud)
@@ -228,7 +231,7 @@ class PickNPlaceModule(Module):
         """Return the selected goal offset 100 mm opposite its final approach direction."""
         if self._goal_pose is None:
             return None
-        if self.config.grasp_strategy == "graspgenx":
+        if self.config.grasp == "graspgenx":
             offset = self._goal_pose.orientation.rotate_vector(
                 # GraspGenX local +Z points in the direction of the final
                 # approach. A pre-grasp retreats along the opposite axis.

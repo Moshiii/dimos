@@ -103,7 +103,7 @@ def main() -> None:
     """Connect to PickNPlaceModule and run one explicit pick-pipeline stage."""
     print("Connecting to PickNPlaceModule...")
     app = Dimos.connect()
-    pnp = app.PickNPlaceModule
+    pnp = app.pnp
     manipulation = app.ManipulationModule
     goal = None
     pre_grasp = None

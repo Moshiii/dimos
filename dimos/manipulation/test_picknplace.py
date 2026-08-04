@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from dimos.core.module import ModuleBase
-from dimos.manipulation.blueprints import _picknplace_xarm6_model, _xarm_graspgenx
+from dimos.manipulation.blueprints import _picknplace_xarm6_model, _xarm_graspgenx, picknplace
 from dimos.manipulation.picknplace import (
     PickNPlaceConfig,
     PickNPlaceModule,
@@ -102,6 +102,16 @@ def test_picknplace_graspgenx_uses_xarm_tcp_calibration() -> None:
 
 def test_picknplace_yaw_alignment_defaults_to_disabled() -> None:
     assert not PickNPlaceConfig().align_grasp_yaw
+
+
+def test_picknplace_blueprint_accepts_short_backend_and_grasp_options() -> None:
+    config = picknplace.config()
+
+    options = config(osr={"det": "moondream", "seg": "edgetam"}, pnp={"grasp": "graspgenx"})
+
+    assert options.osr.det == "moondream"
+    assert options.osr.seg == "edgetam"
+    assert options.pnp.grasp == "graspgenx"
 
 
 def test_table_surface_estimate_ignores_objects_above_the_table() -> None:

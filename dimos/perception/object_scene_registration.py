@@ -17,10 +17,11 @@ from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
+from pydantic import AliasChoices, Field, model_validator
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
-from dimos.core.module import Module
+from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -47,6 +48,34 @@ from dimos.utils.reactive import backpressure
 logger = setup_logger()
 
 
+class ObjectSceneRegistrationConfig(ModuleConfig):
+    """Configurable detector, segmenter, and RGB-D object reconstruction settings."""
+
+    target_frame: str = "map"
+    prompt_mode: YoloePromptMode = YoloePromptMode.LRPC
+    distance_threshold: float = 0.2
+    min_detections_for_permanent: int = 6
+    register_objects: bool = True
+    detect_on_request: bool = False
+    detector_confidence: float = 0.6
+    det: Literal["yoloe", "moondream"] = Field(
+        default="yoloe", validation_alias=AliasChoices("det", "detector_backend")
+    )
+    seg: Literal["yolo", "edgetam"] = Field(
+        default="yolo", validation_alias=AliasChoices("seg", "segmentation_backend")
+    )
+    object_voxel_downsample: float = 0.005
+    max_distance: float = 0.0
+    use_aabb: bool = False
+    max_obstacle_width: float = 0.0
+
+    @model_validator(mode="after")
+    def _require_edgetam_for_moondream(self) -> "ObjectSceneRegistrationConfig":
+        if self.det == "moondream" and self.seg != "edgetam":
+            raise ValueError("osr.det=moondream requires osr.seg=edgetam")
+        return self
+
+
 class ObjectSceneRegistrationModule(Module):
     """Module for prompted 2D detection, segmentation, and RGB-D object reconstruction."""
 
@@ -71,50 +100,27 @@ class ObjectSceneRegistrationModule(Module):
     # A tuple assignment/read is atomic, so depth and its transform cannot be
     # observed from different frames by get_full_scene_pointcloud().
     _latest_scene_snapshot: tuple[Image, Transform | None] | None = None
+    config: ObjectSceneRegistrationConfig
 
-    def __init__(
-        self,
-        target_frame: str = "map",
-        prompt_mode: YoloePromptMode = YoloePromptMode.LRPC,
-        # ObjectDB tuning
-        distance_threshold: float = 0.2,
-        min_detections_for_permanent: int = 6,
-        # Disable to publish only the current frame without temporal registration.
-        register_objects: bool = True,
-        # Cache camera frames and run inference only through scan_scene().
-        detect_on_request: bool = False,
-        detector_confidence: float = 0.6,
-        detector_backend: Literal["yoloe", "moondream"] = "yoloe",
-        segmentation_backend: Literal["yolo", "edgetam"] = "yolo",
-        # Object 3D reconstruction tuning
-        object_voxel_downsample: float = 0.005,
-        max_distance: float = 0.0,
-        use_aabb: bool = False,
-        max_obstacle_width: float = 0.0,
-        **kwargs: Any,
-    ) -> None:
-        if segmentation_backend not in ("yolo", "edgetam"):
-            raise ValueError("segmentation_backend must be 'yolo' or 'edgetam'")
-        if detector_backend not in ("yoloe", "moondream"):
-            raise ValueError("detector_backend must be 'yoloe' or 'moondream'")
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._target_frame = target_frame
-        self._prompt_mode = prompt_mode
-        self._register_objects = register_objects
-        self._detect_on_request = detect_on_request
-        self._detector_confidence = detector_confidence
-        self._detector_backend = detector_backend
-        self._segmentation_backend = segmentation_backend
+        self._target_frame = self.config.target_frame
+        self._prompt_mode = self.config.prompt_mode
+        self._register_objects = self.config.register_objects
+        self._detect_on_request = self.config.detect_on_request
+        self._detector_confidence = self.config.detector_confidence
+        self._detector_backend = self.config.det
+        self._segmentation_backend = self.config.seg
         self._object_db = ObjectDB(
-            distance_threshold=distance_threshold,
-            min_detections_for_permanent=min_detections_for_permanent,
+            distance_threshold=self.config.distance_threshold,
+            min_detections_for_permanent=self.config.min_detections_for_permanent,
         )
         self._latest_objects = []
         self._latest_output_objects = ()
-        self._object_voxel_downsample = object_voxel_downsample
-        self._max_distance = max_distance
-        self._use_aabb = use_aabb
-        self._max_obstacle_width = max_obstacle_width
+        self._object_voxel_downsample = self.config.object_voxel_downsample
+        self._max_distance = self.config.max_distance
+        self._use_aabb = self.config.use_aabb
+        self._max_obstacle_width = self.config.max_obstacle_width
 
     @rpc
     def start(self) -> None:

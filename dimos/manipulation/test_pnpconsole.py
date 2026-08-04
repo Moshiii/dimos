@@ -23,7 +23,7 @@ from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
 def test_client_scans_scene_and_quits(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     pnp = MagicMock()
     pnp.scan_scene.return_value = MagicMock(detections_length=3)
-    app = MagicMock(PickNPlaceModule=pnp)
+    app = MagicMock(pnp=pnp)
     monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
     choices = iter(["1", "", "q"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
@@ -36,7 +36,7 @@ def test_client_scans_scene_and_quits(monkeypatch) -> None:  # type: ignore[no-u
 def test_client_scans_scene_with_text_prompt(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     pnp = MagicMock()
     pnp.scan_scene.return_value = MagicMock(detections_length=1)
-    app = MagicMock(PickNPlaceModule=pnp)
+    app = MagicMock(pnp=pnp)
     monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
     choices = iter(["1", "water bottle", "q"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(choices))
@@ -89,7 +89,7 @@ def test_client_previews_descent_before_explicit_execution(monkeypatch) -> None:
     pnp.get_goal_pose.return_value = goal
     pnp.get_grasp_candidates.return_value = GraspCandidateArray()
     pnp.get_pre_grasp_pose.return_value = pre_grasp
-    app = MagicMock(PickNPlaceModule=pnp)
+    app = MagicMock(pnp=pnp)
     manipulation = app.ManipulationModule
     manipulation.plan_to_pose.return_value = True
     manipulation.execute_and_wait.return_value = True
@@ -112,7 +112,7 @@ def test_client_runs_grasp_and_lift_without_preview(monkeypatch) -> None:  # typ
     pnp.get_goal_pose.return_value = goal
     pnp.get_grasp_candidates.return_value = GraspCandidateArray()
     pnp.get_pre_grasp_pose.return_value = pre_grasp
-    app = MagicMock(PickNPlaceModule=pnp)
+    app = MagicMock(pnp=pnp)
     manipulation = app.ManipulationModule
     manipulation.plan_to_pose.return_value = True
     manipulation.plan_cartesian_targets.return_value = True
@@ -141,7 +141,7 @@ def test_client_confirms_table_collision_install(monkeypatch) -> None:  # type: 
         "width": 0.8,
         "depth": 1.0,
     }
-    app = MagicMock(PickNPlaceModule=pnp)
+    app = MagicMock(pnp=pnp)
     manipulation = app.ManipulationModule
     monkeypatch.setattr(pnpconsole.Dimos, "connect", lambda: app)
     choices = iter(["14", "y", "q"])

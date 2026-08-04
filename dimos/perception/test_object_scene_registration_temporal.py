@@ -94,13 +94,17 @@ def test_segmentation_backend_defaults_to_yolo() -> None:
     finally:
         module.stop()
 
-    with pytest.raises(ValueError, match="segmentation_backend"):
+    with pytest.raises(ValueError, match="seg"):
         ObjectSceneRegistrationModule(segmentation_backend="invalid")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="detector_backend"):
+    with pytest.raises(ValueError, match="det"):
         ObjectSceneRegistrationModule(detector_backend="invalid")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="requires"):
+        ObjectSceneRegistrationModule(det="moondream", seg="yolo")
 
 
-def test_edgetam_backend_refines_yolo_detections(monkeypatch: Any, module: ObjectSceneRegistrationModule) -> None:
+def test_edgetam_backend_refines_yolo_detections(
+    monkeypatch: Any, module: ObjectSceneRegistrationModule
+) -> None:
     color = Image(
         data=np.zeros((2, 2, 3), dtype=np.uint8),
         format=ImageFormat.BGR,

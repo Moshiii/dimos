@@ -1,16 +1,7 @@
 # Pick And Place
 
-This directory contains the xArm6 pick-and-place operator pipeline. It has four
-runnable blueprints:
-
-| Blueprint | Grasp source |
-| --- | --- |
-| `picknplace` | Filtered-object OBB center, with optional principal-axis yaw |
-| `picknplace-edgetam` | Text-prompted Moondream boxes refined by EdgeTAM, then OBB-center grasp |
-| `picknplace-graspgenx` | GraspGenX proposals from the selected object's point cloud |
-| `picknplace-graspgenx-edgetam` | Text-prompted Moondream boxes refined by EdgeTAM, then GraspGenX |
-
-All blueprints use the wrist-mounted RealSense and object-scene registration in `link_base`.
+This directory contains the configurable xArm6 `picknplace` operator pipeline.
+It uses the wrist-mounted RealSense and object-scene registration in `link_base`.
 
 ## Setup
 
@@ -35,30 +26,29 @@ by the EdgeTAM blueprint.
 
 ## Run
 
-Start one blueprint in the background:
-
-```bash
-uv run --no-sync dimos run picknplace-graspgenx --daemon
-```
-
-For text-prompted Moondream identification and EdgeTAM segmentation before GraspGenX:
-
-```bash
-uv run --no-sync dimos run picknplace-graspgenx-edgetam --daemon
-```
-
-For text-prompted Moondream identification and EdgeTAM segmentation with the
-simple OBB-center grasp instead:
-
-```bash
-uv run --no-sync dimos run picknplace-edgetam --daemon
-```
-
-For the OBB fallback instead:
+Start the default YOLO-E and OBB-center-grasp pipeline:
 
 ```bash
 uv run --no-sync dimos run picknplace --daemon
 ```
+
+Use text-prompted Moondream detection, EdgeTAM segmentation, and an OBB-center grasp:
+
+```bash
+uv run --no-sync dimos run picknplace --daemon \
+  -o osr.det=moondream -o osr.seg=edgetam -o pnp.grasp=obb_center
+```
+
+Use the same perception stack with GraspGenX:
+
+```bash
+uv run --no-sync dimos run picknplace --daemon \
+  -o osr.det=moondream -o osr.seg=edgetam -o pnp.grasp=graspgenx
+```
+
+`osr.det` accepts `yoloe` or `moondream`; `osr.seg` accepts `yolo` or `edgetam`.
+Moondream requires EdgeTAM because it produces detection boxes rather than masks.
+`pnp.grasp` accepts `obb_center` or `graspgenx`. GraspGenX loads only when selected.
 
 Then connect the console:
 

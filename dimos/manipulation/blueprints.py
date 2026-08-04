@@ -30,7 +30,6 @@ from dimos.manipulation.visualization.viser.config import ViserVisualizationConf
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.perception.detection.detectors.yoloe import YoloePromptMode
 from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.blueprints.agentic import (
@@ -88,134 +87,20 @@ picknplace = autoconnect(
         enable_pointcloud=False,
     ),
     ObjectSceneRegistrationModule.blueprint(
+        instance_name="osr",
         target_frame="link_base",
-        prompt_mode=YoloePromptMode.LRPC,
         register_objects=False,
         detect_on_request=True,
         detector_confidence=0.4,
         object_voxel_downsample=0.001,
     ),
-    PickNPlaceModule.blueprint(align_grasp_yaw=True),
-    vis_module(
-        global_config.viewer,
-        rerun_config=picknplace_rerun_config(),
-    ),
-).global_config(rerun_open="web")
-
-
-picknplace_edgetam = autoconnect(
-    coordinator(
-        hardware=[_picknplace_xarm6_hardware],
-        tasks=[trajectory_task(_picknplace_xarm6_hardware)],
-    ),
-    ManipulationModule.blueprint(
-        robots=[_picknplace_xarm6_model],
-        visualization=ViserVisualizationConfig(port=8095),
-        planning_timeout=10.0,
-    ),
-    RealSenseCamera.blueprint(
-        width=848,
-        height=480,
-        fps=15,
-        camera_name="camera",
-        base_frame_id="link6",
-        base_transform=PICKNPLACE_CAMERA_TRANSFORM,
-        enable_depth=True,
-        align_depth_to_color=True,
-        enable_pointcloud=False,
-    ),
-    ObjectSceneRegistrationModule.blueprint(
-        target_frame="link_base",
-        prompt_mode=YoloePromptMode.PROMPT,
-        detector_backend="moondream",
-        segmentation_backend="edgetam",
-        register_objects=False,
-        detect_on_request=True,
-        detector_confidence=0.4,
-        object_voxel_downsample=0.001,
-    ),
-    PickNPlaceModule.blueprint(align_grasp_yaw=True),
-    vis_module(
-        global_config.viewer,
-        rerun_config=picknplace_rerun_config(),
-    ),
-).global_config(rerun_open="web")
-
-
-picknplace_graspgenx = autoconnect(
-    coordinator(
-        hardware=[_picknplace_xarm6_hardware],
-        tasks=[trajectory_task(_picknplace_xarm6_hardware)],
-    ),
-    ManipulationModule.blueprint(
-        robots=[_picknplace_xarm6_model],
-        visualization=ViserVisualizationConfig(port=8095),
-        planning_timeout=10.0,
-    ),
-    RealSenseCamera.blueprint(
-        width=848,
-        height=480,
-        fps=15,
-        camera_name="camera",
-        base_frame_id="link6",
-        base_transform=PICKNPLACE_CAMERA_TRANSFORM,
-        enable_depth=True,
-        align_depth_to_color=True,
-        enable_pointcloud=False,
-    ),
-    ObjectSceneRegistrationModule.blueprint(
-        target_frame="link_base",
-        prompt_mode=YoloePromptMode.LRPC,
-        register_objects=False,
-        detect_on_request=True,
-        detector_confidence=0.4,
-        object_voxel_downsample=0.001,
-    ),
-    PickNPlaceModule.blueprint(align_grasp_yaw=True, grasp_strategy="graspgenx"),
+    PickNPlaceModule.blueprint(instance_name="pnp", align_grasp_yaw=True),
     GraspGenXModule.blueprint(
-        **_xarm_graspgenx.model_dump(exclude={"rpc_transport", "tf_transport", "g"})
-    ),
-    vis_module(
-        global_config.viewer,
-        rerun_config=picknplace_rerun_config(),
-    ),
-).global_config(rerun_open="web")
-
-
-picknplace_graspgenx_edgetam = autoconnect(
-    coordinator(
-        hardware=[_picknplace_xarm6_hardware],
-        tasks=[trajectory_task(_picknplace_xarm6_hardware)],
-    ),
-    ManipulationModule.blueprint(
-        robots=[_picknplace_xarm6_model],
-        visualization=ViserVisualizationConfig(port=8095),
-        planning_timeout=10.0,
-    ),
-    RealSenseCamera.blueprint(
-        width=848,
-        height=480,
-        fps=15,
-        camera_name="camera",
-        base_frame_id="link6",
-        base_transform=PICKNPLACE_CAMERA_TRANSFORM,
-        enable_depth=True,
-        align_depth_to_color=True,
-        enable_pointcloud=False,
-    ),
-    ObjectSceneRegistrationModule.blueprint(
-        target_frame="link_base",
-        prompt_mode=YoloePromptMode.PROMPT,
-        detector_backend="moondream",
-        segmentation_backend="edgetam",
-        register_objects=False,
-        detect_on_request=True,
-        detector_confidence=0.4,
-        object_voxel_downsample=0.001,
-    ),
-    PickNPlaceModule.blueprint(align_grasp_yaw=True, grasp_strategy="graspgenx"),
-    GraspGenXModule.blueprint(
-        **_xarm_graspgenx.model_dump(exclude={"rpc_transport", "tf_transport", "g"})
+        instance_name="ggx",
+        load_on_start=False,
+        **_xarm_graspgenx.model_dump(
+            exclude={"rpc_transport", "tf_transport", "g", "instance_name", "load_on_start"}
+        ),
     ),
     vis_module(
         global_config.viewer,
