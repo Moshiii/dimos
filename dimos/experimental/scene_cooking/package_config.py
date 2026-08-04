@@ -38,12 +38,28 @@ class BrowserVisualSpec:
     normalize_textures: bool = True
     quantize: bool = False
     use_gpu_instancing: bool = False
+    preserve_geometry: bool = False
     demote_required_extensions: tuple[str, ...] = ("KHR_texture_transform",)
     max_meshes: int = 200
     max_materials: int = 50
     max_textures: int = 750
     max_vertices: int = 750_000
     max_vertex_growth_ratio: float = 1.25
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.simplify_ratio <= 1.0:
+            raise ValueError("visual simplify_ratio must satisfy 0 < ratio <= 1")
+        if self.preserve_geometry and (
+            self.simplify_ratio != 1.0
+            or self.quantize
+            or self.texture_format is not None
+            or self.max_texture_size is not None
+            or self.normalize_textures
+        ):
+            raise ValueError(
+                "geometry-preserving visuals cannot simplify, quantize, resize, "
+                "convert, or normalize textures"
+            )
 
     @property
     def target_key(self) -> str:
@@ -57,6 +73,23 @@ class BrowserVisualSpec:
 #: Per-target overrides layered on top of ``BrowserVisualSpec``'s defaults.
 #: "rerun" has no entry here -- its values *are* the dataclass defaults.
 _BROWSER_VISUAL_PROFILES: dict[str, dict[str, Any]] = {
+    "mesh": {
+        "optimizer": "gltfpack",
+        "simplify_ratio": 1.0,
+        "simplify_error": 0.0,
+        "texture_format": None,
+        "max_texture_size": None,
+        "normalize_textures": False,
+        "quantize": False,
+        "use_gpu_instancing": True,
+        "preserve_geometry": True,
+        "demote_required_extensions": (),
+        "max_meshes": 1_000,
+        "max_materials": 500,
+        "max_textures": 2_000,
+        "max_vertices": 2_000_000,
+        "max_vertex_growth_ratio": 1.0,
+    },
     "babylon": {
         "optimizer": "gltfpack",
         "simplify_ratio": 0.3,
@@ -131,6 +164,8 @@ class SceneCookSpec:
 
     source_path: Path
     alignment: SceneMeshAlignment = field(default_factory=SceneMeshAlignment)
-    browser_visual: BrowserVisualSpec = field(default_factory=BrowserVisualSpec)
+    browser_visuals: tuple[BrowserVisualSpec, ...] = field(
+        default_factory=lambda: (BrowserVisualSpec(),)
+    )
     browser_collision: BrowserCollisionSpec = field(default_factory=BrowserCollisionSpec)
     mujoco: MujocoSceneSpec = field(default_factory=MujocoSceneSpec)
