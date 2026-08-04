@@ -1958,6 +1958,7 @@ r1lite-runtime = [
     { name = "trimesh" },
     { name = "uvicorn" },
     { name = "viser", extra = ["urdf"] },
+    { name = "xacro" },
 ]
 tests = [
     { name = "chromadb" },
@@ -2259,6 +2260,7 @@ r1lite-runtime = [
     { name = "trimesh", specifier = ">=4.0.0" },
     { name = "uvicorn", specifier = ">=0.34.0" },
     { name = "viser", extras = ["urdf"], specifier = ">=1.0.29" },
+    { name = "xacro" },
 ]
 tests = [
     { name = "chromadb", specifier = ">=1.0.0" },

@@ -485,6 +485,7 @@ r1lite-runtime = [
     "viser[urdf]>=1.0.29",
     "trimesh>=4.0.0",
     "roboplan",
+    "xacro",
 ]
 
 # Full CI test group for the self-hosted runner. Inherits `tests` and adds
