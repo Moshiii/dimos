@@ -29,6 +29,7 @@ from dimos.manipulation.picknplace import (
 from dimos.manipulation.planning.spec.models import IKResult, IKStatus
 from dimos.manipulation.visualization.layers import MeshElement
 from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
@@ -41,6 +42,7 @@ def test_picknplace_scans_and_selects_target() -> None:
     with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
         module = PickNPlaceModule()
     module.config = PickNPlaceConfig()
+    module._visualization = MagicMock()
     scene = MagicMock()
     detections = MagicMock()
     module._scene = scene
@@ -90,6 +92,7 @@ def test_picknplace_scans_and_selects_target() -> None:
         "pitch": 0.0,
         "yaw": 0.0,
     }
+    assert module._selected_object is obj
 
     module.scan_scene("water bottle")
     scene.set_prompts.assert_called_once_with(["water bottle"])
@@ -99,6 +102,88 @@ def test_picknplace_scans_and_selects_target() -> None:
     assert yaw_aligned_goal is not None
     expected = Quaternion.from_euler(Vector3(-math.pi, 0.0, 0.0))
     assert yaw_aligned_goal.orientation.angle_to(expected) == pytest.approx(0.0)
+
+
+def test_scan_objects_uses_independent_simple_queries() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    module._visualization = MagicMock()
+    module.scan_scene = MagicMock(detections_length=3)
+    module.get_scene_info = MagicMock(return_value=[])
+    module._publish_scene_objects = MagicMock()
+
+    result = module.scan_objects([" wooden block ", "white box", " "])
+
+    assert result.is_success()
+    assert result.metadata["queried_names"] == ["wooden block", "white box"]
+    module.scan_scene.assert_called_once_with(prompts=["wooden block", "white box"])
+
+
+def test_pick_selected_verifies_gripper_did_not_fully_close() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    module.config = PickNPlaceConfig(grasp_feedback_delay=0.0)
+    module._goal_pose = PoseStamped(
+        position=Vector3(0.3, 0.1, 0.12),
+        orientation=Quaternion.from_euler(Vector3(-math.pi, 0.0, 0.0)),
+    )
+    module._pre_grasp_pose = PoseStamped(
+        position=Vector3(0.3, 0.1, 0.22),
+        orientation=Quaternion.from_euler(Vector3(-math.pi, 0.0, 0.0)),
+    )
+    module._pick_execution = MagicMock()
+    module._pick_execution.open_gripper.return_value = MagicMock(is_success=lambda: True)
+    module._pick_execution.move_to_pose.return_value = MagicMock(is_success=lambda: True)
+    module._pick_execution.close_gripper.return_value = MagicMock(is_success=lambda: True)
+    module._pick_execution.get_gripper.return_value = 0.0
+
+    result = module.pick_selected()
+
+    assert not result.is_success()
+    assert result.error_code == "GRASP_VERIFICATION_FAILED"
+    assert "empty-closed" in result.message
+    assert result.metadata["gripper_position"] == 0.0
+    assert result.metadata["rescan_required"] is True
+    assert result.metadata["recovered_to_pre_grasp"] is True
+    assert module._pick_execution.open_gripper.call_count == 2
+    assert module._pick_execution.move_to_pose.call_count == 3
+
+
+def test_place_selected_uses_remembered_box_and_held_object() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    module.config = PickNPlaceConfig()
+    module._open_box = {
+        "center_x": 0.4,
+        "center_y": -0.1,
+        "tabletop_z": 0.1,
+        "rim_z": 0.18,
+        "opening_width": 0.18,
+        "opening_depth": 0.14,
+    }
+    module._held_object_size = Vector3(0.04, 0.03, 0.02)
+    module._pick_execution = MagicMock()
+    module._pick_execution.move_to_pose.return_value = MagicMock(is_success=lambda: True)
+    module._pick_execution.open_gripper.return_value = MagicMock(is_success=lambda: True)
+    module._pick_execution.get_ee_pose.return_value = Pose(
+        Vector3(0.3, 0.1, 0.22), Quaternion(0.0, 0.0, 0.0, 1.0)
+    )
+
+    result = module.place_selected()
+
+    assert result.is_success()
+    assert module._pick_execution.move_to_pose.call_args_list[0].args[:3] == pytest.approx(
+        (0.3, 0.1, 0.31)
+    )
+    assert module._pick_execution.move_to_pose.call_args_list[1].args[:3] == pytest.approx(
+        (0.4, -0.1, 0.31)
+    )
+    assert module._pick_execution.move_to_pose.call_args_list[2].args[:3] == pytest.approx(
+        (0.4, -0.1, 0.21)
+    )
+    assert result.metadata["object_bottom_clearance"] == pytest.approx(0.02)
+    assert module._pick_execution.move_to_pose.call_count == 3
+    assert module._held_object_size is None
 
 
 def test_picknplace_home_matches_xarm_lifecycle_home() -> None:
@@ -123,6 +208,10 @@ def test_picknplace_graspgenx_uses_xarm_tcp_calibration() -> None:
 
 def test_picknplace_yaw_alignment_defaults_to_disabled() -> None:
     assert not PickNPlaceConfig().align_grasp_yaw
+
+
+def test_parallel_jaw_yaw_uses_the_nearest_equivalent_orientation() -> None:
+    assert PickNPlaceModule._closest_parallel_jaw_yaw(-math.pi + 0.02, 0.0) == pytest.approx(0.02)
 
 
 def test_picknplace_blueprint_accepts_short_backend_and_grasp_options() -> None:
@@ -205,6 +294,34 @@ def test_estimate_table_runs_a_fresh_scan_before_fitting() -> None:
 
     assert result.is_success()
     module.scan_scene.assert_called_once_with()
+
+
+def test_install_open_box_is_display_only() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    obj = MagicMock(
+        center=Vector3(0.4, 0.1, 0.14),
+        size=Vector3(0.20, 0.16, 0.08),
+    )
+    obj.pose.orientation = Quaternion.from_euler(Vector3(0.0, 0.0, 0.0))
+    obj.pointcloud.points_f32.return_value = np.asarray([[0.3, 0.1, 0.18]] * 10, dtype=np.float32)
+    module._latest_objects = (obj,)
+    module._tabletop_z = 0.10
+    module._obstacle_world = MagicMock()
+    module._obstacle_world.update_obstacle.return_value = False
+    module._obstacle_world.add_obstacle.side_effect = lambda name, *_: name
+    module._visualization = MagicMock()
+
+    result = module.install_open_box(1, wall_thickness=0.01)
+
+    assert result.is_success()
+    assert result.metadata["opening_width"] == pytest.approx(0.18)
+    assert result.metadata["opening_depth"] == pytest.approx(0.14)
+    module._obstacle_world.add_obstacle.assert_not_called()
+    module._obstacle_world.update_obstacle.assert_not_called()
+    layer = module._visualization.set_visualization_layer.call_args.args[0]
+    assert layer.id == "picknplace/open-box"
+    assert layer.elements[0].id == "box-envelope"
 
 
 def test_picknplace_uses_top_graspgenx_candidate() -> None:

@@ -1698,13 +1698,13 @@ class ManipulationModule(Module):
         tabletop_z: float,
         width: float,
         depth: float,
-        safety_margin: float = 0.015,
+        safety_margin: float = 0.0,
         thickness: float = 0.20,
     ) -> bool:
         """Install or update a horizontal table collision slab.
 
-        All dimensions are meters. ``tabletop_z`` is the measured physical tabletop height; a positive
-        ``safety_margin`` raises the slab above it to preserve clearance for collision planning.
+        All dimensions are meters. ``tabletop_z`` is the measured physical tabletop height. The default
+        uses no added clearance so a grasp can descend to an object's measured contact pose.
         """
         if self._world_monitor is None:
             return False
@@ -1883,6 +1883,17 @@ class ManipulationModule(Module):
             )
         return self._preview_execute_wait(robot_name)
 
+    def _planner_fault_result(self) -> SkillResult[ManipulationSkillError] | None:
+        """Return an actionable failure while the planner requires recovery."""
+        with self._lock:
+            if self._state != ManipulationState.FAULT:
+                return None
+            detail = self._error_message or "unknown planner error"
+        return SkillResult.fail(
+            "INVALID_STATE",
+            f"Planner is FAULT ({detail}). Call reset before issuing another motion command.",
+        )
+
     def _preview_execute_wait(
         self, robot_name: RobotName | None = None, preview_duration: float = 0.5
     ) -> SkillResult[ManipulationSkillError]:
@@ -1961,6 +1972,9 @@ class ManipulationModule(Module):
             yaw: Target yaw in radians (omit to keep current orientation).
             robot_name: Robot to move (only needed for multi-arm setups).
         """
+        if fault := self._planner_fault_result():
+            return fault
+
         logger.info(f"Planning motion to ({x:.3f}, {y:.3f}, {z:.3f})...")
 
         # If no orientation specified, preserve the current EE orientation.
@@ -2018,6 +2032,9 @@ class ManipulationModule(Module):
             joints: Comma-separated joint positions in radians, e.g. "0.1, -0.5, 1.2, 0.0, 0.3, -0.1".
             robot_name: Robot to move (only needed for multi-arm setups).
         """
+        if fault := self._planner_fault_result():
+            return fault
+
         try:
             joint_values = [float(j.strip()) for j in joints.split(",")]
         except ValueError:
@@ -2054,6 +2071,9 @@ class ManipulationModule(Module):
         Args:
             robot_name: Robot to move (only needed for multi-arm setups).
         """
+        if fault := self._planner_fault_result():
+            return fault
+
         robot = self._get_robot(robot_name)
         if robot is None:
             return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
@@ -2090,6 +2110,9 @@ class ManipulationModule(Module):
         Args:
             robot_name: Robot to move (only needed for multi-arm setups).
         """
+        if fault := self._planner_fault_result():
+            return fault
+
         robot = self._get_robot(robot_name)
         if robot is None:
             return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")

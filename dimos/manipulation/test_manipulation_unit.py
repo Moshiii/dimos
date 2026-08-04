@@ -249,6 +249,20 @@ class TestSafetyLift:
         plan.assert_not_called()
 
 
+class TestAgentMotionRecovery:
+    def test_move_to_pose_explains_how_to_recover_from_fault(self, module_factory) -> None:
+        module = module_factory()
+        module._state = ManipulationState.FAULT
+        module._error_message = "Trajectory execution timed out"
+
+        result = module.move_to_pose(0.2, 0.0, 0.1)
+
+        assert not result.is_success()
+        assert result.error_code == "INVALID_STATE"
+        assert "FAULT" in result.message
+        assert "reset" in result.message
+
+
 class TestObstacleUpdates:
     def test_complete_update_forwards_new_obstacle_value(self, module_factory) -> None:
         module = module_factory()

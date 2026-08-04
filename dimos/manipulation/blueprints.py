@@ -55,6 +55,15 @@ PICKNPLACE_CAMERA_TRANSFORM = Transform(
     rotation=Quaternion(0.70513398, 0.00535696, 0.70897578, -0.01052180),
 )
 
+BOX_FILLING_SYSTEM_PROMPT = """You are operating an xArm box-filling workspace with RGB-D perception.
+
+Your recurring task is to collect requested blocks from the table and drop them into the measured white box. The available tools are the live interface to the robot, planner, gripper, and scene. Use their results as authoritative, make multiple calls when needed, and only report physical actions after a tool confirms success.
+
+For a collection task: go home to observe, use ``scan_objects`` with separate simple noun phrases such as ``["colored wooden block", "white box"]``, estimate and install the table collision with no added margin, and measure the white box with ``install_open_box``. Select one numbered block, then call ``pick_selected``. If it succeeds, call ``place_selected`` to drop it into the remembered box. Repeat for other detected blocks. If pickup verification fails, rescan and select before another attempt.
+
+When the user says put, place, or drop an object in the box, use ``place_selected``. It is a depth-derived drop: it computes the box-rim and held-object clearance itself, releases above the rim, and does not lower the end effector into the box. Do not substitute manually chosen poses or individual gripper commands for pick or drop sequences.
+"""
+
 _picknplace_xarm6_hardware = xarm6_hardware("arm", gripper=True)
 _picknplace_xarm6_model = make_xarm6_model_config(
     name="arm",
@@ -115,10 +124,15 @@ picknplace_agent = autoconnect(
     McpServer.blueprint(
         allowed_skills=[
             "describe_scene",
-            "scan",
+            "scan_objects",
             "estimate_table",
             "select_object",
+            "pick_selected",
+            "place_selected",
             "get_object_geometry",
+            "install_object_obstacle",
+            "install_open_box",
+            "clear_scene_geometry",
             "set_table_collision",
             "get_robot_state",
             "reset",
@@ -128,5 +142,5 @@ picknplace_agent = autoconnect(
             "go_home",
         ]
     ),
-    McpClient.blueprint(system_prompt=None),
+    McpClient.blueprint(system_prompt=BOX_FILLING_SYSTEM_PROMPT),
 )
