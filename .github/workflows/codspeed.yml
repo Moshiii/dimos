@@ -1,0 +1,67 @@
+name: codspeed
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  UV_NO_SYNC: "1"
+
+jobs:
+  benchmarks:
+    timeout-minutes: 30
+    # CodSpeed-managed bare-metal ARM64 runner; required for walltime mode.
+    runs-on: codspeed-macro
+    permissions:
+      contents: read  # For checkout
+      id-token: write  # OIDC upload to CodSpeed
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      # After checkout (lfs: false) the archive is a ~130-byte LFS pointer;
+      # hashFiles() of the pointer is a stable content-addressed key that
+      # changes exactly when the recording changes (arch-independent asset).
+      - name: Cache the replay dataset archive
+        uses: actions/cache@v6
+        with:
+          path: data/.lfs/go2_hongkong_office.db.tar.gz
+          key: lfs-go2-hongkong-office-${{ hashFiles('data/.lfs/go2_hongkong_office.db.tar.gz') }}
+      # Self-healing whether or not the cache restored anything: pull only when
+      # the file is still a pointer. Anonymous read from the .lfsconfig endpoint.
+      - name: Fetch the replay dataset from LFS if not cached
+        run: |
+          if git lfs pointer --check --file data/.lfs/go2_hongkong_office.db.tar.gz; then
+            git lfs pull --include="data/.lfs/go2_hongkong_office.db.tar.gz" --exclude=""
+          else
+            echo "archive restored from cache"
+          fi
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev libturbojpeg
+      - name: Raise UDP receive buffers for LCM
+        run: sudo sysctl -w net.core.rmem_max=67108864 net.core.rmem_default=67108864
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+      - name: Setup Python
+        uses: actions/setup-python@v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: uv sync --group tests --frozen
+      - name: Pre-extract the replay database
+        run: uv run python -c "from dimos.utils.data import get_data; print(get_data('go2_hongkong_office.db'))"
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: walltime
+          run: uv run pytest --codspeed -m '' --no-cov dimos/robot/unitree/go2/test_replay_benchmark.py
