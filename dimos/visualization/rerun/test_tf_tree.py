@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Where the triads get drawn. How they look is for a human with the viewer open."""
+"""Where the triads get drawn, not how they look."""
 
 from __future__ import annotations
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Labeled axis triads for every frame of a tf tree."""
+"""Axis triads for every frame of a tf tree."""
 
 from __future__ import annotations
 
@@ -36,9 +36,8 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 DEFAULT_TF_ROOT = "world/tf"
-# Where the transforms themselves are declared. Off to the side and free of
-# geometry: rerun pins a frame to the entity that declares it for the life of a
-# recording, so these cannot follow the tree when it re-roots.
+# Where the transforms are declared. Rerun pins a frame to its declaring entity
+# for the life of a recording, so these cannot move with the tree.
 DEFAULT_LINKS_ROOT = "tf_links"
 DEFAULT_AXIS_LENGTH = 0.5
 DEFAULT_TIMELINE = "ts"
@@ -50,7 +49,7 @@ AXIS_COLORS = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
 
 
 def triad(length: float) -> rr.Arrows3D:
-    """XYZ arrows, red green blue for x y z."""
+    """XYZ arrows, red green blue."""
     import rerun as rr
 
     return rr.Arrows3D(
@@ -70,11 +69,10 @@ class Placement:
 
 
 class TFTreeVis:
-    """Draws the tf tree, one nested entity per frame carrying a labeled triad.
+    """Draws the tf tree, one nested entity per frame carrying a triad.
 
-    Under root sits nothing but the tree. The transforms are declared apart from
-    it, under links, because a frame is pinned to its declaring entity while the
-    tree has to re-parent when a publisher starts late.
+    Under root sits nothing but the tree. The transforms are declared apart
+    from it, under links.
     """
 
     def __init__(
@@ -94,9 +92,7 @@ class TFTreeVis:
     def log(self, msg: TFMessage, archetypes: Iterable[Archetype]) -> None:
         """Declare the transforms, then redraw once a message adds nothing new.
 
-        Publishers split one tree across several messages, and drawing each of
-        them walks the tree through shapes it never really had, leaving a stale
-        entity behind every time.
+        Publishers split one tree across several messages.
         """
         import rerun as rr
 
@@ -113,7 +109,7 @@ class TFTreeVis:
                 self._redraw()
 
     def flush(self) -> None:
-        """Draw a pending change that no later message arrived to trigger."""
+        """Draw a pending change nothing else triggered."""
         with self._lock:
             if self._pending:
                 self._pending = False
@@ -191,17 +187,20 @@ class RerunTFTree(Transformer[T, T]):
         pending = iter(self._tf)
         head = next(pending, None)
         floor: float | None = None
-        for obs in upstream:
-            if floor is None:
-                # tf older than the replay would otherwise all land on frame one.
-                floor = obs.ts
-            while head is not None and head.ts <= obs.ts:
-                if head.ts >= floor:
-                    self._log(head)
-                head = next(pending, None)
-            rr.set_time(DEFAULT_TIMELINE, timestamp=obs.ts)
-            yield obs
-        self._vis.flush()
+        try:
+            for obs in upstream:
+                if floor is None:
+                    # tf older than the replay would otherwise all land on frame one.
+                    floor = obs.ts
+                while head is not None and head.ts <= obs.ts:
+                    if head.ts >= floor:
+                        self._log(head)
+                    head = next(pending, None)
+                rr.set_time(DEFAULT_TIMELINE, timestamp=obs.ts)
+                yield obs
+        finally:
+            # Ctrl+C abandons the generator rather than exhausting it.
+            self._vis.flush()
 
     def _log(self, tf_obs: Observation[TFMessage]) -> None:
         import rerun as rr

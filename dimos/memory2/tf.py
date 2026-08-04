@@ -31,8 +31,7 @@ if TYPE_CHECKING:
 def tf_stream(store: Any, stream: str = "tf") -> Stream[TFMessage] | None:
     """The recording's tf stream, or None if it has none.
 
-    Asking a store for an absent stream registers it and writes its tables, so
-    the name has to be checked first.
+    Asking a store for an absent stream creates it, so the name is checked first.
     """
     if stream not in store.list_streams():
         return None

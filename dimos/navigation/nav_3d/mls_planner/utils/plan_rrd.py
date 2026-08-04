@@ -39,7 +39,7 @@ from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.navigation.nav_3d.mls_planner.mls_planner import MLSPlanner
-from dimos.navigation.tf_pose import OdomBasePose, base_height_above_ground
+from dimos.navigation.tf_pose import base_height_above_ground
 from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
 from dimos.utils.data import resolve_named_path
 from dimos.visualization.rerun.tf_tree import RerunTFTree
@@ -141,8 +141,7 @@ def _log_path_wp(waypoints: NDArray[np.float32] | None, entity: str, color: list
 def _tf_over(store: SqliteStore, window: Stream[Any]) -> Stream[TFMessage] | None:
     """The recorded tf stream clipped to another stream's span.
 
-    Absolute bounds: the relative ones anchor on each stream's own first
-    observation, and tf rarely starts on the same sample as the lidar.
+    Absolute bounds: relative ones anchor on each stream's own first observation.
     """
     recorded = tf_stream(store)
     if recorded is None:
@@ -158,16 +157,15 @@ def _tf_over(store: SqliteStore, window: Stream[Any]) -> Stream[TFMessage] | Non
 class BaseSource:
     """Where the body pose comes from. The planner never starts from the sensor.
 
-    The mount leg is what a healthy recording carries, and it rides the replayed
-    odometry rather than the recorded one. Without it the body is read straight
-    off tf, which on a recording whose base_link hangs under a second odometry
-    is the wrong spot, visibly so.
+    Prefers the mount leg, which rides the replayed odometry rather than the
+    recorded one, and falls back to reading the body straight off tf.
     """
 
-    def __init__(self, tf: StreamTF) -> None:
+    def __init__(self, tf: StreamTF, start: float) -> None:
         self._tf = tf
-        # Also primes the buffer: a replay tf loads nothing until it is asked.
-        self.leg = OdomBasePose(tf, BASE_FRAME).sensor_to_base(SENSOR_FRAME)
+        # A replay tf loads nothing until asked, and an untimed lookup anchors on
+        # the end of the stream. Ask at the window this run replays.
+        self.leg = tf.get(SENSOR_FRAME, BASE_FRAME, time_point=start)
         if BASE_FRAME not in tf.get_frames():
             raise typer.BadParameter(
                 f"recording has no {BASE_FRAME} on tf, so there is no body pose to plan from. "
@@ -193,13 +191,17 @@ class BaseSource:
         return self._tf.get(self.root, BASE_FRAME, time_point=ts)
 
 
-def _base_source(store: SqliteStore) -> BaseSource:
+def _base_source(store: SqliteStore, window: Stream[Any]) -> BaseSource:
     tf = StreamTF.from_store(store)
     if tf is None:
         raise typer.BadParameter(
             "recording has no tf stream, so there is no body pose to plan from"
         )
-    return BaseSource(tf)
+    try:
+        start = window.first().ts
+    except LookupError:
+        raise typer.BadParameter("no data in the requested window") from None
+    return BaseSource(tf, start)
 
 
 def _base_pose(pose: tuple[float, ...], ts: float, base_from_sensor: Transform) -> Transform:
@@ -216,7 +218,7 @@ def _base_pose(pose: tuple[float, ...], ts: float, base_from_sensor: Transform) 
 
 
 def _plan_start(base: Transform, base_height: float) -> tuple[float, float, float]:
-    """The body pose dropped to the ground, which is where the planner starts."""
+    """The body pose dropped to the ground, where the planner starts."""
     return (
         float(base.translation.x),
         float(base.translation.y),
@@ -227,12 +229,7 @@ def _plan_start(base: Transform, base_height: float) -> tuple[float, float, floa
 def _log_odometry(
     pose: tuple[float, ...], ts: float, trail: list[tuple[float, float, float]], base: Transform
 ) -> None:
-    """Trace the sensor through the scene, and put the body where the planner has it.
-
-    The body is drawn on its own entity rather than a tf frame: on a recording
-    whose tf carries a second odometry estimate, the frame and the pose the
-    planner used are not the same place.
-    """
+    """Trace the sensor through the scene, and put the body where the planner has it."""
     import rerun as rr
 
     px, py, pz, *_ = pose
@@ -632,7 +629,7 @@ def main(
 
         rr.log("world/goal", rr.Points3D([goal], colors=[[255, 0, 0]], radii=0.1), static=True)
 
-        base_source = _base_source(store)
+        base_source = _base_source(store, lidar)
         base_height = base_source.base_height(robot_height)
         rr.log(
             "world/robot_body/outline",

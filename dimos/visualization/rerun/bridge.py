@@ -597,6 +597,8 @@ class RerunBridgeModule(Module):
     def stop(self) -> None:
         self._override_cache.clear()
         self._frame_attached.clear()
+        if self._tf_tree is not None:
+            self._tf_tree.flush()
         self._tf_tree = None
         super().stop()
 
