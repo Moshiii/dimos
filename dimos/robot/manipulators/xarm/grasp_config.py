@@ -22,7 +22,8 @@ from dimos.manipulation.grasping.grasp_gen_x import (
 )
 
 # Geometry was derived from UFACTORY's xarm_ros gripper URDF and collision
-# meshes at commit 0b5118eb6bf664fc3891c14b203e6ecbd5095dca:
+# meshes at commit 0b5118eb6bf664fc3891c14b203e6ecbd5095dca, and matches
+# data/xarm_grasp_sim/xarm7.xml:
 # - link_tcp is 0.172 m along +Z from xarm_gripper_base_link
 # - link_tcp's closing axis is 90 degrees counter-clockwise around local +Z
 #   from GraspGenX's local +X closing axis
