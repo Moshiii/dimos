@@ -20,7 +20,7 @@ import threading
 from unittest.mock import MagicMock
 
 from dimos.agents.capabilities import CapabilityRegistry
-from dimos.agents.mcp.mcp_server import app, handle_request
+from dimos.agents.mcp.mcp_server import _filter_skills, app, handle_request
 from dimos.core.module import SkillInfo
 
 
@@ -37,6 +37,17 @@ def _make_rpc_calls(
             mock_call.return_value = None
         rpc_calls[skill.func_name] = mock_call
     return rpc_calls
+
+
+def test_filter_skills_respects_allowlist() -> None:
+    schema = json.dumps({"type": "object", "properties": {}})
+    skills = [
+        SkillInfo(class_name="TestSkills", func_name="safe", args_schema=schema),
+        SkillInfo(class_name="TestSkills", func_name="unsafe", args_schema=schema),
+    ]
+
+    assert [skill.func_name for skill in _filter_skills(skills, ["safe"])] == ["safe"]
+    assert _filter_skills(skills, None) == skills
 
 
 def test_mcp_module_request_flow() -> None:

@@ -223,6 +223,17 @@ class ObjectSceneRegistrationModule(Module):
         )
 
     @rpc
+    def describe_scene(self, question: str) -> str:
+        """Answer an open-ended scene question using the configured Moondream detector."""
+        frames = self._latest_aligned_frames
+        if frames is None:
+            raise RuntimeError("No aligned RGB-D frame is available")
+        describe_image = getattr(self._detector, "describe_image", None)
+        if not callable(describe_image):
+            raise RuntimeError("Scene description requires osr.det=moondream")
+        return str(describe_image(frames[0], question))
+
+    @rpc
     def get_object_pointcloud_by_name(self, name: str) -> PointCloud2 | None:
         """Get pointcloud for an object by class name."""
         objects = [obj for obj in self._known_objects() if obj.name == name]

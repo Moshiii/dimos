@@ -21,6 +21,8 @@ from typing import Literal
 import numpy as np
 from pydantic import AliasChoices, Field
 
+from dimos.agents.annotation import skill
+from dimos.agents.skill_result import SkillResult
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
@@ -151,6 +153,19 @@ class PickNPlaceModule(Module):
             )
         return detections
 
+    @skill
+    def scan(self, prompt: str) -> SkillResult:
+        """Detect a prompted object with the configured RGB-D perception pipeline."""
+        if not prompt.strip():
+            return SkillResult.fail("INVALID_INPUT", "A nonempty object prompt is required")
+        try:
+            detections = self.scan_scene(prompt)
+        except RuntimeError as exc:
+            return SkillResult.fail("PERCEPTION_FAILED", str(exc))
+        return SkillResult.ok(
+            f"Detected {detections.detections_length} object(s)", objects=self.get_scene_info()
+        )
+
     @rpc
     def get_scene_info(self) -> list[dict[str, object]]:
         """Return the number, name, and confidence for current detections."""
@@ -164,6 +179,26 @@ class PickNPlaceModule(Module):
             }
             for number, obj in enumerate(objects, 1)
         ]
+
+    @skill
+    def describe_scene(self, question: str = "What objects are visible on the table?") -> str:
+        """Answer an open-ended question about the latest camera frame."""
+        return self._scene.describe_scene(question)
+
+    @skill
+    def get_object_geometry(self, number: int) -> dict[str, object] | None:
+        """Return one current object's center and OBB dimensions in the planning frame."""
+        with self._objects_condition:
+            if number < 1 or number > len(self._latest_objects):
+                return None
+            obj = self._latest_objects[number - 1]
+        return {
+            "number": number,
+            "name": obj.name,
+            "frame_id": obj.frame_id,
+            "center": [obj.center.x, obj.center.y, obj.center.z],
+            "size": [obj.size.x, obj.size.y, obj.size.z],
+        }
 
     @rpc
     def get_goal_pose(self, number: int) -> PoseStamped | None:
@@ -194,6 +229,31 @@ class PickNPlaceModule(Module):
         )
         self._pre_grasp_pose = None
         return self._goal_pose
+
+    @skill
+    def select_object(self, number: int) -> SkillResult:
+        """Select an object and return its collision-free grasp and pre-grasp target coordinates."""
+        goal = self.get_goal_pose(number)
+        if goal is None:
+            return SkillResult.fail("INVALID_INPUT", f"No selectable object numbered {number}")
+        pre_grasp = self.get_pre_grasp_pose()
+        if pre_grasp is None:
+            return SkillResult.fail("INVALID_STATE", "Selected object has no pre-grasp target")
+
+        def pose_target(pose: PoseStamped) -> dict[str, float]:
+            euler = pose.orientation.to_euler()
+            return {
+                "x": pose.position.x,
+                "y": pose.position.y,
+                "z": pose.position.z,
+                "roll": euler.x,
+                "pitch": euler.y,
+                "yaw": euler.z,
+            }
+
+        return SkillResult.ok(
+            "Object selected", goal=pose_target(goal), pre_grasp=pose_target(pre_grasp)
+        )
 
     @rpc
     def select_grasp_candidate(self, rank: int) -> PoseStamped | None:
@@ -340,6 +400,16 @@ class PickNPlaceModule(Module):
             )
         )
         return estimate
+
+    @skill
+    def estimate_table(self) -> SkillResult:
+        """Estimate the current tabletop and return its planning-frame footprint in meters."""
+        estimate = self.estimate_table_surface()
+        if estimate is None:
+            return SkillResult.fail(
+                "PERCEPTION_FAILED", "No horizontal tabletop estimate is available"
+            )
+        return SkillResult.ok("Table estimated", **estimate)
 
     def _basic_grasp(self, number: int) -> tuple[PoseStamped, DetObject] | None:
         """Return the selected cloud's OBB-center grasp frame and object geometry."""

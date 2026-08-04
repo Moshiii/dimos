@@ -19,6 +19,8 @@ Robot-owned manipulation blueprints now live under ``dimos.robot.manipulators``.
 
 import math
 
+from dimos.agents.mcp.mcp_client import McpClient
+from dimos.agents.mcp.mcp_server import McpServer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
@@ -107,3 +109,23 @@ picknplace = autoconnect(
         rerun_config=picknplace_rerun_config(),
     ),
 ).global_config(rerun_open="web")
+
+picknplace_agent = autoconnect(
+    picknplace,
+    McpServer.blueprint(
+        allowed_skills=[
+            "describe_scene",
+            "scan",
+            "estimate_table",
+            "select_object",
+            "get_object_geometry",
+            "set_table_collision",
+            "get_robot_state",
+            "move_to_pose",
+            "close_gripper",
+            "open_gripper",
+            "go_home",
+        ]
+    ),
+    McpClient.blueprint(system_prompt=None),
+)

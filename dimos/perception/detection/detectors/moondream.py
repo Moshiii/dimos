@@ -54,6 +54,10 @@ class Moondream2DDetector(Detector):
             detections.detections.extend(result.detections)
         return detections
 
+    def describe_image(self, image: Image, question: str) -> str:
+        """Answer an open-ended question about an image with the loaded VLM."""
+        return str(self._model.query(image, question))
+
     def stop(self) -> None:
         """Release the Moondream model and GPU memory."""
         self._model.stop()

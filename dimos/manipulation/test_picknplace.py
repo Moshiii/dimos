@@ -71,6 +71,25 @@ def test_picknplace_scans_and_selects_target() -> None:
     assert pre_grasp is not None
     assert pre_grasp.position == Vector3(0.1, 0.2, 0.200)
 
+    selected = module.select_object(1)
+    assert selected.is_success()
+    assert selected.metadata["goal"] == {
+        "x": 0.1,
+        "y": 0.2,
+        "z": 0.1,
+        "roll": -math.pi,
+        "pitch": 0.0,
+        "yaw": 0.0,
+    }
+    assert selected.metadata["pre_grasp"] == {
+        "x": 0.1,
+        "y": 0.2,
+        "z": 0.2,
+        "roll": -math.pi,
+        "pitch": 0.0,
+        "yaw": 0.0,
+    }
+
     module.scan_scene("water bottle")
     scene.set_prompts.assert_called_once_with(["water bottle"])
 

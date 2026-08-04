@@ -1690,7 +1690,7 @@ class ManipulationModule(Module):
         )
         return self._world_monitor.add_obstacle(obstacle)
 
-    @rpc
+    @skill(uses=["movement"])
     def set_table_collision(
         self,
         center_x: float,
