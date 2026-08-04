@@ -476,10 +476,14 @@ r1lite-runtime = [
     "soundfile",
     "uvicorn>=0.34.0",
     "pygame>=2.6.1",
+    # The quest module's web endpoint parses form data at module start.
+    "python-multipart>=0.0.27",
     # The sim blueprint (offline replay/tuning without a robot) renders
-    # through the viser backend and converts meshes with trimesh.
+    # through the viser backend, converts meshes with trimesh, and backs
+    # its manipulation world with roboplan.
     "viser[urdf]>=1.0.29",
     "trimesh>=4.0.0",
+    "roboplan",
 ]
 
 # Full CI test group for the self-hosted runner. Inherits `tests` and adds
