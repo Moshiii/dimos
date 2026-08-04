@@ -22,6 +22,7 @@ import numpy as np
 from pydantic import AliasChoices, Field
 
 from dimos.agents.annotation import skill
+from dimos.agents.capabilities import CAP_PERCEPTION
 from dimos.agents.skill_result import SkillResult
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -78,6 +79,18 @@ def _estimate_table_surface(points: np.ndarray) -> dict[str, float] | None:
     }
 
 
+def _table_midpoint_grasp_z(
+    points: np.ndarray, tabletop_z: float | None, fallback_z: float
+) -> float:
+    """Return the midpoint from the physical table plane to an object's observed top surface."""
+    if tabletop_z is None or points.ndim != 2 or points.shape[1] != 3 or len(points) < 10:
+        return fallback_z
+    top_z = float(np.quantile(points[:, 2], 0.95))
+    if top_z <= tabletop_z:
+        return fallback_z
+    return tabletop_z + (top_z - tabletop_z) / 2.0
+
+
 class PickNPlaceConfig(ModuleConfig):
     """Configuration for PickNPlaceModule."""
 
@@ -112,6 +125,7 @@ class PickNPlaceModule(Module):
         self._pre_grasp_pose: PoseStamped | None = None
         self._grasp_candidates: GraspCandidateArray | None = None
         self._selected_object: DetObject | None = None
+        self._tabletop_z: float | None = None
 
     @rpc
     def start(self) -> None:
@@ -153,7 +167,7 @@ class PickNPlaceModule(Module):
             )
         return detections
 
-    @skill
+    @skill(uses=[CAP_PERCEPTION])
     def scan(self, prompt: str) -> SkillResult:
         """Detect a prompted object from one RGB-D frame without moving the robot.
 
@@ -232,10 +246,13 @@ class PickNPlaceModule(Module):
         self._grasp_candidates = None
         self._selected_object = None
         self.graspgenx_candidates.publish(GraspCandidateArray())
+        grasp_z = _table_midpoint_grasp_z(
+            obj.pointcloud.points_f32(), self._tabletop_z, grasp.position.z
+        )
         self._goal_pose = PoseStamped(
             ts=grasp.ts,
             frame_id=grasp.frame_id,
-            position=Vector3(grasp.position.x, grasp.position.y, max(grasp.position.z, 0.100)),
+            position=Vector3(grasp.position.x, grasp.position.y, max(grasp_z, 0.100)),
             orientation=Quaternion.from_euler(Vector3(-math.pi, 0.0, yaw)),
         )
         self._pre_grasp_pose = None
@@ -379,6 +396,7 @@ class PickNPlaceModule(Module):
         estimate = _estimate_table_surface(scene.points_f32())
         if estimate is None:
             return None
+        self._tabletop_z = estimate["tabletop_z"]
         z = estimate["tabletop_z"]
         half_width = estimate["width"] / 2
         half_depth = estimate["depth"] / 2
@@ -416,13 +434,18 @@ class PickNPlaceModule(Module):
         )
         return estimate
 
-    @skill
+    @skill(uses=[CAP_PERCEPTION])
     def estimate_table(self) -> SkillResult:
-        """Estimate the tabletop without moving the robot and return its planning-frame footprint in meters.
+        """Run a fresh RGB-D scan, then estimate the tabletop without moving the robot.
 
         Pass the returned ``center_x``, ``center_y``, ``tabletop_z``, ``width``, and ``depth`` directly to
-        ``set_table_collision`` before requesting motion near the table.
+        ``set_table_collision`` before requesting motion near the table. Do not call this concurrently with
+        ``scan``; both tools exclusively use the perception pipeline.
         """
+        try:
+            self.scan_scene()
+        except RuntimeError as exc:
+            return SkillResult.fail("PERCEPTION_FAILED", str(exc))
         estimate = self.estimate_table_surface()
         if estimate is None:
             return SkillResult.fail(

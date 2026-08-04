@@ -20,7 +20,7 @@ import threading
 from unittest.mock import MagicMock
 
 from dimos.agents.capabilities import CapabilityRegistry
-from dimos.agents.mcp.mcp_server import _filter_skills, app, handle_request
+from dimos.agents.mcp.mcp_server import _filter_skills, _select_module_skills, app, handle_request
 from dimos.core.module import SkillInfo
 
 
@@ -48,6 +48,15 @@ def test_filter_skills_respects_allowlist() -> None:
 
     assert [skill.func_name for skill in _filter_skills(skills, ["safe"])] == ["safe"]
     assert _filter_skills(skills, None) == skills
+
+
+def test_select_module_skills_retains_deployed_remote_name() -> None:
+    schema = json.dumps({"type": "object", "properties": {}})
+    skill = SkillInfo(class_name="PickNPlaceModule", func_name="scan", args_schema=schema)
+    module = MagicMock(remote_name="pnp")
+    module.get_skills.return_value = [skill]
+
+    assert _select_module_skills([module], ["scan"]) == [(module, skill)]
 
 
 def test_mcp_module_request_flow() -> None:

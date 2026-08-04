@@ -96,6 +96,19 @@ def _filter_skills(skills: list[SkillInfo], allowed_skills: list[str] | None) ->
     return [skill_info for skill_info in skills if skill_info.func_name in allowed]
 
 
+def _select_module_skills(
+    modules: list[RPCClient], allowed_skills: list[str] | None
+) -> list[tuple[RPCClient, SkillInfo]]:
+    """Return exposed skills together with their deployed module RPC address."""
+    allowed = set(allowed_skills) if allowed_skills is not None else None
+    return [
+        (module, skill_info)
+        for module in modules
+        for skill_info in (module.get_skills() or [])
+        if allowed is None or skill_info.func_name in allowed
+    ]
+
+
 def _handle_initialize(req_id: Any) -> dict[str, Any]:
     return _jsonrpc_result(
         req_id,
@@ -398,14 +411,14 @@ class McpServer(Module):
     def on_system_modules(self, modules: list[RPCClient]) -> None:
         # TODO: this is a bit hacky, also not thread-safe
         assert self.rpc is not None
-        skills = [skill_info for module in modules for skill_info in (module.get_skills() or [])]
-        app.state.skills = _filter_skills(skills, self.config.allowed_skills)
+        module_skills = _select_module_skills(modules, self.config.allowed_skills)
+        app.state.skills = [skill_info for _, skill_info in module_skills]
         app.state.skills_by_name = {s.func_name: s for s in app.state.skills}
         app.state.rpc_calls = {
             skill_info.func_name: RpcCall(
-                None, self.rpc, skill_info.func_name, skill_info.class_name, []
+                None, self.rpc, skill_info.func_name, module.remote_name, []
             )
-            for skill_info in app.state.skills
+            for module, skill_info in module_skills
         }
 
     @skill

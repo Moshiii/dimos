@@ -120,9 +120,8 @@ def main() -> None:
         print("\n1) Scan  2) Info  3) Select target  4) Plan/preview approach")
         print("5) Execute approach  6) Plan/preview descent  7) Execute descent  8) Close")
         print("9) Plan/preview ascent  10) Execute ascent  11) Open  12) Current EE  13) Go home")
-        print(
-            "14) Scan/estimate/install table collision  15) Grasp + lift now (no preview)  q) Quit"
-        )
+        print("14) Scan/estimate/install table collision  15) Grasp + lift now (no preview)")
+        print("16) Describe current camera scene  q) Quit")
         choice = input("Select: ").strip().lower()
         try:
             if choice == "q":
@@ -300,8 +299,13 @@ def main() -> None:
                     continue
                 ascent_executed = manipulation.execute_and_wait()
                 print(ascent_executed)
+            elif choice == "16":
+                question = input(
+                    "Scene question [What objects are visible on the table?]: "
+                ).strip()
+                print(pnp.describe_scene(question or "What objects are visible on the table?"))
             else:
-                print("Choose 1-15 or q.")
+                print("Choose 1-16 or q.")
         except Exception as exc:
             print(f"RPC failed: {exc}")
 

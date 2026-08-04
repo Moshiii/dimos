@@ -121,6 +121,7 @@ picknplace_agent = autoconnect(
             "get_object_geometry",
             "set_table_collision",
             "get_robot_state",
+            "reset",
             "move_to_pose",
             "close_gripper",
             "open_gripper",

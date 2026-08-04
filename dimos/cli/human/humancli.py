@@ -85,6 +85,19 @@ def _split_tool_message(content: Any) -> tuple[str, str] | None:
     return content[len(TOOL_MSG_PREFIX) : end], content[end + 1 :].lstrip()
 
 
+def _content_text(content: Any) -> str:
+    """Extract displayable text from string or OpenAI Responses content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            text
+            for item in content
+            if isinstance(item, dict) and isinstance((text := item.get("text")), str)
+        )
+    return str(content) if content is not None else ""
+
+
 class ToolPanel:
     """Live state for one streaming tool's box.
 
@@ -360,7 +373,7 @@ class HumanCLIApp(App):  # type: ignore[type-arg]
                     theme.YELLOW,
                 )
             elif isinstance(msg, AIMessage):
-                content = msg.content or ""
+                content = _content_text(msg.content)
                 tool_calls = getattr(msg, "tool_calls", None) or msg.additional_kwargs.get(
                     "tool_calls", []
                 )

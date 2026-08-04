@@ -24,6 +24,7 @@ from dimos.manipulation.picknplace import (
     PickNPlaceConfig,
     PickNPlaceModule,
     _estimate_table_surface,
+    _table_midpoint_grasp_z,
 )
 from dimos.manipulation.planning.spec.models import IKResult, IKStatus
 from dimos.manipulation.visualization.layers import MeshElement
@@ -147,6 +148,26 @@ def test_table_surface_estimate_ignores_objects_above_the_table() -> None:
     assert estimate["depth"] >= 1.0
 
 
+def test_table_midpoint_grasp_uses_observed_object_height() -> None:
+    points = np.array(
+        [
+            [0.2, 0.1, 0.117],
+            [0.2, 0.1, 0.119],
+            [0.2, 0.1, 0.120],
+            [0.2, 0.1, 0.121],
+            [0.2, 0.1, 0.120],
+            [0.2, 0.1, 0.119],
+            [0.2, 0.1, 0.120],
+            [0.2, 0.1, 0.119],
+            [0.2, 0.1, 0.120],
+            [0.2, 0.1, 0.120],
+        ]
+    )
+
+    assert _table_midpoint_grasp_z(points, 0.100, 0.120) == pytest.approx(0.110275)
+    assert _table_midpoint_grasp_z(points[:9], 0.100, 0.120) == pytest.approx(0.120)
+
+
 def test_table_surface_estimate_displays_filled_tabletop() -> None:
     with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
         module = PickNPlaceModule()
@@ -164,6 +185,26 @@ def test_table_surface_estimate_displays_filled_tabletop() -> None:
     assert isinstance(layer.elements[0], MeshElement)
     assert layer.elements[0].opacity == pytest.approx(1.0)
     np.testing.assert_array_equal(layer.elements[0].triangles, [[0, 1, 2], [0, 2, 3]])
+
+
+def test_estimate_table_runs_a_fresh_scan_before_fitting() -> None:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        module = PickNPlaceModule()
+    module.scan_scene = MagicMock()
+    module.estimate_table_surface = MagicMock(
+        return_value={
+            "center_x": 0.5,
+            "center_y": 0.0,
+            "tabletop_z": 0.35,
+            "width": 0.8,
+            "depth": 1.0,
+        }
+    )
+
+    result = module.estimate_table()
+
+    assert result.is_success()
+    module.scan_scene.assert_called_once_with()
 
 
 def test_picknplace_uses_top_graspgenx_candidate() -> None:
