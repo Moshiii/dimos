@@ -22,8 +22,11 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from dimos.benchmark.agent_eval.base import BaseEvalModel
-from dimos.benchmark.agent_eval.models import EvalCase, ExactIntegerValidatorRef
+from dimos.benchmark.agent_eval.models import (
+    BaseEvalModel,
+    EvalCase,
+    ExactIntegerValidatorRef,
+)
 
 _ANSWER_LINE = re.compile(r"(?m)^ANSWER:\s*")
 _TERMINAL_INTEGER = re.compile(r"(?:^|\n)ANSWER:\s*(-?\d+)\s*\Z")

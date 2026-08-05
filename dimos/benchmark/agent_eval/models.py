@@ -20,9 +20,14 @@ import math
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dimos.benchmark.agent_eval.base import BaseEvalModel
+
+class BaseEvalModel(BaseModel):
+    """Strict immutable base for the compact evaluation contracts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    schema_version: Literal["1.0"] = "1.0"
 
 NonEmpty = Annotated[str, Field(min_length=1)]
 
