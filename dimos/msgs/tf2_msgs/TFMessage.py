@@ -48,12 +48,7 @@ def _triad(length: float):  # type: ignore[no-untyped-def]
 
 
 class TfFrameTree:
-    """Nests each frame's triad under its parent, mirroring the tf tree in the panel.
-
-    Rerun never lets an entity move, so a frame placed as a root before its
-    real parent arrives gets its old entity blanked and a new one declared
-    once that parent is known.
-    """
+    """Store each frame under its parents. This lets us view the tree in the left panel."""
 
     def __init__(
         self, axis_length: float = DEFAULT_AXIS_LENGTH, root: str = DEFAULT_TF_ROOT
