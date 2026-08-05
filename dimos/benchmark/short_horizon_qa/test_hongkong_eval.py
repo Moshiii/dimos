@@ -30,13 +30,16 @@ def test_real_hongkong_recording_prepares_direct_demo_case(tmp_path: Path) -> No
         Path(__file__).parent / "cases" / "demo_go2_hongkong_office-room-count-smoke" / "case.json"
     )
     case = EvalCase.model_validate_json(case_path.read_bytes())
+    map_progress: list[tuple[int, int]] = []
     manifest = prepare_bundle(
         get_data("go2_hongkong_office.db"),
         [],
         tmp_path / "bundle",
         progress=[case.source.progress],
         mapper=MapperSettings(device="CPU:0"),
+        map_progress=lambda current, total: map_progress.append((current, total)),
     )
     assert case.case_id == "demo-go2-hongkong-office-room-count-smoke"
     assert manifest.cutoffs[0].normalized_progress == 1.0
     assert manifest.cutoffs[0].map_frame_count == 4235
+    assert map_progress[-1] == (4235, 4235)

@@ -69,6 +69,7 @@ def execute_single_case(
         raise ValueError(f"API key environment variable {config.agent.api_key_env!r} is unset")
     bundle = _materialize_frozen_memory(case, progress)
     _, cutoff, source_path, derived_path = load_bundle(bundle, progress=case.source.progress)
+    emit_progress(progress, StatusProgress(channel="eval", message="memory ready"))
     cli, extension = _pi_paths()
     runner = PiCliRunner(
         cli=cli,
@@ -76,6 +77,7 @@ def execute_single_case(
         model=config.agent.model,
         thinking_level=config.agent.thinking_level,
         timeout_s=TURN_TIMEOUT_SECONDS,
+        progress=progress,
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -186,6 +188,10 @@ def _materialize_frozen_memory(case: EvalCase, progress: ProgressSink | None) ->
             bundle,
             progress=[case.source.progress],
             mapper=mapper,
+            map_progress=lambda current, total: emit_progress(
+                progress,
+                StatusProgress(channel="eval", message=f"mapping {current}/{total} frames"),
+            ),
         )
     return bundle
 

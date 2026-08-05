@@ -57,17 +57,20 @@ def test_prepare_builds_reusable_runtime_maps_without_changing_source(
 ) -> None:
     output = tmp_path / "bundle"
     before = recording.read_bytes()
+    progress: list[tuple[int, int]] = []
 
     manifest = prepare_bundle(
         recording,
         [4.0, 9.0],
         output,
         mapper=MapperSettings(device="CPU:0"),
+        map_progress=lambda current, total: progress.append((current, total)),
     )
 
     assert recording.read_bytes() == before
     assert [item.map_frame_count for item in manifest.cutoffs] == [5, 10]
     assert [item.map_timestamp for item in manifest.cutoffs] == [104.0, 109.0]
+    assert progress == [(10, 10)]
     assert (output / "derived.db").is_file()
     encoded = json.loads((output / "manifest.v1.json").read_text())
     assert encoded["source_size_bytes"] == recording.stat().st_size

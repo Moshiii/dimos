@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import math
 import os
@@ -47,6 +48,7 @@ def prepare_bundle(
     *,
     progress: list[float] | None = None,
     mapper: MapperSettings = MapperSettings(),
+    map_progress: Callable[[int, int], None] | None = None,
 ) -> FrozenMemoryManifest:
     """Build one derived map sidecar without copying the source recording."""
     cutoffs = _validate_seconds(cutoff_seconds or [])
@@ -73,6 +75,7 @@ def prepare_bundle(
             progresses,
             temporary_path,
             mapper,
+            map_progress,
         )
         os.replace(temporary_path, output)
         return manifest
@@ -85,6 +88,7 @@ def _prepare_into(
     progresses: list[float],
     output: Path,
     mapper: MapperSettings,
+    map_progress: Callable[[int, int], None] | None,
 ) -> FrozenMemoryManifest:
     derived_path = output / DERIVED_NAME
     with SqliteStore(path=str(source_path), must_exist=True, read_only=True) as source:
@@ -109,7 +113,13 @@ def _prepare_into(
             raise ValueError(
                 f"Cutoff {selections[-1].seconds}s exceeds recording duration {duration:.3f}s"
             )
-        cutoff_maps = _write_maps(source, derived_path, absolute_cutoffs, mapper)
+        cutoff_maps = _write_maps(
+            source,
+            derived_path,
+            absolute_cutoffs,
+            mapper,
+            map_progress,
+        )
         records = tuple(
             CutoffRecord(
                 cutoff_seconds=selection.seconds,
@@ -206,10 +216,12 @@ def _write_maps(
     derived_path: Path,
     cutoffs: list[float],
     mapper: MapperSettings,
+    map_progress: Callable[[int, int], None] | None,
 ) -> list[Any]:
     if "lidar" not in source.list_streams():
         raise ValueError("Source recording has no lidar stream")
     lidar = source.stream("lidar", PointCloud2)
+    total_frames = lidar.count()
     first = next(iter(lidar), None)
     if first is None:
         raise ValueError("No lidar observations exist before the final cutoff")
@@ -227,8 +239,20 @@ def _write_maps(
         show_startup_log=False,
     )
     emissions = iter(lidar.transform(transformer))
+    last_reported = 0
+
+    def next_emission() -> Any:
+        nonlocal last_reported
+        observation = next(emissions, None)
+        if observation is not None and map_progress is not None:
+            frame_count = int(observation.tags["frame_count"])
+            if frame_count == total_frames or frame_count - last_reported >= 250:
+                map_progress(frame_count, total_frames)
+                last_reported = frame_count
+        return observation
+
     try:
-        latest = next(emissions, None)
+        latest = next_emission()
         if latest is None:
             raise ValueError("Mapper produced no global map")
 
@@ -236,11 +260,11 @@ def _write_maps(
         with SqliteStore(path=str(derived_path)) as derived:
             target = derived.stream("global_map", PointCloud2)
             stored_by_source_id: dict[int, Any] = {}
-            following = next(emissions, None)
+            following = next_emission()
             for cutoff in cutoffs:
                 while following is not None and following.ts <= cutoff:
                     latest = following
-                    following = next(emissions, None)
+                    following = next_emission()
                 if latest.ts > cutoff:
                     raise ValueError(f"No runtime map was emitted by cutoff {cutoff}")
                 source_key = latest.id
