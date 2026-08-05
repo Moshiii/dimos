@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import threading
 from typing import Any, Literal
@@ -44,65 +43,32 @@ def run(
     agent_backend: Literal["pi"] = typer.Option("pi", "--agent.backend"),
     agent_model: Literal["gpt-5.6-luna"] = typer.Option("gpt-5.6-luna", "--agent.model"),
     thinking_level: Literal["medium"] = typer.Option("medium", "--agent.thinking-level"),
-    auth_mode: Literal["codex-oauth", "openai-api-key"] | None = typer.Option(
-        None,
-        "--agent.auth.mode",
-        help="Auth mode; inferred from auth options or OPENAI_API_KEY when omitted",
-    ),
-    auth_path: Path | None = typer.Option(None, "--agent.auth.path"),
-    auth_env: str | None = typer.Option(None, "--agent.auth.env"),
-    output: Path | None = typer.Option(None, "--output"),
+    api_key_env: str = typer.Option("OPENAI_API_KEY", "--agent.api-key-env"),
+    output: Path = typer.Option(..., "--output"),
     json_output: bool = typer.Option(False, "--json", help="Print compact JSON"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress live evaluation progress"),
 ) -> None:
     """Run one static evaluation case synchronously."""
-    from dimos.benchmark.agent_eval.single_case import (
-        DEFAULT_OPENAI_API_KEY_ENV,
-        CodexOAuthConfig,
+    from dimos.benchmark.agent_eval.models import (
         EvalRunConfig,
-        OpenAIApiKeyConfig,
         PiAgentConfig,
     )
 
-    if auth_mode is None:
-        if auth_path is not None and auth_env is not None:
-            raise typer.BadParameter(
-                "--agent.auth.path and --agent.auth.env select different auth modes"
-            )
-        if auth_path is not None:
-            auth_mode = "codex-oauth"
-        elif auth_env is not None or os.environ.get(DEFAULT_OPENAI_API_KEY_ENV):
-            auth_mode = "openai-api-key"
-        else:
-            auth_mode = "codex-oauth"
-    auth: CodexOAuthConfig | OpenAIApiKeyConfig
-    if auth_mode == "codex-oauth":
-        if auth_env is not None:
-            raise typer.BadParameter("--agent.auth.env requires --agent.auth.mode=openai-api-key")
-        auth = CodexOAuthConfig(path=auth_path)
-    else:
-        if auth_path is not None:
-            raise typer.BadParameter("--agent.auth.path requires --agent.auth.mode=codex-oauth")
-        auth = OpenAIApiKeyConfig(env=auth_env or DEFAULT_OPENAI_API_KEY_ENV)
     config = EvalRunConfig(
         agent=PiAgentConfig(
             backend=agent_backend,
             model=agent_model,
             thinking_level=thinking_level,
-            auth=auth,
+            api_key_env=api_key_env,
         )
     )
     renderer = None if quiet else ProgressRenderer()
     try:
-        result = (
-            execute_single_case(case, config=config, progress=renderer)
-            if output is None
-            else execute_single_case(
-                case,
-                config=config,
-                output_root=output,
-                progress=renderer,
-            )
+        result = execute_single_case(
+            case,
+            config=config,
+            output=output,
+            progress=renderer,
         )
     except Exception as exc:
         if renderer is not None:
@@ -111,12 +77,12 @@ def run(
         raise typer.Exit(2) from exc
     if renderer is not None:
         renderer.finish()
-    typer.echo(result.model_dump_json() if json_output else format_result(result))
+    typer.echo(result.model_dump_json() if json_output else format_result(result, output))
     if result.attempt_status == "failed":
         raise typer.Exit(1)
 
 
-def format_result(result: Any) -> str:
+def format_result(result: Any, output: Path | None = None) -> str:
     """Render the compact typed result without exposing private oracle material."""
     if result.attempt_status == "failed":
         heading = "! Evaluation not evaluated"
@@ -124,24 +90,17 @@ def format_result(result: Any) -> str:
         heading = "✓ Evaluation passed"
     else:
         heading = "✗ Evaluation failed"
-    source = result.source
-    if result.progress is not None:
-        source += f" @ {result.progress * 100:g}%"
+    source = f"{result.recording} @ {result.progress * 100:g}%"
     answer = str(result.integer_answer) if result.integer_answer is not None else "—"
     rows = (
         ("Case", result.case_id),
         ("Source", source),
-        ("Question", result.question),
         ("Answer", answer),
         ("Result", result.task_result),
-        (
-            "Agent",
-            f"{result.agent.agent_id} · {result.agent.model} · {result.agent.thinking_level}",
-        ),
+        ("Agent", f"Pi · {result.model} · {result.thinking_level}"),
         ("Tool calls", str(result.tool_call_count)),
         ("Duration", f"{result.duration_seconds:.1f}s"),
-        ("Attempt", result.attempt_id),
-        ("Artifacts", str(result.artifact_path)),
+        ("Output", str((output / "result.json") if output is not None else "result.json")),
     )
     body = "\n".join(f"  {label:<10} {value}" for label, value in rows)
     return f"{heading}\n\n{body}"

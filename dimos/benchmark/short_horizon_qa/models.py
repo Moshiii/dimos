@@ -61,12 +61,12 @@ class CutoffRecord(FrozenQaModel):
 class FrozenMemoryManifest(FrozenQaModel):
     record_type: Literal["frozen-memory-bundle"] = "frozen-memory-bundle"
     schema_version: Literal["1.0"] = "1.0"
+    source_identity: str = Field(min_length=1)
     source_path: str = Field(min_length=1)
-    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_size_bytes: int = Field(gt=0)
+    source_mtime_ns: int = Field(gt=0)
     recording_start_timestamp: float
     recording_end_timestamp: float
     derived_path: Literal["derived.db"] = "derived.db"
-    derived_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     mapper: MapperSettings
     cutoffs: tuple[CutoffRecord, ...] = Field(min_length=1)

@@ -12,234 +12,194 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""One immutable case bound to typed local agent execution configuration."""
+"""Direct runner for one frozen-memory Pi evaluation case."""
 
 from __future__ import annotations
 
-import hashlib
+import json
 import os
 from pathlib import Path
+import re
+import shutil
+import tempfile
 import time
-from typing import Annotated, Literal, TypeVar
 
-from pydantic import Field
-
-from dimos.benchmark.agent_eval.auth import RuntimeCredential
-from dimos.benchmark.agent_eval.base import BaseEvalModel
-from dimos.benchmark.agent_eval.case import (
-    AgentCondition,
-    AgentOutcome,
-    EvalCase,
-    FrozenRecordingSource,
-    Prediction,
-    RuntimeBinding,
-)
-from dimos.benchmark.agent_eval.pi_adapter import credential_binding_sha256
-from dimos.benchmark.agent_eval.pi_process import NodePiSessionFactory
-from dimos.benchmark.agent_eval.progress import (
-    CaseHeaderProgress,
-    ProgressSink,
-    StatusProgress,
-    emit_progress,
-)
+from dimos.agents.code_policy_core import CodePolicySessionConfig, FrozenMemoryEnvironment
+from dimos.agents.code_policy_server import CodePolicyMcpServer
+from dimos.benchmark.agent_eval.models import CompactEvalResult, EvalCase, EvalRunConfig
+from dimos.benchmark.agent_eval.pi_process import PiCliRunner, PiRunError
+from dimos.benchmark.agent_eval.progress import ProgressSink, StatusProgress, emit_progress
 from dimos.benchmark.short_horizon_qa.eval import (
     load_exact_integer_oracle,
-    run_frozen_case,
+    parse_integer_prediction,
 )
+from dimos.benchmark.short_horizon_qa.models import MapperSettings
 from dimos.benchmark.short_horizon_qa.prepare import prepare_bundle
-from dimos.constants import CACHE_DIR, STATE_DIR
+from dimos.benchmark.short_horizon_qa.service import load_bundle
+from dimos.constants import CACHE_DIR
+from dimos.memory2.cli.dataset import resolve_dataset
 
-DEFAULT_MODEL: Literal["gpt-5.6-luna"] = "gpt-5.6-luna"
-DEFAULT_OUTPUT_ROOT = STATE_DIR / "evals"
-DEFAULT_CODEX_AUTH_PATH = Path.home() / ".pi" / "agent" / "auth.json"
-DEFAULT_OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
-SINGLE_CASE_TURN_TIMEOUT_SECONDS = 600.0
-EvalModelT = TypeVar("EvalModelT", bound=BaseEvalModel)
+TURN_TIMEOUT_SECONDS = 600.0
 
+SYSTEM_PROMPT = """You are answering a question about a frozen robot recording.
 
-class CodexOAuthConfig(BaseEvalModel):
-    mode: Literal["codex-oauth"] = "codex-oauth"
-    path: Path | None = None
-
-
-class OpenAIApiKeyConfig(BaseEvalModel):
-    mode: Literal["openai-api-key"] = "openai-api-key"
-    env: str = Field(default=DEFAULT_OPENAI_API_KEY_ENV, min_length=1)
-
-
-AgentAuthConfig = Annotated[
-    CodexOAuthConfig | OpenAIApiKeyConfig,
-    Field(discriminator="mode"),
-]
-
-
-class PiAgentConfig(BaseEvalModel):
-    backend: Literal["pi"] = "pi"
-    model: Literal["gpt-5.6-luna"] = DEFAULT_MODEL
-    thinking_level: Literal["medium"] = "medium"
-    auth: AgentAuthConfig = Field(default_factory=CodexOAuthConfig)
-
-
-class EvalRunConfig(BaseEvalModel):
-    agent: PiAgentConfig = Field(default_factory=PiAgentConfig)
-
-
-class CompactEvalResult(BaseEvalModel):
-    attempt_id: str
-    case_id: str
-    source: str
-    progress: float | None
-    question: str
-    attempt_status: Literal["completed", "failed"]
-    task_result: Literal["passed", "failed", "not_evaluated"]
-    reason: str
-    prediction_status: Literal["parsed", "invalid"] | None = None
-    integer_answer: int | None = None
-    agent: AgentCondition
-    tool_call_count: int = Field(ge=0)
-    duration_seconds: float = Field(ge=0)
-    artifact_path: Path
+You have exactly one tool, `python_exec`. It runs trusted, unsandboxed Python in a
+persistent Jupyter kernel with a read-only `memory` object. Inspect Memory2 streams
+and compute the answer from the recording. Do not guess. End with exactly one line:
+ANSWER: <integer>
+"""
 
 
 def execute_single_case(
     case_path: Path,
     *,
     config: EvalRunConfig,
-    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    output: Path,
     progress: ProgressSink | None = None,
 ) -> CompactEvalResult:
-    """Preflight and execute exactly one static frozen-memory case."""
+    """Preflight, run, and atomically publish exactly one result directory."""
     path = case_path.expanduser().resolve()
+    output = output.expanduser().resolve()
+    _validate_output(output)
     emit_progress(progress, StatusProgress(channel="eval", message="loading case"))
     case = EvalCase.model_validate_json(path.read_bytes())
-    if not isinstance(case.source, FrozenRecordingSource):
-        raise ValueError("single-case CLI currently supports frozen-memory cases only")
-    task = case.task
-    emit_progress(
-        progress,
-        CaseHeaderProgress(
-            case_id=case.case_id,
-            source=case.source.recording,
-            progress=case.source.progress,
-            question=getattr(task, "prompt", ""),
-        ),
+    oracle = load_exact_integer_oracle(case, path.parent)
+    api_key = os.environ.get(config.agent.api_key_env)
+    if not api_key:
+        raise ValueError(f"API key environment variable {config.agent.api_key_env!r} is unset")
+    bundle = _materialize_frozen_memory(case, progress)
+    _, cutoff, source_path, derived_path = load_bundle(bundle, progress=case.source.progress)
+    cli, extension = _pi_paths()
+    runner = PiCliRunner(
+        cli=cli,
+        extension=extension,
+        model=config.agent.model,
+        thinking_level=config.agent.thinking_level,
+        timeout_s=TURN_TIMEOUT_SECONDS,
     )
 
-    # Resolve all private case material before starting Pi.
-    emit_progress(progress, StatusProgress(channel="eval", message="verifying validator"))
-    load_exact_integer_oracle(case, path.parent)
-    emit_progress(progress, StatusProgress(channel="eval", message="preparing frozen memory"))
-    bundle = _materialize_frozen_memory(case)
-    emit_progress(progress, StatusProgress(channel="eval", message="frozen memory ready"))
-    credential, binding_digest = _resolve_credential(config.agent.auth)
-    adapter = _adapter_entrypoint()
-    condition = AgentCondition(
-        agent_id="pi-code-policy",
-        adapter="pi-node",
-        model=config.agent.model,
-        thinking_level=config.agent.thinking_level,
-    )
-    runtime = RuntimeBinding(
-        runtime_id="local-standalone-code-policy",
-        parameters={
-            "auth_mode": config.agent.auth.mode,
-            "credential_binding_sha256": binding_digest,
-            "turn_timeout_seconds": SINGLE_CASE_TURN_TIMEOUT_SECONDS,
-        },
-    )
-    factory = NodePiSessionFactory(
-        command=("node", str(adapter)),
-        credential=credential,
-        model=config.agent.model,
-        thinking_level=config.agent.thinking_level,
-        startup_timeout_s=180.0,
-        progress=progress,
-    )
-    emit_progress(progress, StatusProgress(channel="eval", message="starting attempt"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=output.parent))
+    runtime_dir = temporary / "runtime"
+    runtime_dir.mkdir()
     started = time.monotonic()
-    engine_result = run_frozen_case(
-        case=case,
-        bundle=bundle,
-        private_root=path.parent,
-        output_root=output_root.expanduser(),
-        pi_factory=factory,
-        agent_condition=condition,
-        runtime_binding=runtime,
-        turn_timeout_s=SINGLE_CASE_TURN_TIMEOUT_SECONDS,
-    )
-    duration = time.monotonic() - started
-    emit_progress(progress, StatusProgress(channel="eval", message="attempt finished"))
-    prediction = _optional_model(engine_result.attempt_path / "prediction.v1.json", Prediction)
-    agent_outcome = _optional_model(
-        engine_result.attempt_path / "agent-outcome.v1.json", AgentOutcome
-    )
-    return CompactEvalResult(
-        attempt_id=engine_result.outcome.attempt_id,
-        case_id=case.case_id,
-        source=case.source.recording,
-        progress=case.source.progress,
-        question=getattr(task, "prompt", ""),
-        attempt_status=engine_result.outcome.attempt_status,
-        task_result=engine_result.outcome.task_result,
-        reason=engine_result.outcome.reason,
-        prediction_status=prediction.status if prediction is not None else None,
-        integer_answer=prediction.integer_answer if prediction is not None else None,
-        agent=condition,
-        tool_call_count=agent_outcome.tool_call_count if agent_outcome is not None else 0,
-        duration_seconds=duration,
-        artifact_path=engine_result.attempt_path,
-    )
-
-
-def _resolve_credential(auth: AgentAuthConfig) -> tuple[RuntimeCredential, str]:
-    if isinstance(auth, CodexOAuthConfig):
-        configured = auth.path or Path(
-            os.environ.get("PI_SPATIAL_AUTH_PATH", DEFAULT_CODEX_AUTH_PATH)
-        )
-        path = configured.expanduser().resolve()
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"Codex OAuth credential not found at {path}; use --agent.auth.path"
+    stderr = ""
+    server: CodePolicyMcpServer | None = None
+    try:
+        emit_progress(progress, StatusProgress(channel="eval", message="starting agent"))
+        server = CodePolicyMcpServer(
+            CodePolicySessionConfig(
+                environment=FrozenMemoryEnvironment(
+                    recording_path=str(source_path),
+                    derived_recording_path=str(derived_path),
+                    memory_cutoff_timestamp=cutoff.cutoff_timestamp,
+                )
             )
-        material = path.read_bytes()
-        return (
-            RuntimeCredential(auth_mode="subscription", binding_name=str(path), value=None),
-            credential_binding_sha256("subscription", str(path), material),
         )
-    value = os.environ.get(auth.env)
-    if not value:
-        raise ValueError(f"credential environment variable {auth.env!r} is unset")
-    return (
-        RuntimeCredential(auth_mode="environment", binding_name=auth.env, value=value),
-        credential_binding_sha256("environment", auth.env, value),
+        try:
+            server.start()
+            pi_result = runner.run(
+                prompt=_agent_prompt(case),
+                system_prompt=SYSTEM_PROMPT,
+                mcp_url=server.mcp_url,
+                api_key=api_key,
+                run_dir=runtime_dir,
+            )
+            stderr = pi_result.stderr
+            if pi_result.transcript_path is not None:
+                shutil.copy2(pi_result.transcript_path, temporary / "pi-transcript.jsonl")
+            prediction = parse_integer_prediction(pi_result.final_text)
+            passed = (
+                prediction.status == "parsed" and prediction.integer_answer == oracle.expected_count
+            )
+            result = CompactEvalResult(
+                case_id=case.case_id,
+                recording=case.source.recording,
+                progress=case.source.progress,
+                model=config.agent.model,
+                thinking_level=config.agent.thinking_level,
+                final_response=pi_result.final_text,
+                prediction_status=prediction.status,
+                integer_answer=prediction.integer_answer,
+                passed=passed,
+                validator_revision=case.validator.revision,
+                tool_call_count=pi_result.tool_call_count,
+                duration_seconds=time.monotonic() - started,
+            )
+        finally:
+            server.stop()
+    except Exception as exc:
+        if isinstance(exc, PiRunError):
+            stderr = exc.stderr
+        result = CompactEvalResult(
+            case_id=case.case_id,
+            recording=case.source.recording,
+            progress=case.source.progress,
+            model=config.agent.model,
+            thinking_level=config.agent.thinking_level,
+            prediction_status="not_evaluated",
+            passed=None,
+            validator_revision=case.validator.revision,
+            tool_call_count=server.session.execution_count if server is not None else 0,
+            duration_seconds=time.monotonic() - started,
+            infra_error=f"{type(exc).__name__}: {exc}",
+        )
+    finally:
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    if stderr:
+        (temporary / "stderr.log").write_text(stderr, encoding="utf-8")
+    (temporary / "result.json").write_text(
+        json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
+    if output.exists():
+        output.rmdir()
+    os.replace(temporary, output)
+    emit_progress(progress, StatusProgress(channel="eval", message="result published"))
+    return result
 
 
-def _materialize_frozen_memory(case: EvalCase) -> Path:
-    source = case.source
-    assert isinstance(source, FrozenRecordingSource)
-    key = hashlib.sha256(source.model_dump_json().encode()).hexdigest()[:24]
+def _validate_output(output: Path) -> None:
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        raise FileExistsError(f"Output must be absent or an empty directory: {output}")
+
+
+def _materialize_frozen_memory(case: EvalCase, progress: ProgressSink | None) -> Path:
+    source_path = resolve_dataset(case.source.recording).resolve()
+    stat = source_path.stat()
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", source_path.stem)[:64]
+    mapper = MapperSettings()
+    raw_key = (
+        f"{stem}-{stat.st_size}-{stat.st_mtime_ns}-p{case.source.progress:.9f}-"
+        f"v{mapper.voxel_size_m}-b{mapper.block_count}-d{mapper.device}-"
+        f"c{int(mapper.carve_columns)}-f{mapper.frame_id}-e{mapper.emit_every}"
+    )
+    key = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_key)
     bundle = CACHE_DIR / "agent_eval" / "frozen_memory" / key
     if not (bundle / "manifest.v1.json").is_file():
+        emit_progress(progress, StatusProgress(channel="eval", message="preparing memory"))
         bundle.parent.mkdir(parents=True, exist_ok=True)
-        prepare_bundle(source.recording, [], bundle, progress=[source.progress])
+        prepare_bundle(
+            case.source.recording,
+            [],
+            bundle,
+            progress=[case.source.progress],
+            mapper=mapper,
+        )
     return bundle
 
 
-def _adapter_entrypoint() -> Path:
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "packages"
-        / "pi-code-policy-adapter"
-        / "dist"
-        / "code-policy-main.js"
+def _pi_paths() -> tuple[Path, Path]:
+    package = Path(__file__).resolve().parents[3] / "packages" / "pi-code-policy-extension"
+    cli = package / "node_modules" / "@earendil-works" / "pi-coding-agent" / "dist" / "cli.js"
+    extension = package / "dist" / "python-exec.js"
+    return cli, extension
+
+
+def _agent_prompt(case: EvalCase) -> str:
+    return (
+        f"{case.task.prompt}\n\n"
+        "Use python_exec to inspect the read-only recording. "
+        f"End with `{case.task.answer_marker} <integer>`."
     )
-    if not path.is_file():
-        raise FileNotFoundError(
-            "Pi adapter is not built; run npm run build in packages/pi-code-policy-adapter"
-        )
-    return path
-
-
-def _optional_model(path: Path, model: type[EvalModelT]) -> EvalModelT | None:
-    return model.model_validate_json(path.read_bytes()) if path.is_file() else None

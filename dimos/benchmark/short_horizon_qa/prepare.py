@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -34,18 +33,11 @@ from dimos.benchmark.short_horizon_qa.models import (
 from dimos.mapping.voxels.module import VoxelMapTransformer
 from dimos.memory2.cli.dataset import resolve_dataset
 from dimos.memory2.store.sqlite import SqliteStore
+from dimos.memory2.stream import Stream
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
 MANIFEST_NAME = "manifest.v1.json"
 DERIVED_NAME = "derived.db"
-
-
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def prepare_bundle(
@@ -74,13 +66,21 @@ def prepare_bundle(
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{output.name}-", dir=output.parent) as temporary:
         temporary_path = Path(temporary)
-        manifest = _prepare_into(source_path, cutoffs, progresses, temporary_path, mapper)
+        manifest = _prepare_into(
+            source_path,
+            str(recording),
+            cutoffs,
+            progresses,
+            temporary_path,
+            mapper,
+        )
         os.replace(temporary_path, output)
         return manifest
 
 
 def _prepare_into(
     source_path: Path,
+    source_identity: str,
     cutoffs: list[float],
     progresses: list[float],
     output: Path,
@@ -127,12 +127,12 @@ def _prepare_into(
 
     _seal_sqlite(derived_path)
     manifest = FrozenMemoryManifest(
+        source_identity=source_identity,
         source_path=str(source_path),
-        source_sha256=file_sha256(source_path),
         source_size_bytes=source_path.stat().st_size,
+        source_mtime_ns=source_path.stat().st_mtime_ns,
         recording_start_timestamp=recording_start,
         recording_end_timestamp=recording_end,
-        derived_sha256=file_sha256(derived_path),
         mapper=mapper,
         cutoffs=records,
     )
@@ -176,7 +176,7 @@ def _validate_progress(values: list[float]) -> list[float]:
 def _stream_ranges(source: SqliteStore) -> dict[str, tuple[int, float, float]]:
     result: dict[str, tuple[int, float, float]] = {}
     for name in source.list_streams():
-        stream = source.stream(name)
+        stream: Stream[Any] = source.stream(name)
         count = stream.count()
         if count:
             start, end = stream.get_time_range()
@@ -187,7 +187,7 @@ def _stream_ranges(source: SqliteStore) -> dict[str, tuple[int, float, float]]:
 def _stream_boundaries(source: SqliteStore, cutoff: float) -> tuple[StreamBoundary, ...]:
     boundaries: list[StreamBoundary] = []
     for name in source.list_streams():
-        bounded = source.stream(name).through(cutoff)
+        bounded: Stream[Any] = source.stream(name).time_range(-math.inf, cutoff)
         count = bounded.count()
         last = bounded.last() if count else None
         boundaries.append(
@@ -209,7 +209,7 @@ def _write_maps(
 ) -> list[Any]:
     if "lidar" not in source.list_streams():
         raise ValueError("Source recording has no lidar stream")
-    lidar = source.stream("lidar", PointCloud2).as_read_only()
+    lidar = source.stream("lidar", PointCloud2)
     first = next(iter(lidar), None)
     if first is None:
         raise ValueError("No lidar observations exist before the final cutoff")

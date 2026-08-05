@@ -16,18 +16,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from dimos.agents.code_policy_core import (
     CodePolicySession,
     CodePolicySessionConfig,
     FrozenMemoryEnvironment,
     LiveDimosEnvironment,
+    _kernel_environment,
 )
 from dimos.memory2.store.sqlite import SqliteStore
 
 
-def test_plain_session_persists_and_resets_without_module(mocker, tmp_path: Path) -> None:
+def test_session_persists_python_namespace(mocker, tmp_path: Path) -> None:
     mocker.patch("dimos.agents.code_policy_core._bootstrap_source", return_value="pass")
     session = CodePolicySession(
         CodePolicySessionConfig(
@@ -38,15 +37,32 @@ def test_plain_session_persists_and_resets_without_module(mocker, tmp_path: Path
     try:
         assert "[1]" in session.python_exec("items = [1]\nitems")
         assert "[1, 2]" in session.python_exec("items.append(2)\nitems")
-        first = session.get_session_receipt()
-        second = session.reset_session()
-        assert second.previous_session_id == first.session_id
-        assert "NameError" in session.python_exec("items")
+        assert session.execution_count == 2
     finally:
         session.stop()
 
 
-def test_frozen_session_bootstrap_exposes_memory_without_app(tmp_path: Path) -> None:
+def test_new_session_starts_with_a_fresh_namespace(mocker, tmp_path: Path) -> None:
+    mocker.patch("dimos.agents.code_policy_core._bootstrap_source", return_value="pass")
+    config = CodePolicySessionConfig(
+        environment=LiveDimosEnvironment(recording_path=str(tmp_path / "unused.db"))
+    )
+    first = CodePolicySession(config)
+    first.start()
+    try:
+        first.python_exec("session_only = 1")
+    finally:
+        first.stop()
+
+    second = CodePolicySession(config)
+    second.start()
+    try:
+        assert "False" in second.python_exec("'session_only' in globals()")
+    finally:
+        second.stop()
+
+
+def test_frozen_session_exposes_bounded_memory_without_app(tmp_path: Path) -> None:
     source_path = tmp_path / "source.db"
     derived_path = tmp_path / "derived.db"
     with SqliteStore(path=str(source_path)) as source:
@@ -71,38 +87,33 @@ def test_frozen_session_bootstrap_exposes_memory_without_app(tmp_path: Path) -> 
             "memory.streams.global_map.last().data, 'app' in globals())"
         )
         assert "(['before'], 'map', False)" in result
+        assert "PermissionError" in session.python_exec("memory.streams.messages.append('blocked')")
     finally:
         session.stop()
 
 
-def test_live_read_only_memory_observes_committed_writer_data(mocker, tmp_path: Path) -> None:
-    path = tmp_path / "live.db"
-    with SqliteStore(path=str(path)) as writer:
-        writer.stream("events", int).append(1, ts=1.0)
+def test_kernel_environment_does_not_forward_credentials(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("SOME_AUTH_TOKEN", "secret")
+    monkeypatch.setenv("CODE_POLICY_TEST_VALUE", "safe")
+    environment = LiveDimosEnvironment(recording_path=str(tmp_path / "memory.db"))
+    result = _kernel_environment(environment)
+    assert "OPENAI_API_KEY" not in result
+    assert "SOME_AUTH_TOKEN" not in result
+    assert result["CODE_POLICY_TEST_VALUE"] == "safe"
 
-    bootstrap = f"""
-from dimos.memory2.store.sqlite import SqliteStore
-memory = SqliteStore(path={str(path)!r}, must_exist=True, read_only=True)
-memory.start()
-"""
-    mocker.patch("dimos.agents.code_policy_core._bootstrap_source", return_value=bootstrap)
+
+def test_timeout_interrupts_kernel_and_keeps_session_usable(mocker, tmp_path: Path) -> None:
+    mocker.patch("dimos.agents.code_policy_core._bootstrap_source", return_value="pass")
     session = CodePolicySession(
-        CodePolicySessionConfig(environment=LiveDimosEnvironment(recording_path=str(path)))
+        CodePolicySessionConfig(
+            environment=LiveDimosEnvironment(recording_path=str(tmp_path / "unused.db")),
+            interrupt_grace_s=2,
+        )
     )
     session.start()
     try:
-        assert "\n\n1" in session.python_exec("memory.streams.events.count()")
-        with SqliteStore(path=str(path)) as writer:
-            writer.stream("events", int).append(2, ts=2.0)
-        assert "\n\n2" in session.python_exec("memory.streams.events.count()")
-        mutation = session.python_exec("memory.streams.events.append(3)")
-        assert "PermissionError" in mutation
+        assert "timed out" in session.python_exec("while True: pass", timeout_s=0.1)
+        assert "2" in session.python_exec("1 + 1")
     finally:
         session.stop()
-
-
-def test_frozen_environment_requires_all_fields() -> None:
-    with pytest.raises(ValueError):
-        FrozenMemoryEnvironment.model_validate(
-            {"kind": "frozen_memory", "recording_path": "source.db"}
-        )

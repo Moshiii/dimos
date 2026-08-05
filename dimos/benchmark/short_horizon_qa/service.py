@@ -18,17 +18,17 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import time
 
 from dimos.agents.code_policy_core import (
     CodePolicySessionConfig,
     FrozenMemoryEnvironment,
 )
-from dimos.agents.code_policy_server import StandaloneCodePolicyServer
+from dimos.agents.code_policy_server import CodePolicyMcpServer
 from dimos.benchmark.short_horizon_qa.models import CutoffRecord, FrozenMemoryManifest
 from dimos.benchmark.short_horizon_qa.prepare import (
     DERIVED_NAME,
     MANIFEST_NAME,
-    file_sha256,
 )
 
 
@@ -37,7 +37,6 @@ def load_bundle(
     cutoff_seconds: float | None = None,
     *,
     progress: float | None = None,
-    verify_integrity: bool = True,
 ) -> tuple[FrozenMemoryManifest, CutoffRecord, Path, Path]:
     """Validate a prepared bundle and resolve one exact configured cutoff."""
     if (cutoff_seconds is None) == (progress is None):
@@ -81,13 +80,12 @@ def load_bundle(
             f"Requested {requested} is not unique in the bundle. Available: {available}"
         )
 
-    if verify_integrity:
-        if source_path.stat().st_size != manifest.source_size_bytes:
-            raise ValueError(f"Source recording size changed: {source_path}")
-        if file_sha256(source_path) != manifest.source_sha256:
-            raise ValueError(f"Source recording hash changed: {source_path}")
-        if file_sha256(derived_path) != manifest.derived_sha256:
-            raise ValueError(f"Derived recording hash changed: {derived_path}")
+    source_stat = source_path.stat()
+    if (
+        source_stat.st_size != manifest.source_size_bytes
+        or source_stat.st_mtime_ns != manifest.source_mtime_ns
+    ):
+        raise ValueError(f"Source recording identity changed: {source_path}")
     return manifest, matches[0], source_path, derived_path
 
 
@@ -111,12 +109,15 @@ def serve_bundle(
     cutoff_seconds: float | None = None,
     *,
     progress: float | None = None,
-    mcp_port: int = 9990,
 ) -> None:
     """Run the frozen QA MCP endpoint until interrupted."""
     _, cutoff, source_path, derived_path = load_bundle(bundle, cutoff_seconds, progress=progress)
-    server = StandaloneCodePolicyServer(
-        frozen_qa_config(source_path, derived_path, cutoff),
-        port=mcp_port,
-    )
-    server.run_forever()
+    server = CodePolicyMcpServer(frozen_qa_config(source_path, derived_path, cutoff))
+    server.start()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()

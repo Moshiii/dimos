@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, TypeVar, cast
 
 from dimos.core.resource import CompositeResource
@@ -68,7 +69,7 @@ class FrozenMemoryStore(CompositeResource):
         if name not in self._streams:
             store = self._source if name in self._source_names else self._derived
             assert store is not None
-            self._streams[name] = store.stream(name).through(self.through_timestamp).as_read_only()
+            self._streams[name] = store.stream(name).time_range(-math.inf, self.through_timestamp)
         return cast("Stream[T]", self._streams[name])
 
     def delete_stream(self, name: str) -> None:

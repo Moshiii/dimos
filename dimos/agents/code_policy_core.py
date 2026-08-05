@@ -12,63 +12,47 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Module-independent persistent Python policy session."""
+"""Persistent, module-independent Python session for trusted CodePolicy agents."""
 
 from __future__ import annotations
 
-import base64
-from datetime import UTC, datetime
 import os
+import queue
 import re
 import threading
 import time
-from typing import Annotated, Any, Literal
-from uuid import uuid4
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from dimos.utils.logging_config import setup_logger
-
-logger = setup_logger()
+from pydantic import BaseModel, ConfigDict, Field
 
 MAX_EXECUTION_TIMEOUT_S = 110.0
-DEFAULT_STARTUP_TIMEOUT_S = 10.0
-DEFAULT_INTERRUPT_GRACE_S = 2.0
 DEFAULT_OUTPUT_LIMIT = 32_000
 _RECORDING_PATH_ENV = "DIMOS_CODE_POLICY_RECORDING_PATH"
 _DERIVED_RECORDING_PATH_ENV = "DIMOS_CODE_POLICY_DERIVED_RECORDING_PATH"
 _MEMORY_CUTOFF_ENV = "DIMOS_CODE_POLICY_MEMORY_CUTOFF"
 _CONNECT_APP_ENV = "DIMOS_CODE_POLICY_CONNECT_APP"
-_TRUNCATION_MARKER = "\n... [output truncated]"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-
-SessionId = Annotated[str, Field(pattern=r"^code_policy_session_[0-9a-f]{32}$")]
-ExecutionId = Annotated[str, Field(pattern=r"^code_policy_call_[0-9a-f]{32}$")]
-ExecutionStatus = Literal[
-    "busy",
-    "completed",
-    "execution-failed",
-    "invalid-request",
-    "kernel-start-failed",
-    "module-stopped",
-    "python-error",
-    "timed-out",
-]
-ObserverAvailability = Literal["ready", "replaced", "stopped", "unavailable"]
+_TRUNCATION_MARKER = "\n... [output truncated]"
+_CREDENTIAL_NAME_RE = re.compile(
+    r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|OPENAI|ANTHROPIC|AWS_|AZURE_)",
+    re.IGNORECASE,
+)
 
 
-class _EvidenceModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+class FrozenMemoryEnvironment(BaseModel):
+    """A source and derived Memory2 recording pinned at an inclusive cutoff."""
 
-
-class FrozenMemoryEnvironment(_EvidenceModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["frozen_memory"] = "frozen_memory"
     recording_path: str = Field(min_length=1)
     derived_recording_path: str = Field(min_length=1)
     memory_cutoff_timestamp: float
 
 
-class LiveDimosEnvironment(_EvidenceModel):
+class LiveDimosEnvironment(BaseModel):
+    """A live DimOS environment with read-only memory and an attached app."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["live_dimos"] = "live_dimos"
     recording_path: str = Field(min_length=1)
 
@@ -78,111 +62,48 @@ CodePolicyEnvironment = FrozenMemoryEnvironment | LiveDimosEnvironment
 
 class CodePolicySessionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
     environment: CodePolicyEnvironment
-    output_limit: int = DEFAULT_OUTPUT_LIMIT
-    startup_timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S
-    interrupt_grace_s: float = DEFAULT_INTERRUPT_GRACE_S
-
-    @model_validator(mode="after")
-    def limits_are_valid(self) -> CodePolicySessionConfig:
-        if self.output_limit < 0:
-            raise ValueError("output_limit must be non-negative")
-        if self.startup_timeout_s <= 0 or self.interrupt_grace_s <= 0:
-            raise ValueError("CodePolicy timeouts must be positive")
-        return self
+    output_limit: int = Field(default=DEFAULT_OUTPUT_LIMIT, ge=0)
+    startup_timeout_s: float = Field(default=10.0, gt=0)
+    interrupt_grace_s: float = Field(default=2.0, gt=0)
 
 
-class CodePolicySessionReceipt(_EvidenceModel):
-    session_id: SessionId
-    reset_at: datetime
-    previous_session_id: SessionId | None
-
-
-class CodePolicyExecutionRecord(_EvidenceModel):
-    execution_id: ExecutionId
-    session_id: SessionId
-    source: str
-    requested_timeout_s: float
-    started_at: datetime
-    finished_at: datetime
-    monotonic_duration_s: Annotated[float, Field(ge=0)]
-    status: ExecutionStatus
-    jupyter_message_id: str | None
-    jupyter_execution_count: int | None
-    output: str
-    transcript: str
-    interrupt_attempted: bool
-    interrupt_recovered: bool
-    kernel_restarted: bool
-    namespace_preserved: bool
-    remote_work_may_continue: bool
-
-
-class CodePolicyObserverDescriptor(_EvidenceModel):
-    transport: Literal["tcp", "ipc"]
-    ip: str
-    iopub_port: Annotated[int, Field(gt=0)]
-    signature_scheme: str
-    key_base64: str
-    code_policy_session_id: SessionId
-    jupyter_client_session_id: str
-    kernel_generation: Annotated[int, Field(gt=0)]
-
-
-class CodePolicyObserverState(_EvidenceModel):
-    availability: ObserverAvailability
-    code_policy_session_id: SessionId
-    kernel_generation: Annotated[int, Field(ge=0)]
-    descriptor: CodePolicyObserverDescriptor | None
-
-
-class CodePolicyObserverProbeReceipt(_EvidenceModel):
-    message_id: str
-    code_policy_session_id: SessionId
-    kernel_generation: Annotated[int, Field(gt=0)]
-
-
-class _BoundedTextOutput:
+class _BoundedOutput:
     def __init__(self, limit: int) -> None:
-        self._limit = max(0, limit)
-        self._parts: list[str] = []
-        self._length = 0
-        self._truncated = False
+        self.limit = limit
+        self.parts: list[str] = []
+        self.length = 0
+        self.truncated = False
 
     def __call__(self, message: dict[str, Any]) -> None:
         message_type = message.get("header", {}).get("msg_type")
         content = message.get("content", {})
+        value = ""
         if message_type == "stream":
-            self._append(str(content.get("text", "")))
+            value = str(content.get("text", ""))
         elif message_type in {"execute_result", "display_data"}:
-            text = content.get("data", {}).get("text/plain")
-            if text is not None:
-                self._append(str(text))
+            value = str(content.get("data", {}).get("text/plain", ""))
         elif message_type == "error":
-            traceback = content.get("traceback")
-            if isinstance(traceback, list):
-                self._append("\n".join(str(line) for line in traceback))
-            else:
-                self._append(f"{content.get('ename', 'Error')}: {content.get('evalue', '')}")
-
-    def text(self) -> str:
-        return "".join(self._parts)
+            traceback = content.get("traceback", [])
+            value = "\n".join(str(line) for line in traceback)
+        self._append(_ANSI_ESCAPE_RE.sub("", value))
 
     def _append(self, value: str) -> None:
-        if not value or self._truncated:
+        if not value or self.truncated:
             return
-        value = _ANSI_ESCAPE_RE.sub("", value)
-        remaining = self._limit - self._length
+        remaining = self.limit - self.length
         if len(value) <= remaining:
-            self._parts.append(value)
-            self._length += len(value)
+            self.parts.append(value)
+            self.length += len(value)
             return
         marker = _TRUNCATION_MARKER[:remaining]
         content_limit = max(0, remaining - len(marker))
-        self._parts.append(value[:content_limit] + marker)
-        self._length = self._limit
-        self._truncated = True
+        self.parts.append(value[:content_limit] + marker)
+        self.length = self.limit
+        self.truncated = True
+
+    def text(self) -> str:
+        return "".join(self.parts)
 
 
 def _load_kernel_manager() -> type[Any]:
@@ -190,7 +111,7 @@ def _load_kernel_manager() -> type[Any]:
         from jupyter_client.manager import KernelManager
     except ImportError as exc:
         raise RuntimeError(
-            "Code-policy execution requires the agents extra: uv sync --extra agents"
+            "CodePolicy requires ipykernel and jupyter-client; install the agents extra"
         ) from exc
     return KernelManager
 
@@ -205,10 +126,8 @@ if _cutoff is None:
     memory = _SqliteStore(
         path=_os.environ[{_RECORDING_PATH_ENV!r}], must_exist=True, read_only=True
     )
-    memory.start()
 else:
     from dimos.memory2.store.frozen import FrozenMemoryStore as _FrozenMemoryStore
-
     _source = _SqliteStore(
         path=_os.environ[{_RECORDING_PATH_ENV!r}], must_exist=True, read_only=True
     )
@@ -218,12 +137,11 @@ else:
     memory = _FrozenMemoryStore(
         source=_source, derived=_derived, through_timestamp=float(_cutoff)
     )
-    memory.start()
     del _FrozenMemoryStore, _source, _derived
 
-if _os.environ.get({_CONNECT_APP_ENV!r}, "1") == "1":
+memory.start()
+if _os.environ.get({_CONNECT_APP_ENV!r}) == "1":
     from dimos.porcelain.dimos import Dimos as _Dimos
-
     app = _Dimos.connect()
     del _Dimos
 
@@ -231,81 +149,56 @@ del _os, _SqliteStore, _cutoff
 """
 
 
+def _kernel_environment(environment: CodePolicyEnvironment) -> dict[str, str]:
+    """Build a useful kernel environment without forwarding host credentials."""
+    result = {
+        name: value for name, value in os.environ.items() if not _CREDENTIAL_NAME_RE.search(name)
+    }
+    result[_RECORDING_PATH_ENV] = environment.recording_path
+    if isinstance(environment, FrozenMemoryEnvironment):
+        result[_CONNECT_APP_ENV] = "0"
+        result[_DERIVED_RECORDING_PATH_ENV] = environment.derived_recording_path
+        result[_MEMORY_CUTOFF_ENV] = str(environment.memory_cutoff_timestamp)
+    else:
+        result[_CONNECT_APP_ENV] = "1"
+        result.pop(_DERIVED_RECORDING_PATH_ENV, None)
+        result.pop(_MEMORY_CUTOFF_ENV, None)
+    return result
+
+
 class CodePolicySession:
-    """Execute trusted agent-authored Python in one persistent kernel."""
+    """Execute trusted Python serially in one persistent Jupyter kernel."""
 
     def __init__(self, config: CodePolicySessionConfig) -> None:
         self.config = config
+        self.execution_count = 0
+        self.execution_duration_s = 0.0
         self._execution_lock = threading.Lock()
-        self._records_lock = threading.Lock()
         self._kernel_lock = threading.RLock()
-        self._kernel_manager: Any = None
-        self._kernel_client: Any = None
-        self._kernel_generation = 0
-        self._session_id: str = _new_session_id()
-        self._session_reset_at = _utc_now()
+        self._manager: Any = None
+        self._client: Any = None
         self._stopped = True
-        self._execution_records: list[CodePolicyExecutionRecord] = []
 
     def start(self) -> None:
         self._stopped = False
 
     def python_exec(self, code: str, timeout_s: float = MAX_EXECUTION_TIMEOUT_S) -> str:
-        started_at = _utc_now()
-        started_monotonic = time.monotonic()
         if self._stopped:
-            transcript = "Code Policy Module stopped"
-            self._record(
-                code,
-                timeout_s,
-                started_at,
-                started_monotonic,
-                status="module-stopped",
-                transcript=transcript,
-            )
-            return transcript
+            return "CodePolicy session is stopped"
+        if not code:
+            return "python_exec code must be non-empty"
         if not 0 < timeout_s <= MAX_EXECUTION_TIMEOUT_S:
-            transcript = (
-                f"Invalid timeout_s={timeout_s!r}; expected a value in "
-                f"(0, {MAX_EXECUTION_TIMEOUT_S:g}]"
-            )
-            self._record(
-                code,
-                timeout_s,
-                started_at,
-                started_monotonic,
-                status="invalid-request",
-                transcript=transcript,
-            )
-            return transcript
+            return f"timeout_s must be in (0, {MAX_EXECUTION_TIMEOUT_S:g}]"
         if not self._execution_lock.acquire(blocking=False):
-            transcript = "Code Policy Module busy: another python_exec call is active"
-            self._record(
-                code,
-                timeout_s,
-                started_at,
-                started_monotonic,
-                status="busy",
-                transcript=transcript,
-            )
-            return transcript
-        logger.info("Code policy execution started", source=code, timeout_s=timeout_s)
+            return "CodePolicy session is busy"
+        started = time.monotonic()
+        self.execution_count += 1
         try:
             try:
                 client = self._ensure_kernel()
             except Exception as exc:
-                logger.exception("Code policy kernel failed to start")
-                transcript = f"Code policy kernel failed to start: {type(exc).__name__}: {exc}"
-                self._record(
-                    code,
-                    timeout_s,
-                    started_at,
-                    started_monotonic,
-                    status="kernel-start-failed",
-                    transcript=transcript,
-                )
-                return transcript
-            output = _BoundedTextOutput(self.config.output_limit)
+                return f"CodePolicy kernel failed to start: {type(exc).__name__}: {exc}"
+            output = _BoundedOutput(self.config.output_limit)
             try:
                 reply = client.execute_interactive(
                     code,
@@ -314,353 +207,105 @@ class CodePolicySession:
                     store_history=True,
                     timeout=timeout_s,
                 )
-            except TimeoutError:
-                interrupt_recovered, kernel_restarted = self._recover_from_timeout()
-                if interrupt_recovered:
-                    transcript = (
-                        f"Execution timed out after {timeout_s:.1f}s and was interrupted. "
-                        "The Python namespace was preserved. Remote RPC work may still be "
-                        "running; it was not cancelled."
-                    )
-                else:
-                    transcript = (
-                        f"Execution timed out after {timeout_s:.1f}s. The kernel did not "
-                        "recover from interruption and was restarted; the Python namespace "
-                        "was reset. Remote RPC work may still be running; it was not cancelled."
-                    )
-                self._record(
-                    code,
-                    timeout_s,
-                    started_at,
-                    started_monotonic,
-                    status="timed-out",
-                    output=output.text(),
-                    transcript=transcript,
-                    interrupt_attempted=True,
-                    interrupt_recovered=interrupt_recovered,
-                    kernel_restarted=kernel_restarted,
-                    namespace_preserved=interrupt_recovered,
-                    remote_work_may_continue=True,
+            except (TimeoutError, queue.Empty):
+                if self._interrupt_and_recover():
+                    return f"Execution timed out after {timeout_s:.1f}s and was interrupted"
+                return (
+                    f"Execution timed out after {timeout_s:.1f}s; "
+                    "the kernel was restarted and its namespace was reset"
                 )
-                return transcript
             except Exception as exc:
-                self._shutdown_kernel(reason=type(exc).__name__)
-                logger.exception("Code policy execution failed")
-                transcript = (
-                    f"Code policy execution failed: {type(exc).__name__}: {exc}. "
-                    "The Python namespace was reset."
-                )
-                self._record(
-                    code,
-                    timeout_s,
-                    started_at,
-                    started_monotonic,
-                    status="execution-failed",
-                    output=output.text(),
-                    transcript=transcript,
-                    kernel_restarted=True,
-                )
-                return transcript
-            duration_s = time.monotonic() - started_monotonic
-            transcript = _format_reply(reply, output.text(), duration_s)
+                self._shutdown_kernel()
+                return f"CodePolicy execution failed: {type(exc).__name__}: {exc}"
             content = reply.get("content", {})
-            status: ExecutionStatus = (
-                "completed" if content.get("status") == "ok" else "python-error"
-            )
-            self._record(
-                code,
-                timeout_s,
-                started_at,
-                started_monotonic,
-                status=status,
-                output=output.text(),
-                transcript=transcript,
-                jupyter_message_id=reply.get("parent_header", {}).get("msg_id"),
-                jupyter_execution_count=content.get("execution_count"),
-            )
-            return transcript
+            body = output.text().rstrip()
+            if not body and content.get("status") != "ok":
+                body = f"{content.get('ename', 'Error')}: {content.get('evalue', '')}"
+            if not body:
+                body = "(completed)"
+            state = "completed" if content.get("status") == "ok" else "failed"
+            return f"In [{content.get('execution_count', '?')}] {state}\n\n{body}"
         finally:
+            self.execution_duration_s += time.monotonic() - started
             self._execution_lock.release()
-
-    def reset_session(self) -> CodePolicySessionReceipt:
-        if not self._execution_lock.acquire(blocking=False):
-            raise RuntimeError("cannot reset code policy while python_exec is active")
-        try:
-            previous_session_id = self._session_id
-            self._shutdown_kernel(reason="session reset")
-            self._session_id = _new_session_id()
-            self._session_reset_at = _utc_now()
-            return CodePolicySessionReceipt(
-                session_id=self._session_id,
-                reset_at=self._session_reset_at,
-                previous_session_id=previous_session_id,
-            )
-        finally:
-            self._execution_lock.release()
-
-    def get_session_receipt(self) -> CodePolicySessionReceipt:
-        return CodePolicySessionReceipt(
-            session_id=self._session_id,
-            reset_at=self._session_reset_at,
-            previous_session_id=None,
-        )
-
-    def get_execution_records(
-        self, session_id: str | None = None
-    ) -> tuple[CodePolicyExecutionRecord, ...]:
-        with self._records_lock:
-            records = tuple(self._execution_records)
-        if session_id is None:
-            return records
-        return tuple(record for record in records if record.session_id == session_id)
-
-    def prepare_observer(self) -> CodePolicyObserverState:
-        if self._stopped:
-            return self._observer_state("stopped")
-        self._ensure_kernel()
-        return self._observer_state("ready")
-
-    def get_observer_state(self, known_generation: int | None = None) -> CodePolicyObserverState:
-        if self._stopped:
-            return self._observer_state("stopped")
-        with self._kernel_lock:
-            manager = self._kernel_manager
-            client = self._kernel_client
-            generation = self._kernel_generation
-            is_ready = manager is not None and client is not None and bool(manager.is_alive())
-        if not is_ready:
-            return self._observer_state("unavailable")
-        availability: ObserverAvailability = (
-            "replaced"
-            if known_generation is not None and known_generation != generation
-            else "ready"
-        )
-        return self._observer_state(availability)
-
-    def issue_observer_probe(self, kernel_generation: int) -> CodePolicyObserverProbeReceipt:
-        if self._stopped:
-            raise RuntimeError("code policy session is stopped")
-        if not self._execution_lock.acquire(blocking=False):
-            raise RuntimeError("cannot probe while python_exec is active")
-        try:
-            client = self._ensure_kernel()
-            with self._kernel_lock:
-                if kernel_generation != self._kernel_generation:
-                    raise RuntimeError(
-                        "code policy kernel generation changed before readiness probe"
-                    )
-                message_id = client.execute(
-                    "None", silent=True, store_history=False, allow_stdin=False
-                )
-                return CodePolicyObserverProbeReceipt(
-                    message_id=message_id,
-                    code_policy_session_id=self._session_id,
-                    kernel_generation=self._kernel_generation,
-                )
-        finally:
-            self._execution_lock.release()
-
-    def interrupt_active(self) -> bool:
-        if self._execution_lock.acquire(blocking=False):
-            self._execution_lock.release()
-            return False
-        manager = self._kernel_manager
-        if manager is None or not manager.is_alive():
-            return False
-        manager.interrupt_kernel()
-        return True
 
     def stop(self) -> None:
         self._stopped = True
-        self._shutdown_kernel(reason="session stop")
-
-    def _record(
-        self,
-        source: str,
-        timeout_s: float,
-        started_at: datetime,
-        started_monotonic: float,
-        *,
-        status: ExecutionStatus,
-        output: str = "",
-        transcript: str,
-        jupyter_message_id: str | None = None,
-        jupyter_execution_count: int | None = None,
-        interrupt_attempted: bool = False,
-        interrupt_recovered: bool = False,
-        kernel_restarted: bool = False,
-        namespace_preserved: bool = True,
-        remote_work_may_continue: bool = False,
-    ) -> None:
-        record = CodePolicyExecutionRecord(
-            execution_id=f"code_policy_call_{uuid4().hex}",
-            session_id=self._session_id,
-            source=source,
-            requested_timeout_s=timeout_s,
-            started_at=started_at,
-            finished_at=_utc_now(),
-            monotonic_duration_s=max(0.0, time.monotonic() - started_monotonic),
-            status=status,
-            jupyter_message_id=jupyter_message_id,
-            jupyter_execution_count=jupyter_execution_count,
-            output=output,
-            transcript=transcript,
-            interrupt_attempted=interrupt_attempted,
-            interrupt_recovered=interrupt_recovered,
-            kernel_restarted=kernel_restarted,
-            namespace_preserved=namespace_preserved,
-            remote_work_may_continue=remote_work_may_continue,
-        )
-        with self._records_lock:
-            self._execution_records.append(record)
+        self._shutdown_kernel()
 
     def _ensure_kernel(self) -> Any:
         with self._kernel_lock:
-            manager = self._kernel_manager
-            client = self._kernel_client
-            if manager is not None and client is not None and manager.is_alive():
-                return client
-            self._shutdown_kernel(reason="kernel unavailable")
-            manager_type = _load_kernel_manager()
-            manager = manager_type(kernel_name="python3")
+            if self._manager is not None and self._client is not None and self._manager.is_alive():
+                return self._client
+            self._shutdown_kernel()
+            manager = _load_kernel_manager()(kernel_name="python3")
             client = None
             try:
-                env = os.environ.copy()
-                environment = self.config.environment
-                env[_RECORDING_PATH_ENV] = environment.recording_path
-                if isinstance(environment, FrozenMemoryEnvironment):
-                    env[_CONNECT_APP_ENV] = "0"
-                    env[_DERIVED_RECORDING_PATH_ENV] = environment.derived_recording_path
-                    env[_MEMORY_CUTOFF_ENV] = str(environment.memory_cutoff_timestamp)
-                else:
-                    env[_CONNECT_APP_ENV] = "1"
-                    env.pop(_DERIVED_RECORDING_PATH_ENV, None)
-                    env.pop(_MEMORY_CUTOFF_ENV, None)
-                manager.start_kernel(env=env)
+                manager.start_kernel(env=_kernel_environment(self.config.environment))
                 client = manager.client()
                 client.start_channels()
                 client.wait_for_ready(timeout=self.config.startup_timeout_s)
-                self._bootstrap(client)
+                reply = client.execute_interactive(
+                    _bootstrap_source(),
+                    allow_stdin=False,
+                    output_hook=lambda _message: None,
+                    silent=True,
+                    store_history=False,
+                    timeout=self.config.startup_timeout_s,
+                )
+                if reply.get("content", {}).get("status") != "ok":
+                    content = reply.get("content", {})
+                    raise RuntimeError(
+                        f"{content.get('ename', 'KernelBootstrapError')}: "
+                        f"{content.get('evalue', 'bootstrap failed')}"
+                    )
             except Exception:
                 if client is not None:
                     client.stop_channels()
                 try:
-                    manager.shutdown_kernel(now=True)
+                    manager.shutdown_kernel(now=False)
                 except Exception:
-                    logger.exception("Failed to stop an uninitialized code policy kernel")
+                    pass
                 raise
-            self._kernel_manager = manager
-            self._kernel_client = client
-            self._kernel_generation += 1
-        logger.info("Code policy kernel started", environment=self.config.environment.kind)
-        return client
+            self._manager = manager
+            self._client = client
+            return client
 
-    def _bootstrap(self, client: Any) -> None:
-        reply = client.execute_interactive(
-            _bootstrap_source(),
-            allow_stdin=False,
-            output_hook=lambda _message: None,
-            silent=True,
-            store_history=False,
-            timeout=self.config.startup_timeout_s,
-        )
-        content = reply.get("content", {})
-        if content.get("status") != "ok":
-            name = content.get("ename", "KernelBootstrapError")
-            value = content.get("evalue", "unknown bootstrap failure")
-            raise RuntimeError(f"{name}: {value}")
-
-    def _recover_from_timeout(self) -> tuple[bool, bool]:
-        manager = self._kernel_manager
-        client = self._kernel_client
+    def _interrupt_and_recover(self) -> bool:
+        manager, client = self._manager, self._client
         if manager is None or client is None:
-            return False, False
+            return False
         try:
             manager.interrupt_kernel()
             client.wait_for_ready(timeout=self.config.interrupt_grace_s)
-            logger.info("Code policy kernel recovered after interrupt")
-            return True, False
+            return True
         except Exception:
-            logger.warning("Code policy kernel did not recover after interrupt")
-        try:
-            manager.restart_kernel(now=True)
-            client.wait_for_ready(timeout=self.config.startup_timeout_s)
-            self._bootstrap(client)
-            with self._kernel_lock:
-                self._kernel_generation += 1
-            logger.info("Code policy kernel restarted after failed interrupt")
-            return False, True
-        except Exception:
-            logger.exception("Code policy kernel failed to restart")
-            self._shutdown_kernel(reason="restart failure")
-            return False, True
+            try:
+                manager.restart_kernel(now=True)
+                client.wait_for_ready(timeout=self.config.startup_timeout_s)
+                reply = client.execute_interactive(
+                    _bootstrap_source(),
+                    allow_stdin=False,
+                    output_hook=lambda _message: None,
+                    silent=True,
+                    store_history=False,
+                    timeout=self.config.startup_timeout_s,
+                )
+                if reply.get("content", {}).get("status") != "ok":
+                    raise RuntimeError("bootstrap failed after kernel restart")
+            except Exception:
+                self._shutdown_kernel()
+            return False
 
-    def _shutdown_kernel(self, *, reason: str) -> None:
+    def _shutdown_kernel(self) -> None:
         with self._kernel_lock:
-            manager = self._kernel_manager
-            client = self._kernel_client
-            self._kernel_manager = None
-            self._kernel_client = None
-        if manager is None and client is None:
-            return
-        try:
-            if manager is not None:
-                manager.shutdown_kernel(now=True)
-        except Exception:
-            logger.exception("Failed to stop code policy kernel")
-        finally:
-            if client is not None:
-                client.stop_channels()
-        logger.info("Code policy kernel stopped", reason=reason)
-
-    def _observer_state(self, availability: ObserverAvailability) -> CodePolicyObserverState:
-        descriptor: CodePolicyObserverDescriptor | None = None
-        with self._kernel_lock:
-            generation = self._kernel_generation
-            manager = self._kernel_manager
-            client = self._kernel_client
-            if availability in {"ready", "replaced"}:
-                if manager is None or client is None or not manager.is_alive():
-                    availability = "unavailable"
-                else:
-                    connection = manager.get_connection_info()
-                    key = connection["key"]
-                    if isinstance(key, str):
-                        key = key.encode()
-                    descriptor = CodePolicyObserverDescriptor(
-                        transport=connection["transport"],
-                        ip=connection["ip"],
-                        iopub_port=connection["iopub_port"],
-                        signature_scheme=connection["signature_scheme"],
-                        key_base64=base64.b64encode(key).decode("ascii"),
-                        code_policy_session_id=self._session_id,
-                        jupyter_client_session_id=client.session.session,
-                        kernel_generation=generation,
-                    )
-        return CodePolicyObserverState(
-            availability=availability,
-            code_policy_session_id=self._session_id,
-            kernel_generation=generation,
-            descriptor=descriptor,
-        )
-
-
-def _new_session_id() -> str:
-    return f"code_policy_session_{uuid4().hex}"
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _format_reply(reply: dict[str, Any], output: str, duration_s: float) -> str:
-    content = reply.get("content", {})
-    status = content.get("status", "unknown")
-    execution_count = content.get("execution_count", "?")
-    state = "completed" if status == "ok" else "failed"
-    body = output.rstrip()
-    if not body and status != "ok":
-        body = f"{content.get('ename', 'Error')}: {content.get('evalue', '')}".rstrip()
-    if not body:
-        body = "(completed)"
-    return f"In [{execution_count}] {state} in {duration_s:.2f}s\n\n{body}"
+            manager, client = self._manager, self._client
+            self._manager = None
+            self._client = None
+        if manager is not None:
+            try:
+                manager.shutdown_kernel(now=False)
+            except Exception:
+                pass
+        if client is not None:
+            client.stop_channels()

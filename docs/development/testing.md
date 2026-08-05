@@ -71,15 +71,15 @@ pytest -m self_hosted dimos/path/to/test_something.py
 
 ### Frozen agent evaluation
 
-Install the optional Python dependencies, then build and test the dedicated Node
-adapter:
+Install the optional Python dependencies, then build and test the small Pi
+extension:
 
 ```bash
 uv sync --extra agents
-npm ci --prefix packages/pi-code-policy-adapter
-npm run typecheck --prefix packages/pi-code-policy-adapter
-npm run build --prefix packages/pi-code-policy-adapter
-npm test --prefix packages/pi-code-policy-adapter
+npm ci --prefix packages/pi-code-policy-extension
+npm run typecheck --prefix packages/pi-code-policy-extension
+npm run build --prefix packages/pi-code-policy-extension
+npm test --prefix packages/pi-code-policy-extension
 ```
 
 Run the focused Python suite with:
@@ -89,7 +89,6 @@ uv run --extra agents pytest \
   dimos/memory2/store/test_frozen.py \
   dimos/agents/test_code_policy_core.py \
   dimos/agents/test_code_policy_server.py \
-  dimos/agents/mcp/test_mcp_adapter.py \
   dimos/benchmark/agent_eval \
   dimos/benchmark/short_horizon_qa \
   dimos/cli/test_eval.py

@@ -24,7 +24,6 @@ import pytest
 from dimos.agents.code_policy_core import FrozenMemoryEnvironment
 from dimos.benchmark.short_horizon_qa.models import MapperSettings
 from dimos.benchmark.short_horizon_qa.prepare import (
-    file_sha256,
     prepare_bundle,
     resolve_progress,
 )
@@ -57,7 +56,7 @@ def test_prepare_builds_reusable_runtime_maps_without_changing_source(
     recording: Path, tmp_path: Path
 ) -> None:
     output = tmp_path / "bundle"
-    before = file_sha256(recording)
+    before = recording.read_bytes()
 
     manifest = prepare_bundle(
         recording,
@@ -66,12 +65,14 @@ def test_prepare_builds_reusable_runtime_maps_without_changing_source(
         mapper=MapperSettings(device="CPU:0"),
     )
 
-    assert file_sha256(recording) == before
+    assert recording.read_bytes() == before
     assert [item.map_frame_count for item in manifest.cutoffs] == [5, 10]
     assert [item.map_timestamp for item in manifest.cutoffs] == [104.0, 109.0]
     assert (output / "derived.db").is_file()
     encoded = json.loads((output / "manifest.v1.json").read_text())
-    assert encoded["source_sha256"] == before
+    assert encoded["source_size_bytes"] == recording.stat().st_size
+    assert encoded["source_mtime_ns"] == recording.stat().st_mtime_ns
+    assert "source_sha256" not in encoded
 
     with FrozenMemoryStore(
         SqliteStore(path=str(recording), must_exist=True, read_only=True),
@@ -202,7 +203,7 @@ def test_bundle_loads_into_standalone_code_policy_config(recording: Path, tmp_pa
     assert config.environment.memory_cutoff_timestamp == 104.0
 
 
-def test_bundle_integrity_check_rejects_changed_derived_recording(
+def test_bundle_identity_check_rejects_changed_source_recording(
     recording: Path, tmp_path: Path
 ) -> None:
     output = tmp_path / "bundle"
@@ -212,8 +213,8 @@ def test_bundle_integrity_check_rejects_changed_derived_recording(
         output,
         mapper=MapperSettings(device="CPU:0"),
     )
-    with (output / "derived.db").open("ab") as stream:
+    with recording.open("ab") as stream:
         stream.write(b"tampered")
 
-    with pytest.raises(ValueError, match="Derived recording hash changed"):
+    with pytest.raises(ValueError, match="Source recording identity changed"):
         load_bundle(output, 4.0)
