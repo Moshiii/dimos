@@ -174,6 +174,7 @@ class RoboPlanWorld:
                 return None
             snapshot = deepcopy(obstacle)
             self._add_obstacle_to_scene(snapshot, obstacle_id)
+            self._disable_obstacle_pair_collisions(obstacle_id)
             self._obstacles[obstacle_id] = snapshot
             return obstacle_id
 
@@ -200,6 +201,7 @@ class RoboPlanWorld:
             try:
                 scene.removeGeometry(obstacle_id)
                 self._add_obstacle_to_scene(snapshot, obstacle_id)
+                self._disable_obstacle_pair_collisions(obstacle_id)
             except Exception:
                 self._usable = False
                 raise
@@ -1083,6 +1085,13 @@ class RoboPlanWorld:
             )
             return
         raise ValueError(f"Unsupported obstacle type: {obstacle.obstacle_type}")
+
+    def _disable_obstacle_pair_collisions(self, obstacle_id: str) -> None:
+        """Ignore environment contacts that cannot change with robot configuration."""
+        scene = self._require_scene()
+        for other_id in self._obstacles:
+            if other_id != obstacle_id:
+                scene.setCollisions(obstacle_id, other_id, False)
 
     def _validate_obstacle(self, obstacle: Obstacle, *, allow_empty_name: bool = False) -> None:
         validate_obstacle(
