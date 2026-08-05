@@ -728,6 +728,37 @@ def test_replay_fixture_drives_production_pipeline() -> None:
     assert task.compute(state) is None
 
 
+def test_folded_boot_pose_seed_solves() -> None:
+    # The robot boots with joint 2 measured up to 1.74 deg BELOW the
+    # vendor URDF lower bound (three hardware sessions, 2026-07-28). The
+    # old solver hard-failed and the arm froze until dragged past the
+    # limit; the blueprint's seed_limit_tolerance must cover this depth
+    # so the first engage of every session works.
+    from dimos.control.tasks.teleop_task.teleop_task import create_task
+    from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
+    from dimos.teleop.quest.quest_types import Buttons
+
+    left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
+    task = create_task(left_cfg, None)
+    task.start()
+    lower, _upper = _task_limits(task)
+    q_boot = lower.copy()
+    q_boot[1] -= np.deg2rad(1.74)
+    positions = dict(zip(left_cfg.joint_names, q_boot.tolist(), strict=True))
+
+    engage = Buttons()
+    engage.left_primary = True
+    assert task.on_teleop_buttons(engage, 1.0)
+    pose = PoseStamped(position=[0.02, 0.0, 0.02], frame_id="teleop_left_arm")
+    assert task.on_cartesian_command(pose, t_now=1.0)
+    state = types.SimpleNamespace(t_now=1.02, dt=0.01, joints=_FakeJoints(positions))
+    out = task.compute(state)
+    assert out is not None, "arm frozen at folded boot pose (seed tolerance regression)"
+    q_new = np.array(out.positions)
+    assert np.all(q_new >= lower - 1e-9)
+    assert np.max(np.abs(q_new - q_boot)) <= np.deg2rad(5.0)
+
+
 def test_engaged_task_times_out_when_stream_stops() -> None:
     from dimos.control.tasks.teleop_task.teleop_task import create_task
     from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
