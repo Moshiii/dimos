@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from mcp import Client
@@ -42,20 +43,25 @@ def _config(tmp_path: Path) -> CodePolicySessionConfig:
 
 
 @pytest.mark.asyncio
-async def test_server_exposes_exactly_one_persistent_python_tool(tmp_path: Path) -> None:
+async def test_server_exposes_exactly_one_persistent_python_tool(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     server = CodePolicyMcpServer(_config(tmp_path))
-    server.start()
-    try:
-        async with Client(server.mcp_url) as client:
-            tools = await client.list_tools()
-            assert [tool.name for tool in tools.tools] == ["python_exec"]
-            first = await client.call_tool("python_exec", {"code": "items = [1]\nitems"})
-            second = await client.call_tool("python_exec", {"code": "items.append(2)\nitems"})
-            assert "[1]" in first.content[0].text
-            assert "[1, 2]" in second.content[0].text
-            assert server.session.execution_count == 2
-    finally:
-        await asyncio.to_thread(server.stop)
+    with caplog.at_level(logging.INFO):
+        server.start()
+        try:
+            async with Client(server.mcp_url) as client:
+                tools = await client.list_tools()
+                assert [tool.name for tool in tools.tools] == ["python_exec"]
+                first = await client.call_tool("python_exec", {"code": "items = [1]\nitems"})
+                second = await client.call_tool("python_exec", {"code": "items.append(2)\nitems"})
+                assert "[1]" in first.content[0].text
+                assert "[1, 2]" in second.content[0].text
+                assert server.session.execution_count == 2
+        finally:
+            await asyncio.to_thread(server.stop)
+    assert "StreamableHTTP session manager started" not in caplog.text
+    assert "Terminating session" not in caplog.text
 
 
 @pytest.mark.asyncio
