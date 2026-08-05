@@ -19,6 +19,7 @@ import subprocess
 import sys
 import textwrap
 
+from click import unstyle
 import pytest
 from typer.testing import CliRunner
 
@@ -124,11 +125,12 @@ def test_eval_exit_codes_distinguish_infra_semantic_and_preflight(tmp_path, monk
 
 def test_eval_help_is_typed_and_output_is_required(tmp_path) -> None:
     runner = CliRunner()
-    help_result = runner.invoke(main, ["eval", "run", "--help"])
+    help_result = runner.invoke(main, ["eval", "run", "--help"], color=True)
     missing_output = runner.invoke(main, ["eval", "run", str(_case(tmp_path))])
     assert help_result.exit_code == 0
-    assert "--agent.api-key-env" in help_result.stdout
-    assert "--output" in help_result.stdout
+    help_text = unstyle(help_result.stdout)
+    assert "--agent.api-key-env" in help_text
+    assert "--output" in help_text
     assert missing_output.exit_code == 2
 
 

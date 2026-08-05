@@ -108,3 +108,29 @@ def test_nonempty_output_is_rejected_before_execution(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError, match="absent or an empty"):
         execute_single_case(_case(tmp_path), config=EvalRunConfig(), output=output)
     assert (output / "keep").read_text() == "user data"
+
+
+def test_materialize_accepts_bundle_published_by_concurrent_runner(
+    monkeypatch, tmp_path: Path
+) -> None:
+    recording = tmp_path / "recording.db"
+    recording.touch()
+    case = EvalCase(
+        case_id="concurrent",
+        source=FrozenRecordingSource(recording=str(recording), progress=1.0),
+        task=IntegerQuestionTask(prompt="How many rooms?"),
+        validator=ExactIntegerValidatorRef(revision="v1", private_path="private/oracle.json"),
+    )
+    monkeypatch.setattr(single_case, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(single_case, "resolve_dataset", lambda _recording: recording)
+
+    def publish_first(_recording, _cutoffs, output: Path, **_kwargs) -> None:
+        output.mkdir()
+        (output / "manifest.v1.json").write_text("{}")
+        raise FileExistsError(output)
+
+    monkeypatch.setattr(single_case, "prepare_bundle", publish_first)
+
+    bundle = single_case._materialize_frozen_memory(case, None)
+
+    assert bundle.joinpath("manifest.v1.json").is_file()
