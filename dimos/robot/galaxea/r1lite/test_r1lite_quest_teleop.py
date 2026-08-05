@@ -309,7 +309,9 @@ def test_module_rotation_pairing_and_no_default_recording() -> None:
         kwargs = next(
             atom.kwargs for atom in blueprint.blueprints if atom.module is R1LiteQuestTeleopModule
         )
-        assert kwargs["local_rotation"] is True
+        # World-frame deltas: the merged task applies rotations
+        # world-frame, so the module must publish them world-frame too.
+        assert kwargs["local_rotation"] is False
         # Recording is opt-in per session, never a blueprint default.
         assert kwargs.get("record_path", "") == ""  # recording stays opt-in
 

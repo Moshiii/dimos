@@ -139,7 +139,11 @@ r1lite_quest_teleop = autoconnect(
             else os.environ.get("QUEST_RECORD", "")
         ),
         motion_gain=1.3,
-        local_rotation=True,
+        # World-frame rotation deltas: the merged teleop task applies
+        # delta rotations world-frame (the old task-side rotation_frame
+        # pairing is gone), so hand-local deltas here would land in the
+        # wrong frame and drift with wrist excursion. A1Z parity.
+        local_rotation=False,
         position_deadband_m=0.02,
     ),
     # tracking_speed is the actual arm speed (the vendor tracker follows
@@ -218,7 +222,7 @@ def _sim_trajectory_tasks() -> list[TaskConfig]:
 
 
 r1lite_quest_teleop_sim = autoconnect(
-    R1LiteQuestTeleopModule.blueprint(task_names=_TASK_NAMES, local_rotation=True),
+    R1LiteQuestTeleopModule.blueprint(task_names=_TASK_NAMES, local_rotation=False),
     ControlCoordinator.blueprint(
         hardware=_sim_hardware(),
         tasks=[*r1lite_standard_tasks(), *_teleop_tasks(), *_sim_trajectory_tasks()],
