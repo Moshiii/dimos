@@ -28,6 +28,7 @@ from dimos.benchmark.agent_eval.progress import (
 from dimos.benchmark.agent_eval.single_case import CompactEvalResult
 from dimos.cli.dimos import main
 import dimos.cli.eval as eval_cli
+from dimos.core.global_config import global_config
 
 
 def _result(tmp_path: Path) -> CompactEvalResult:
@@ -186,6 +187,46 @@ def test_eval_run_accepts_dotted_auth_and_agent_options(tmp_path, monkeypatch) -
     assert result.exit_code == 0, result.output
     assert captured["config"].agent.auth.env == "MY_OPENAI_KEY"
     assert captured["output_root"] == output
+
+
+def test_eval_run_honors_global_rerun_web_options(tmp_path, monkeypatch) -> None:
+    case = tmp_path / "case.json"
+    case.write_text("{}")
+    observed = {}
+    original = global_config.model_dump()
+
+    def execute(path, *, config, output_root=None, progress=None):
+        observed.update(
+            viewer=global_config.viewer,
+            rerun_web=global_config.rerun_web,
+            rerun_open=global_config.rerun_open,
+        )
+        return _result(tmp_path)
+
+    monkeypatch.setattr(eval_cli, "execute_single_case", execute)
+    try:
+        result = CliRunner().invoke(
+            main,
+            [
+                "--viewer",
+                "rerun",
+                "--rerun-web",
+                "--rerun-open",
+                "web",
+                "eval",
+                "run",
+                str(case),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert observed == {
+            "viewer": "rerun",
+            "rerun_web": True,
+            "rerun_open": "web",
+        }
+    finally:
+        global_config.update(**original)
 
 
 def test_eval_run_json_is_one_compact_pydantic_result(tmp_path, monkeypatch) -> None:

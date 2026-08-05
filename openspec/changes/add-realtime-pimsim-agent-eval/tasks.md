@@ -51,3 +51,9 @@
 - [x] 7.2 Run the focused case-model, attempt-engine, CLI, provider, scene-control, live CodePolicy, and Go2 evaluation test suites plus mypy and pre-commit checks for changed files.
 - [x] 7.3 Execute the documented credentialed command `uv run dimos eval run <go-to-bed-case> --output=<path>` against PiMSim and retain the finalized attempt path and result in implementation notes.
 - [x] 7.4 Verify the real attempt contains all required evidence, exposes no private goal material publicly, and classifies a clean goal timeout as completed/failed rather than infrastructure failure.
+
+## 8. Enable invocation-level Rerun Web visualization
+
+- [x] 8.1 Preserve resolved DimOS viewer and Rerun presentation settings when starting the case-bound realtime runtime, including explicit headless mode.
+- [x] 8.2 Add hermetic tests proving realtime runtime configuration does not override viewer selection or change case identity.
+- [x] 8.3 Document the exact Rerun Web and headless commands, then run focused tests and changed-file quality checks.

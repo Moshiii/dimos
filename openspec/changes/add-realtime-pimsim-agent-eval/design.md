@@ -96,6 +96,15 @@ Merge `cc/chore/pimsim-integration` before implementing the evaluator, resolve c
 
 The attempt retains the private and public case projections, source/startup/preparation receipts, Pi and CodePolicy evidence, agent actions, periodic private goal observations, final private score, lifecycle events, cleanup diagnostics, attempt manifest, and normalized outcome. Public progress may say that goal monitoring is active, but it must not print the target query, distance, bounds, or predicate progress.
 
+### Visualization remains invocation-level presentation
+
+The real-time runtime honors the process-global DimOS `viewer`, `rerun_open`,
+and `rerun_web` settings instead of forcing visualization off. These flags are
+resolved before the `eval` subcommand and affect only observer presentation;
+they do not enter the case fingerprint, agent prompt, validator, or outcome.
+This permits Rerun Web for an otherwise identical attempt while retaining
+`--viewer none` for unattended execution.
+
 ## Risks / Trade-offs
 
 - **[PiMSim and DimOS provider versions drift]** → Validate the provider and scene-control entry points before reserving the live attempt and fail with an actionable preflight diagnostic.

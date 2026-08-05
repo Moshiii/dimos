@@ -80,6 +80,32 @@ uv run dimos eval run \
   --output=/tmp/dimos-eval-go-to-bed
 ```
 
+Each invocation runs one case and one attempt. It does not run the surrounding
+pytest suite. Enable the Rerun Web view with global options placed before the
+`eval` subcommand:
+
+```bash
+uv run dimos \
+  --viewer rerun \
+  --rerun-web \
+  --rerun-open web \
+  eval run \
+  dimos/benchmark/realtime_sim/cases/go2-apartment-go-to-bed/case.json \
+  --output=/tmp/dimos-eval-go-to-bed
+```
+
+The command center and embedded Rerun view are available at
+<http://localhost:7779>. For explicit headless execution, use:
+
+```bash
+uv run dimos --viewer none eval run \
+  dimos/benchmark/realtime_sim/cases/go2-apartment-go-to-bed/case.json \
+  --output=/tmp/dimos-eval-go-to-bed
+```
+
+Visualization settings are presentation-only and do not change case identity
+or evaluation semantics.
+
 Use `--agent.auth.mode=codex-oauth` with `--agent.auth.path`, or
 `--agent.auth.mode=openai-api-key` with `--agent.auth.env`. The command exits
 zero for completed evaluations (whether the task passed or failed), one for an

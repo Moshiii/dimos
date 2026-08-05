@@ -80,3 +80,18 @@ On success, timeout, infrastructure failure, interruption, or presentation failu
 #### Scenario: Cleanup partially fails
 - **WHEN** one owned resource cannot be stopped within its cleanup limit
 - **THEN** the evaluator continues cleaning the remaining resources and records the cleanup diagnostic with the outcome
+
+### Requirement: Invocation-level live visualization
+The real-time evaluator SHALL honor the resolved DimOS viewer and Rerun Web
+presentation settings while preserving all case-bound source, interaction, and
+validator semantics. Visualization settings MUST NOT participate in case
+identity or private evaluation truth, and `--viewer none` SHALL remain
+available for unattended execution.
+
+#### Scenario: Observe an evaluation through Rerun Web
+- **WHEN** a developer invokes the canonical evaluation command with the global `--viewer rerun`, `--rerun-web`, and web-opening settings
+- **THEN** the case-bound blueprint starts its Rerun bridge and web visualization without changing the case fingerprint or outcome rules
+
+#### Scenario: Run headlessly
+- **WHEN** a developer invokes the canonical evaluation command with global `--viewer none`
+- **THEN** the same case executes without a Rerun bridge and retains identical evaluation semantics

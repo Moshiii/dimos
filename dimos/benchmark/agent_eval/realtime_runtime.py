@@ -66,7 +66,6 @@ class DimosSimulatorRuntime:
             "simulation_provider": global_config.simulation_provider,
             "scene_package": global_config.scene_package,
             "robot_model": global_config.robot_model,
-            "viewer": global_config.viewer,
         }
 
     def start(self) -> dict[str, JsonValue]:
@@ -76,7 +75,6 @@ class DimosSimulatorRuntime:
             simulation_provider=self.source.simulation_provider,
             scene_package=self.source.scene,
             robot_model=robot_model,
-            viewer="none",
         )
         # Resolving the source blueprint materializes its case-bound provider binding.
         base = get_by_name(self.source.dimos_blueprint)

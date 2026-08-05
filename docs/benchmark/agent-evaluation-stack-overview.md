@@ -357,6 +357,28 @@ uv run dimos eval run \
   --output=/tmp/dimos-eval-go-to-bed
 ```
 
+This command executes one case and one attempt. The apartment exploration
+route is source preparation for that attempt, not a collection of additional
+tests, and `dimos eval run` does not invoke the self-hosted pytest suite.
+
+To observe the same case through Rerun Web, pass the global visualization
+options before `eval`:
+
+```bash
+uv run dimos \
+  --viewer rerun \
+  --rerun-web \
+  --rerun-open web \
+  eval run \
+  dimos/benchmark/realtime_sim/cases/go2-apartment-go-to-bed/case.json \
+  --output=/tmp/dimos-eval-go-to-bed
+```
+
+Open <http://localhost:7779> if the browser does not open automatically. Use
+`uv run dimos --viewer none eval run ...` for explicit headless execution.
+Viewer options alter presentation only; they do not alter the case fingerprint,
+agent task, deadline, private validator, or outcome rules.
+
 The case already binds PiMSim, its scene, Go2, the blueprint, preparation, and
 the deadline. There is intentionally no `--runtime` or source override.
 

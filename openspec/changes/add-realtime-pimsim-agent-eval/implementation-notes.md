@@ -46,3 +46,27 @@ Environment preparation performed for the run:
 Compatibility work stayed in DimOS. PiMSim itself was not modified. DimOS now
 accepts PiMSim's `mesh` browser visual target and multi-visual `visual_specs`
 scene-cooking call.
+
+## Rerun Web acceptance
+
+Executed the same single case with invocation-level visualization enabled:
+
+```bash
+uv run dimos \
+  --viewer rerun \
+  --rerun-web \
+  --rerun-open none \
+  eval run \
+  dimos/benchmark/realtime_sim/cases/go2-apartment-go-to-bed/case.json \
+  --output=/tmp/dimos-eval-go-to-bed-rerun-web \
+  --quiet
+```
+
+The runtime deployed `RerunBridgeModule`, `RerunWebSocketServer`, and
+`WebsocketVisModule`. During the attempt,
+`http://localhost:7779/command-center` returned HTTP 200 and the Rerun endpoint
+on port 3030 accepted WebSocket upgrade requests. The single attempt finalized
+`completed`/`passed` with `goal_reached` in 84.6 seconds and then stopped all
+three visualization modules during normal evaluator cleanup. Its finalized
+path is
+`/tmp/dimos-eval-go-to-bed-rerun-web/attempt_9f9209d4061f4814b2d5ed206d58572b`.
