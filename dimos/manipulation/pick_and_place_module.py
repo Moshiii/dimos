@@ -252,6 +252,10 @@ class PickAndPlaceModule(ManipulationModule):
         """
         if self._world_monitor is None:
             return []
+        if self._object_scene is not None:
+            # One detection pass on the current (stationary) camera frames; this is
+            # the only detection trigger when the scene runs detect_on_request.
+            self._object_scene.scan_scene()
         result = self._world_monitor.refresh_obstacles(min_duration)
         # Snapshot detections at refresh time — the live cache is volatile
         self._detection_snapshot = self._world_monitor.get_cached_objects()
@@ -618,6 +622,13 @@ then refreshes perception obstacles.
             f"No unique current detection matches {selector}; scan again and use an object ID",
         )
 
+    def _cloud_stale(self, pointcloud: PointCloud2 | None) -> bool:
+        return (
+            pointcloud is None
+            or pointcloud.ts is None
+            or time.time() - pointcloud.ts > self.config.max_object_pointcloud_age
+        )
+
     def _provider_candidates(
         self, detection: DetObject, transaction: _PickTransaction
     ) -> list[GraspCandidate]:
@@ -643,6 +654,11 @@ then refreshes perception obstacles.
             )
 
         pointcloud = self._object_scene.get_object_pointcloud_by_object_id(detection.object_id)
+        if self._cloud_stale(pointcloud):
+            # The scene only refreshes clouds inside scan_scene(); agent latency
+            # between scan and pick easily outlives max_object_pointcloud_age.
+            self._object_scene.scan_scene()
+            pointcloud = self._object_scene.get_object_pointcloud_by_object_id(detection.object_id)
         if pointcloud is None:
             raise _PickPipelineError(
                 "GRASP_INPUT_INVALID",
@@ -654,10 +670,7 @@ then refreshes perception obstacles.
                 "GRASP_INPUT_INVALID",
                 f"Object '{detection.object_id}' has an empty or invalid point cloud",
             )
-        if (
-            pointcloud.ts is None
-            or time.time() - pointcloud.ts > self.config.max_object_pointcloud_age
-        ):
+        if self._cloud_stale(pointcloud):
             raise _PickPipelineError(
                 "GRASP_INPUT_INVALID",
                 f"Object '{detection.object_id}' point cloud is stale",
