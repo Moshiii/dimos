@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -179,20 +180,29 @@ def _materialize_frozen_memory(case: EvalCase, progress: ProgressSink | None) ->
     )
     key = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_key)
     bundle = CACHE_DIR / "agent_eval" / "frozen_memory" / key
-    if not (bundle / "manifest.v1.json").is_file():
+    manifest = bundle / "manifest.v1.json"
+    if not manifest.is_file():
         emit_progress(progress, StatusProgress(channel="eval", message="preparing memory"))
         bundle.parent.mkdir(parents=True, exist_ok=True)
-        prepare_bundle(
-            case.source.recording,
-            [],
-            bundle,
-            progress=[case.source.progress],
-            mapper=mapper,
-            map_progress=lambda current, total: emit_progress(
-                progress,
-                StatusProgress(channel="eval", message=f"mapping {current}/{total} frames"),
-            ),
-        )
+        try:
+            prepare_bundle(
+                case.source.recording,
+                [],
+                bundle,
+                progress=[case.source.progress],
+                mapper=mapper,
+                map_progress=lambda current, total: emit_progress(
+                    progress,
+                    StatusProgress(channel="eval", message=f"mapping {current}/{total} frames"),
+                ),
+            )
+        except OSError as exc:
+            concurrent_publish = isinstance(exc, FileExistsError) or exc.errno in {
+                errno.EEXIST,
+                errno.ENOTEMPTY,
+            }
+            if not concurrent_publish or not manifest.is_file():
+                raise
     return bundle
 
 

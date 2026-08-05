@@ -19,8 +19,10 @@ import sqlite3
 
 import pytest
 
+from dimos.memory2.blobstore.sqlite import SqliteBlobStore
 from dimos.memory2.store.frozen import FrozenMemoryStore
 from dimos.memory2.store.sqlite import SqliteStore
+from dimos.memory2.vectorstore.sqlite import SqliteVectorStore
 
 
 @pytest.fixture
@@ -87,6 +89,39 @@ def test_read_only_sqlite_store_does_not_create_wal(recorded_stores) -> None:
     assert source_path.read_bytes() == original_bytes
     assert not wal_path.exists()
     assert not shm_path.exists()
+
+
+def test_read_only_store_propagates_to_external_sqlite_components(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.db"
+    blob_path = tmp_path / "blobs.db"
+    vector_path = tmp_path / "vectors.db"
+    blob_store = SqliteBlobStore(path=str(blob_path))
+    vector_store = SqliteVectorStore(path=str(vector_path))
+    with SqliteStore(path=str(source_path)) as source:
+        stream = source.stream(
+            "camera",
+            str,
+            blob_store=blob_store,
+            vector_store=vector_store,
+        )
+        stream.append("frame", ts=1.0)
+        blob_store._conn.commit()
+    for path in (source_path, blob_path, vector_path):
+        with sqlite3.connect(path) as connection:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            connection.execute("PRAGMA journal_mode=DELETE")
+
+    with SqliteStore(path=str(source_path), must_exist=True, read_only=True) as source:
+        stream = source.stream("camera")
+        assert stream.first().data == "frame"
+        backend = stream._source
+        assert backend is not None
+        assert backend.blob_store is not None
+        assert backend.vector_store is not None
+        assert backend.blob_store._conn.execute("PRAGMA query_only").fetchone() == (1,)
+        assert backend.vector_store._conn.execute("PRAGMA query_only").fetchone() == (1,)
+        assert not Path(f"{blob_path}-wal").exists()
+        assert not Path(f"{vector_path}-wal").exists()
 
 
 def test_frozen_memory_rejects_stream_collisions(recorded_stores) -> None:

@@ -89,23 +89,31 @@ class SqliteStore(Store):
         # Reconstruct components from serialized config
         bs_data = stored.get("blob_store")
         if bs_data is not None:
-            bs_cfg = bs_data.get("config", {})
-            if bs_cfg.get("path") is None and bs_data["class"] == qual(SqliteBlobStore):
-                bs: Any = SqliteBlobStore(conn=backend_conn)
+            bs_cfg = dict(bs_data.get("config", {}))
+            if bs_data["class"] == qual(SqliteBlobStore):
+                if self.config.read_only:
+                    bs_cfg["read_only"] = True
+                if bs_cfg.get("path") is None:
+                    bs_cfg["conn"] = backend_conn
+                bs: Any = SqliteBlobStore(**bs_cfg)
             else:
                 bs = deserialize_component(bs_data)
         else:
-            bs = SqliteBlobStore(conn=backend_conn)
+            bs = SqliteBlobStore(conn=backend_conn, read_only=self.config.read_only)
 
         vs_data = stored.get("vector_store")
         if vs_data is not None:
-            vs_cfg = vs_data.get("config", {})
-            if vs_cfg.get("path") is None and vs_data["class"] == qual(SqliteVectorStore):
-                vs: Any = SqliteVectorStore(conn=backend_conn)
+            vs_cfg = dict(vs_data.get("config", {}))
+            if vs_data["class"] == qual(SqliteVectorStore):
+                if self.config.read_only:
+                    vs_cfg["read_only"] = True
+                if vs_cfg.get("path") is None:
+                    vs_cfg["conn"] = backend_conn
+                vs: Any = SqliteVectorStore(**vs_cfg)
             else:
                 vs = deserialize_component(vs_data)
         else:
-            vs = SqliteVectorStore(conn=backend_conn)
+            vs = SqliteVectorStore(conn=backend_conn, read_only=self.config.read_only)
 
         notifier_data = stored.get("notifier")
         if notifier_data is not None:
