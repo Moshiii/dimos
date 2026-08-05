@@ -13,6 +13,9 @@ permissions: {}
 
 env:
   UV_NO_SYNC: "1"
+  # Dump the Python stack if the benchmark process dies on a signal (it
+  # currently exits 132/SIGILL on this runner with no traceback).
+  PYTHONFAULTHANDLER: "1"
 
 jobs:
   benchmarks:
@@ -23,6 +26,12 @@ jobs:
       contents: read  # For checkout
       id-token: write  # OIDC upload to CodSpeed
     steps:
+      # Temporary diagnostics: the SIGILL below may be an ARMv8.2-compiled
+      # wheel (torch et al.) on older silicon — this names the CPU.
+      - name: Show runner hardware
+        run: |
+          uname -a
+          head -30 /proc/cpuinfo
       - name: Checkout
         uses: actions/checkout@v7
       # After checkout (lfs: false) the archive is a ~130-byte LFS pointer;
