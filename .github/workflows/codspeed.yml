@@ -75,10 +75,18 @@ jobs:
         run: uv sync --group tests --frozen
       - name: Pre-extract the replay database
         run: uv run python -c "from dimos.utils.data import get_data; print(get_data('go2_hongkong_office.db'))"
-      # Temporary diagnostics: the same pytest command, same machine, but
-      # without the codspeed runner's isolation/profiler wrapping (short
-      # window to keep it cheap). SIGILL here => our stack on this silicon
-      # (faulthandler prints the stack); pass here => runner-context problem.
+      # Temporary diagnostics: the plain (runner-less) smoke SIGILLed too, so a
+      # native wheel dies on this silicon. Import each in a fresh interpreter;
+      # the one that exits 132 is the culprit (the loop survives it).
+      - name: Bisect native imports
+        run: |
+          for m in numpy scipy cv2 sqlite_vec lcm zenoh rerun open3d torch onnxruntime; do
+            echo "=== import $m"
+            uv run python -X faulthandler -c "import $m; print('$m ok')" || echo "=== $m FAILED with $?"
+          done
+      - name: Probe the sqlite read path
+        run: uv run python -X faulthandler -c "import os; os.environ['DIMOS_BENCH_DURATION']='10'; from dimos.robot.unitree.go2.test_replay_benchmark import _expected_counts; print(_expected_counts('data/go2_hongkong_office.db'))"
+      # If both probes pass, re-check the full path without the runner wrap.
       - name: Smoke the benchmark without the codspeed runner
         run: env DIMOS_BENCH_DURATION=10 uv run pytest --codspeed -m '' --no-cov dimos/robot/unitree/go2/test_replay_benchmark.py
 
