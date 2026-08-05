@@ -29,6 +29,7 @@ class BaseEvalModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     schema_version: Literal["1.0"] = "1.0"
 
+
 NonEmpty = Annotated[str, Field(min_length=1)]
 
 
