@@ -38,6 +38,7 @@ from dimos.memory2.type.filter import (
     PredicateFilter,
     StreamQuery,
     TagsFilter,
+    ThroughFilter,
     TimeRangeFilter,
 )
 from dimos.memory2.type.observation import EmbeddedObservation, Observation
@@ -127,6 +128,7 @@ class Stream(CompositeResource, Generic[T, O]):
         *,
         transform: Transformer[Any, T] | None = None,
         query: StreamQuery = StreamQuery(),
+        writable: bool = True,
     ) -> None:
         super().__init__()
         self._source = source
@@ -134,6 +136,7 @@ class Stream(CompositeResource, Generic[T, O]):
             self.register_disposable(source)
         self._transform = transform
         self._query = query
+        self._writable = writable
 
     def stop(self) -> None:
         buf = self._query.live_buffer
@@ -219,7 +222,21 @@ class Stream(CompositeResource, Generic[T, O]):
             search_k=overrides.get("search_k", q.search_k),
             search_text=overrides.get("search_text", q.search_text),
         )
-        return Stream(self._source, transform=self._transform, query=new_q)
+        return Stream(
+            self._source,
+            transform=self._transform,
+            query=new_q,
+            writable=self._writable,
+        )
+
+    def as_read_only(self) -> Stream[T, O]:
+        """Return a query-equivalent stream that rejects appends."""
+        return Stream(
+            self._source,
+            transform=self._transform,
+            query=self._query,
+            writable=False,
+        )
 
     def _with_filter(self, f: Filter) -> Stream[T, O]:
         return self._replace_query(filters=(*self._query.filters, f))
@@ -229,6 +246,10 @@ class Stream(CompositeResource, Generic[T, O]):
 
     def before(self, t: float) -> Stream[T, O]:
         return self._with_filter(BeforeFilter(t))
+
+    def through(self, t: float) -> Stream[T, O]:
+        """Keep observations at or before absolute timestamp ``t``."""
+        return self._with_filter(ThroughFilter(t))
 
     def time_range(self, t1: float, t2: float) -> Stream[T, O]:
         return self._with_filter(TimeRangeFilter(t1, t2))
@@ -680,6 +701,8 @@ class Stream(CompositeResource, Generic[T, O]):
         Returns :class:`EmbeddedObservation` when *embedding* is provided,
         else a plain :class:`Observation`.
         """
+        if not self._writable:
+            raise PermissionError("Cannot append to a read-only stream")
         if isinstance(self._source, Stream) or self._source is None:
             raise TypeError(
                 "Cannot append to a transform/unbound stream. Append to the source stream."

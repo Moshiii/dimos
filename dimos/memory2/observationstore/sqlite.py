@@ -30,6 +30,7 @@ from dimos.memory2.type.filter import (
     BeforeFilter,
     NearFilter,
     TagsFilter,
+    ThroughFilter,
     TimeRangeFilter,
 )
 from dimos.memory2.type.observation import _UNLOADED, Observation, PoseTuple
@@ -71,6 +72,8 @@ def _compile_filter(f: Filter, stream: str, prefix: str = "") -> tuple[str, list
         return (f"{prefix}ts > ?", [f.t])
     if isinstance(f, BeforeFilter):
         return (f"{prefix}ts < ?", [f.t])
+    if isinstance(f, ThroughFilter):
+        return (f"{prefix}ts <= ?", [f.t])
     if isinstance(f, TimeRangeFilter):
         return (f"{prefix}ts >= ? AND {prefix}ts <= ?", [f.t1, f.t2])
     if isinstance(f, AtFilter):
@@ -209,6 +212,7 @@ class SqliteObservationStoreConfig(ObservationStoreConfig):
     blob_store_conn_match: bool = Field(default=False, exclude=True)
     page_size: int = 256
     path: str | None = None
+    read_only: bool = False
 
     @model_validator(mode="after")
     def _conn_xor_path(self) -> SqliteObservationStoreConfig:
@@ -249,9 +253,18 @@ class SqliteObservationStore(ObservationStore[T]):
     def start(self) -> None:
         if self._conn is None:
             assert self._path is not None
-            disposable, self._conn = open_disposable_sqlite_connection(self._path)
+            disposable, self._conn = open_disposable_sqlite_connection(
+                self._path, read_only=self.config.read_only
+            )
             self.register_disposable(disposable)
-        self._ensure_tables()
+        if self.config.read_only:
+            found = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (self._name,)
+            ).fetchone()
+            if found is None:
+                raise KeyError(f"Stream table {self._name!r} does not exist")
+        else:
+            self._ensure_tables()
 
     def _ensure_tables(self) -> None:
         """Create the metadata table and R*Tree index if they don't exist."""

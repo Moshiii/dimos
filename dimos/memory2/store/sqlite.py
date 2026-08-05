@@ -27,6 +27,7 @@ from dimos.memory2.codecs.base import codec_id
 from dimos.memory2.observationstore.sqlite import SqliteObservationStore
 from dimos.memory2.registry import RegistryStore, deserialize_component, qual
 from dimos.memory2.store.base import Store, StoreConfig
+from dimos.memory2.stream import Stream
 from dimos.memory2.utils.sqlite import open_disposable_sqlite_connection
 from dimos.memory2.utils.validation import validate_identifier
 from dimos.memory2.vectorstore.base import VectorStore
@@ -41,6 +42,7 @@ class SqliteStoreConfig(StoreConfig):
     ] = "memory.db"
     page_size: int = 256
     must_exist: bool = False
+    read_only: bool = False
 
 
 class SqliteStore(Store):
@@ -54,16 +56,24 @@ class SqliteStore(Store):
             raise FileNotFoundError(
                 f"SQLite database not found: {os.path.abspath(self.config.path)}"
             )
-        if not self.config.must_exist:
+        if self.config.read_only and not os.path.exists(self.config.path):
+            raise FileNotFoundError(
+                f"SQLite database not found: {os.path.abspath(self.config.path)}"
+            )
+        if not self.config.must_exist and not self.config.read_only:
             parent = os.path.dirname(self.config.path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
         self._registry_conn = self._open_connection()
-        self._registry = RegistryStore(conn=self._registry_conn)
+        self._registry = RegistryStore(
+            conn=self._registry_conn, read_only=self.config.read_only
+        )
 
     def _open_connection(self) -> sqlite3.Connection:
         """Open a new WAL-mode connection with sqlite-vec loaded."""
-        disposable, connection = open_disposable_sqlite_connection(self.config.path)
+        disposable, connection = open_disposable_sqlite_connection(
+            self.config.path, read_only=self.config.read_only
+        )
         self.register_disposable(disposable)
         return connection
 
@@ -116,6 +126,7 @@ class SqliteStore(Store):
             codec=codec,
             blob_store_conn_match=blob_store_conn_match and eager_blobs,
             page_size=page_size,
+            read_only=self.config.read_only,
         )
         backend: Backend[Any] = Backend(
             metadata_store=metadata_store,
@@ -164,6 +175,9 @@ class SqliteStore(Store):
                     )
             return self._assemble_backend(name, stored)
 
+        if self.config.read_only:
+            raise KeyError(f"Stream {name!r} does not exist in read-only store")
+
         # Create path: inject conn-shared defaults, then delegate to base
         if payload_type is None:
             raise TypeError(f"Stream {name!r} does not exist yet — payload_type is required")
@@ -210,7 +224,15 @@ class SqliteStore(Store):
         db_names = set(self._registry.list_streams())
         return sorted(db_names | set(self._streams.keys()))
 
+    def stream(
+        self, name: str, payload_type: type[Any] | None = None, **overrides: Any
+    ) -> Stream[Any]:
+        stream = super().stream(name, payload_type, **overrides)
+        return stream.as_read_only() if self.config.read_only else stream
+
     def delete_stream(self, name: str) -> None:
+        if self.config.read_only:
+            raise PermissionError("Cannot delete streams from a read-only store")
         super().delete_stream(name)
         self._registry_conn.execute(f'DROP TABLE IF EXISTS "{name}"')
         self._registry_conn.execute(f'DROP TABLE IF EXISTS "{name}_blob"')
