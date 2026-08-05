@@ -91,8 +91,11 @@ class ObjectDB:
             for obj in objects:
                 matched, reason = self._match(obj, now)
                 if matched is None:
-                    results.append(self._insert_pending(obj, now))
+                    inserted = self._insert_pending(obj, now)
+                    results.append(inserted)
                     stats["created"] += 1
+                    if self._check_promotion(inserted):
+                        stats["promoted"] += 1
                     continue
 
                 self._update_existing(matched, obj, now)
