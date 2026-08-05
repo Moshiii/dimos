@@ -382,11 +382,11 @@ results, public logs, and public outcome.
 
 The OpenSpec change contains the detailed proposal and contracts:
 
-- [Proposal](/openspec/changes/standalone-code-policy-frozen-qa-eval/proposal.md)
-- [Design](/openspec/changes/standalone-code-policy-frozen-qa-eval/design.md)
-- [General evaluation case model](/openspec/changes/standalone-code-policy-frozen-qa-eval/specs/agent-evaluation-case-model/spec.md)
-- [Frozen QA evaluation spec](/openspec/changes/standalone-code-policy-frozen-qa-eval/specs/frozen-qa-agent-evaluation/spec.md)
-- [Standalone CodePolicy service spec](/openspec/changes/standalone-code-policy-frozen-qa-eval/specs/standalone-code-policy-service/spec.md)
+- [Archived proposal](/openspec/changes/archive/2026-08-05-standalone-code-policy-frozen-qa-eval/proposal.md)
+- [Archived design](/openspec/changes/archive/2026-08-05-standalone-code-policy-frozen-qa-eval/design.md)
+- [General evaluation case model](/openspec/specs/agent-evaluation-case-model/spec.md)
+- [Frozen QA evaluation spec](/openspec/specs/frozen-qa-agent-evaluation/spec.md)
+- [Standalone CodePolicy service spec](/openspec/specs/standalone-code-policy-service/spec.md)
 - [Short-horizon QA runbook](/docs/benchmark/short-horizon-qa.md)
 
 Start with the proposal for the motivation and scope. Read the design for the
