@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 
     from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
 
+_VOXEL_DOWNSAMPLE = 0.005
+
 
 @dataclass(kw_only=True)
 class Object(Detection3D):
@@ -84,12 +86,15 @@ class Object(Detection3D):
         # Accumulate pointclouds (both are already in world frame) for visualization,
         # but use the latest single-detection geometry for obstacle sizing.
         # Recomputing size from accumulated clouds inflates obstacles unrealistically.
+        # Re-voxelize so the stored cloud is bounded by surface area, not view count.
         if (
             accumulate_pointcloud
             and other.camera_transform is not None
             and self.camera_transform is not None
         ):
-            self.pointcloud = self.pointcloud + other.pointcloud
+            self.pointcloud = (self.pointcloud + other.pointcloud).voxel_downsample(
+                _VOXEL_DOWNSAMPLE
+            )
         else:
             self.pointcloud = other.pointcloud
 
@@ -204,7 +209,7 @@ class Object(Detection3D):
         depth_trunc: float = 10.0,
         statistical_nb_neighbors: int = 10,
         statistical_std_ratio: float = 0.5,
-        voxel_downsample: float = 0.005,
+        voxel_downsample: float = _VOXEL_DOWNSAMPLE,
         mask_erode_pixels: int = 3,
         max_distance: float = 0.0,
         use_aabb: bool = False,
