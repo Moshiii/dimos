@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from dimos.constants import CACHE_DIR
+from dimos.navigation.nav_3d.evaluator.progress import frame_progress
 from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers, keys_contain, voxel_keys
 from dimos.utils.logging_config import setup_logger
 
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
     from dimos.navigation.nav_3d.evaluator.cases import Suite
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
+    from dimos.navigation.nav_3d.evaluator.progress import ProgressFactory, Tick
     from dimos.navigation.nav_3d.evaluator.recording import Frame
 
 logger = setup_logger()
@@ -81,6 +83,7 @@ CACHE_VERSION = 4
 CHECKPOINT_CACHE_VERSION = 4
 
 
+# Any, not NDArray: savez_compressed's stub types **kwds against its allow_pickle bool.
 def _save_npz(cache: Path, **arrays: Any) -> None:
     """Publish a cache atomically, so an interrupted build cannot poison later runs."""
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -126,12 +129,15 @@ def replay_frames(
     mapper: VoxelRayMapper,
     voxel_size: float,
     times: NDArray[np.float64],
+    tick: Tick | None = None,
 ) -> tuple[FinalMap, list[NDArray[np.int64]]]:
     """Feed frames through the mapper in order, snapshotting at each requested
     time. A snapshot holds exactly the frames with ts <= its time."""
     snapshots: list[NDArray[np.int64]] = []
     t0 = perf_counter()
     for frame in frames:
+        if tick is not None:
+            tick()
         while len(snapshots) < len(times) and frame.ts > times[len(snapshots)]:
             snapshots.append(np.unique(voxel_keys(mapper.global_map(), voxel_size)))
         mapper.add_frame(frame.points, frame.origin)
@@ -158,7 +164,9 @@ def _save_final(cache: Path, final: FinalMap) -> None:
     logger.info("final map cached", cache=cache.name, voxels=len(final.occupied))
 
 
-def load_or_build_final_map(suite: Suite, cfg: EvalConfig) -> FinalMap:
+def load_or_build_final_map(
+    suite: Suite, cfg: EvalConfig, progress: ProgressFactory | None = None
+) -> FinalMap:
     db_path = suite.db_path()
     cache = _cache_path(db_path, _final_params(db_path, suite, cfg))
     if cache.exists():
@@ -171,12 +179,14 @@ def load_or_build_final_map(suite: Suite, cfg: EvalConfig) -> FinalMap:
         )
 
     logger.info("building final map (cache miss)", recording=db_path.name)
-    final, _ = replay_frames(
-        suite.world_frames(cfg.align_tol),
-        cfg.make_mapper(),
-        cfg.voxel_size,
-        np.array([], dtype=np.float64),
-    )
+    with frame_progress(progress, suite, "final map") as tick:
+        final, _ = replay_frames(
+            suite.world_frames(cfg.align_tol),
+            cfg.make_mapper(),
+            cfg.voxel_size,
+            np.array([], dtype=np.float64),
+            tick,
+        )
     _save_final(cache, final)
     return final
 
@@ -195,7 +205,10 @@ def encode_deltas(
 
 
 def load_or_build_checkpoints(
-    suite: Suite, cfg: EvalConfig, times: NDArray[np.float64]
+    suite: Suite,
+    cfg: EvalConfig,
+    times: NDArray[np.float64],
+    progress: ProgressFactory | None = None,
 ) -> MapCheckpoints:
     """Occupied key sets at the requested times, deduped and sorted. A cache
     miss replays the recording once and fills the final cache too."""
@@ -218,12 +231,14 @@ def load_or_build_checkpoints(
         )
 
     logger.info("building map checkpoints (cache miss)", n=len(times), recording=db_path.name)
-    final, snapshots = replay_frames(
-        suite.world_frames(cfg.align_tol),
-        cfg.make_mapper(),
-        cfg.voxel_size,
-        times,
-    )
+    with frame_progress(progress, suite, "map checkpoints") as tick:
+        final, snapshots = replay_frames(
+            suite.world_frames(cfg.align_tol),
+            cfg.make_mapper(),
+            cfg.voxel_size,
+            times,
+            tick,
+        )
     final_cache = _cache_path(db_path, _final_params(db_path, suite, cfg))
     if not final_cache.exists():
         _save_final(final_cache, final)

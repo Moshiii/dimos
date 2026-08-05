@@ -17,9 +17,8 @@ twice, online at their start time and again on the whole recording."""
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
-import itertools
 import multiprocessing
 from time import perf_counter
 from typing import TYPE_CHECKING
@@ -33,15 +32,19 @@ from dimos.navigation.nav_3d.evaluator.final_map import (
     load_or_build_final_map,
 )
 from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
+from dimos.navigation.nav_3d.evaluator.progress import frame_progress, stage_progress
 from dimos.navigation.nav_3d.evaluator.voxel_keys import key_centers
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from numpy.typing import NDArray
 
     from dimos.navigation.nav_3d.evaluator.cases import Case, Suite
     from dimos.navigation.nav_3d.evaluator.final_map import FinalMap, MapCheckpoints
     from dimos.navigation.nav_3d.evaluator.pipeline import NavPipeline
+    from dimos.navigation.nav_3d.evaluator.progress import ProgressFactory, Tick
     from dimos.navigation.nav_3d.evaluator.recording import Trajectory
 
 logger = setup_logger()
@@ -171,12 +174,12 @@ def _run_plan(
     map_keys: NDArray[np.int64],
     support_keys: NDArray[np.int64],
     cfg: EvalConfig,
-) -> tuple[PlanOutcome, NDArray[np.float32] | None]:
+) -> PlanOutcome:
     t0 = perf_counter()
     waypoints = pipeline.plan(case.start, case.goal)
     plan_ms = (perf_counter() - t0) * 1000
     if waypoints is None or len(waypoints) == 0:
-        return _no_plan(plan_ms), None
+        return _no_plan(plan_ms)
 
     reached = metrics.goal_reached(waypoints, case.goal, cfg.goal_tolerance)
     gate = metrics.check_path(waypoints, map_keys, cfg)
@@ -199,7 +202,7 @@ def _run_plan(
         unsupported=support.unsupported_points[:MAX_COLLISIONS_KEPT].tolist(),
         steep=kinematics.violation_points[:MAX_COLLISIONS_KEPT].tolist(),
     )
-    return outcome, waypoints
+    return outcome
 
 
 def _no_plan(plan_ms: float) -> PlanOutcome:
@@ -267,32 +270,39 @@ def _final_only(case: Case) -> bool:
 
 
 def _references(
-    suite: Suite, trajectory: Trajectory, final_only: NDArray[np.bool_], cfg: EvalConfig
+    suite: Suite,
+    trajectory: Trajectory,
+    final_only: NDArray[np.bool_],
+    cfg: EvalConfig,
+    progress: ProgressFactory | None = None,
 ) -> list[metrics.Reference]:
     """The demonstrated route length each case is scored against."""
     refs: list[metrics.Reference] = []
-    for i, case in enumerate(suite.cases):
-        if case.expect_fail:
-            # Infeasible by certification: no demonstrated route, no plan time.
-            miss = float(np.linalg.norm(np.asarray(case.goal) - np.asarray(case.start)))
-            refs.append(metrics.Reference(miss, False, float("inf"), False))
-            continue
-        ref = metrics.reference_length(trajectory, case.start, case.goal, cfg)
-        if not final_only[i]:
-            # Only online-replayed cases need a causal snap onto the trajectory.
-            if not ref.snapped:
-                logger.warning(
-                    "endpoint off the walked trajectory, using a straight-line reference",
-                    dataset=suite.dataset,
-                    case=case.id,
-                )
-            elif not ref.causal:
-                logger.warning(
-                    "goal never visited before the start, planning on the full map",
-                    dataset=suite.dataset,
-                    case=case.id,
-                )
-        refs.append(ref)
+    label = f"{suite.dataset} references"
+    with stage_progress(progress, len(suite.cases), label) as tick:
+        for i, case in enumerate(suite.cases):
+            tick()
+            if case.expect_fail:
+                # Infeasible by certification: no demonstrated route, no plan time.
+                miss = float(np.linalg.norm(np.asarray(case.goal) - np.asarray(case.start)))
+                refs.append(metrics.Reference(miss, False, float("inf"), False))
+                continue
+            ref = metrics.reference_length(trajectory, case.start, case.goal, cfg)
+            if not final_only[i]:
+                # Only online-replayed cases need a causal snap onto the trajectory.
+                if not ref.snapped:
+                    logger.warning(
+                        "endpoint off the walked trajectory, using a straight-line reference",
+                        dataset=suite.dataset,
+                        case=case.id,
+                    )
+                elif not ref.causal:
+                    logger.warning(
+                        "goal never visited before the start, planning on the full map",
+                        dataset=suite.dataset,
+                        case=case.id,
+                    )
+            refs.append(ref)
     return refs
 
 
@@ -301,10 +311,15 @@ class _OnlineCase:
     """One case's online plan and the map it was planned against."""
 
     outcome: PlanOutcome
-    waypoints: NDArray[np.float32] | None
     map_keys: NDArray[np.int64]
     artifacts: PlannerArtifacts | None = None
     occupied: NDArray[np.float32] | None = None
+
+    @property
+    def waypoints(self) -> NDArray[np.float32] | None:
+        if not self.outcome.waypoints:
+            return None
+        return np.asarray(self.outcome.waypoints, dtype=np.float32)
 
 
 @dataclass
@@ -325,23 +340,23 @@ def _replay_online(
     refs: list[metrics.Reference],
     map_keys: NDArray[np.int64],
     keep_artifacts: bool,
+    progress: ProgressFactory | None,
 ) -> _OnlinePass:
     """Feed the recording to the pipeline once, planning each case where its
     start time falls, so the pipeline has seen what the robot had seen by then."""
     out = _OnlinePass({}, [], None)
 
-    def plan_at(k: int, keys: NDArray[np.int64]) -> None:
+    def plan_at(k: int, keys: NDArray[np.int64], tick: Tick) -> None:
         for ci in np.flatnonzero(case_ckpt == k):
             case, ref = suite.cases[ci], refs[ci]
+            tick()
             if not len(keys):
-                out.cases[ci] = _OnlineCase(_no_plan(0.0), None, keys)
+                out.cases[ci] = _OnlineCase(_no_plan(0.0), keys)
                 continue
             # Collisions use the incremental map as of plan time. Support uses
             # the final map, since ground exists whether or not it was mapped.
-            outcome, waypoints = _run_plan(pipeline, case, ref.length, keys, map_keys, cfg)
             out.cases[ci] = _OnlineCase(
-                outcome,
-                waypoints,
+                _run_plan(pipeline, case, ref.length, keys, map_keys, cfg),
                 keys,
                 artifacts=_snapshot(pipeline) if keep_artifacts else None,
                 occupied=key_centers(keys, cfg.voxel_size) if keep_artifacts else None,
@@ -349,16 +364,22 @@ def _replay_online(
 
     snapshots = checkpoints.iter_snapshots()
     k = 0
-    for frame in suite.world_frames(cfg.align_tol):
-        while k < len(checkpoints.times) and frame.ts > checkpoints.times[k]:
-            plan_at(k, next(snapshots))
+    online_cases = int(np.count_nonzero(case_ckpt >= 0))
+    with (
+        frame_progress(progress, suite, "replay") as frame_tick,
+        stage_progress(progress, online_cases, f"{suite.dataset} online plans") as plan_tick,
+    ):
+        for frame in suite.world_frames(cfg.align_tol):
+            frame_tick()
+            while k < len(checkpoints.times) and frame.ts > checkpoints.times[k]:
+                plan_at(k, next(snapshots), plan_tick)
+                k += 1
+            t0 = perf_counter()
+            pipeline.add_frame(frame.points, frame.origin, frame.ts)
+            out.add_ms.append((perf_counter() - t0) * 1000)
+        while k < len(checkpoints.times):
+            plan_at(k, next(snapshots), plan_tick)
             k += 1
-        t0 = perf_counter()
-        pipeline.add_frame(frame.points, frame.origin, frame.ts)
-        out.add_ms.append((perf_counter() - t0) * 1000)
-    while k < len(checkpoints.times):
-        plan_at(k, next(snapshots))
-        k += 1
 
     # The stream is exhausted, so the pipeline now holds the whole recording.
     out.final_artifacts = _snapshot(pipeline) if keep_artifacts else None
@@ -373,18 +394,49 @@ def _score_final(
     final: FinalMap,
     final_only: NDArray[np.bool_],
     online: _OnlinePass,
+    progress: ProgressFactory | None = None,
 ) -> list[CaseResult]:
     """Plan every case against the completed map and combine both phases."""
     map_keys = final.occupied_keys
     results: list[CaseResult] = []
-    for ci, case in enumerate(suite.cases):
-        ref = refs[ci]
-        final_out, _ = _run_plan(pipeline, case, ref.length, map_keys, map_keys, cfg)
-        if case.expect_fail or case.expect_final_fail:
-            # Both labels certify the final map holds no route, so the planner
-            # passes by refusing. Before the split, so a curated case scores.
-            final_out = score_negative(final_out)
-        if final_only[ci]:
+    label = f"{suite.dataset} final plans"
+    with stage_progress(progress, len(suite.cases), label) as tick:
+        for ci, case in enumerate(suite.cases):
+            ref = refs[ci]
+            tick()
+            final_out = _run_plan(pipeline, case, ref.length, map_keys, map_keys, cfg)
+            if case.expect_fail or case.expect_final_fail:
+                # Both labels certify the final map holds no route, so the planner
+                # passes by refusing. Before the split, so a curated case scores.
+                final_out = score_negative(final_out)
+            if final_only[ci]:
+                results.append(
+                    CaseResult(
+                        id=case.id,
+                        dataset=suite.dataset,
+                        start=case.start,
+                        goal=case.goal,
+                        tags=case.tags,
+                        l_ref=ref.length,
+                        online_voxels=len(final.occupied),
+                        expect_fail=case.expect_fail,
+                        online=final_out,
+                        final=final_out,
+                        soft_progress=final_out.spl,
+                        final_only=True,
+                    )
+                )
+                continue
+            run = online.cases[ci]
+            waypoints = run.waypoints
+            end = waypoints[-1] if waypoints is not None else None
+            dynamic_candidate, blocking = (
+                (False, [])
+                if case.expect_final_fail
+                else _dynamic_candidate(
+                    run.outcome, final_out, waypoints, run.map_keys, map_keys, cfg
+                )
+            )
             results.append(
                 CaseResult(
                     id=case.id,
@@ -393,47 +445,26 @@ def _score_final(
                     goal=case.goal,
                     tags=case.tags,
                     l_ref=ref.length,
-                    online_voxels=len(final.occupied),
-                    expect_fail=case.expect_fail,
-                    online=final_out,
+                    online_voxels=len(run.map_keys),
+                    expect_fail=False,
+                    online=run.outcome,
                     final=final_out,
-                    soft_progress=final_out.spl,
-                    final_only=True,
+                    soft_progress=metrics.soft_progress(end, case.start, case.goal),
+                    dynamic_candidate=dynamic_candidate,
+                    blocking_points=blocking,
+                    online_artifacts=run.artifacts,
+                    online_occupied=run.occupied,
                 )
             )
-            continue
-        run = online.cases[ci]
-        end = run.waypoints[-1] if run.waypoints is not None and len(run.waypoints) else None
-        dynamic_candidate, blocking = (
-            (False, [])
-            if case.expect_final_fail
-            else _dynamic_candidate(
-                run.outcome, final_out, run.waypoints, run.map_keys, map_keys, cfg
-            )
-        )
-        results.append(
-            CaseResult(
-                id=case.id,
-                dataset=suite.dataset,
-                start=case.start,
-                goal=case.goal,
-                tags=case.tags,
-                l_ref=ref.length,
-                online_voxels=len(run.map_keys),
-                expect_fail=False,
-                online=run.outcome,
-                final=final_out,
-                soft_progress=metrics.soft_progress(end, case.start, case.goal),
-                dynamic_candidate=dynamic_candidate,
-                blocking_points=blocking,
-                online_artifacts=run.artifacts,
-                online_occupied=run.occupied,
-            )
-        )
     return results
 
 
-def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> DatasetResult:
+def run_suite(
+    suite: Suite,
+    cfg: EvalConfig,
+    keep_artifacts: bool = False,
+    progress: ProgressFactory | None = None,
+) -> DatasetResult:
     db_path = suite.db_path()
     if not db_path.exists():
         # sqlite would otherwise create an empty db here and the failure would
@@ -442,7 +473,7 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
     trajectory = suite.trajectory()
 
     final_only = np.array([_final_only(c) for c in suite.cases], dtype=bool)
-    refs = _references(suite, trajectory, final_only, cfg)
+    refs = _references(suite, trajectory, final_only, cfg, progress)
     # Final-only cases never replay online, so they take no checkpoint and their
     # plan time drops out of the schedule.
     start_ts = np.array(
@@ -451,8 +482,8 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
     )
     # Before the final map, because a cold checkpoint build replays the whole
     # recording and fills the final cache on its way through.
-    checkpoints = load_or_build_checkpoints(suite, cfg, start_ts)
-    final = load_or_build_final_map(suite, cfg)
+    checkpoints = load_or_build_checkpoints(suite, cfg, start_ts, progress)
+    final = load_or_build_final_map(suite, cfg, progress)
     case_ckpt = np.searchsorted(checkpoints.times, start_ts)
     case_ckpt[final_only] = -1
 
@@ -466,10 +497,11 @@ def run_suite(suite: Suite, cfg: EvalConfig, keep_artifacts: bool = False) -> Da
         refs,
         final.occupied_keys,
         keep_artifacts,
+        progress,
     )
     return DatasetResult(
         dataset=suite.dataset,
-        cases=_score_final(pipeline, suite, cfg, refs, final, final_only, online),
+        cases=_score_final(pipeline, suite, cfg, refs, final, final_only, online, progress),
         final_voxels=len(final.occupied),
         map_build_ms=final.build_ms,
         add_frame_ms=metrics.timing_stats(online.add_ms),
@@ -483,6 +515,8 @@ def evaluate(
     cfg: EvalConfig | None = None,
     workers: int = 1,
     keep_artifacts: bool = False,
+    progress: ProgressFactory | None = None,
+    on_dataset: Callable[[str], None] | None = None,
 ) -> Report:
     """Score every suite. A dataset is one sequential pass over its recording,
     so workers only spreads datasets across processes."""
@@ -494,11 +528,24 @@ def evaluate(
             max_workers=min(workers, len(suites)),
             mp_context=multiprocessing.get_context("spawn"),
         ) as pool:
-            datasets = list(
-                pool.map(run_suite, suites, itertools.repeat(cfg), itertools.repeat(keep_artifacts))
-            )
+            pending = {
+                pool.submit(run_suite, suite, cfg, keep_artifacts, progress): i
+                for i, suite in enumerate(suites)
+            }
+            # Reported as they land, collected back into manifest order.
+            landed: dict[int, DatasetResult] = {}
+            for future in as_completed(pending):
+                result = future.result()
+                landed[pending[future]] = result
+                if on_dataset is not None:
+                    on_dataset(result.dataset)
+            datasets = [landed[i] for i in range(len(suites))]
     else:
-        datasets = [run_suite(suite, cfg, keep_artifacts=keep_artifacts) for suite in suites]
+        datasets = []
+        for suite in suites:
+            datasets.append(run_suite(suite, cfg, keep_artifacts=keep_artifacts, progress=progress))
+            if on_dataset is not None:
+                on_dataset(suite.dataset)
     cases = [c for d in datasets for c in d.cases]
     if not cases:
         raise ValueError("no cases to evaluate")

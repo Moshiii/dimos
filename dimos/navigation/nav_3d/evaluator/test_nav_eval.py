@@ -65,7 +65,7 @@ from dimos.navigation.nav_3d.evaluator.runner import (
     _run_plan,
     score_negative,
 )
-from dimos.navigation.nav_3d.evaluator.tagging import route_tags
+from dimos.navigation.nav_3d.evaluator.tagging import retag_suite, route_tags
 from dimos.navigation.nav_3d.evaluator.voxel_keys import (
     cylinder_offsets,
     keys_contain,
@@ -306,7 +306,7 @@ def test_meta_straight_line_cheat_scores_zero() -> None:
     """A planner that ignores the map and beelines must not score."""
     keys, cfg, case = _meta_scene()
     line = np.array([case.start, case.goal], dtype=np.float32)
-    out, _ = _run_plan(_stub(line), case, 24.0, keys, keys, cfg)
+    out = _run_plan(_stub(line), case, 24.0, keys, keys, cfg)
     assert out.planned and out.reached and out.supported
     assert not out.valid
     assert out.spl == 0.0
@@ -315,7 +315,7 @@ def test_meta_straight_line_cheat_scores_zero() -> None:
 
 def test_meta_no_path_scores_zero() -> None:
     keys, cfg, case = _meta_scene()
-    out, _ = _run_plan(_stub(None), case, 24.0, keys, keys, cfg)
+    out = _run_plan(_stub(None), case, 24.0, keys, keys, cfg)
     assert not out.planned
     assert out.spl == 0.0
     assert out.min_clearance is None
@@ -326,7 +326,7 @@ def test_meta_demonstrated_route_scores_full() -> None:
     keys, cfg, case = _meta_scene()
     route = _u_route()
     l_ref = metrics.path_length(route)
-    out, _ = _run_plan(_stub(route), case, l_ref, keys, keys, cfg)
+    out = _run_plan(_stub(route), case, l_ref, keys, keys, cfg)
     assert out.success
     assert out.spl == pytest.approx(1.0)
     assert out.min_clearance == metrics.MARGIN_CAP_M
@@ -338,7 +338,7 @@ def test_meta_floating_bridge_fails_support() -> None:
     keys = np.unique(voxel_keys(gapped, VOXEL))
     _, cfg, case = _meta_scene()
     line = np.array([case.start, case.goal], dtype=np.float32)
-    out, _ = _run_plan(_stub(line), case, 24.0, keys, keys, cfg)
+    out = _run_plan(_stub(line), case, 24.0, keys, keys, cfg)
     assert out.planned and out.reached and out.valid
     assert not out.supported
     assert out.spl == 0.0
@@ -350,17 +350,17 @@ def test_meta_floating_bridge_fails_support() -> None:
 def test_meta_negative_case_scoring() -> None:
     """A certified-infeasible case scores 1.0 for refusal, 0.0 for any claim."""
     keys, cfg, case = _meta_scene()
-    refused, _ = _run_plan(_stub(None), case, 16.0, keys, keys, cfg)
+    refused = _run_plan(_stub(None), case, 16.0, keys, keys, cfg)
     out = score_negative(refused)
     assert out.success
     assert out.spl == 1.0
-    claimed, _ = _run_plan(_stub(_u_route()), case, 16.0, keys, keys, cfg)
+    claimed = _run_plan(_stub(_u_route()), case, 16.0, keys, keys, cfg)
     out = score_negative(claimed)
     assert not out.success
     assert out.spl == 0.0
     # A path that wanders but never reaches the goal is still a refusal.
     wander = np.array([case.start, [4.0, 2.0, 0.0]], dtype=np.float32)
-    partial, _ = _run_plan(_stub(wander), case, 16.0, keys, keys, cfg)
+    partial = _run_plan(_stub(wander), case, 16.0, keys, keys, cfg)
     assert score_negative(partial).success
 
 
@@ -371,22 +371,22 @@ def test_dynamic_candidate_flags_route_blocked_by_new_occupancy() -> None:
     final_keys = np.unique(voxel_keys(np.concatenate([_floor(), _wall(10.0)]), VOXEL))
     line = np.array([case.start, case.goal], dtype=np.float32)
 
-    online, wp = _run_plan(_stub(line), case, 24.0, open_keys, open_keys, cfg)
+    online = _run_plan(_stub(line), case, 24.0, open_keys, open_keys, cfg)
     assert online.success
-    final, _ = _run_plan(_stub(line), case, 24.0, final_keys, final_keys, cfg)
+    final = _run_plan(_stub(line), case, 24.0, final_keys, final_keys, cfg)
     assert not final.success
 
-    flagged, blocking = _dynamic_candidate(online, final, wp, open_keys, final_keys, cfg)
+    flagged, blocking = _dynamic_candidate(online, final, line, open_keys, final_keys, cfg)
     assert flagged
     assert blocking
 
     # No occupancy appeared between the two maps, so the final failure is not a
     # dynamic obstacle and must not be flagged.
-    unflagged, _ = _dynamic_candidate(online, final, wp, final_keys, final_keys, cfg)
+    unflagged, _ = _dynamic_candidate(online, final, line, final_keys, final_keys, cfg)
     assert not unflagged
 
     # A clean final plan is never a candidate.
-    assert not _dynamic_candidate(online, online, wp, open_keys, final_keys, cfg)[0]
+    assert not _dynamic_candidate(online, online, line, open_keys, final_keys, cfg)[0]
 
 
 def test_chord_direction_spans_robot_length() -> None:
@@ -483,6 +483,32 @@ def test_route_tags_gate_excludes_detour_routes() -> None:
     assert route_tags((0.0, 0.0, 0.0), (4.0, 0.0, 0.0), detour, keys, _cfg()) == ["flat"]
 
 
+def test_retag_recomputes_geometry_and_leaves_the_rest_alone() -> None:
+    """A retag rewrites an auto case's geometric tags from the map as it stands
+    now, keeps its provenance, and skips curated and off-trajectory cases."""
+    positions = np.column_stack([np.linspace(0, 10, 101), np.zeros(101), np.full(101, 0.3)]).astype(
+        np.float32
+    )
+    traj = Trajectory(ts=np.linspace(0, 20, 101), positions=positions)
+    suite = Suite(
+        dataset="demo",
+        cases=[
+            Case(id="auto_00", start=(1, 0, 0), goal=(9, 0, 0), tags=["auto", "stairs", "up"]),
+            Case(id="manual_00", start=(1, 0, 0), goal=(9, 0, 0), tags=["manual", "stairs"]),
+            Case(id="auto_01", start=(1, 40, 0), goal=(9, 40, 0), tags=["auto", "flat"]),
+        ],
+    )
+    recomputed = retag_suite(suite, traj, np.array([], dtype=np.int64), _cfg())
+
+    # The stale climb tags go, the walk is flat, and "auto" survives as provenance.
+    assert recomputed == {"auto_00": ["auto", "flat"]}
+    assert [c.tags for c in suite.cases] == [
+        ["auto", "stairs", "up"],
+        ["manual", "stairs"],
+        ["auto", "flat"],
+    ]
+
+
 def _final_map(points: np.ndarray) -> FinalMap:
     return FinalMap(
         voxel_size=VOXEL,
@@ -538,13 +564,7 @@ def test_snap_to_surface() -> None:
 
 def test_generate_cases_around_wall() -> None:
     """A U-shaped walk around a wall must yield non-trivial cases spanning it."""
-    wall_pts = _wall(10.0)
-    final = FinalMap(
-        voxel_size=VOXEL,
-        occupied=wall_pts,
-        occupied_keys=np.unique(voxel_keys(wall_pts, VOXEL)),
-        build_ms=0.0,
-    )
+    final = _final_map(_wall(10.0))
     xs, ys = np.meshgrid(np.arange(0, 20, VOXEL), np.arange(-3, 6, VOXEL))
     surface = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1, dtype=np.float32)
 
@@ -568,7 +588,8 @@ def test_generate_cases_around_wall() -> None:
 
 
 def test_select_diverse_backfills_to_min_cases() -> None:
-    """Sector caps must not starve a dataset below the case floor."""
+    """Sector caps must not starve a dataset below the case floor, and the
+    floor must never push it past max_cases."""
     candidates = [
         Candidate(
             start=(float(x), 0.0, 0.0),
@@ -580,9 +601,11 @@ def test_select_diverse_backfills_to_min_cases() -> None:
         for x in np.arange(0.0, 16.0, 2.0)
     ]
     strict = _select_diverse(candidates, max_cases=12, min_cases=0)
-    backfilled = _select_diverse(candidates, max_cases=12, min_cases=10)
-    assert len(backfilled) > len(strict)
+    backfilled = _select_diverse(candidates, max_cases=12, min_cases=6)
+    assert len(strict) < 6
+    assert len(backfilled) == 6
     assert len({(c.start, c.goal) for c in backfilled}) == len(backfilled)
+    assert len(_select_diverse(candidates, max_cases=3, min_cases=6)) == 3
 
 
 def test_pick_along_ray() -> None:
@@ -657,7 +680,7 @@ def test_offset_deltas_match_packing_the_summed_indices() -> None:
     assert np.array_equal(shifted.ravel(), packed)
 
 
-def test_spl_and_body_frames_survive_degenerate_input() -> None:
+def test_body_frames_survive_a_zero_length_path() -> None:
     """A zero-length path must still yield a usable body frame."""
     point = np.array([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0]], dtype=np.float32)
     fwd, lateral, up = metrics.body_frames(point, 0.7)
@@ -713,7 +736,7 @@ def test_a_curated_dynamic_case_scores_for_refusing() -> None:
     keys, cfg, case = _meta_scene()
     for tags in (["auto"], ["manual"]):
         marked = replace(case, tags=tags, expect_final_fail=True)
-        refused, _ = _run_plan(_stub(None), marked, 16.0, keys, keys, cfg)
+        refused = _run_plan(_stub(None), marked, 16.0, keys, keys, cfg)
         assert score_negative(refused).spl == 1.0
         assert _final_only(marked) == ("auto" not in tags)
 

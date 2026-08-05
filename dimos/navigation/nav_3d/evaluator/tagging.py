@@ -27,6 +27,7 @@ from dimos.navigation.nav_3d.evaluator.metrics import (
     arc_lengths,
     body_frames,
     densify,
+    ground_truth_route,
     path_length,
 )
 from dimos.navigation.nav_3d.evaluator.voxel_keys import keys_contain, voxel_keys
@@ -34,7 +35,9 @@ from dimos.navigation.nav_3d.evaluator.voxel_keys import keys_contain, voxel_key
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+    from dimos.navigation.nav_3d.evaluator.cases import Suite
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
+    from dimos.navigation.nav_3d.evaluator.recording import Trajectory
 
 # A pair of endpoints this far apart in z or beyond is a climb, not a flat
 # traverse. Half the body height.
@@ -185,3 +188,25 @@ def route_tags(
     if route is not None and len(route) >= 2 and _is_local(route, start, goal, cfg):
         tags += _corridor_tags(route, occupied_keys, cfg)
     return tags
+
+
+def retag_suite(
+    suite: Suite,
+    trajectory: Trajectory,
+    occupied_keys: NDArray[np.int64],
+    cfg: EvalConfig,
+) -> dict[str, list[str]]:
+    """New tag lists keyed by case id, for the auto cases whose route is still
+    on the walked trajectory. Curated and off-trajectory cases are left out, so
+    they keep the tags they have."""
+    out: dict[str, list[str]] = {}
+    for case in suite.cases:
+        if "auto" not in case.tags:
+            continue
+        route = ground_truth_route(trajectory, case.start, case.goal, cfg)
+        if route is None:
+            continue
+        provenance = [t for t in case.tags if t not in GEOMETRIC_TAGS]
+        geo = route_tags(case.start, case.goal, route, occupied_keys, cfg)
+        out[case.id] = provenance + [t for t in geo if t not in provenance]
+    return out

@@ -82,6 +82,19 @@ class Suite:
 
         return load_trajectory(self.db_path(), self.odom_stream, self.end_ts_seconds())
 
+    def frame_count(self) -> int:
+        """How many frames world_frames will yield, for a progress denominator.
+        An upper bound: a lidar frame with no odometry inside the alignment
+        tolerance is dropped."""
+        from dimos.memory2.store.sqlite import SqliteStore
+        from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
+        store = SqliteStore(path=str(self.db_path()))
+        with store:
+            stream = store.stream(self.lidar_stream, PointCloud2)
+            end_ts = self.end_ts_seconds()
+            return (stream if end_ts is None else stream.before(end_ts)).count()
+
     def world_frames(self, align_tol: float) -> Iterator[Frame]:
         """Lidar frames registered into the world by their odometry pose."""
         from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames

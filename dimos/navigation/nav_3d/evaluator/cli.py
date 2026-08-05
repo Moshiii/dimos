@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 import typer
@@ -41,9 +42,9 @@ from dimos.navigation.nav_3d.evaluator.generate import (
     generate_cases,
     resolve_max_cases,
 )
-from dimos.navigation.nav_3d.evaluator.metrics import ground_truth_route
+from dimos.navigation.nav_3d.evaluator.progress import RunProgress
 from dimos.navigation.nav_3d.evaluator.runner import Report, evaluate
-from dimos.navigation.nav_3d.evaluator.tagging import GEOMETRIC_TAGS, route_tags
+from dimos.navigation.nav_3d.evaluator.tagging import retag_suite
 from dimos.utils.data import get_data_dir
 
 if TYPE_CHECKING:
@@ -183,7 +184,20 @@ def run(
         if not suites:
             raise typer.BadParameter(f"no cases carry all tags {tag}")
     cfg = _apply_overrides(EvalConfig(), set_ or [])
-    report = evaluate(suites, cfg, workers=workers, keep_artifacts=rrd_out is not None)
+    # A case the planner cannot solve is the measurement here, and the report
+    # names every one of them. Its per-case warning would only scroll away the
+    # progress bar. Read once, when the planner starts its tracing subscriber.
+    os.environ.setdefault("RUST_LOG", "warn,dimos_mls_planner=error")
+    started = perf_counter()
+    with RunProgress() as bars:
+        report = evaluate(
+            suites,
+            cfg,
+            workers=workers,
+            keep_artifacts=rrd_out is not None,
+            progress=bars.factory(),
+            on_dataset=lambda name: print(f"  {name} scored ({perf_counter() - started:.0f}s)"),
+        )
     _print_report(report)
     if json_out is not None:
         json_out.parent.mkdir(parents=True, exist_ok=True)
@@ -350,19 +364,14 @@ def retag(
     suite, manifest = _load_manifest(dataset)
     cfg = EvalConfig()
     final = load_or_build_final_map(suite, cfg)
-    trajectory = suite.trajectory()
+    recomputed = retag_suite(suite, suite.trajectory(), final.occupied_keys, cfg)
     changed = 0
     for case in suite.cases:
-        if "auto" not in case.tags:
-            print(f"  {case.id}: curated, tags kept [{', '.join(case.tags)}]")
+        new_tags = recomputed.get(case.id)
+        if new_tags is None:
+            reason = "curated" if "auto" not in case.tags else "off-trajectory"
+            print(f"  {case.id}: {reason}, tags kept [{', '.join(case.tags)}]")
             continue
-        route = ground_truth_route(trajectory, case.start, case.goal, cfg)
-        if route is None:
-            print(f"  {case.id}: off-trajectory, tags kept [{', '.join(case.tags)}]")
-            continue
-        provenance = [t for t in case.tags if t not in GEOMETRIC_TAGS]
-        geo = route_tags(case.start, case.goal, route, final.occupied_keys, cfg)
-        new_tags = provenance + [t for t in geo if t not in provenance]
         if new_tags != case.tags:
             changed += 1
             print(f"  {case.id}: [{', '.join(case.tags)}] -> [{', '.join(new_tags)}]")
