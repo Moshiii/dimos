@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import lru_cache
 import time
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 import warnings
@@ -55,6 +56,15 @@ class AgentImageMessage(TypedDict):
     source_type: Literal["base64"]
     mime_type: Literal["image/jpeg", "image/png"]
     data: str  # Base64 encoded image data
+
+
+@lru_cache(maxsize=1)
+def _turbojpeg() -> Any:
+    """Constructing TurboJPEG dlopens the native library — ~940 ms, versus 2 ms
+    to encode a frame. Its encode/decode create their own per-call handles."""
+    from turbojpeg import TurboJPEG
+
+    return TurboJPEG()
 
 
 @dataclass
@@ -541,12 +551,11 @@ class Image(Timestamped):
         Returns:
             Raw JPEG bytes.
         """
-        from turbojpeg import TJPF_RGB, TurboJPEG
+        from turbojpeg import TJPF_RGB
 
-        jpeg = TurboJPEG()
         # Canonicalize to RGB so JPEG bytes are deterministic regardless of input format.
         rgb_array = self.to_rgb().data
-        return jpeg.encode(rgb_array, quality=quality, pixel_format=TJPF_RGB)  # type: ignore[no-any-return]
+        return _turbojpeg().encode(rgb_array, quality=quality, pixel_format=TJPF_RGB)  # type: ignore[no-any-return]
 
     def lcm_jpeg_encode(self, quality: int = 75, frame_id: str | None = None) -> bytes:
         """Convert to LCM Image message with JPEG-compressed data.
@@ -598,15 +607,14 @@ class Image(Timestamped):
         Returns:
             Image instance
         """
-        from turbojpeg import TJPF_RGB, TurboJPEG
+        from turbojpeg import TJPF_RGB
 
-        jpeg = TurboJPEG()
         msg = LCMImage.lcm_decode(data)
 
         if msg.encoding != "jpeg":
             raise ValueError(f"Expected JPEG encoding, got {msg.encoding}")
 
-        rgb_array = jpeg.decode(msg.data, pixel_format=TJPF_RGB)
+        rgb_array = _turbojpeg().decode(msg.data, pixel_format=TJPF_RGB)
 
         return cls(
             data=rgb_array,
