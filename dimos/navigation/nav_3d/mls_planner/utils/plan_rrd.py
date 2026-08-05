@@ -154,54 +154,12 @@ def _tf_over(store: SqliteStore, window: Stream[Any]) -> Stream[TFMessage] | Non
     return recorded.order_by("ts").time_range(first, last)
 
 
-class BaseSource:
-    """Where the body pose comes from. The planner never starts from the sensor.
-
-    Prefers the mount leg, which rides the replayed odometry rather than the
-    recorded one, and falls back to reading the body straight off tf.
-    """
-
-    def __init__(self, tf: StreamTF, start: float) -> None:
-        self._tf = tf
-        # A replay tf loads nothing until asked, and an untimed lookup anchors on
-        # the end of the stream. Ask at the window this run replays.
-        self.leg = tf.get(SENSOR_FRAME, BASE_FRAME, time_point=start)
-        if BASE_FRAME not in tf.get_frames():
-            raise typer.BadParameter(
-                f"recording has no {BASE_FRAME} on tf, so there is no body pose to plan from. "
-                "Record with Go2Mid360StaticTf running, or repair the tf stream."
-            )
-        self.root = tf.get_root(BASE_FRAME)
-        if self.leg is None:
-            print(
-                f"no {SENSOR_FRAME} -> {BASE_FRAME} on tf: reading the body off "
-                f"{self.root} -> {BASE_FRAME} instead, which the replayed odometry "
-                "does not correct"
-            )
-
-    def base_height(self, robot_height: float) -> float:
-        """How far to drop the body pose to the ground, 0 without the mount."""
-        return (
-            0.0 if self.leg is None else base_height_above_ground(robot_height, self.leg.inverse())
-        )
-
-    def pose(self, sensor_pose: tuple[float, ...], ts: float) -> Transform | None:
-        if self.leg is not None:
-            return _base_pose(sensor_pose, ts, self.leg)
-        return self._tf.get(self.root, BASE_FRAME, time_point=ts)
-
-
-def _base_source(store: SqliteStore, window: Stream[Any]) -> BaseSource:
+def _base_from_sensor(store: SqliteStore) -> Transform | None:
+    """Sensor to robot base link transform from the recorded tf stream."""
     tf = StreamTF.from_store(store)
     if tf is None:
-        raise typer.BadParameter(
-            "recording has no tf stream, so there is no body pose to plan from"
-        )
-    try:
-        start = window.first().ts
-    except LookupError:
-        raise typer.BadParameter("no data in the requested window") from None
-    return BaseSource(tf, start)
+        return None
+    return tf.get(SENSOR_FRAME, BASE_FRAME)
 
 
 def _base_pose(pose: tuple[float, ...], ts: float, base_from_sensor: Transform) -> Transform:
@@ -217,19 +175,36 @@ def _base_pose(pose: tuple[float, ...], ts: float, base_from_sensor: Transform) 
     return sensor + base_from_sensor
 
 
-def _plan_start(base: Transform, base_height: float) -> tuple[float, float, float]:
-    """The body pose dropped to the ground, where the planner starts."""
-    return (
+def _plan_start(
+    pose: tuple[float, ...],
+    ts: float,
+    base_from_sensor: Transform | None,
+    base_height: float,
+    robot_height: float,
+) -> tuple[tuple[float, float, float], Transform | None]:
+    """Ground-projected planner start, plus the base pose when tf has the mount.
+
+    Without a tf stream the start is the sensor pose dropped by the robot height.
+    """
+    px, py, pz, *_ = pose
+    if base_from_sensor is None:
+        return (float(px), float(py), float(pz) - robot_height), None
+    base = _base_pose(pose, ts, base_from_sensor)
+    start = (
         float(base.translation.x),
         float(base.translation.y),
         float(base.translation.z) - base_height,
     )
+    return start, base
 
 
 def _log_odometry(
-    pose: tuple[float, ...], ts: float, trail: list[tuple[float, float, float]], base: Transform
+    pose: tuple[float, ...],
+    ts: float,
+    trail: list[tuple[float, float, float]],
+    base: Transform | None,
 ) -> None:
-    """Trace the sensor through the scene, and put the body where the planner has it."""
+    """Trace the sensor moving throughout the scene."""
     import rerun as rr
 
     px, py, pz, *_ = pose
@@ -239,6 +214,8 @@ def _log_odometry(
         rr.log(
             "world/mid360_path", rr.LineStrips3D([trail], colors=[SENSOR_PATH_COLOR], radii=0.015)
         )
+    if base is None:
+        return
     rr.log(
         "world/robot_body",
         rr.Transform3D(
@@ -629,27 +606,32 @@ def main(
 
         rr.log("world/goal", rr.Points3D([goal], colors=[[255, 0, 0]], radii=0.1), static=True)
 
-        base_source = _base_source(store, lidar)
-        base_height = base_source.base_height(robot_height)
-        rr.log(
-            "world/robot_body/outline",
-            rr.Boxes3D(
-                half_sizes=[ROBOT_LENGTH / 2, ROBOT_WIDTH / 2, robot_height / 2],
-                colors=[(0, 255, 127)],
-            ),
-            static=True,
+        base_from_sensor = _base_from_sensor(store)
+        base_height = (
+            base_height_above_ground(robot_height, base_from_sensor.inverse())
+            if base_from_sensor is not None
+            else 0.0
         )
-        # wall_clearance is the planner's proxy for the robot radius.
-        rr.log(
-            "world/robot_body/clearance",
-            rr.Cylinders3D(
-                lengths=[robot_height],
-                radii=[wall_clearance],
-                colors=[(255, 120, 120, 80)],
-                fill_mode="solid",
-            ),
-            static=True,
-        )
+        if base_from_sensor is not None:
+            rr.log(
+                "world/robot_body/outline",
+                rr.Boxes3D(
+                    half_sizes=[ROBOT_LENGTH / 2, ROBOT_WIDTH / 2, robot_height / 2],
+                    colors=[(0, 255, 127)],
+                ),
+                static=True,
+            )
+            # wall_clearance is the planner's proxy for the robot radius.
+            rr.log(
+                "world/robot_body/clearance",
+                rr.Cylinders3D(
+                    lengths=[robot_height],
+                    radii=[wall_clearance],
+                    colors=[(255, 120, 120, 80)],
+                    fill_mode="solid",
+                ),
+                static=True,
+            )
         sensor_trail: list[tuple[float, float, float]] = []
 
         try:
@@ -657,10 +639,9 @@ def main(
             for ray_obs in ray_pipeline:
                 if ray_obs.pose_tuple is None:
                     continue
-                base = base_source.pose(ray_obs.pose_tuple, ray_obs.ts)
-                if base is None:
-                    continue
-                start = _plan_start(base, base_height)
+                start, base = _plan_start(
+                    ray_obs.pose_tuple, ray_obs.ts, base_from_sensor, base_height, robot_height
+                )
                 ref_timing = _process_frame(
                     ray_obs,
                     planners,

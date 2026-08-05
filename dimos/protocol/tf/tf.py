@@ -117,16 +117,6 @@ class MultiTBuffer:
                 frames.add(child)
         return frames
 
-    def get_root(self, frame_id: str) -> str:
-        """The frame at the top of frame_id's parent chain, frame_id if it has none."""
-        with self._cv:
-            parents = {child: parent for parent, child in self.buffers}
-        walked: set[str] = set()
-        while frame_id in parents and frame_id not in walked:
-            walked.add(frame_id)
-            frame_id = parents[frame_id]
-        return frame_id
-
     def get_connections(self, frame_id: str) -> set[str]:
         """Get all frames connected to the given frame (both as parent and child)."""
         connections = set()
