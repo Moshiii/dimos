@@ -250,6 +250,18 @@ def test_on_system_modules_uses_responses_api_model(
     assert model.reasoning == {"effort": "medium", "summary": "auto"}
 
 
+def test_on_system_modules_publishes_initial_idle(
+    configured_mcp_client: McpClient,
+) -> None:
+    with (
+        patch("dimos.agents.mcp.mcp_client.create_agent"),
+        patch.object(configured_mcp_client.agent_idle, "publish") as publish,
+    ):
+        configured_mcp_client.on_system_modules([])
+
+    publish.assert_called_once_with(True)
+
+
 @pytest.mark.parametrize("model_name", ["gpt-4o", "ollama:qwen3:8b", "huggingface:Qwen/Qwen3-8B"])
 def test_on_system_modules_resolves_non_reasoning_models(
     configured_mcp_client: McpClient, model_name: str

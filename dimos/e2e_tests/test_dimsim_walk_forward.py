@@ -16,21 +16,36 @@ import pytest
 
 
 @pytest.mark.self_hosted_large
-def test_walk_forward(lcm_spy, start_blueprint, human_input, dim_sim) -> None:
+def test_walk_forward(
+    lcm_spy,
+    start_blueprint,
+    wait_for_agent_ready,
+    human_input,
+    scene_control,
+    simulator_name,
+) -> None:
+    scene_args = ("--dimsim-scene=empty",) if simulator_name == "dimsim" else ()
     start_blueprint(
+        *scene_args,
         "run",
         "--disable",
         "spatial-memory",
         "--disable",
         "security-module",
         "unitree-go2-agentic",
-        simulator="dimsim",
+        simulator=simulator_name,
+        scene_package="none",
     )
-    lcm_spy.save_topic("/rpc/McpClient/on_system_modules/res")
-    lcm_spy.wait_for_saved_topic("/rpc/McpClient/on_system_modules/res", timeout=1200.0)
+    wait_for_agent_ready(timeout=1200.0)
 
     origin_x, origin_y = 1, 2
-    dim_sim.set_agent_position(origin_x, origin_y)
+    scene_control.set_agent_position(origin_x, origin_y)
+    lcm_spy.save_topic("/global_costmap#nav_msgs.OccupancyGrid")
+    scene_control.add_wall(-1, -1, 6, -1)
+    scene_control.add_wall(-1, 5, 6, 5)
+    scene_control.add_wall(-1, -1, -1, 5)
+    scene_control.add_wall(6, -1, 6, 5)
+    lcm_spy.wait_for_saved_topic("/global_costmap#nav_msgs.OccupancyGrid", timeout=30)
 
     human_input("move forward 3 meter")
 
