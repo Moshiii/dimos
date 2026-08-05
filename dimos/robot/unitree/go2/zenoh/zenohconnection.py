@@ -57,10 +57,9 @@ OPTICAL_RPY = Vector3(-math.pi / 2, 0.0, -math.pi / 2)
 
 
 class GO2ZenohConfig(StaticTfPublisherConfig):
-    # front_camera -> mid360_link, fixed-axis rpy in degrees. The 60 deg tilt lands on
-    # roll because the lidar sits yawed 90 deg on its bracket. Both yaw signs level the
-    # body but differ by 180 deg of heading — flip it if the camera looks backwards.
-    mid360_mount_rpy_deg: tuple[float, float, float] = (-60.0, 0.0, -90.0)
+    # front_camera -> mid360_link, fixed-axis rpy in degrees: pointing straight ahead,
+    # pitched 60 deg down.
+    mid360_mount_rpy_deg: tuple[float, float, float] = (0.0, 60.0, 0.0)
     camera_info_hz: float = Field(default=1.0, gt=0.0)
 
 

@@ -38,7 +38,7 @@ from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.nav_3d.mls_planner.goal_relay import GoalRelay
 from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.navigation.nav_3d.mls_planner.viz import planner_visual_override
-from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT
+from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.vis_module import vis_module
 
@@ -48,7 +48,18 @@ voxel_size = 0.08
 planner_viz_hz = 2.0
 
 # GO2Zenoh publishes this mount onto tf, where nav reads its odometry corrections.
-MID360_MOUNT_RPY_DEG = (-60.0, 0.0, -90.0)
+MID360_MOUNT_RPY_DEG = (0.0, 60.0, 0.0)
+
+
+def _static_robot_body(rr: Any) -> list[Any]:
+    """Go2-shaped box on the body frame."""
+    return [
+        rr.Boxes3D(
+            half_sizes=[ROBOT_LENGTH / 2, ROBOT_WIDTH / 2, ROBOT_HEIGHT / 2],
+            colors=[(0, 255, 127)],
+        ),
+        rr.Transform3D(parent_frame="tf#/base_link"),
+    ]
 
 
 def _camera_info_to_pinhole(camera_info: Any) -> Any:
@@ -111,6 +122,11 @@ def _rerun_config(visual_override: dict[str, Any] | None = None) -> dict[str, An
     return {
         "blueprint": _rerun_blueprint,
         "tf_axes": 0.5,
+        # The robot box hangs off base_link on its own entity: a static transform
+        # under world/tf would override the live one.
+        "static": {
+            "world/robot_body": _static_robot_body,
+        },
         "visual_override": {
             "world/camera_info": _camera_info_to_pinhole,
             "world/pointlio_map": _render_map,
