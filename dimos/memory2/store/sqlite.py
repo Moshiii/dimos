@@ -65,9 +65,7 @@ class SqliteStore(Store):
             if parent:
                 os.makedirs(parent, exist_ok=True)
         self._registry_conn = self._open_connection()
-        self._registry = RegistryStore(
-            conn=self._registry_conn, read_only=self.config.read_only
-        )
+        self._registry = RegistryStore(conn=self._registry_conn, read_only=self.config.read_only)
 
     def _open_connection(self) -> sqlite3.Connection:
         """Open a new WAL-mode connection with sqlite-vec loaded."""
