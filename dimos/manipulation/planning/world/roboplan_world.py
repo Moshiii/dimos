@@ -589,7 +589,7 @@ class RoboPlanWorld:
                 planning_time=time.time() - started,
                 message="RoboPlan Cartesian planning failed: returned an empty trajectory",
             )
-        if not self._combined_path_collision_free(path):
+        if config.check_collision and not self._combined_path_collision_free(path):
             return PlanningResult(
                 status=PlanningStatus.NO_SOLUTION,
                 planning_time=time.time() - started,

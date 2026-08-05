@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from contextlib import nullcontext
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -192,6 +191,42 @@ class TestPlaceBack:
         assert not result.is_success()
         assert result.error_code == "NO_PRIOR_POSE"
         assert "pick" in result.message.lower()
+
+    def test_place_contact_legs_use_unchecked_linear_motion(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        robot_config = SimpleNamespace(pre_grasp_offset=0.1)
+        mocker.patch.object(
+            module,
+            "_get_robot",
+            return_value=("arm", "robot-id", robot_config, None),
+        )
+        mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
+        approach = mocker.patch.object(module, "plan_to_pose", return_value=True)
+        mocker.patch.object(module, "_preview_execute_wait", return_value=SkillResult.ok())
+        linear = mocker.patch.object(
+            module,
+            "_execute_linear_motion",
+            return_value=SkillResult.ok(),
+        )
+        mocker.patch.object(module, "_set_gripper_position", return_value=True)
+        mocker.patch("dimos.manipulation.pick_and_place_module.time.sleep")
+        place_pose = Pose(Vector3(0.5, 0.0, 0.2), Quaternion())
+
+        result = module._place_with_orientation(
+            place_pose.position.x,
+            place_pose.position.y,
+            place_pose.position.z,
+            place_pose.orientation,
+        )
+
+        assert result.is_success()
+        approach.assert_called_once()
+        pre_place_pose = approach.call_args.args[0]
+        assert linear.call_args_list == [
+            mocker.call(place_pose, "arm", 0.03, check_collision=False),
+            mocker.call(pre_place_pose, "arm", 0.03, check_collision=False),
+        ]
 
 
 def test_grasp_pipeline_error_agent_encoding_is_structured() -> None:
@@ -406,12 +441,15 @@ class TestProposalSelection:
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         endpoint = JointState(name=["arm/joint1"], position=[0.1])
-        # Each candidate is checked in two legs: pre-grasp against the whole
-        # scene, then grasp+retreat with the target suppressed.
         plan_sequence = mocker.patch.object(
             module,
             "_check_connected_pose_sequence",
-            side_effect=[(0, None), (None, endpoint), (None, endpoint)],
+            side_effect=[(0, None), (None, endpoint)],
+        )
+        ik_sequence = mocker.patch.object(
+            module,
+            "_check_pose_ik_sequence",
+            return_value=(None, endpoint),
         )
         plan_motion = mocker.patch.object(module, "plan_to_pose")
         command_gripper = mocker.patch.object(module, "_set_gripper_position")
@@ -420,13 +458,18 @@ class TestProposalSelection:
         selected = module._select_feasible_grasp(
             [_candidate(0.4, 0.9), _candidate(0.5, 0.8)],
             "arm",
-            0.1,
             transaction,
         )
 
         assert selected.rank == 2
         assert selected.candidate.score == 0.8
-        assert plan_sequence.call_count == 3
+        assert plan_sequence.call_count == 2
+        ik_sequence.assert_called_once_with(
+            (selected.candidate.pose, selected.retreat_pose),
+            "arm",
+            start=endpoint,
+            check_collision=False,
+        )
         assert transaction.rejections == {"pre_grasp_infeasible": 1}
         plan_motion.assert_not_called()
         command_gripper.assert_not_called()
@@ -446,17 +489,22 @@ class TestProposalSelection:
         failed_index: int,
         expected_rejection: str,
     ) -> None:
-        mocker.patch.object(
-            module,
-            "_check_connected_pose_sequence",
-            return_value=(failed_index, None),
-        )
+        pre_grasp = mocker.patch.object(module, "_check_connected_pose_sequence")
+        contact = mocker.patch.object(module, "_check_pose_ik_sequence")
+        if failed_index == 0:
+            pre_grasp.return_value = (0, None)
+        else:
+            endpoint = JointState(name=["arm/joint1"], position=[0.1])
+            pre_grasp.return_value = (None, endpoint)
+            contact.return_value = (failed_index - 1, None)
         transaction = SimpleNamespace(rejections=Counter())
 
         with pytest.raises(RuntimeError, match="No feasible grasp among 1"):
-            module._select_feasible_grasp([_candidate(0.4, 0.9)], "arm", 0.1, transaction)
+            module._select_feasible_grasp([_candidate(0.4, 0.9)], "arm", transaction)
 
         assert transaction.rejections == {expected_rejection: 1}
+        if failed_index == 0:
+            contact.assert_not_called()
 
     def test_selection_rejects_malformed_candidate_and_honors_limit(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -465,19 +513,50 @@ class TestProposalSelection:
         invalid = _candidate(0.4, 0.9)
         invalid.pose.orientation.w = 0.0
         plan_sequence = mocker.patch.object(module, "_check_connected_pose_sequence")
+        ik_sequence = mocker.patch.object(module, "_check_pose_ik_sequence")
         transaction = SimpleNamespace(rejections=Counter())
 
         with pytest.raises(RuntimeError, match="No feasible grasp among 1"):
-            module._select_feasible_grasp([invalid, _candidate(0.5, 0.8)], "arm", 0.1, transaction)
+            module._select_feasible_grasp([invalid, _candidate(0.5, 0.8)], "arm", transaction)
 
         plan_sequence.assert_not_called()
+        ik_sequence.assert_not_called()
         assert transaction.rejections == {"invalid": 1}
+
+    def test_pre_grasp_uses_fixed_configured_offset(self, module: PickAndPlaceModule) -> None:
+        module.config.grasp_pre_grasp_offset = 0.25
+        grasp = Pose(Vector3(0.4, 0.0, 0.3), Quaternion())
+
+        result = module._compute_pre_grasp_pose(
+            grasp,
+            float(module.config.grasp_pre_grasp_offset),
+            Vector3(0.0, 0.0, -1.0),
+        )
+
+        assert result == Pose(Vector3(0.4, 0.0, 0.05), grasp.orientation)
+
+    def test_retreat_moves_back_with_world_up_bias(self, module: PickAndPlaceModule) -> None:
+        module.config.grasp_retreat_offset = 0.10
+        module.config.grasp_retreat_lift_offset = 0.01
+        half_sqrt = 2**-0.5
+        grasp = Pose(
+            Vector3(0.4, 0.0, 0.2),
+            Quaternion(0.0, half_sqrt, 0.0, half_sqrt),
+        )
+
+        retreat = module._compute_retreat_pose(
+            grasp,
+            Vector3(0.0, 0.0, -1.0),
+        )
+
+        assert retreat.position.x == pytest.approx(0.3)
+        assert retreat.position.y == pytest.approx(0.0)
+        assert retreat.position.z == pytest.approx(0.21)
+        assert retreat.orientation == grasp.orientation
 
 
 class TestPickTransaction:
-    def _arrange_success(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> tuple[GraspCandidate, SimpleNamespace]:
+    def _arrange_success(self, module: PickAndPlaceModule, mocker: MockerFixture) -> GraspCandidate:
         detection = _make_det_object()
         candidate = _candidate(0.4, 0.9)
         selected = _FeasibleGrasp(candidate, 1, Pose(0.4, 0.0, 0.3), Pose(0.4, 0.0, 0.3))
@@ -492,22 +571,20 @@ class TestPickTransaction:
         mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
         mocker.patch.object(module, "plan_to_pose", return_value=True)
         mocker.patch.object(module, "_preview_execute_wait", return_value=SkillResult.ok())
+        mocker.patch.object(module, "_execute_linear_motion", return_value=SkillResult.ok())
         mocker.patch.object(module, "_set_gripper_position", return_value=True)
         mocker.patch.object(
             module,
             "_verify_grasp",
             return_value=_GraspVerification(True, 0.1, "verified"),
         )
-        suppression = SimpleNamespace(cleanup_error=None)
-        world = mocker.Mock()
-        world.suppress_object_obstacle.return_value = nullcontext(suppression)
-        module._world_monitor = world
-        return candidate, suppression
+        module._world_monitor = mocker.Mock()
+        return candidate
 
     def test_success_executes_ordered_pick_and_records_metadata(
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
-        candidate, _ = self._arrange_success(module, mocker)
+        candidate = self._arrange_success(module, mocker)
 
         result = module.pick("cup", object_id="abc12345")
 
@@ -521,25 +598,12 @@ class TestPickTransaction:
         ]
         assert module.plan_to_pose.call_args_list == [
             mocker.call(Pose(0.4, 0.0, 0.3), "arm"),
-            mocker.call(candidate.pose, "arm"),
-            mocker.call(Pose(0.4, 0.0, 0.3), "arm"),
         ]
-
-    def test_pick_can_suppress_all_object_obstacles_for_diagnostics(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> None:
-        self._arrange_success(module, mocker)
-        module.config.pick_suppress_all_object_obstacles = True
-        all_suppression = SimpleNamespace(cleanup_error=None)
-        module._world_monitor.suppress_all_object_obstacles.return_value = nullcontext(  # type: ignore[union-attr]
-            all_suppression
-        )
-
-        result = module.pick("cup", object_id="abc12345")
-
-        assert result.is_success()
-        module._world_monitor.suppress_all_object_obstacles.assert_called_once_with()  # type: ignore[union-attr]
-        module._world_monitor.suppress_object_obstacle.assert_not_called()  # type: ignore[union-attr]
+        assert module._execute_linear_motion.call_args_list == [
+            mocker.call(candidate.pose, "arm", 0.03, check_collision=False),
+            mocker.call(Pose(0.4, 0.0, 0.3), "arm", 0.03, check_collision=False),
+        ]
+        assert module._world_monitor.method_calls == []
 
     def test_no_safety_lift_validates_candidates_from_current_state(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -551,7 +615,7 @@ class TestPickTransaction:
 
         assert result.is_success()
         check_sequence.assert_not_called()
-        assert module._select_feasible_grasp.call_args.args[4] is None
+        assert module._select_feasible_grasp.call_args.args[3] is None
 
     def test_safety_lift_endpoint_is_shared_with_candidate_validation(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -570,7 +634,7 @@ class TestPickTransaction:
 
         assert result.is_success()
         check_sequence.assert_called_once_with((lift_pose,), "arm")
-        assert module._select_feasible_grasp.call_args.args[4] is lift_endpoint
+        assert module._select_feasible_grasp.call_args.args[3] is lift_endpoint
 
     def test_safety_lift_planning_failure_aborts_prepare_without_candidate_rejection(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -599,7 +663,10 @@ class TestPickTransaction:
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         self._arrange_success(module, mocker)
-        module.plan_to_pose.side_effect = [True, True, False]
+        module._execute_linear_motion.side_effect = [
+            SkillResult.ok(),
+            SkillResult.fail("PLANNING_FAILED", "linear planning failed"),
+        ]
 
         result = module.pick("cup", object_id="abc12345")
 
@@ -632,30 +699,6 @@ class TestPickTransaction:
             "PICK_BUSY",
         )
 
-    def test_cleanup_failure_does_not_hide_primary_failure(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> None:
-        _, suppression = self._arrange_success(module, mocker)
-        suppression.cleanup_error = "restore failed"
-        # Approach plans; the grasp leg fails inside the target suppression.
-        module.plan_to_pose.side_effect = [True, False]
-
-        result = module.pick("cup", object_id="abc12345")
-
-        assert result.error_code == "PLANNING_FAILED"
-        assert "cleanup: restore failed" in result.message
-
-    def test_cleanup_failure_turns_success_into_scene_failure(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> None:
-        _, suppression = self._arrange_success(module, mocker)
-        suppression.cleanup_error = "restore failed"
-
-        result = module.pick("cup", object_id="abc12345")
-
-        assert result.error_code == "WORLD_MONITOR_UNAVAILABLE"
-        assert "restore failed" in result.message
-
     @pytest.mark.parametrize(
         ("setup", "expected_code", "expected_phase"),
         [
@@ -663,12 +706,10 @@ class TestPickTransaction:
             ("open", "GRIPPER_FAILED", "PREPARE"),
             ("approach_planning", "PLANNING_FAILED", "APPROACH"),
             ("approach_execution", "EXECUTION_FAILED", "APPROACH"),
-            ("grasp_planning", "PLANNING_FAILED", "GRASP"),
-            ("grasp_execution", "EXECUTION_FAILED", "GRASP"),
+            ("grasp_motion", "PLANNING_FAILED", "GRASP"),
             ("close", "GRIPPER_FAILED", "CLOSE"),
             ("verification", "GRASP_VERIFICATION_FAILED", "VERIFY"),
-            ("retreat_planning", "PLANNING_FAILED", "RETREAT"),
-            ("retreat_execution", "EXECUTION_FAILED", "RETREAT"),
+            ("retreat_motion", "EXECUTION_FAILED", "RETREAT"),
         ],
     )
     def test_phase_failures_stop_the_pipeline(
@@ -690,22 +731,16 @@ class TestPickTransaction:
             module._preview_execute_wait.side_effect = [
                 SkillResult.fail("EXECUTION_FAILED", "rejected")
             ]
-        elif setup == "grasp_planning":
-            module.plan_to_pose.side_effect = [True, False]
-        elif setup == "grasp_execution":
-            module._preview_execute_wait.side_effect = [
-                SkillResult.ok(),
-                SkillResult.fail("EXECUTION_FAILED", "rejected"),
+        elif setup == "grasp_motion":
+            module._execute_linear_motion.side_effect = [
+                SkillResult.fail("PLANNING_FAILED", "linear planning failed")
             ]
         elif setup == "close":
             module._set_gripper_position.side_effect = [True, False]
         elif setup == "verification":
             module._verify_grasp.return_value = _GraspVerification(False, 0.0, "empty close")
-        elif setup == "retreat_planning":
-            module.plan_to_pose.side_effect = [True, True, False]
         else:
-            module._preview_execute_wait.side_effect = [
-                SkillResult.ok(),
+            module._execute_linear_motion.side_effect = [
                 SkillResult.ok(),
                 SkillResult.fail("EXECUTION_FAILED", "rejected"),
             ]
@@ -737,17 +772,20 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     plan_sequence = mocker.patch.object(
         module,
         "_check_connected_pose_sequence",
-        # Per candidate: the pre-grasp leg, then the suppressed grasp+retreat leg.
-        side_effect=[(0, None), (None, JointState()), (None, JointState())],
+        side_effect=[(0, None), (None, JointState())],
+    )
+    ik_sequence = mocker.patch.object(
+        module,
+        "_check_pose_ik_sequence",
+        return_value=(None, JointState()),
     )
     mocker.patch.object(module, "_safety_lift_pose", return_value=None)
     mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
     plan = mocker.patch.object(module, "plan_to_pose", return_value=True)
     execute = mocker.patch.object(module, "_preview_execute_wait", return_value=SkillResult.ok())
+    linear = mocker.patch.object(module, "_execute_linear_motion", return_value=SkillResult.ok())
     gripper = mocker.patch.object(module, "_set_gripper_position", return_value=True)
-    suppression = SimpleNamespace(cleanup_error=None)
     world = mocker.Mock()
-    world.suppress_object_obstacle.return_value = nullcontext(suppression)
     module._world_monitor = world
     mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now)
 
@@ -760,11 +798,12 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     assert result.metadata["rejections"] == {"pre_grasp_infeasible": 1}
     scene.get_object_pointcloud_by_object_id.assert_called_once_with("abc12345")
     generator.propose_grasps.assert_called_once_with(scene.get_object_pointcloud_by_object_id())
-    # Suppressed twice: once to validate the grasp leg, once to execute it.
-    assert world.method_calls == [mocker.call.suppress_object_obstacle("abc12345")] * 2
-    assert plan_sequence.call_count == 3
-    assert plan.call_count == 3
-    assert execute.call_count == 3
+    assert world.method_calls == []
+    assert plan_sequence.call_count == 2
+    assert ik_sequence.call_count == 1
+    assert plan.call_count == 1
+    assert execute.call_count == 1
+    assert linear.call_count == 2
     assert gripper.call_args_list == [mocker.call(0.85, "arm"), mocker.call(0.0, "arm")]
 
 

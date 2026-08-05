@@ -23,7 +23,7 @@ The pipeline SHALL retrieve the selected object's `PointCloud2` through `ObjectS
 - **THEN** the pipeline performs no robot motion and returns a frame-mismatch failure
 
 ### Requirement: Ranked feasibility selection
-The pipeline SHALL examine candidates in descending generator-score order, up to a configurable attempt limit. It SHALL reject non-finite or malformed poses and candidates whose pre-grasp, grasp, or retreat targets fail kinematic or collision feasibility checks. Generator scores SHALL be treated only as relative ranking values, not calibrated probabilities.
+The pipeline SHALL examine candidates in descending generator-score order, up to a configurable attempt limit. It SHALL derive pre-grasp using a fixed configured offset along the grasp retraction direction and validate the connected collision-aware approach path. It SHALL reject non-finite or malformed poses, candidates without a valid pre-grasp approach, and candidates whose grasp or retreat fails sequential unchecked IK reachability. Generator scores SHALL be treated only as relative ranking values, not calibrated probabilities.
 
 #### Scenario: Highest-scored candidate is infeasible
 - **WHEN** the first candidate cannot satisfy approach or grasp feasibility and a lower-scored candidate can
@@ -33,19 +33,46 @@ The pipeline SHALL examine candidates in descending generator-score order, up to
 - **WHEN** every candidate within the configured attempt limit fails validation or feasibility
 - **THEN** the pipeline performs no gripper closure, leaves the robot in a safe pre-pick state, and returns `GRASP_ATTEMPTS_EXHAUSTED` with rejection counts by reason
 
-### Requirement: Target-aware collision scene
-The pipeline SHALL keep non-target scene obstacles active while checking and executing a pick. It SHALL exclude only the selected target object from collision checking for the grasp approach and SHALL restore a consistent perception-derived planning scene on success, failure, cancellation, or exception.
+#### Scenario: Fixed pre-grasp approach is feasible
+- **WHEN** the pose 25 cm behind the grasp along the configured approach axis has a collision-aware connected path
+- **THEN** the pipeline uses that pose as the candidate's pre-grasp
 
-#### Scenario: Target is registered as an obstacle
+#### Scenario: Fixed pre-grasp approach is infeasible
+- **WHEN** the fixed pre-grasp pose or its connected approach path is infeasible
+- **THEN** the candidate is rejected as `pre_grasp_infeasible` without robot motion
+
+### Requirement: Intentional linear contact motion
+The pipeline SHALL leave the planning scene unchanged. Motion to pre-grasp SHALL remain collision-aware. Motion from pre-grasp to grasp and from grasp to retreat SHALL follow straight TCP paths generated from sequential collision-disabled IK samples, without invoking scene-backed Cartesian planning or collision validation, while retaining kinematic tracking, joint limits, timing, and execution-result validation.
+
+#### Scenario: Target remains registered as an obstacle
 - **WHEN** the selected object is present in the planning world as a perception obstacle
-- **THEN** the pipeline removes that object's obstacle before grasp feasibility checks while retaining all other object and static obstacles
+- **THEN** the pipeline does not remove or suppress that object or any other planning obstacle
 
-#### Scenario: Execution fails after target exclusion
-- **WHEN** any later planning, execution, gripper, verification, or retreat step fails
-- **THEN** cleanup refreshes or restores the perception obstacle state before the skill returns
+#### Scenario: Contact motion bypasses collision rejection
+- **WHEN** a reachable straight pre-grasp-to-grasp or grasp-to-retreat trajectory intersects registered collision geometry
+- **THEN** the linear contact primitive may execute it without collision queries while still enforcing non-collision motion constraints
+
+#### Scenario: Retreat avoids table rubbing
+- **WHEN** the robot retreats after closing on an object
+- **THEN** the retreat target combines the configured grasp-local backward offset with the configured positive world-Z lift offset while preserving grasp orientation
+
+#### Scenario: Place retract starts in contact
+- **WHEN** placement reaches the object pose, releases the gripper, and the current configuration intersects registered object geometry
+- **THEN** the pipeline retracts to pre-place with unchecked linear motion instead of invoking collision-aware path planning from the contact state
+
+### Requirement: Explicit unchecked relative control
+The manipulation module SHALL expose `plan_linear` as a plan-only interface with collision checking enabled by default. It SHALL expose `move_relative` as an agent skill that accepts world-frame displacement, always disables planning-scene collision checking, and explicitly labels that behavior as unsafe in its tool description and result. The unchecked skill SHALL continue to enforce finite input, kinematic feasibility, joint and controller limits, timing, and execution-result validation.
+
+#### Scenario: Agent inspects unchecked motion tool
+- **WHEN** the agent receives the `move_relative` tool schema
+- **THEN** the description states that collision checking is disabled and that the command may collide with the robot, environment, objects, or people
+
+#### Scenario: Relative unchecked motion succeeds
+- **WHEN** the caller supplies a finite, non-zero world-frame displacement with a feasible Cartesian trajectory
+- **THEN** the module preserves TCP orientation, executes with collision checking disabled, and reports the disabled collision policy in the success result
 
 ### Requirement: Safe pick execution
-For a selected feasible candidate, the pipeline SHALL execute the ordered phases `PREPARE`, `APPROACH`, `GRASP`, `CLOSE`, `VERIFY`, and `RETREAT`. It SHALL stop at the first failed phase, SHALL report that phase in the result, and MUST NOT open the gripper automatically after closure because the robot may be holding the object.
+For a selected feasible candidate, the pipeline SHALL execute the ordered phases `PREPARE`, `APPROACH`, `GRASP`, `CLOSE`, `VERIFY`, and `RETREAT`. `APPROACH` SHALL use collision-aware planning; `GRASP` and `RETREAT` SHALL use unchecked linear TCP motion. It SHALL stop at the first failed phase, SHALL report that phase in the result, and MUST NOT open the gripper automatically after closure because the robot may be holding the object.
 
 #### Scenario: Successful pick sequence
 - **WHEN** all motion plans execute, gripper commands are accepted, verification succeeds, and retreat completes

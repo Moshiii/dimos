@@ -23,8 +23,8 @@ Extends ManipulationModule with perception integration and long-horizon skills:
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager, nullcontext, suppress
+from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 import math
@@ -113,10 +113,12 @@ class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     planning_frame: str = "world"
     max_object_pointcloud_age: FiniteFloat = Field(default=10.0, gt=0.0)
     max_grasp_candidates_to_check: int = Field(default=5, gt=0)
-    grasp_pre_grasp_offset: FiniteFloat | None = Field(default=None, gt=0.0)
-    grasp_retreat_offset: FiniteFloat | None = Field(default=None, gt=0.0)
+    # Fixed retraction distance from grasp to pre-grasp.
+    grasp_pre_grasp_offset: FiniteFloat = Field(default=0.25, gt=0.0)
+    grasp_retreat_offset: FiniteFloat = Field(default=0.10, gt=0.0)
+    grasp_retreat_lift_offset: FiniteFloat = Field(default=0.01, ge=0.0)
     grasp_approach_vector: tuple[FiniteFloat, FiniteFloat, FiniteFloat] = (0.0, 0.0, -1.0)
-    pick_suppress_all_object_obstacles: bool = False
+    grasp_linear_speed: FiniteFloat = Field(default=0.03, gt=0.0)
     grasp_verification: GraspVerificationConfig = Field(default_factory=GraspVerificationConfig)
     # Gripper geometry for grasp visualization only. Source from the same config
     # object as the grasp generator: grasp_gen_x bakes grasp_frame_to_tcp into
@@ -183,7 +185,6 @@ class _PickTransaction:
     selected: _FeasibleGrasp | None = None
     rejections: Counter[str] = field(default_factory=Counter)
     gripper_closed: bool = False
-    cleanup_error: str | None = None
 
 
 class _PickPipelineError(RuntimeError):
@@ -704,24 +705,6 @@ then refreshes perception obstacles.
         self._publish_candidate_layers(ranked[: self.config.max_grasp_candidates_to_check])
         return ranked
 
-    @contextmanager
-    def _suppress_target(self, transaction: _PickTransaction) -> Iterator[None]:
-        """Hide only the pick target, so the rest of the scene stays planned against.
-
-        A failed restore leaves the world without that obstacle, so it is
-        recorded on the transaction rather than dropped.
-        """
-        if self._world_monitor is None or self.config.pick_suppress_all_object_obstacles:
-            yield
-            return
-        handle = None
-        try:
-            with self._world_monitor.suppress_object_obstacle(transaction.object_id) as handle:
-                yield
-        finally:
-            if handle is not None and handle.cleanup_error:
-                transaction.cleanup_error = handle.cleanup_error
-
     def _grasp_viz(self) -> Any | None:
         """Visualization backend, or None when disabled or gripper geometry is unset."""
         if self._world_monitor is None or self.config.grasp_viz_gripper is None:
@@ -791,19 +774,35 @@ then refreshes perception obstacles.
         norm = np.linalg.norm(local)
         if norm == 0.0:
             return np.zeros(3, dtype=float)
-        return candidate.pose.orientation.to_rotation_matrix() @ (local / norm)
+        return np.asarray(
+            candidate.pose.orientation.to_rotation_matrix() @ (local / norm),
+            dtype=float,
+        )
+
+    def _compute_retreat_pose(self, grasp_pose: Pose, approach_vector: Vector3) -> Pose:
+        """Move back along the grasp approach and bias the retreat upward in world Z."""
+        retracted = self._compute_pre_grasp_pose(
+            grasp_pose,
+            float(self.config.grasp_retreat_offset),
+            approach_vector,
+        )
+        return Pose(
+            Vector3(
+                retracted.position.x,
+                retracted.position.y,
+                retracted.position.z + float(self.config.grasp_retreat_lift_offset),
+            ),
+            retracted.orientation,
+        )
 
     def _select_feasible_grasp(
         self,
         candidates: list[GraspCandidate],
         robot_name: str,
-        robot_pre_grasp_offset: float,
         transaction: _PickTransaction,
         sequence_start: JointState | None = None,
     ) -> _FeasibleGrasp:
         vector = Vector3(self.config.grasp_approach_vector)
-        pre_offset = self.config.grasp_pre_grasp_offset or robot_pre_grasp_offset
-        retreat_offset = self.config.grasp_retreat_offset or pre_offset
         limit = min(len(candidates), self.config.max_grasp_candidates_to_check)
 
         for rank, candidate in enumerate(candidates[:limit], start=1):
@@ -815,8 +814,12 @@ then refreshes perception obstacles.
                     candidate.score,
                 )
                 continue
-            pre_grasp = self._compute_pre_grasp_pose(candidate.pose, pre_offset, vector)
-            retreat = self._compute_pre_grasp_pose(candidate.pose, retreat_offset, vector)
+            pre_grasp = self._compute_pre_grasp_pose(
+                candidate.pose,
+                float(self.config.grasp_pre_grasp_offset),
+                vector,
+            )
+            retreat = self._compute_retreat_pose(candidate.pose, vector)
             retraction = self._candidate_retraction_vector(candidate, vector)
             self._publish_attempt_layer(candidate.pose, pre_grasp)
             rejections = (
@@ -824,16 +827,19 @@ then refreshes perception obstacles.
                 _CandidateRejection.GRASP_INFEASIBLE,
                 _CandidateRejection.RETREAT_INFEASIBLE,
             )
-            # The pre-grasp is checked against the whole scene; only the leg
-            # that touches the target may ignore the target.
+            # The approach to pre-grasp remains collision-aware. The short
+            # contact legs only need sequential kinematic reachability because
+            # execution deliberately uses unchecked linear TCP motion.
             failed_index, mid = self._check_connected_pose_sequence(
                 (pre_grasp,), robot_name, start=sequence_start
             )
             if failed_index is None:
-                with self._suppress_target(transaction):
-                    failed_index, _ = self._check_connected_pose_sequence(
-                        (candidate.pose, retreat), robot_name, start=mid
-                    )
+                failed_index, _ = self._check_pose_ik_sequence(
+                    (candidate.pose, retreat),
+                    robot_name,
+                    start=mid,
+                    check_collision=False,
+                )
                 if failed_index is not None:
                     failed_index += 1
             if failed_index is not None:
@@ -957,40 +963,39 @@ then refreshes perception obstacles.
                 transaction, execution.error_code or "EXECUTION_FAILED", execution.message
             )
 
-        # From here the gripper must reach into, and then carry, the target, so
-        # the target alone is hidden. Every other obstacle stays.
-        with self._suppress_target(transaction):
-            transaction.phase = _PickPhase.GRASP
-            if not self.plan_to_pose(selected.candidate.pose, robot_name):
-                return self._phase_failure(transaction, "PLANNING_FAILED", "grasp planning failed")
-            execution = self._preview_execute_wait(robot_name)
-            if not execution.is_success():
-                return self._phase_failure(
-                    transaction, execution.error_code or "EXECUTION_FAILED", execution.message
-                )
+        transaction.phase = _PickPhase.GRASP
+        execution = self._execute_linear_motion(
+            selected.candidate.pose,
+            robot_name,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
+        if not execution.is_success():
+            return self._phase_failure(
+                transaction, execution.error_code or "EXECUTION_FAILED", execution.message
+            )
 
-            transaction.phase = _PickPhase.CLOSE
-            if not self._set_gripper_position(float(verification.closed_position), robot_name):
-                return self._phase_failure(transaction, "GRIPPER_FAILED", "close command failed")
-            transaction.gripper_closed = True
+        transaction.phase = _PickPhase.CLOSE
+        if not self._set_gripper_position(float(verification.closed_position), robot_name):
+            return self._phase_failure(transaction, "GRIPPER_FAILED", "close command failed")
+        transaction.gripper_closed = True
 
-            transaction.phase = _PickPhase.VERIFY
-            verified = self._verify_grasp(robot_name)
-            if not verified.held:
-                return self._phase_failure(
-                    transaction, "GRASP_VERIFICATION_FAILED", verified.detail
-                )
+        transaction.phase = _PickPhase.VERIFY
+        verified = self._verify_grasp(robot_name)
+        if not verified.held:
+            return self._phase_failure(transaction, "GRASP_VERIFICATION_FAILED", verified.detail)
 
-            transaction.phase = _PickPhase.RETREAT
-            if not self.plan_to_pose(selected.retreat_pose, robot_name):
-                return self._phase_failure(
-                    transaction, "PLANNING_FAILED", "retreat planning failed"
-                )
-            execution = self._preview_execute_wait(robot_name)
-            if not execution.is_success():
-                return self._phase_failure(
-                    transaction, execution.error_code or "EXECUTION_FAILED", execution.message
-                )
+        transaction.phase = _PickPhase.RETREAT
+        execution = self._execute_linear_motion(
+            selected.retreat_pose,
+            robot_name,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
+        if not execution.is_success():
+            return self._phase_failure(
+                transaction, execution.error_code or "EXECUTION_FAILED", execution.message
+            )
 
         transaction.phase = _PickPhase.DONE
         self._last_pick_pose = selected.candidate.pose
@@ -1014,8 +1019,8 @@ then refreshes perception obstacles.
     ) -> SkillResult[ManipulationSkillError]:
         """Pick up an object by name using grasp planning and motion execution.
 
-        Generates grasp poses, plans collision-free approach/grasp/retract motions,
-        and executes them.
+        Generates grasp poses, plans a collision-free fixed-distance pre-grasp approach,
+        and executes unchecked linear grasp and retreat contact motions.
 
         Args:
             object_name: Name of the object to pick (e.g. "cup", "bottle", "can").
@@ -1026,13 +1031,11 @@ then refreshes perception obstacles.
             return SkillResult.fail("PICK_BUSY", "Another pick transaction is active")
 
         transaction = _PickTransaction()
-        suppression = None
-        result: SkillResult[ManipulationSkillError]
         try:
             robot = self._get_robot(robot_name)
             if robot is None:
                 return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
-            rname, _, robot_config, _ = robot
+            rname, _, _, _ = robot
 
             detection = self._require_pick_object(object_name, object_id)
             transaction.object_id = detection.object_id
@@ -1045,46 +1048,26 @@ then refreshes perception obstacles.
                     "WORLD_MONITOR_UNAVAILABLE", "Planning world monitor is unavailable"
                 )
 
-            # Staged by default: selection and the approach plan against the
-            # whole scene, and only the target-touching legs suppress the
-            # target (see _select_feasible_grasp / _execute_selected_pick).
-            suppression_context: Any = (
-                self._world_monitor.suppress_all_object_obstacles()
-                if self.config.pick_suppress_all_object_obstacles
-                else nullcontext()
-            )
-            with suppression_context as suppression:
-                sequence_start = None
-                lift_pose = self._safety_lift_pose(rname)
-                if lift_pose is not None:
-                    transaction.phase = _PickPhase.PREPARE
-                    failed_index, sequence_start = self._check_connected_pose_sequence(
-                        (lift_pose,), rname
-                    )
-                    if failed_index is not None:
-                        raise _PickPipelineError(
-                            "PLANNING_FAILED",
-                            "Required safety-lift planning failed",
-                        )
-                transaction.phase = _PickPhase.SELECT
-                transaction.selected = self._select_feasible_grasp(
-                    candidates,
-                    rname,
-                    robot_config.pre_grasp_offset,
-                    transaction,
-                    sequence_start,
+            sequence_start = None
+            lift_pose = self._safety_lift_pose(rname)
+            if lift_pose is not None:
+                transaction.phase = _PickPhase.PREPARE
+                failed_index, sequence_start = self._check_connected_pose_sequence(
+                    (lift_pose,), rname
                 )
-                result = self._execute_selected_pick(transaction, rname)
-            cleanup_error = transaction.cleanup_error or (
-                suppression.cleanup_error if suppression is not None else None
-            )
-            if cleanup_error is not None:
-                if result.is_success():
-                    return self._phase_failure(
-                        transaction, "WORLD_MONITOR_UNAVAILABLE", cleanup_error
+                if failed_index is not None:
+                    raise _PickPipelineError(
+                        "PLANNING_FAILED",
+                        "Required safety-lift planning failed",
                     )
-                result.message = f"{result.message}; cleanup: {cleanup_error}"
-            return result
+            transaction.phase = _PickPhase.SELECT
+            transaction.selected = self._select_feasible_grasp(
+                candidates,
+                rname,
+                transaction,
+                sequence_start,
+            )
+            return self._execute_selected_pick(transaction, rname)
         except _PickPipelineError as exc:
             return self._phase_failure(transaction, exc.code, str(exc))
         except RuntimeError as exc:
@@ -1153,10 +1136,13 @@ then refreshes perception obstacles.
             return exec_result
 
         # 2. Lower to place position
-        logger.info("Lowering to place position...")
-        if not self.plan_to_pose(place_pose, rname):
-            return SkillResult.fail("PLANNING_FAILED", "Place pose planning failed")
-        exec_result = self._preview_execute_wait(rname)
+        logger.info("Lowering to place position with collision checking disabled...")
+        exec_result = self._execute_linear_motion(
+            place_pose,
+            rname,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
         if not exec_result.is_success():
             return exec_result
 
@@ -1166,10 +1152,13 @@ then refreshes perception obstacles.
         time.sleep(1.0)
 
         # 4. Retract
-        logger.info("Retracting...")
-        if not self.plan_to_pose(pre_place_pose, rname):
-            return SkillResult.fail("PLANNING_FAILED", "Retract planning failed")
-        exec_result = self._preview_execute_wait(rname)
+        logger.info("Retracting with collision checking disabled...")
+        exec_result = self._execute_linear_motion(
+            pre_place_pose,
+            rname,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
         if not exec_result.is_success():
             return exec_result
 

@@ -26,10 +26,7 @@ Example:
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -51,15 +48,6 @@ if TYPE_CHECKING:
     from dimos.perception.detection.type.detection3d.object import Object
 
 logger = setup_logger()
-
-
-@dataclass
-class ObjectObstacleSuppression:
-    """Result of a scoped object-obstacle suppression."""
-
-    object_id: str
-    removed: bool = False
-    cleanup_error: str | None = None
 
 
 class WorldObstacleMonitor:
@@ -108,7 +96,6 @@ class WorldObstacleMonitor:
         self._object_cache: dict[str, tuple[Object, float, float]] = {}
         # object_id -> obstacle_id (objects currently added to Drake world)
         self._object_obstacles: dict[str, str] = {}
-        self._object_suppressions: Counter[str] = Counter()
 
         # Running state
         self._running = False
@@ -137,7 +124,6 @@ class WorldObstacleMonitor:
             self._perception_objects.clear()
             self._perception_timestamps.clear()
             self._object_obstacles.clear()
-            self._object_suppressions.clear()
 
     def on_collision_object(self, msg: CollisionObjectMessage) -> None:
         """Handle explicit collision object message.
@@ -512,8 +498,6 @@ class WorldObstacleMonitor:
             for oid, (obj, first_seen, last_seen) in self._object_cache.items():
                 if not isinstance(obj, Object):
                     continue
-                if self._object_suppressions[oid] > 0:
-                    continue
                 if last_seen - first_seen < min_duration:
                     continue
                 eligible.append((oid, obj))
@@ -534,10 +518,6 @@ class WorldObstacleMonitor:
 
             result: list[dict[str, Any]] = []
             for oid, obj, obstacle in prepared:
-                # Suppression may have started while obstacle geometry was
-                # computed outside the lock.
-                if self._object_suppressions[oid] > 0:
-                    continue
                 assert isinstance(obj, Object)
                 obs_id = self._parent.add_obstacle(obstacle)
                 if not obs_id:
@@ -572,126 +552,6 @@ class WorldObstacleMonitor:
             self._parent.remove_obstacle(obs_id)
             logger.info(f"Removed obstacle for object '{object_id}'")
             return True
-
-    @contextmanager
-    def suppress_object_obstacle(self, object_id: str) -> Iterator[ObjectObstacleSuppression]:
-        """Exclude one cached object obstacle for the lifetime of the context.
-
-        Nested callers share one removal. Live refreshes skip suppressed object
-        IDs, and the outermost exit restores the latest cached geometry.
-        """
-        handle = ObjectObstacleSuppression(object_id=object_id)
-        with self._lock:
-            depth = self._object_suppressions[object_id]
-            self._object_suppressions[object_id] = depth + 1
-            if depth == 0:
-                obstacle_id = self._object_obstacles.get(object_id)
-                if obstacle_id is not None:
-                    if not self._parent.remove_obstacle(obstacle_id):
-                        del self._object_suppressions[object_id]
-                        raise RuntimeError(f"failed to suppress obstacle for object '{object_id}'")
-                    del self._object_obstacles[object_id]
-                    handle.removed = True
-                    logger.info(f"Suppressed obstacle for object '{object_id}'")
-        try:
-            yield handle
-        finally:
-            self._release_object_suppression(handle)
-
-    @contextmanager
-    def suppress_all_object_obstacles(self) -> Iterator[ObjectObstacleSuppression]:
-        """Exclude all cached object obstacles for the lifetime of the context."""
-        handle = ObjectObstacleSuppression(object_id="*")
-        suppressed_ids: set[str] = set()
-        removed = 0
-        with self._lock:
-            suppressed_ids = set(self._object_cache) | set(self._object_obstacles)
-            for object_id in suppressed_ids:
-                self._object_suppressions[object_id] += 1
-            for object_id, obstacle_id in list(self._object_obstacles.items()):
-                if not self._parent.remove_obstacle(obstacle_id):
-                    for suppressed_id in suppressed_ids:
-                        depth = self._object_suppressions.get(suppressed_id, 0)
-                        if depth <= 1:
-                            self._object_suppressions.pop(suppressed_id, None)
-                        else:
-                            self._object_suppressions[suppressed_id] = depth - 1
-                    raise RuntimeError("failed to suppress all object obstacles")
-                del self._object_obstacles[object_id]
-                removed += 1
-            handle.removed = removed > 0
-            logger.info("Suppressed %d object obstacle(s)", removed)
-        try:
-            yield handle
-        finally:
-            self._release_all_object_suppressions(handle, suppressed_ids)
-
-    def _release_object_suppression(self, handle: ObjectObstacleSuppression) -> None:
-        object_id = handle.object_id
-        cached: Object | None = None
-        with self._lock:
-            depth = self._object_suppressions.get(object_id, 0)
-            if depth > 1:
-                self._object_suppressions[object_id] = depth - 1
-                return
-            self._object_suppressions.pop(object_id, None)
-            entry = self._object_cache.get(object_id)
-            if entry is not None:
-                cached = entry[0]
-
-        if cached is None:
-            return
-        obstacle = self._object_to_obstacle(cached)
-        with self._lock:
-            if self._object_suppressions.get(object_id, 0) > 0:
-                return
-            if object_id in self._object_obstacles:
-                return
-            obstacle_id = self._parent.add_obstacle(obstacle)
-            if obstacle_id:
-                self._object_obstacles[object_id] = obstacle_id
-                logger.info(f"Restored obstacle for object '{object_id}'")
-                return
-            handle.cleanup_error = f"failed to restore obstacle for object '{object_id}'"
-            logger.error(handle.cleanup_error)
-
-    def _release_all_object_suppressions(
-        self, handle: ObjectObstacleSuppression, object_ids: set[str]
-    ) -> None:
-        cached_objects: list[tuple[str, Object]] = []
-        with self._lock:
-            for object_id in object_ids:
-                depth = self._object_suppressions.get(object_id, 0)
-                if depth > 1:
-                    self._object_suppressions[object_id] = depth - 1
-                    continue
-                self._object_suppressions.pop(object_id, None)
-                entry = self._object_cache.get(object_id)
-                if entry is not None:
-                    cached_objects.append((object_id, entry[0]))
-
-        restored = 0
-        errors: list[str] = []
-        for object_id, cached in cached_objects:
-            obstacle = self._object_to_obstacle(cached)
-            with self._lock:
-                if self._object_suppressions.get(object_id, 0) > 0:
-                    continue
-                if object_id in self._object_obstacles:
-                    continue
-                obstacle_id = self._parent.add_obstacle(obstacle)
-                if obstacle_id:
-                    self._object_obstacles[object_id] = obstacle_id
-                    restored += 1
-                else:
-                    errors.append(object_id)
-        if restored:
-            logger.info("Restored %d object obstacle(s)", restored)
-        if errors:
-            handle.cleanup_error = "failed to restore obstacle(s) for object(s): " + ", ".join(
-                sorted(errors)
-            )
-            logger.error(handle.cleanup_error)
 
     def clear_perception_obstacles(self) -> int:
         """Remove all object obstacles from the planning world.

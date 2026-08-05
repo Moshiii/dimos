@@ -2,7 +2,7 @@
 
 GraspGenX is an import-safe, dedicated-worker module implementing `GraspGenSpec.propose_grasps(PointCloud2) -> GraspCandidateArray`. Object perception already implements `ObjectSceneRegistrationSpec`, including stable-ID/name point-cloud lookup, and emits world-frame `DetObject` instances consumed by `PickAndPlaceModule`.
 
-The current `pick` skill already owns planning, execution, gripper control, perception obstacle integration, and `place_back` state, but `_generate_grasps_for_pick` produces a single hand-authored pose. Its sequence begins moving after only the pre-grasp plan succeeds, uses fixed waits for gripper commands, and reports success without checking whether an object prevented full closure.
+The current `pick` skill already owns planning, execution, gripper control, perception obstacle integration, and `place_back` state, but `_generate_grasps_for_pick` produces a single hand-authored pose. Its sequence begins moving after only the pre-grasp plan succeeds, uses fixed waits for gripper commands, and reports success without checking whether an object prevented full closure. The final approach necessarily intersects the target, so planning-scene suppression is the wrong abstraction; the motion primitive should express intentional unchecked contact directly.
 
 The natural missing seam is orchestration inside `PickAndPlaceModule`:
 
@@ -31,7 +31,7 @@ The model worker remains independent and optional. The high-level skill owns the
 - Make `pick` a complete learned-grasp pipeline with precise, testable phase and failure semantics.
 - Reuse the existing perception, proposal, planning, coordinator, and `SkillResult` interfaces.
 - Reject bad candidates before physical motion where possible.
-- Preserve non-target collision checking and guarantee planning-scene cleanup.
+- Preserve collision-aware motion to pre-grasp while leaving the planning scene unchanged.
 - Verify physical closure using gripper feedback on the initial xArm integration.
 - Keep the high-level agent interface stable.
 
@@ -69,25 +69,29 @@ Name-only lookup must first establish uniqueness from the current detection snap
 Candidates remain in generator score order. For each candidate up to `max_grasp_candidates_to_check`, the pipeline:
 
 1. validates finite rigid-pose data and frame agreement;
-2. derives pre-grasp and retreat poses using the configured approach-axis offset;
-3. checks IK/collision feasibility for all three targets without dispatching motion;
+2. derives pre-grasp from a fixed configured offset along the approach axis and derives retreat by combining the configured backward offset with a world-Z lift bias;
+3. checks collision-aware connected feasibility to pre-grasp and collision-free sequential IK reachability for grasp and retreat without dispatching motion;
 4. chooses the first candidate passing the gate.
 
 The actual plans are regenerated from live state immediately before each phase because stored plans become stale after execution. A planning or execution failure after motion begins terminates the transaction rather than jumping to another candidate from a changed robot state.
 
+Pre-grasp is the candidate grasp pose retracted by `grasp_pre_grasp_offset` along the configured grasp approach axis. It must pass collision-aware IK and the connected approach-path check. The shipped xArm learned-pick configuration uses a fixed 25 cm offset. Failures remain `pre_grasp_infeasible` so public rejection reporting stays stable.
+
+Retreat preserves the grasp-local backward displacement defined by `grasp_retreat_offset`, then adds `grasp_retreat_lift_offset` in world Z. The xArm default is a 10 cm pullback plus a 1 cm lift, avoiding a purely horizontal drag without replacing the natural retraction direction.
+
 Alternative: attempt candidates sequentially and retry after any failure. Rejected because after the first approach the robot is no longer at the common evaluated start state, making retry safety and cleanup ambiguous.
 
-### 5. Treat target obstacle exclusion as transaction state
+### 5. Represent intentional contact as unchecked linear motion
 
-Before feasibility checks, the pipeline calls the existing targeted `WorldMonitor.remove_object_obstacle(object_id)` path. Other perception and static obstacles remain. A `try/finally` transaction boundary refreshes perception obstacles on every return path.
+`ManipulationModule.plan_linear` generates a straight TCP trajectory and requires an explicit collision policy; it never executes the plan. A private execution helper composes it with preview, dispatch, and completion handling. The pick pipeline uses that helper with collision checking disabled only for pre-grasp-to-grasp and grasp-to-retreat; motion to pre-grasp remains collision-aware. Placement uses the same boundary: approach to pre-place is collision-aware, while lowering into contact and retracting after release are unchecked linear motions. Unchecked trajectories are built from chained collision-disabled IK samples instead of invoking the scene-backed Cartesian planner, making the bypass independent of backend collision behavior.
 
-The obstacle monitor can receive live updates concurrently, so the implementation must ensure the target is not re-added during the exclusion window. The preferred extension is a scoped suppression API owned by `WorldObstacleMonitor` (for example, an object-ID suppression context managed under its existing lock), rather than repeatedly deleting the obstacle from orchestration code.
+The RoboPlan Cartesian configuration and `plan_linear` default collision checking on. The agent-facing `move_relative` skill deliberately selects the unchecked policy and makes that fact explicit in its name-independent schema, warnings, and success result. It accepts only a world-frame delta and preserves the current TCP orientation. The target and all other obstacles remain registered throughout the transaction, so no suppression, restoration, or obstacle-monitor race handling is required. Unchecked means planning-scene collision queries are bypassed; finite inputs, Cartesian tracking, kinematic feasibility, joint limits, timing, controller acceptance, and execution-result handling remain enforced.
 
-Alternative: clear all perception obstacles. Rejected because it removes collision protection for the rest of the scene. Permanently delete the target obstacle. Rejected because failure paths would leave the planning world inconsistent.
+Alternative: temporarily remove the target obstacle. Rejected because it mutates shared planning-scene state to encode a property of one motion segment and introduces restoration and concurrent-refresh failure modes.
 
 ### 6. Model the pipeline as an explicit transaction
 
-A private transaction object records the selected object, proposal source, current phase, candidate rank/score, target-suppression handle, closure state, and cleanup status. A module lock rejects concurrent `pick` calls. The phases are:
+A private transaction object records the selected object, proposal source, current phase, candidate rank/score, and closure state. A module lock rejects concurrent `pick` calls. The phases are:
 
 ```text
 RESOLVE -> PROPOSE -> SELECT -> PREPARE -> APPROACH -> GRASP
@@ -129,16 +133,17 @@ Existing `OBJECT_NOT_DETECTED`, `GRASP_GENERATION_FAILED`, `GRASP_ATTEMPTS_EXHAU
 - [Single-view point clouds can produce geometrically plausible but poor grasps] → retain score ordering, validate scene feasibility, expose candidate rank/score, and leave visual servoing/regrasp for follow-up.
 - [Gripper aperture is an imperfect grasp signal, especially for thin objects] → make thresholds robot-specific, test boundary behavior, and describe verification as a closure proxy.
 - [Planning feasibility checks may be expensive across many GPU proposals] → cap candidates checked, stop at the first feasible candidate, and record rejection metrics for tuning.
-- [The target can be re-added by asynchronous perception during a pick] → add scoped suppression inside the obstacle monitor under its lock and test live-update behavior.
-- [A target-free collision world permits intended finger/object contact but cannot model post-grasp payload collisions] → keep all non-target obstacles and explicitly defer attached-object geometry.
+- [A fixed pre-grasp distance may reject candidates that a shorter pose could reach] → keep candidate fallback and expose `pre_grasp_infeasible` rejection counts for tuning.
+- [Unchecked contact motion can intersect more than the selected object] → constrain pipeline use to short generated contact legs, retain collision-aware approach planning, and label the general-purpose `move_relative` skill as unsafe in both its tool schema and agent prompt.
+- [The held object is not modeled as attached geometry] → explicitly defer payload collision geometry and keep subsequent general-purpose planning collision-aware.
 - [GraspGenX increases GPU memory and startup time] → retain a dedicated worker, lazy optional runtime imports, and blueprint-level opt-in.
 - [Planning can still fail after an earlier feasibility gate because the robot/world changed] → regenerate plans from live state and stop safely rather than retrying from an unanalysed state.
 
 ## Migration Plan
 
 1. Add configuration, error codes, and private transaction/candidate helpers behind the unchanged `pick` signature.
-2. Add scoped target-obstacle suppression and unit tests without enabling it in shipped blueprints.
-3. Wire the perception and proposal Specs into `PickAndPlaceModule`; keep heuristic fallback explicitly enabled in legacy blueprints during transition.
+2. Add collision-policy control to RoboPlan Cartesian paths, the plan-only `plan_linear` RPC, and the explicitly unsafe `move_relative` skill.
+3. Wire the perception and proposal Specs into `PickAndPlaceModule`; use linear contact legs and keep heuristic fallback explicitly enabled in legacy blueprints during transition.
 4. Add a distinct GraspGenX-enabled xArm perception blueprint with xArm-specific gripper sweep/TCP and verification configuration, then compose its agentic variant. Keep the existing blueprint dependency footprint unchanged.
 5. Validate in deterministic unit tests, recorded/replay perception, MuJoCo where sensor support permits, and finally real xArm hardware with a guarded test matrix.
 6. Update the agent prompt, blueprint registry if a new runnable blueprint is introduced, and manipulation documentation.
@@ -148,6 +153,5 @@ Rollback is blueprint-level: remove the GraspGenX module and restore explicit he
 ## Open Questions
 
 - What xArm closure threshold has been validated for the physical gripper, and does it need object-width-aware tolerance?
-- Does the current perception obstacle monitor need to freeze only the target ID, or should it snapshot all obstacles for the short execution window?
-- Is candidate feasibility via existing IK/collision APIs sufficiently predictive, or should the first version generate full approach/grasp/retreat paths in a cloned planning context?
+- Should candidate selection reuse the runtime sampled-IK contact-path generator for hypothetical-start dry runs, rather than its current endpoint-only unchecked IK gate?
 - Which approach axis encoded by the GraspGenX TCP transform should define pre-grasp and retreat offsets for the configured xArm gripper?

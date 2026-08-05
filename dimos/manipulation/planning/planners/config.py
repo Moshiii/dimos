@@ -33,6 +33,7 @@ class RoboPlanCartesianPathConfig(BaseConfig):
     """Runtime options for the official RoboPlan Cartesian path planner."""
 
     backend: Literal["roboplan"] = "roboplan"
+    check_collision: bool = True
     speed_mode: Literal["bounded", "time_optimal"] = "bounded"
     dt: float = Field(default=0.01, gt=0.0)
     max_linear_speed: float = Field(default=0.1, gt=0.0)

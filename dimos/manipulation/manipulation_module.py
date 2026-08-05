@@ -66,10 +66,11 @@ from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
 from dimos.manipulation.planning.planners.config import (
     CartesianPathConfig,
     ManipulationPlannerConfig,
+    RoboPlanCartesianPathConfig,
     RoboPlanPlannerConfig,
 )
 from dimos.manipulation.planning.spec.config import RobotModelConfig
-from dimos.manipulation.planning.spec.enums import IKStatus, ObstacleType
+from dimos.manipulation.planning.spec.enums import IKStatus, ObstacleType, PlanningStatus
 from dimos.manipulation.planning.spec.models import (
     DEFAULT_OBSTACLE_RGBA,
     CartesianTarget,
@@ -105,6 +106,10 @@ from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+_UNCHECKED_LINEAR_IK_STEP_SIZE = 0.005
+_UNCHECKED_ANGULAR_IK_STEP_SIZE = 0.02
+_UNCHECKED_MAX_ANGULAR_SPEED = 0.5
 
 # Composite type aliases for readability (using semantic IDs from planning.spec)
 RobotEntry: TypeAlias = tuple[WorldRobotID, RobotModelConfig, JointTrajectoryGenerator]
@@ -1174,6 +1179,51 @@ class ManipulationModule(Module):
         result = self._plan_connected_pose_sequence(poses, robot_name, start)
         return result.failed_index, result.endpoint
 
+    def _check_pose_ik_sequence(
+        self,
+        poses: Sequence[Pose],
+        robot_name: RobotName,
+        start: JointState | None = None,
+        *,
+        check_collision: bool = True,
+    ) -> tuple[int | None, JointState | None]:
+        """Dry-run sequential pose IK and return the failure index and endpoint."""
+        if not poses:
+            return None, start
+        if self._world_monitor is None or self._kinematics is None:
+            logger.warning("Pose IK sequence checking is unavailable")
+            return 0, None
+        try:
+            group_id = self._require_unique_pose_group_id_for_robot(robot_name)
+            selection = self._world_monitor.planning_groups.select((group_id,))
+            if start is None:
+                current = self._world_monitor.current_global_joint_state()
+                start = filter_joint_state_to_selected_joints(current, selection.joint_names)
+            else:
+                start = filter_joint_state_to_selected_joints(start, selection.joint_names)
+        except (KeyError, ValueError) as exc:
+            logger.warning("Failed to initialize pose IK sequence checking: %s", exc)
+            return 0, None
+
+        for index, pose in enumerate(poses):
+            target = PoseStamped(
+                frame_id="world",
+                position=pose.position,
+                orientation=pose.orientation,
+            )
+            ik = self.inverse_kinematics(
+                pose_targets={group_id: target},
+                seed=start,
+                check_collision=check_collision,
+            )
+            if not ik.is_success() or ik.joint_state is None:
+                return index, None
+            try:
+                start = filter_joint_state_to_selected_joints(ik.joint_state, selection.joint_names)
+            except ValueError:
+                return index, None
+        return None, start
+
     def _plan_connected_pose_sequence(
         self,
         poses: Sequence[Pose],
@@ -1256,6 +1306,302 @@ class ManipulationModule(Module):
     ) -> bool:
         """Plan TCP motion through absolute or relative Cartesian waypoints."""
         return self.generate_cartesian_plan(targets, config, auxiliary_groups) is not None
+
+    @rpc
+    def plan_linear(
+        self,
+        target_pose: Pose,
+        robot_name: RobotName | None = None,
+        max_linear_speed: float = 0.03,
+        check_collision: bool = True,
+    ) -> bool:
+        """Plan a straight TCP path to an absolute world-frame pose.
+
+        This method only creates the plan; it does not execute it. Collision
+        checking is enabled by default and must be disabled explicitly for an
+        intentional-contact motion.
+
+        Args:
+            target_pose: Absolute target TCP pose in the world frame.
+            robot_name: Robot to move (required if multiple robots are configured).
+            max_linear_speed: Maximum TCP linear speed in meters per second.
+            check_collision: Whether to reject paths that collide with the planning scene.
+        """
+        if not math.isfinite(max_linear_speed) or max_linear_speed <= 0.0:
+            self._record_error("Linear speed must be finite and positive")
+            return False
+        robot = self._get_robot(robot_name)
+        if robot is None:
+            self._record_error("Robot not found or robot_name is required")
+            return False
+        selected_robot_name, _, _, _ = robot
+        try:
+            group_id = self._require_unique_pose_group_id_for_robot(selected_robot_name)
+        except ValueError as exc:
+            self._record_error(str(exc))
+            return False
+        current_pose = self.get_ee_pose(selected_robot_name)
+        if current_pose is None:
+            self._record_error("Current TCP pose is unavailable")
+            return False
+        if not check_collision:
+            logger.warning("Planning UNSAFE linear TCP motion with collision checking disabled")
+            return self._plan_unchecked_linear(
+                current_pose,
+                target_pose,
+                group_id,
+                max_linear_speed,
+            )
+        waypoints = (
+            PoseStamped(
+                frame_id="world",
+                position=current_pose.position,
+                orientation=current_pose.orientation,
+            ),
+            PoseStamped(
+                frame_id="world",
+                position=target_pose.position,
+                orientation=target_pose.orientation,
+            ),
+        )
+        config = RoboPlanCartesianPathConfig(
+            max_linear_speed=max_linear_speed,
+            check_collision=check_collision,
+        )
+        logger.info("Planning linear TCP motion with collision checking enabled")
+        return self.plan_cartesian_targets({group_id: waypoints}, config)
+
+    def _plan_unchecked_linear(
+        self,
+        start_pose: Pose,
+        target_pose: Pose,
+        group_id: PlanningGroupID,
+        max_linear_speed: float,
+    ) -> bool:
+        """Build a straight TCP path from sequential IK without collision queries."""
+        if self._world_monitor is None or self._kinematics is None:
+            return self._record_error("Planning not initialized")
+        planning_epoch = self._begin_group_planning()
+        if planning_epoch is None:
+            return False
+        resolved = self._resolve_group_plan_start((group_id,), planning_epoch)
+        if resolved is None:
+            return False
+        selection, seed = resolved
+
+        dx = target_pose.position.x - start_pose.position.x
+        dy = target_pose.position.y - start_pose.position.y
+        dz = target_pose.position.z - start_pose.position.z
+        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+        start_orientation = start_pose.orientation
+        target_orientation = target_pose.orientation
+        dot = sum(
+            start * target
+            for start, target in zip(
+                (
+                    start_orientation.x,
+                    start_orientation.y,
+                    start_orientation.z,
+                    start_orientation.w,
+                ),
+                (
+                    target_orientation.x,
+                    target_orientation.y,
+                    target_orientation.z,
+                    target_orientation.w,
+                ),
+                strict=True,
+            )
+        )
+        angular_distance = 2.0 * math.acos(min(1.0, abs(dot)))
+        sample_count = max(
+            1,
+            math.ceil(distance / _UNCHECKED_LINEAR_IK_STEP_SIZE - 1e-9),
+            math.ceil(angular_distance / _UNCHECKED_ANGULAR_IK_STEP_SIZE - 1e-9),
+        )
+
+        path = [seed]
+        for sample_index in range(1, sample_count + 1):
+            fraction = sample_index / sample_count
+            orientation = self._interpolate_quaternion(
+                start_orientation,
+                target_orientation,
+                fraction,
+            )
+            pose = Pose(
+                Vector3(
+                    start_pose.position.x + fraction * dx,
+                    start_pose.position.y + fraction * dy,
+                    start_pose.position.z + fraction * dz,
+                ),
+                orientation,
+            )
+            ik = self.inverse_kinematics(
+                {
+                    group_id: PoseStamped(
+                        frame_id="world",
+                        position=pose.position,
+                        orientation=pose.orientation,
+                    )
+                },
+                seed=seed,
+                check_collision=False,
+            )
+            if not ik.is_success() or ik.joint_state is None:
+                detail = f": {ik.message}" if ik.message else ""
+                return self._fail_planning_epoch(
+                    planning_epoch,
+                    "Unchecked linear IK failed at sample "
+                    f"{sample_index}/{sample_count}: {ik.status.name}{detail}",
+                )
+            try:
+                seed = filter_joint_state_to_selected_joints(
+                    ik.joint_state,
+                    selection.joint_names,
+                )
+            except ValueError as exc:
+                return self._fail_planning_epoch(
+                    planning_epoch,
+                    f"Unchecked linear IK returned an invalid joint state: {exc}",
+                )
+            path.append(seed)
+
+        result = PlanningResult(
+            status=PlanningStatus.SUCCESS,
+            path=path,
+            planning_time=0.0,
+            message="Unchecked sequential-IK Cartesian path found",
+        )
+        plan = self._store_generated_plan((group_id,), result, planning_epoch)
+        if plan is None:
+            return False
+
+        minimum_duration = max(
+            distance / max_linear_speed,
+            angular_distance / _UNCHECKED_MAX_ANGULAR_SPEED,
+        )
+        current_duration = plan.trajectory.duration
+        if current_duration > 0.0 and current_duration < minimum_duration:
+            scale = minimum_duration / current_duration
+            for point in plan.trajectory.points:
+                point.time_from_start *= scale
+                point.velocities = [velocity / scale for velocity in point.velocities]
+        logger.info(
+            "Unchecked linear path: %d IK samples, distance=%.3fm, duration=%.3fs",
+            sample_count,
+            distance,
+            plan.trajectory.duration,
+        )
+        return True
+
+    @staticmethod
+    def _interpolate_quaternion(
+        start: Quaternion,
+        target: Quaternion,
+        fraction: float,
+    ) -> Quaternion:
+        """Return a normalized shortest-arc quaternion interpolation."""
+        start_values = (start.x, start.y, start.z, start.w)
+        target_values = (target.x, target.y, target.z, target.w)
+        if sum(a * b for a, b in zip(start_values, target_values, strict=True)) < 0.0:
+            target_values = (
+                -target_values[0],
+                -target_values[1],
+                -target_values[2],
+                -target_values[3],
+            )
+        values = tuple(
+            a + fraction * (b - a) for a, b in zip(start_values, target_values, strict=True)
+        )
+        norm = math.sqrt(sum(value * value for value in values))
+        if norm <= 1e-12:
+            return Quaternion(target.x, target.y, target.z, target.w)
+        return Quaternion(*(value / norm for value in values))
+
+    def _execute_linear_motion(
+        self,
+        target_pose: Pose,
+        robot_name: RobotName | None = None,
+        max_linear_speed: float = 0.03,
+        *,
+        check_collision: bool,
+    ) -> SkillResult[ManipulationSkillError]:
+        """Plan and execute a linear motion with an explicit collision policy."""
+        robot = self._get_robot(robot_name)
+        if robot is None:
+            return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
+        selected_robot_name, _, _, _ = robot
+        if not self.plan_linear(
+            target_pose,
+            selected_robot_name,
+            max_linear_speed,
+            check_collision,
+        ):
+            detail = f": {self._error_message}" if self._error_message else ""
+            return SkillResult.fail(
+                "PLANNING_FAILED",
+                f"Linear Cartesian planning failed{detail}",
+            )
+        return self._preview_execute_wait(selected_robot_name)
+
+    @skill
+    def move_relative(
+        self,
+        x: float = 0.0,
+        y: float = 0.0,
+        z: float = 0.0,
+        robot_name: str | None = None,
+        max_linear_speed: float = 0.03,
+    ) -> SkillResult[ManipulationSkillError]:
+        """UNSAFE: move the TCP by a world-frame offset with collision checking disabled.
+
+        This low-level command bypasses planning-scene collision safety and can
+        collide with the robot, environment, objects, or people. It still
+        requires a finite, kinematically feasible trajectory within joint and
+        controller limits. Use only for short intentional-contact or recovery
+        motions, or when the user explicitly requests the unchecked command.
+
+        Args:
+            x: Relative world-frame X displacement in meters (forward is positive).
+            y: Relative world-frame Y displacement in meters (left is positive).
+            z: Relative world-frame Z displacement in meters (up is positive).
+            robot_name: Robot to move (only needed for multi-arm setups).
+            max_linear_speed: Maximum TCP linear speed in meters per second.
+        """
+        if not all(math.isfinite(value) for value in (x, y, z, max_linear_speed)):
+            return SkillResult.fail("PLANNING_FAILED", "Motion values must be finite")
+        if max_linear_speed <= 0.0:
+            return SkillResult.fail("PLANNING_FAILED", "Linear speed must be positive")
+        if x == 0.0 and y == 0.0 and z == 0.0:
+            return SkillResult.fail("PLANNING_FAILED", "Relative displacement must be non-zero")
+
+        robot = self._get_robot(robot_name)
+        if robot is None:
+            return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
+        selected_robot_name, _, _, _ = robot
+        current_pose = self.get_ee_pose(selected_robot_name)
+        if current_pose is None:
+            return SkillResult.fail("PLANNING_FAILED", "Current TCP pose is unavailable")
+        target_pose = Pose(
+            Vector3(
+                current_pose.position.x + x,
+                current_pose.position.y + y,
+                current_pose.position.z + z,
+            ),
+            current_pose.orientation,
+        )
+        result = self._execute_linear_motion(
+            target_pose,
+            selected_robot_name,
+            max_linear_speed,
+            check_collision=False,
+        )
+        if not result.is_success():
+            return result
+        return SkillResult.ok(
+            "UNSAFE relative motion completed with collision checking disabled: "
+            f"delta=({x:.3f}, {y:.3f}, {z:.3f}) m"
+        )
 
     def generate_cartesian_plan(
         self,

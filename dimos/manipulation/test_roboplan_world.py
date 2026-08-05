@@ -1818,6 +1818,28 @@ def test_cartesian_postvalidation_checks_between_waypoints(
     assert "collision post-validation" in result.message
 
 
+def test_cartesian_can_skip_collision_postvalidation(
+    fake_roboplan: None,
+    robot_config: RobotModelConfig,
+    mocker: MockerFixture,
+) -> None:
+    world, _ = _make_world(fake_roboplan, robot_config)
+    selection = _selection((robot_config,), "arm/manipulator")
+    collision_check = mocker.spy(world, "_combined_path_collision_free")
+
+    result = world.plan_cartesian_path(
+        world,
+        selection,
+        JointState(name=list(selection.joint_names), position=[0.0, 0.0]),
+        {"arm/manipulator": _relative_target(Transform(translation=Vector3(0.05, 0.0, 0.0)))},
+        RoboPlanCartesianPathConfig(check_collision=False),
+    )
+
+    assert result.status == PlanningStatus.SUCCESS
+    assert result.path
+    collision_check.assert_not_called()
+
+
 def test_native_planner_preserves_other_robot_and_auxiliary_joint_state(
     fake_roboplan: None,
     robot_config: RobotModelConfig,

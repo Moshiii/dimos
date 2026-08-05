@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
+from dimos.agents.skill_result import SkillResult
 from dimos.control.coordinator import ControlCoordinator
 from dimos.control.tasks.trajectory_task.trajectory_task import (
     TrajectoryCancellationResult,
@@ -671,6 +672,15 @@ class TestPlanningInitialization:
 class TestPlanningGroupApis:
     """Test explicit planning-group API behavior."""
 
+    def test_move_relative_skill_warns_that_collision_checking_is_disabled(self) -> None:
+        method = ManipulationModule.move_relative
+
+        assert method.__skill__ is True
+        assert method.__doc__ is not None
+        assert method.__doc__.startswith("UNSAFE:")
+        assert "collision checking disabled" in method.__doc__
+        assert "people" in method.__doc__
+
     def test_list_planning_groups_and_robot_info_include_groups(self, robot_config, module_factory):
         module = module_factory()
         registry = PlanningGroupRegistry([robot_config])
@@ -771,6 +781,168 @@ class TestPlanningGroupApis:
 
         assert success is True
         assert module._planner.plan_selected_joint_path.call_count == 2
+
+    def test_plan_linear_collision_aware_uses_cartesian_planner_without_executing(
+        self, module_factory, mocker: MockerFixture
+    ) -> None:
+        module = module_factory()
+        robot = ("test_arm", "robot-id", MagicMock(), MagicMock())
+        mocker.patch.object(module, "_get_robot", return_value=robot)
+        mocker.patch.object(
+            module,
+            "_require_unique_pose_group_id_for_robot",
+            return_value="test_arm/manipulator",
+        )
+        current = Pose(Vector3(0.3, 0.0, 0.2), Quaternion())
+        target = Pose(Vector3(0.4, 0.0, 0.1), Quaternion())
+        mocker.patch.object(module, "get_ee_pose", return_value=current)
+        plan = mocker.patch.object(module, "plan_cartesian_targets", return_value=True)
+        execute = mocker.patch.object(module, "_preview_execute_wait")
+
+        result = module.plan_linear(
+            target,
+            "test_arm",
+            max_linear_speed=0.04,
+            check_collision=True,
+        )
+
+        assert result is True
+        targets, config = plan.call_args.args
+        waypoints = targets["test_arm/manipulator"]
+        assert [waypoint.position for waypoint in waypoints] == [
+            current.position,
+            target.position,
+        ]
+        assert config.max_linear_speed == 0.04
+        assert config.check_collision is True
+        execute.assert_not_called()
+
+    def test_plan_linear_reports_planning_failure(
+        self, module_factory, mocker: MockerFixture
+    ) -> None:
+        module = module_factory()
+        robot = ("test_arm", "robot-id", MagicMock(), MagicMock())
+        mocker.patch.object(module, "_get_robot", return_value=robot)
+        mocker.patch.object(
+            module,
+            "_require_unique_pose_group_id_for_robot",
+            return_value="test_arm/manipulator",
+        )
+        mocker.patch.object(
+            module,
+            "get_ee_pose",
+            return_value=Pose(Vector3(0.3, 0.0, 0.2), Quaternion()),
+        )
+        mocker.patch.object(module, "plan_cartesian_targets", return_value=False)
+        result = module.plan_linear(Pose(), "test_arm", check_collision=True)
+
+        assert result is False
+
+    def test_plan_linear_unchecked_bypasses_scene_backed_cartesian_planner(
+        self, module_factory, mocker: MockerFixture
+    ) -> None:
+        module = module_factory()
+        robot = ("test_arm", "robot-id", MagicMock(), MagicMock())
+        mocker.patch.object(module, "_get_robot", return_value=robot)
+        mocker.patch.object(
+            module,
+            "_require_unique_pose_group_id_for_robot",
+            return_value="test_arm/manipulator",
+        )
+        current = Pose(Vector3(0.3, 0.0, 0.2), Quaternion())
+        target = Pose(Vector3(0.4, 0.0, 0.21), Quaternion())
+        mocker.patch.object(module, "get_ee_pose", return_value=current)
+        unchecked = mocker.patch.object(
+            module,
+            "_plan_unchecked_linear",
+            return_value=True,
+        )
+        cartesian = mocker.patch.object(module, "plan_cartesian_targets")
+
+        result = module.plan_linear(
+            target,
+            "test_arm",
+            max_linear_speed=0.04,
+            check_collision=False,
+        )
+
+        assert result is True
+        unchecked.assert_called_once_with(
+            current,
+            target,
+            "test_arm/manipulator",
+            0.04,
+        )
+        cartesian.assert_not_called()
+
+    def test_unchecked_linear_path_samples_sequential_ik_without_collision_queries(
+        self, robot_config, mocker: MockerFixture
+    ) -> None:
+        module, names, live = _connected_sequence_module(robot_config)
+        start = Pose(Vector3(0.30, 0.0, 0.20), Quaternion())
+        target = Pose(Vector3(0.31, 0.0, 0.20), Quaternion())
+        goals = [
+            JointState(name=names, position=[0.05, 0.0, 0.0]),
+            JointState(name=names, position=[0.10, 0.0, 0.0]),
+        ]
+        mocker.patch.object(module, "get_ee_pose", return_value=start)
+        solve = mocker.patch.object(
+            module,
+            "inverse_kinematics",
+            side_effect=[IKResult(status=IKStatus.SUCCESS, joint_state=goal) for goal in goals],
+        )
+
+        result = module.plan_linear(
+            target,
+            "test_arm",
+            max_linear_speed=0.04,
+            check_collision=False,
+        )
+
+        assert result is True
+        assert [call.kwargs["check_collision"] for call in solve.call_args_list] == [False, False]
+        assert [call.kwargs["seed"].position for call in solve.call_args_list] == [
+            live.position,
+            goals[0].position,
+        ]
+        module._planner.plan_cartesian_path.assert_not_called()
+        assert module._last_plan is not None
+        assert [state.position for state in module._last_plan.path] == [
+            live.position,
+            goals[0].position,
+            goals[1].position,
+        ]
+        assert module._last_plan.trajectory.duration >= 0.25 - 1e-9
+
+    def test_move_relative_executes_world_delta_without_collision_checking(
+        self, module_factory, mocker: MockerFixture
+    ) -> None:
+        module = module_factory()
+        mocker.patch.object(
+            module,
+            "_get_robot",
+            return_value=("test_arm", "robot-id", MagicMock(), MagicMock()),
+        )
+        current = Pose(Vector3(0.3, -0.1, 0.2), Quaternion(0.1, 0.2, 0.3, 0.9))
+        mocker.patch.object(module, "get_ee_pose", return_value=current)
+        execute = mocker.patch.object(
+            module,
+            "_execute_linear_motion",
+            return_value=SkillResult.ok(),
+        )
+
+        result = module.move_relative(0.05, -0.02, 0.1, "test_arm", max_linear_speed=0.04)
+
+        assert result.is_success()
+        target = execute.call_args.args[0]
+        assert target.position == Vector3(0.35, -0.12, 0.3)
+        assert target.orientation == current.orientation
+        execute.assert_called_once_with(
+            target,
+            "test_arm",
+            0.04,
+            check_collision=False,
+        )
 
     def test_plan_to_pose_targets_uses_group_ik_and_selected_path(
         self, robot_config, module_factory
@@ -880,6 +1052,36 @@ class TestPlanningGroupApis:
         ]
         assert module._state == ManipulationState.IDLE
         assert module._last_plan is None
+
+    def test_pose_ik_sequence_chains_unchecked_endpoints_without_path_planning(
+        self, robot_config, mocker: MockerFixture
+    ) -> None:
+        module, names, live = _connected_sequence_module(robot_config)
+        goals = [
+            JointState(name=names, position=[0.1, 0.0, 0.0]),
+            JointState(name=names, position=[0.2, 0.1, 0.0]),
+        ]
+        solve = mocker.patch.object(
+            module,
+            "inverse_kinematics",
+            side_effect=[IKResult(status=IKStatus.SUCCESS, joint_state=goal) for goal in goals],
+        )
+
+        failed_index, endpoint = module._check_pose_ik_sequence(
+            [Pose(), Pose()],
+            "test_arm",
+            check_collision=False,
+        )
+
+        assert failed_index is None
+        assert endpoint is not None
+        assert endpoint.position == goals[-1].position
+        assert [call.kwargs["seed"].position for call in solve.call_args_list] == [
+            live.position,
+            goals[0].position,
+        ]
+        assert [call.kwargs["check_collision"] for call in solve.call_args_list] == [False, False]
+        module._planner.plan_selected_joint_path.assert_not_called()
 
     def test_connected_pose_plan_exposes_paths_without_storing_them(
         self, robot_config, mocker: MockerFixture

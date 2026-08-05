@@ -78,6 +78,9 @@ _XARM_GRASP_OBJECTS = {
 
 _XARM_GRASP_PICK_KWARGS: dict[str, object] = {
     "max_grasp_candidates_to_check": 30,
+    "grasp_pre_grasp_offset": 0.25,
+    "grasp_retreat_offset": 0.10,
+    "grasp_retreat_lift_offset": 0.01,
     "grasp_viz_gripper": _XARM_GRASPGENX.gripper,
     "grasp_viz_frame_to_tcp": _XARM_GRASPGENX.grasp_frame_to_tcp,
     "use_mesh_obstacles": True,

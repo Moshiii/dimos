@@ -56,10 +56,13 @@ uv run dimos run xarm-graspgenx-agent
 `pick` remains the only high-level picking tool. It resolves one current
 object, obtains that object's planning-frame point cloud, requests ranked
 GraspGenX candidates, and rejects candidates that fail pre-grasp, grasp, or
-retreat inverse kinematics. During planning, the selected target is
-temporarily removed from the collision scene while all other obstacles remain
-active. The selected candidate then runs through prepare, approach, grasp,
-close, verify, and retreat phases.
+retreat inverse kinematics. The planning scene remains unchanged. Motion to
+pre-grasp is collision-aware; the short pre-grasp-to-grasp and
+grasp-to-retreat contact legs use straight TCP paths with collision checking
+explicitly disabled. These unchecked legs are generated from chained,
+collision-disabled IK samples rather than the scene-backed Cartesian planner,
+so contact at the grasp pose cannot reject the retreat. The selected candidate
+then runs through prepare, approach, grasp, close, verify, and retreat phases.
 
 Use the stable object ID returned by `scan_objects` whenever names are
 ambiguous. A name is accepted only when it identifies exactly one current
@@ -71,18 +74,28 @@ The learned pipeline configuration lives in
 `dimos/robot/manipulators/xarm/grasp_config.py`. It records the xArm gripper
 sweep volume and the transform from GraspGenX's gripper frame to the planned
 TCP. `PickAndPlaceModuleConfig` controls the planning frame, maximum point
-cloud age, candidate-check limit, TCP approach direction, approach/retreat
-offsets, heuristic fallback, and closure-feedback verification thresholds.
+cloud age, candidate-check limit, TCP approach direction, fixed pre-grasp
+distance, retreat offsets, heuristic fallback, and closure-feedback verification thresholds.
 Changing the frame transform, approach direction, or closure threshold
 requires robot-specific calibration.
+
+For learned picks, pre-grasp is fixed 25 cm back from the grasp along the
+configured grasp approach axis. The pipeline validates the resulting approach
+with collision-aware IK and path planning. Retreat still pulls back 10 cm
+along the grasp approach axis, with an additional 1 cm world-Z lift to reduce
+object rubbing on the table.
+
+Placement uses the same boundary: the pre-place approach remains
+collision-aware, while lowering into contact and retracting from the released
+object use unchecked straight TCP paths. This prevents a planning-scene
+contact at the place pose from blocking the retract.
 
 Failures are phase-specific and stop motion immediately. Before closure, a
 failed transaction leaves the gripper in its current safe state. After a
 successful close command, failures never automatically reopen the gripper;
 the result includes `object_may_be_held=true`, and an operator or agent should
-inspect state before issuing another motion. Target collision geometry is
-restored on every exit path, and restoration errors are reported without
-hiding the primary failure.
+inspect state before issuing another motion. No object is removed or
+suppressed in the planning scene.
 
 The current verification is a closure-position proxy: an xArm gripper that
 stops above the calibrated empty-close threshold is treated as holding
@@ -127,6 +140,14 @@ Move 10 cm to the left.
 ```text
 Move 10 cm above the detected object's pose.
 ```
+
+The agent also exposes `move_relative` as an explicitly unsafe low-level
+command. Its `x`, `y`, and `z` arguments are world-frame offsets, not absolute
+coordinates, and it bypasses all planning-scene collision checking. Use it
+only for short intentional-contact/recovery motions or when unchecked motion
+is explicitly requested. The straight segment is sampled at 5 mm intervals
+with collision-disabled IK. Kinematic feasibility, joint/controller limits,
+timing, and execution feedback still apply.
 
 ## Debugging and testing interfaces
 
