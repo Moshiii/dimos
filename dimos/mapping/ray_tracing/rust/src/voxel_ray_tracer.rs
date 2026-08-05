@@ -21,6 +21,29 @@ use validator::ValidationError;
 
 pub type VoxelKey = (i32, i32, i32);
 pub type VoxelHealth = i32;
+type ChunkKey = (i32, i32, i32);
+
+/// Voxels per chunk edge for the healthy-voxel spatial index `emit_points` scans.
+const CHUNK_SIZE: i32 = 16;
+
+#[inline]
+fn chunk_of(key: VoxelKey) -> ChunkKey {
+    (
+        key.0.div_euclid(CHUNK_SIZE),
+        key.1.div_euclid(CHUNK_SIZE),
+        key.2.div_euclid(CHUNK_SIZE),
+    )
+}
+
+#[inline]
+fn voxel_center(key: VoxelKey, voxel_size: f32) -> (f32, f32, f32) {
+    let half = voxel_size * 0.5;
+    (
+        key.0 as f32 * voxel_size + half,
+        key.1 as f32 * voxel_size + half,
+        key.2 as f32 * voxel_size + half,
+    )
+}
 
 #[native_config]
 #[validate(schema(function = "validate_health_range"))]
@@ -68,6 +91,9 @@ fn validate_health_range(cfg: &Config) -> Result<(), ValidationError> {
 #[derive(Default)]
 pub struct VoxelMap {
     pub voxels: AHashMap<VoxelKey, Voxel>,
+    /// Healthy (health > 0) voxel keys grouped by chunk, kept in sync with `voxels`
+    /// on every health transition. `emit_points` scans this instead of the whole map.
+    healthy_chunks: AHashMap<ChunkKey, AHashSet<VoxelKey>>,
 }
 
 impl VoxelMap {
@@ -89,9 +115,67 @@ impl VoxelMap {
             .observe(Vector3::new(point.0, point.1, point.2) - center);
     }
 
-    #[cfg(test)]
-    fn set(&mut self, key: VoxelKey, health: VoxelHealth) {
-        self.voxels.insert(key, Voxel::with_health(health));
+    /// Move a voxel in or out of the healthy-chunk index on a health-sign crossing.
+    fn update_health_index(&mut self, key: VoxelKey, was_healthy: bool, now_healthy: bool) {
+        if now_healthy == was_healthy {
+            return;
+        }
+        let chunk = chunk_of(key);
+        if now_healthy {
+            self.healthy_chunks.entry(chunk).or_default().insert(key);
+        } else if let Some(set) = self.healthy_chunks.get_mut(&chunk) {
+            set.remove(&key);
+            if set.is_empty() {
+                self.healthy_chunks.remove(&chunk);
+            }
+        }
+    }
+
+    /// Register a ray hit: create the voxel at `min_health` if new, then bump its
+    /// health, keeping the healthy-chunk index in sync.
+    fn record_hit(&mut self, key: VoxelKey, min_health: VoxelHealth, max_health: VoxelHealth) {
+        let c = self.voxels.entry(key).or_insert_with(|| Voxel {
+            health: min_health,
+            ..Default::default()
+        });
+        let was_healthy = c.health > 0;
+        c.health = (c.health + 1).min(max_health);
+        let now_healthy = c.health > 0;
+        self.update_health_index(key, was_healthy, now_healthy);
+    }
+
+    /// Apply a clearing miss: drop the voxel's health by one, removing it once it
+    /// reaches `min_health`. Keeps the healthy-chunk index in sync. Returns whether
+    /// the voxel was removed.
+    fn record_miss(&mut self, key: VoxelKey, min_health: VoxelHealth) -> bool {
+        let Some(c) = self.voxels.get_mut(&key) else {
+            return false;
+        };
+        let was_healthy = c.health > 0;
+        c.health -= 1;
+        let removed = c.health <= min_health;
+        let now_healthy = !removed && c.health > 0;
+        if removed {
+            self.voxels.remove(&key);
+        }
+        self.update_health_index(key, was_healthy, now_healthy);
+        removed
+    }
+
+    /// Set a voxel's health directly, creating it if absent and leaving any
+    /// existing accumulated moments untouched. Bypasses hit/miss health
+    /// accounting — for tests and map construction outside `update_map`'s normal
+    /// flow. Keeps the healthy-chunk index in sync.
+    pub fn set_health(&mut self, key: VoxelKey, health: VoxelHealth) {
+        let was_healthy = self.voxels.get(&key).is_some_and(|c| c.health > 0);
+        self.voxels.entry(key).or_default().health = health;
+        self.update_health_index(key, was_healthy, health > 0);
+    }
+
+    /// Reset to empty, including the healthy-chunk index.
+    pub fn clear(&mut self) {
+        self.voxels.clear();
+        self.healthy_chunks.clear();
     }
 
     #[cfg(test)]
@@ -426,6 +510,43 @@ fn has_support(voxels: &AHashMap<VoxelKey, Voxel>, key: VoxelKey, support_min: i
     false
 }
 
+/// Chunk range (inclusive) covering the axis-aligned box a cylinder bounds fits in.
+fn chunk_range_for_bounds(bounds: &LocalBounds, voxel_size: f32) -> (ChunkKey, ChunkKey) {
+    let inv = 1.0 / voxel_size;
+    let radius = bounds.r_xy_max_sq.sqrt();
+    let lo = world_to_voxel(
+        bounds.origin_x - radius,
+        bounds.origin_y - radius,
+        bounds.z_min,
+        inv,
+    );
+    let hi = world_to_voxel(
+        bounds.origin_x + radius,
+        bounds.origin_y + radius,
+        bounds.z_max,
+        inv,
+    );
+    (chunk_of(lo), chunk_of(hi))
+}
+
+/// A healthy voxel's emitted point, gated on `bounds` and `support_min`.
+fn emit_candidate(
+    map: &VoxelMap,
+    key: VoxelKey,
+    voxel_size: f32,
+    bounds: Option<&LocalBounds>,
+    support_min: i32,
+) -> Option<(f32, f32, f32)> {
+    let (x, y, z) = voxel_center(key, voxel_size);
+    if !bounds.is_none_or(|b| b.contains(x, y, z)) {
+        return None;
+    }
+    if support_min > 0 && !has_support(&map.voxels, key, support_min) {
+        return None;
+    }
+    Some((x, y, z))
+}
+
 /// Points for an emitted cloud: healthy surface voxels within `bounds` (all
 /// when `None`) with at least `support_min` occupied neighbors, plus this
 /// frame's not-yet-healthy `live` voxels within `bounds`.
@@ -436,36 +557,40 @@ pub fn emit_points(
     support_min: i32,
     live: &AHashSet<VoxelKey>,
 ) -> Vec<(f32, f32, f32)> {
-    let half = voxel_size * 0.5;
-    let center = |(kx, ky, kz): VoxelKey| {
-        (
-            kx as f32 * voxel_size + half,
-            ky as f32 * voxel_size + half,
-            kz as f32 * voxel_size + half,
-        )
-    };
-    let in_bounds = |x, y, z| bounds.is_none_or(|b| b.contains(x, y, z));
+    let mut out = Vec::new();
 
-    let mut out = Vec::with_capacity(map.voxels.len() + live.len());
-    for (&key, c) in map.voxels.iter() {
-        if c.health <= 0 {
-            continue;
+    match bounds {
+        Some(b) => {
+            let (lo, hi) = chunk_range_for_bounds(b, voxel_size);
+            for cx in lo.0..=hi.0 {
+                for cy in lo.1..=hi.1 {
+                    for cz in lo.2..=hi.2 {
+                        let Some(keys) = map.healthy_chunks.get(&(cx, cy, cz)) else {
+                            continue;
+                        };
+                        out.extend(keys.iter().filter_map(|&key| {
+                            emit_candidate(map, key, voxel_size, bounds, support_min)
+                        }));
+                    }
+                }
+            }
         }
-        let (x, y, z) = center(key);
-        if !in_bounds(x, y, z) {
-            continue;
+        None => {
+            out.extend(
+                map.healthy_chunks
+                    .values()
+                    .flatten()
+                    .filter_map(|&key| emit_candidate(map, key, voxel_size, bounds, support_min)),
+            );
         }
-        if support_min > 0 && !has_support(&map.voxels, key, support_min) {
-            continue;
-        }
-        out.push((x, y, z));
     }
+
     for &key in live.iter() {
         if matches!(map.voxels.get(&key), Some(c) if c.health > 0) {
             continue;
         }
-        let (x, y, z) = center(key);
-        if !in_bounds(x, y, z) {
+        let (x, y, z) = voxel_center(key, voxel_size);
+        if !bounds.is_none_or(|b| b.contains(x, y, z)) {
             continue;
         }
         out.push((x, y, z));
@@ -544,12 +669,8 @@ pub fn update_map(
             a
         });
 
-    for v in &hits {
-        let c = map.voxels.entry(*v).or_insert_with(|| Voxel {
-            health: cfg.min_health,
-            ..Default::default()
-        });
-        c.health = (c.health + 1).min(cfg.max_health);
+    for &v in &hits {
+        map.record_hit(v, cfg.min_health, cfg.max_health);
     }
 
     for &p in points {
@@ -557,13 +678,9 @@ pub fn update_map(
     }
 
     let mut removed: Vec<VoxelKey> = Vec::new();
-    for v in misses.difference(&hits) {
-        if let Some(c) = map.voxels.get_mut(v) {
-            c.health -= 1;
-            if c.health <= cfg.min_health {
-                map.voxels.remove(v);
-                removed.push(*v);
-            }
+    for &v in misses.difference(&hits) {
+        if map.record_miss(v, cfg.min_health) {
+            removed.push(v);
         }
     }
 
@@ -843,7 +960,7 @@ mod tests {
     fn voxels_on_ray_are_removed() {
         let cfg = basic_config();
         let mut map = VoxelMap::default();
-        map.set((3, 0, 0), 1);
+        map.set_health((3, 0, 0), 1);
         update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
         // The voxel on the ray should be cleared.
         assert!(!map.voxels.contains_key(&(3, 0, 0)));
@@ -854,7 +971,7 @@ mod tests {
     fn voxels_not_on_ray_survive() {
         let cfg = basic_config();
         let mut map = VoxelMap::default();
-        map.set((3, 5, 0), 1);
+        map.set_health((3, 5, 0), 1);
         update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
         assert_eq!(map.health((3, 5, 0)), Some(1));
         assert_eq!(map.health((5, 0, 0)), Some(1));
@@ -864,7 +981,7 @@ mod tests {
     fn voxels_within_shadow_region_are_removed() {
         let cfg = basic_config();
         let mut map = VoxelMap::default();
-        map.set((6, 0, 0), 1);
+        map.set_health((6, 0, 0), 1);
         update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
         // The voxel inside the shadow region should be cleared.
         assert!(!map.voxels.contains_key(&(6, 0, 0)));
@@ -875,7 +992,7 @@ mod tests {
     fn voxels_beyond_shadow_region_survive() {
         let cfg = basic_config();
         let mut map = VoxelMap::default();
-        map.set((8, 0, 0), 1);
+        map.set_health((8, 0, 0), 1);
         update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
         assert_eq!(map.health((8, 0, 0)), Some(1));
         assert_eq!(map.health((5, 0, 0)), Some(1));
@@ -902,7 +1019,7 @@ mod tests {
             ..basic_config()
         };
         let mut map = VoxelMap::default();
-        map.set((3, 0, 0), 1);
+        map.set_health((3, 0, 0), 1);
         update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
         assert_eq!(map.health((3, 0, 0)), Some(1));
     }
@@ -1036,7 +1153,7 @@ mod tests {
         keys.sort();
         keys.dedup();
         for &k in &keys {
-            map.voxels.get_mut(&k).unwrap().health = health;
+            map.set_health(k, health);
         }
         map.recompute_all_normals(voxel_size);
         (map, keys)
@@ -1381,10 +1498,10 @@ mod tests {
         // A 3x3 surface patch, plus one isolated voxel far from anything.
         for x in 0..3 {
             for y in 0..3 {
-                map.set((x, y, 0), 1);
+                map.set_health((x, y, 0), 1);
             }
         }
-        map.set((20, 20, 0), 1);
+        map.set_health((20, 20, 0), 1);
         let bounds = LocalBounds {
             origin_x: 0.0,
             origin_y: 0.0,
@@ -1409,6 +1526,155 @@ mod tests {
         assert!(
             !gated.contains(&isolated),
             "isolated voxel must be gated out"
+        );
+    }
+
+    /// The whole-map scan `emit_points` used before the chunk index, kept only as a
+    /// reference to differentially test the indexed implementation against.
+    fn emit_points_naive(
+        map: &VoxelMap,
+        voxel_size: f32,
+        bounds: Option<&LocalBounds>,
+        support_min: i32,
+        live: &AHashSet<VoxelKey>,
+    ) -> Vec<(f32, f32, f32)> {
+        let in_bounds = |x, y, z| bounds.is_none_or(|b| b.contains(x, y, z));
+        let mut out = Vec::with_capacity(map.voxels.len() + live.len());
+        for (&key, c) in map.voxels.iter() {
+            if c.health <= 0 {
+                continue;
+            }
+            let (x, y, z) = voxel_center(key, voxel_size);
+            if !in_bounds(x, y, z) {
+                continue;
+            }
+            if support_min > 0 && !has_support(&map.voxels, key, support_min) {
+                continue;
+            }
+            out.push((x, y, z));
+        }
+        for &key in live.iter() {
+            if matches!(map.voxels.get(&key), Some(c) if c.health > 0) {
+                continue;
+            }
+            let (x, y, z) = voxel_center(key, voxel_size);
+            if !in_bounds(x, y, z) {
+                continue;
+            }
+            out.push((x, y, z));
+        }
+        out
+    }
+
+    fn sort_points(mut pts: Vec<(f32, f32, f32)>) -> Vec<(f32, f32, f32)> {
+        pts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        pts
+    }
+
+    /// The chunk-indexed `emit_points` must return exactly what the old whole-map
+    /// scan did, across randomized maps that straddle chunk boundaries, sparse and
+    /// dense regions, and both bounded and unbounded queries.
+    #[test]
+    fn emit_points_matches_naive_scan_on_random_maps() {
+        let mut state = 88172645463325252_u64;
+        let mut next_u64 = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let voxel_size = 0.5;
+        let bounds = LocalBounds {
+            origin_x: 0.0,
+            origin_y: 0.0,
+            r_xy_max_sq: 25.0,
+            z_min: -2.0,
+            z_max: 2.0,
+        };
+        let live: AHashSet<VoxelKey> = AHashSet::new();
+
+        for trial in 0..20 {
+            let mut map = VoxelMap::default();
+            for _ in 0..400 {
+                let key = (
+                    (next_u64() % 40) as i32 - 20,
+                    (next_u64() % 40) as i32 - 20,
+                    (next_u64() % 10) as i32 - 5,
+                );
+                // Mostly unhealthy so healthy voxels are sparse relative to entries.
+                let health = (next_u64() % 7) as i32 - 5;
+                map.set_health(key, health);
+            }
+
+            for (support_min, use_bounds) in
+                [(0, false), (0, true), (2, false), (2, true), (4, true)]
+            {
+                let b = use_bounds.then_some(&bounds);
+                let got = sort_points(emit_points(&map, voxel_size, b, support_min, &live));
+                let want = sort_points(emit_points_naive(&map, voxel_size, b, support_min, &live));
+                assert_eq!(
+                    got, want,
+                    "trial {trial} support_min={support_min} bounds={use_bounds}"
+                );
+            }
+        }
+    }
+
+    /// The healthy-chunk index must stay lean regardless of how many unhealthy
+    /// entries pile up in `voxels` — this is the whole point of indexing on health
+    /// transitions instead of scanning every entry at emit time.
+    #[test]
+    fn healthy_chunk_index_excludes_dead_entries_regardless_of_count() {
+        let mut map = VoxelMap::default();
+        for i in 0..50_000_i32 {
+            map.set_health((i % 500, (i / 500) % 500, 0), 0); // health=0, never healthy
+        }
+        for x in 0..3 {
+            for y in 0..3 {
+                map.set_health((x, y, 100), 1);
+            }
+        }
+
+        let live = AHashSet::new();
+        let points = emit_points(&map, 1.0, None, 0, &live);
+        assert_eq!(points.len(), 9, "only the healthy patch is emitted");
+
+        let indexed: usize = map.healthy_chunks.values().map(|s| s.len()).sum();
+        assert_eq!(
+            indexed, 9,
+            "dead entries never enter the healthy-chunk index"
+        );
+    }
+
+    /// `update_map` drives both `record_hit` (new voxel becomes healthy) and
+    /// `record_miss` (healthy voxel cleared) — the index must track both.
+    #[test]
+    fn healthy_chunk_index_tracks_health_transitions_through_update_map() {
+        let cfg = basic_config(); // min_health=0, max_health=1
+        let mut map = VoxelMap::default();
+        map.set_health((3, 0, 0), 1);
+        assert_eq!(
+            map.healthy_chunks.values().map(|s| s.len()).sum::<usize>(),
+            1,
+            "set() indexes the healthy voxel"
+        );
+
+        update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
+
+        assert!(
+            !map.voxels.contains_key(&(3, 0, 0)),
+            "voxel on the ray is cleared"
+        );
+        let indexed: Vec<VoxelKey> = map
+            .healthy_chunks
+            .values()
+            .flat_map(|s| s.iter().copied())
+            .collect();
+        assert_eq!(
+            indexed,
+            vec![(5, 0, 0)],
+            "index drops the cleared voxel and gains the new hit"
         );
     }
 }

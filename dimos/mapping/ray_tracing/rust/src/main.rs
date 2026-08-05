@@ -369,7 +369,7 @@ async fn main() {
 mod tests {
     use super::*;
     use ahash::AHashSet;
-    use dimos_voxel_ray_tracing::voxel_ray_tracer::{Voxel, VoxelKey};
+    use dimos_voxel_ray_tracing::voxel_ray_tracer::VoxelKey;
 
     #[test]
     fn nearest_pose_picks_by_stamp_and_gates_on_tolerance() {
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn local_map_includes_voxel_inside_cylinder() {
         let mut map = VoxelMap::default();
-        map.voxels.insert((0, 0, 0), Voxel::with_health(1));
+        map.set_health((0, 0, 0), 1);
         let live: AHashSet<VoxelKey> = AHashSet::new();
         let cylinder = LocalBounds {
             origin_x: 0.0,
@@ -467,7 +467,7 @@ mod tests {
     #[test]
     fn local_map_excludes_voxel_outside_radius() {
         let mut map = VoxelMap::default();
-        map.voxels.insert((5, 0, 0), Voxel::with_health(1));
+        map.set_health((5, 0, 0), 1);
         let live: AHashSet<VoxelKey> = AHashSet::new();
         let cylinder = LocalBounds {
             origin_x: 0.0,
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn local_map_excludes_voxel_outside_z_range() {
         let mut map = VoxelMap::default();
-        map.voxels.insert((0, 0, 5), Voxel::with_health(1));
+        map.set_health((0, 0, 5), 1);
         let live: AHashSet<VoxelKey> = AHashSet::new();
         let cylinder = LocalBounds {
             origin_x: 0.0,
@@ -554,10 +554,10 @@ mod tests {
         let mut map = VoxelMap::default();
         for x in 0..3 {
             for y in 0..3 {
-                map.voxels.insert((x, y, 0), Voxel::with_health(1));
+                map.set_health((x, y, 0), 1);
             }
         }
-        map.voxels.insert((20, 0, 0), Voxel::with_health(1));
+        map.set_health((20, 0, 0), 1);
         let mut live: AHashSet<VoxelKey> = AHashSet::new();
         live.insert((25, 0, 0));
         let cylinder = LocalBounds {

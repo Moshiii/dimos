@@ -231,7 +231,7 @@ impl VoxelRayMapper {
     }
 
     fn clear(&mut self) {
-        self.map.voxels.clear();
+        self.map.clear();
         self.live.clear();
     }
 
