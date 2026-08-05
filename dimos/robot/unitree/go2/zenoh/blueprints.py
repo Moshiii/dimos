@@ -110,7 +110,6 @@ def _rerun_config(visual_override: dict[str, Any] | None = None) -> dict[str, An
     """The bridge's own view, plus whatever the layer above it adds."""
     return {
         "blueprint": _rerun_blueprint,
-        # Triad length in meters, on every frame that reaches the tf topic.
         "tf_axes": 0.5,
         "visual_override": {
             "world/camera_info": _camera_info_to_pinhole,

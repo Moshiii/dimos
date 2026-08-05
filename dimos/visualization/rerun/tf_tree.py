@@ -69,11 +69,7 @@ class Placement:
 
 
 class TFTreeVis:
-    """Draws the tf tree, one nested entity per frame carrying a triad.
-
-    Under root sits nothing but the tree. The transforms are declared apart
-    from it, under links.
-    """
+    """Draws the tf tree, one nested entity per frame carrying a triad."""
 
     def __init__(
         self,
@@ -199,7 +195,6 @@ class RerunTFTree(Transformer[T, T]):
                 rr.set_time(DEFAULT_TIMELINE, timestamp=obs.ts)
                 yield obs
         finally:
-            # Ctrl+C abandons the generator rather than exhausting it.
             self._vis.flush()
 
     def _log(self, tf_obs: Observation[TFMessage]) -> None:

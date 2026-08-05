@@ -341,10 +341,8 @@ class RerunBridgeModule(Module):
 
         # TFMessage for example returns list of (entity_path, archetype) tuples
         if is_rerun_multi(rerun_data):
-            # Bound locally: stop() clears the tree from another thread.
             tf_tree = self._tf_tree
             if tf_tree is not None and isinstance(msg, TFMessage):
-                # The tree re-paths these: its own layout, not the flat one.
                 tf_tree.log(msg, [archetype for _, archetype in rerun_data])
                 return
             for path, archetype in rerun_data:
