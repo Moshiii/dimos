@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, JsonValue
 
+from dimos.benchmark.agent_eval.case import EvalOutcome
 from dimos.benchmark.agent_eval.models import (
     ArtifactReference,
     AttemptId,
@@ -150,6 +151,39 @@ class AttemptStore:
         final_path = self.path / relative_path
         temp_path = self.path / f".outcome.v1.json.tmp-{uuid4().hex}"
         data = canonical_json(outcome.model_dump(mode="json")) + b"\n"
+        descriptor = os.open(
+            temp_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            0o600,
+        )
+        try:
+            _write_all(descriptor, data)
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            os.link(temp_path, final_path)
+            _fsync_directory(self.path)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temp_path.unlink(missing_ok=True)
+        return ArtifactReference(
+            path=relative_path,
+            sha256=hashlib.sha256(data).hexdigest(),
+            size_bytes=len(data),
+        )
+
+    def write_eval_outcome(self, outcome: EvalOutcome) -> ArtifactReference:
+        """Atomically retain the backend-neutral terminal outcome."""
+        if outcome.attempt_id != self.attempt_id:
+            raise ValueError("outcome attempt identity mismatch")
+        return self._write_terminal("outcome.v1.json", outcome)
+
+    def _write_terminal(self, relative_path: str, value: BaseModel) -> ArtifactReference:
+        self._require_open()
+        final_path = self.path / relative_path
+        temp_path = self.path / f".{relative_path}.tmp-{uuid4().hex}"
+        data = canonical_json(value.model_dump(mode="json")) + b"\n"
         descriptor = os.open(
             temp_path,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,

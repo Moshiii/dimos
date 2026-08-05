@@ -23,10 +23,12 @@ import pytest
 from dimos.agents.code_policy import (
     CodePolicyConfig,
     CodePolicyModule,
-    CodePolicyObserverDescriptor,
-    CodePolicyObserverState,
     _bootstrap_source,
     _BoundedTextOutput,
+)
+from dimos.agents.code_policy_core import (
+    CodePolicyObserverDescriptor,
+    CodePolicyObserverState,
 )
 from dimos.agents.mcp.mcp_server import handle_request
 from dimos.benchmark.agent_eval.pi_adapter import inspect_python_exec_inventory
@@ -35,7 +37,7 @@ from dimos.memory2.store.sqlite import SqliteStore
 
 @pytest.fixture
 def code_policy(mocker, tmp_path) -> Iterator[CodePolicyModule]:
-    mocker.patch("dimos.agents.code_policy._bootstrap_source", return_value="pass")
+    mocker.patch("dimos.agents.code_policy_core._bootstrap_source", return_value="pass")
     module = CodePolicyModule(
         recording_path=str(tmp_path / "unused.db"),
         interrupt_grace_s=1.0,
@@ -437,7 +439,7 @@ def test_timeout_restarts_kernel_when_interrupt_does_not_recover(
     client.wait_for_ready.side_effect = [TimeoutError, None]
     code_policy._kernel_manager = manager
     code_policy._kernel_client = client
-    mocker.patch.object(code_policy, "_bootstrap")
+    mocker.patch.object(code_policy._session, "_bootstrap")
 
     result = code_policy.python_exec("while True: pass", timeout_s=0.1)
     record = code_policy.get_execution_records()[-1]
@@ -473,7 +475,7 @@ def test_failed_kernel_restart_does_not_advance_generation(
 def test_python_exec_rejects_invalid_timeout_without_starting_kernel(
     mocker, code_policy: CodePolicyModule
 ) -> None:
-    ensure_kernel = mocker.patch.object(code_policy, "_ensure_kernel")
+    ensure_kernel = mocker.patch.object(code_policy._session, "_ensure_kernel")
 
     result = code_policy.python_exec("pass", timeout_s=111.0)
 

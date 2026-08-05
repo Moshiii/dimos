@@ -29,16 +29,26 @@ from uuid import uuid4
 
 from dimos.benchmark.agent_eval.config import RuntimeCredential
 from dimos.benchmark.agent_eval.models import ArtifactReference
+from dimos.benchmark.agent_eval.pi import PiTurn
 from dimos.benchmark.agent_eval.pi_adapter import (
     CodePolicyCallLog,
     McpBinding,
     PythonExecBroker,
 )
-from dimos.benchmark.agent_eval.runner import PiTurn
+from dimos.benchmark.agent_eval.progress import (
+    AssistantTextProgress,
+    FinalResponseProgress,
+    ProgressSink,
+    StatusProgress,
+    ToolEndProgress,
+    ToolStartProgress,
+    emit_progress,
+)
 
 _PROTOCOL_VERSION = 1
 _MAX_FRAME_BYTES = 64 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
+_MAX_PROGRESS_BYTES = 4 * 1024
 
 
 class NodePiSessionFactory:
@@ -50,6 +60,7 @@ class NodePiSessionFactory:
         model: str,
         thinking_level: str,
         startup_timeout_s: float,
+        progress: ProgressSink | None = None,
     ) -> None:
         if not command or startup_timeout_s <= 0:
             raise ValueError("Pi adapter command and startup timeout are required")
@@ -58,6 +69,7 @@ class NodePiSessionFactory:
         self.command = command
         self.credential = credential
         self.startup_timeout_s = startup_timeout_s
+        self.progress = progress
 
     def create(
         self,
@@ -84,6 +96,7 @@ class NodePiSessionFactory:
             initial_prompt=public_prompt,
             broker=broker,
             startup_timeout_s=self.startup_timeout_s,
+            progress=self.progress,
         )
 
 
@@ -98,6 +111,7 @@ class NodePiSession:
         initial_prompt: str,
         broker: PythonExecBroker,
         startup_timeout_s: float,
+        progress: ProgressSink | None,
     ) -> None:
         self.session_id = session_id
         self.policy_call_count = 0
@@ -107,6 +121,7 @@ class NodePiSession:
         self._write_lock = threading.Lock()
         self._closed_evidence: dict[str, Any] | None = None
         self._disposed = False
+        self._progress = progress
         self._stderr_path = attempt_path / "pi-adapter.stderr.log"
         self._stderr = bytearray()
         self._process = subprocess.Popen(
@@ -138,6 +153,7 @@ class NodePiSession:
         )
         self._reader.start()
         self._stderr_reader.start()
+        emit_progress(self._progress, StatusProgress(channel="pi", message="session starting"))
         self._send(
             {
                 "version": _PROTOCOL_VERSION,
@@ -155,6 +171,7 @@ class NodePiSession:
         if started.get("tools") != ["python_exec"]:
             self.dispose()
             raise RuntimeError("Pi adapter activated an unexpected tool inventory")
+        emit_progress(self._progress, StatusProgress(channel="pi", message="session started"))
 
     def prompt(self, prompt: str, timeout_s: float) -> PiTurn:
         if self._disposed:
@@ -174,8 +191,10 @@ class NodePiSession:
             raise RuntimeError("Pi adapter returned an invalid policy-call count")
         self.policy_call_count = count
         final_text = frame.get("final_text")
+        text = final_text if isinstance(final_text, str) else ""
+        emit_progress(self._progress, FinalResponseProgress(text=_bounded_progress(text)))
         return PiTurn(
-            final_text=final_text if isinstance(final_text, str) else "",
+            final_text=text,
             policy_call_count=count,
         )
 
@@ -244,7 +263,7 @@ class NodePiSession:
                 if frame.get("type") == "tool_call":
                     self._handle_tool_call(frame)
                 elif frame.get("type") == "transcript":
-                    continue
+                    self._handle_transcript(frame)
                 else:
                     self._frames.put(frame)
         except BaseException as exc:
@@ -260,9 +279,24 @@ class NodePiSession:
             or not isinstance(params, dict)
         ):
             raise RuntimeError("malformed Pi tool call")
+        code = params.get("code")
+        if isinstance(code, str) and code:
+            emit_progress(
+                self._progress,
+                ToolStartProgress(code=_bounded_progress(code)),
+            )
+        started = time.monotonic()
         try:
             result = self._broker.request(tool, params)
             text = _mcp_text(result)
+            emit_progress(
+                self._progress,
+                ToolEndProgress(
+                    ok=True,
+                    result=_bounded_progress(text),
+                    duration_seconds=max(0.0, time.monotonic() - started),
+                ),
+            )
             reply = {
                 "version": _PROTOCOL_VERSION,
                 "type": "tool_reply",
@@ -271,14 +305,39 @@ class NodePiSession:
                 "result": text,
             }
         except Exception as exc:
+            diagnostic = f"{type(exc).__name__}: {exc}"
+            emit_progress(
+                self._progress,
+                ToolEndProgress(
+                    ok=False,
+                    result=_bounded_progress(diagnostic),
+                    duration_seconds=max(0.0, time.monotonic() - started),
+                ),
+            )
             reply = {
                 "version": _PROTOCOL_VERSION,
                 "type": "tool_reply",
                 "id": call_id,
                 "ok": False,
-                "error": f"{type(exc).__name__}: {exc}"[:1024],
+                "error": diagnostic[:1024],
             }
         self._send(reply)
+
+    def _handle_transcript(self, frame: dict[str, Any]) -> None:
+        event = frame.get("event")
+        if event == "assistant_text_delta":
+            delta = frame.get("delta")
+            if isinstance(delta, str) and delta:
+                emit_progress(
+                    self._progress,
+                    AssistantTextProgress(delta=_bounded_progress(delta)),
+                )
+        elif event == "agent_start":
+            emit_progress(self._progress, StatusProgress(channel="pi", message="agent started"))
+        elif event == "turn_start":
+            emit_progress(self._progress, StatusProgress(channel="pi", message="turn started"))
+        elif event == "agent_end":
+            emit_progress(self._progress, StatusProgress(channel="pi", message="agent finished"))
 
     def _read_stderr(self, stderr: IO[str]) -> None:
         for chunk in iter(lambda: stderr.read(4096), ""):
@@ -348,6 +407,15 @@ def _mcp_text(result: dict[str, Any]) -> str:
         if isinstance(text, str):
             return text
     return json.dumps(first, allow_nan=False, separators=(",", ":"))[:32_000]
+
+
+def _bounded_progress(value: str) -> str:
+    encoded = value.encode()
+    if len(encoded) <= _MAX_PROGRESS_BYTES:
+        return value
+    marker = "\n… [truncated]"
+    keep = _MAX_PROGRESS_BYTES - len(marker.encode())
+    return encoded[:keep].decode(errors="ignore") + marker
 
 
 def _artifact(root: Path, relative_path: str) -> ArtifactReference:

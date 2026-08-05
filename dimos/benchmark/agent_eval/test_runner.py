@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-from dimos.agents.code_policy import CodePolicySessionReceipt
+from dimos.agents.code_policy_core import CodePolicySessionReceipt
 from dimos.benchmark.agent_eval.backend import BackendReadiness
 from dimos.benchmark.agent_eval.config import select_destination
 from dimos.benchmark.agent_eval.models import (
@@ -32,10 +32,10 @@ from dimos.benchmark.agent_eval.models import (
     ResetReceipt,
     ResolvedSmokeConfig,
 )
+from dimos.benchmark.agent_eval.pi import PiTurn
 from dimos.benchmark.agent_eval.pi_adapter import PythonExecBroker
 from dimos.benchmark.agent_eval.runner import (
     LocalAgentEvalRunner,
-    PiTurn,
     _validate_reset,
 )
 from dimos.benchmark.dimsim.bundle import generate_smoke_release

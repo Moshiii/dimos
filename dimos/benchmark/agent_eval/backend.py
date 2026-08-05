@@ -20,10 +20,10 @@ from typing import Any, Protocol
 
 from pydantic import Field, JsonValue
 
+from dimos.benchmark.agent_eval.base import BaseEvalModel
 from dimos.benchmark.agent_eval.models import (
     AttemptId,
     BackendEpisodeReference,
-    EvalModel,
     EvaluationHandle,
     NonEmpty,
     OperationId,
@@ -32,14 +32,14 @@ from dimos.benchmark.agent_eval.models import (
 from dimos.benchmark.dimsim.models import OpaqueId, Pose2, Sha256
 
 
-class BackendReadiness(EvalModel):
+class BackendReadiness(BaseEvalModel):
     record_type: str = "backend-readiness"
     backend: NonEmpty
     ready: bool
     detail: NonEmpty
 
 
-class BackendResetRequest(EvalModel):
+class BackendResetRequest(BaseEvalModel):
     record_type: str = "backend-reset-request"
     attempt_id: AttemptId
     operation_id: OperationId
@@ -49,7 +49,7 @@ class BackendResetRequest(EvalModel):
     source_revisions: dict[str, NonEmpty] = Field(min_length=1)
 
 
-class BackendEvaluationRequest(EvalModel):
+class BackendEvaluationRequest(BaseEvalModel):
     record_type: str = "backend-evaluation-request"
     attempt_id: AttemptId
     operation_id: OperationId

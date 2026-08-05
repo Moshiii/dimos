@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class FrozenQaModel(BaseModel):
@@ -44,10 +45,17 @@ class StreamBoundary(FrozenQaModel):
 class CutoffRecord(FrozenQaModel):
     cutoff_seconds: float = Field(ge=0)
     cutoff_timestamp: float
+    normalized_progress: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     stream_boundaries: tuple[StreamBoundary, ...]
     map_observation_id: int
     map_timestamp: float
     map_frame_count: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def progress_is_finite(self) -> CutoffRecord:
+        if self.normalized_progress is not None and not math.isfinite(self.normalized_progress):
+            raise ValueError("normalized progress must be finite")
+        return self
 
 
 class FrozenMemoryManifest(FrozenQaModel):

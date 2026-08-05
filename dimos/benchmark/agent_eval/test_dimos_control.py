@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from datetime import UTC, datetime
-
-from dimos.agents.code_policy import CodePolicySessionReceipt
 from dimos.benchmark.agent_eval.dimos_control import AttachedDimosControl
 from dimos.navigation.base import NavigationState
 
@@ -25,17 +22,6 @@ class _Module:
         self.cancelled = False
         self.state = NavigationState.IDLE
 
-    def reset_session(self):
-        return CodePolicySessionReceipt(
-            session_id="code_policy_session_" + "a" * 32,
-            reset_at=datetime.now(UTC),
-            previous_session_id=None,
-        )
-
-    def interrupt_active(self):
-        self.interrupted = True
-        return True
-
     def get_state(self):
         return self.state
 
@@ -45,7 +31,6 @@ class _Module:
 
 class _App:
     def __init__(self) -> None:
-        self.CodePolicyModule = _Module()
         self.ReplanningAStarPlanner = _Module()
         self.stopped = False
 
@@ -57,9 +42,6 @@ def test_attached_control_uses_host_only_rpc_paths() -> None:
     app = _App()
     control = AttachedDimosControl(app)  # type: ignore[arg-type]
 
-    receipt = control.reset_session(1.0)
-    assert receipt.session_id.startswith("code_policy_session_")
-    assert control.interrupt_active(1.0)
     assert not control.motion_active(1.0)
     app.ReplanningAStarPlanner.state = NavigationState.FOLLOWING_PATH
     assert control.motion_active(1.0)

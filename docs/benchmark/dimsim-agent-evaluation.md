@@ -26,17 +26,20 @@ cd ../..
 
 Start the evaluation blueprint manually and leave it running. Disabling the
 optional viewer reduces unrelated rendering load without removing the robot,
-navigation, memory, MCP, code-policy, recorder, or DimSim modules:
+navigation, recorder, or DimSim modules:
 
 ```bash
 dimos --viewer none run unitree-go2-dimsim-external-pi-eval --daemon
 dimos status
-dimos mcp list-tools
 ```
 
-The runner attaches to this stack. It never launches or stops DimOS or DimSim.
-Normal completion, failure, and interruption release only the runner's Pi,
-evaluation, and RPC-client resources.
+The blueprint deliberately contains no CodePolicy module, agent-facing MCP
+server, or internal agent. The runner attaches to the robot stack through
+porcelain, owns a fresh standalone CodePolicy process with read-only live
+`memory` plus porcelain-backed `app`, and exposes exactly `python_exec` to Pi.
+It never launches or stops DimOS or DimSim. Normal completion, failure, and
+interruption release the runner's Pi, standalone CodePolicy, evaluation, and
+RPC-client resources.
 
 ## Generate and select the task
 
@@ -87,6 +90,10 @@ Copy its opaque `task_id` into a JSON configuration:
   }
 }
 ```
+
+`mcp_endpoint` is retained as a compatibility config field during migration;
+the runner selects an available loopback endpoint for its standalone service,
+so a fixed port is not part of case identity.
 
 `readiness_s` also bounds creation of the fresh Pi session. A cold local
 subscription/model cache can take more than five minutes to initialize; warm
@@ -175,7 +182,6 @@ dimos stop
 DIMSIM_HEADLESS=false DIMSIM_RENDER=cpu dimos --rerun-open web \
   run unitree-go2-dimsim-external-pi-eval --daemon
 dimos status
-dimos mcp list-tools
 ```
 
 Open these pages if the browser does not open automatically:
@@ -195,8 +201,16 @@ Playwright page. Open the scene URL once: that browser tab becomes the
 authoritative simulator client. Do not open multiple copies of the DimSim page.
 The Rerun page is a separate passive DimOS visualization.
 
-In a second terminal, attach the read-only code-policy observer before asking
-Pi to act:
+For an unscored manual session, start the standalone live service in a second
+terminal after the recorder database exists:
+
+```bash
+uv run python -m dimos.agents.code_policy_server \
+  --live-memory /tmp/dimos-agent-eval-recording.db \
+  --port 9990
+```
+
+You can then attach the read-only code-policy observer before asking Pi to act:
 
 ```bash
 dimos code-policy-watch

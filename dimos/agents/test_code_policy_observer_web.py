@@ -22,7 +22,7 @@ import threading
 
 from fastapi.testclient import TestClient
 
-from dimos.agents.code_policy import CodePolicyObserverDescriptor
+from dimos.agents.code_policy_core import CodePolicyObserverDescriptor
 from dimos.agents.code_policy_observer import ObservationEvent
 from dimos.agents.code_policy_observer_web import (
     CodePolicyWebServer,

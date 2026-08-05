@@ -12,4 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Frozen-recording interface for short-horizon question answering."""
+"""Shared Pydantic policy for serialized evaluation contracts."""
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
+
+class BaseEvalModel(BaseModel):
+    """Strict immutable base for serialized evaluation contracts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    schema_version: Literal["1.0"] = "1.0"

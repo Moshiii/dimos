@@ -30,7 +30,17 @@ export type CodePolicyOutbound =
       tool: "python_exec";
       params: { code: string; timeout_s?: number };
     }
-  | { version: 1; type: "transcript"; event: string }
+  | {
+      version: 1;
+      type: "transcript";
+      event: "agent_start" | "turn_start" | "agent_end";
+    }
+  | {
+      version: 1;
+      type: "transcript";
+      event: "assistant_text_delta";
+      delta: string;
+    }
   | {
       version: 1;
       type: "turn_complete";

@@ -54,6 +54,7 @@ import typer
 
 from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
 from dimos.cli.cache import app as cache_app
+from dimos.cli.eval import app as eval_app
 from dimos.cli.shell import shell
 from dimos.constants import CONFIG_DIR, LOG_DIR
 from dimos.core.daemon import daemonize, install_signal_handlers
@@ -184,6 +185,7 @@ main.add_typer(go2tool_app, name="go2tool")
 main.add_typer(piper_app, name="piper")
 main.command()(shell)
 main.add_typer(cache_app, name="cache")
+main.add_typer(eval_app, name="eval")
 
 runtime_app = typer.Typer(help="Runtime environment commands")
 main.add_typer(runtime_app, name="runtime")

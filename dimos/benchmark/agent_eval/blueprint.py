@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Current DimSim spatial stack for an externally driven one-tool Pi session."""
+"""DimSim spatial stack for a runner-owned standalone Pi interaction."""
 
-from dimos.agents.code_policy import CodePolicyModule
-from dimos.agents.mcp.mcp_server import McpServer
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.agents.skills.person_follow import PersonFollowSkillContainer
 from dimos.benchmark.agent_eval.observation_recorder import (
@@ -41,8 +39,6 @@ unitree_go2_dimsim_external_pi_eval = autoconnect(
         db_path=DEFAULT_AGENT_EVAL_RECORDING_PATH,
         on_existing="overwrite",
     ),
-    CodePolicyModule.blueprint(recording_path=DEFAULT_AGENT_EVAL_RECORDING_PATH),
-    McpServer.blueprint(),
     _external_pi_navigation_skills,
 ).global_config(
     simulation="dimsim",

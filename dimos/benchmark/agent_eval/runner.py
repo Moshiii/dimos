@@ -31,7 +31,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, JsonValue
 
-from dimos.agents.code_policy import CodePolicySessionReceipt
+from dimos.agents.code_policy_core import CodePolicySessionReceipt
 from dimos.benchmark.agent_eval.backend import (
     BackendEvaluationRequest,
     BackendResetRequest,
@@ -46,6 +46,7 @@ from dimos.benchmark.agent_eval.models import (
     NormalizedOutcome,
     ResolvedSmokeConfig,
 )
+from dimos.benchmark.agent_eval.pi import PiSession, PiSessionFactory
 from dimos.benchmark.agent_eval.pi_adapter import (
     CodePolicyCallLog,
     McpBinding,
@@ -67,35 +68,6 @@ class CodePolicyControl(Protocol):
     def cancel_motion(self, timeout_s: float) -> None: ...
 
     def close(self) -> None: ...
-
-
-class PiTurn(BaseModel):
-    final_text: str = ""
-    policy_call_count: int
-
-
-class PiSession(Protocol):
-    session_id: str
-
-    def prompt(self, prompt: str, timeout_s: float) -> PiTurn: ...
-
-    def abort(self, timeout_s: float) -> None: ...
-
-    def dispose(self) -> None: ...
-
-    def artifact_references(self) -> tuple[ArtifactReference, ...]: ...
-
-
-class PiSessionFactory(Protocol):
-    def create(
-        self,
-        *,
-        attempt_path: Path,
-        public_prompt: str,
-        code_policy_session_id: str,
-        call_log: CodePolicyCallLog,
-        mcp: McpBinding,
-    ) -> PiSession: ...
 
 
 class RunnerResult(BaseModel):

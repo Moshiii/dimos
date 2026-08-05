@@ -17,17 +17,18 @@
 from __future__ import annotations
 
 import argparse
-import math
 from pathlib import Path
 import re
 import sys
 
-from dimos.agents.mcp.mcp_adapter import McpAdapter
 from dimos.benchmark.agent_eval.config import load_smoke_config, select_destination
 from dimos.benchmark.agent_eval.dimos_control import AttachedDimosControl
 from dimos.benchmark.agent_eval.dimsim_backend import DimSimEvaluationBackend
+from dimos.benchmark.agent_eval.live import run_live_case
+from dimos.benchmark.agent_eval.observation_recorder import (
+    DEFAULT_AGENT_EVAL_RECORDING_PATH,
+)
 from dimos.benchmark.agent_eval.pi_process import NodePiSessionFactory
-from dimos.benchmark.agent_eval.runner import LocalAgentEvalRunner
 
 _ENDPOINT = re.compile(r"^https?://(?P<host>[A-Za-z0-9.-]+):(?P<port>[0-9]{1,5})/?$")
 
@@ -67,11 +68,7 @@ def _run(config_path: Path) -> int:
         raise FileNotFoundError(
             "Pi adapter is not built; run npm run build in packages/pi-spatial-adapter"
         )
-    mcp = McpAdapter(
-        loaded.resolved.mcp_endpoint,
-        timeout=math.ceil(loaded.resolved.timeouts.mcp_call_s),
-    )
-    dimos_control = AttachedDimosControl.connect(loaded.resolved.timeouts.readiness_s)
+    motion = AttachedDimosControl.connect(loaded.resolved.timeouts.readiness_s)
     backend = DimSimEvaluationBackend(
         host=host,
         port=port,
@@ -88,18 +85,20 @@ def _run(config_path: Path) -> int:
         thinking_level=loaded.resolved.pi_thinking_level,
         startup_timeout_s=loaded.resolved.timeouts.readiness_s,
     )
-    result = LocalAgentEvalRunner(
-        config=loaded.resolved,
+    result = run_live_case(
         selected=selected,
         backend=backend,
-        mcp=mcp,
-        code_policy=dimos_control,
+        motion=motion,
+        memory_path=DEFAULT_AGENT_EVAL_RECORDING_PATH,
+        output_root=Path(loaded.resolved.output_root),
         pi_factory=pi_factory,
-    ).run()
+        timeouts=loaded.resolved.timeouts,
+        episode_timeout_s=loaded.resolved.episode_timeout_s,
+    )
     print(
         f"{result.outcome.task_result}: {result.outcome.reason} (artifacts: {result.attempt_path})"
     )
-    return result.exit_code
+    return 0 if result.outcome.attempt_status == "completed" else 1
 
 
 def _parse_endpoint(value: str) -> tuple[str, int]:

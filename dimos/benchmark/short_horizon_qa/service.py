@@ -19,25 +19,29 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from dimos.agents.code_policy import CodePolicyModule
-from dimos.agents.mcp.mcp_server import McpServer
+from dimos.agents.code_policy_core import (
+    CodePolicySessionConfig,
+    FrozenMemoryEnvironment,
+)
+from dimos.agents.code_policy_server import StandaloneCodePolicyServer
 from dimos.benchmark.short_horizon_qa.models import CutoffRecord, FrozenMemoryManifest
 from dimos.benchmark.short_horizon_qa.prepare import (
     DERIVED_NAME,
     MANIFEST_NAME,
     file_sha256,
 )
-from dimos.core.coordination.blueprints import Blueprint, autoconnect
-from dimos.core.coordination.module_coordinator import ModuleCoordinator
 
 
 def load_bundle(
     bundle: Path,
-    cutoff_seconds: float,
+    cutoff_seconds: float | None = None,
     *,
+    progress: float | None = None,
     verify_integrity: bool = True,
 ) -> tuple[FrozenMemoryManifest, CutoffRecord, Path, Path]:
     """Validate a prepared bundle and resolve one exact configured cutoff."""
+    if (cutoff_seconds is None) == (progress is None):
+        raise ValueError("Select exactly one cutoff in seconds or normalized progress")
     bundle = bundle.resolve()
     manifest_path = bundle / MANIFEST_NAME
     if not manifest_path.is_file():
@@ -50,15 +54,31 @@ def load_bundle(
     if not derived_path.is_file():
         raise FileNotFoundError(derived_path)
 
-    matches = [
-        cutoff
-        for cutoff in manifest.cutoffs
-        if math.isclose(cutoff.cutoff_seconds, cutoff_seconds, rel_tol=0.0, abs_tol=1e-9)
-    ]
-    if len(matches) != 1:
+    if progress is not None:
+        matches = [
+            cutoff
+            for cutoff in manifest.cutoffs
+            if cutoff.normalized_progress is not None
+            and math.isclose(cutoff.normalized_progress, progress, rel_tol=0.0, abs_tol=1e-12)
+        ]
+        requested = f"progress {progress}"
+        available = ", ".join(
+            str(item.normalized_progress)
+            for item in manifest.cutoffs
+            if item.normalized_progress is not None
+        )
+    else:
+        assert cutoff_seconds is not None
+        matches = [
+            cutoff
+            for cutoff in manifest.cutoffs
+            if math.isclose(cutoff.cutoff_seconds, cutoff_seconds, rel_tol=0.0, abs_tol=1e-9)
+        ]
+        requested = f"cutoff {cutoff_seconds}s"
         available = ", ".join(str(item.cutoff_seconds) for item in manifest.cutoffs)
+    if len(matches) != 1:
         raise ValueError(
-            f"Cutoff {cutoff_seconds}s is not in the prepared bundle. Available: {available}"
+            f"Requested {requested} is not unique in the bundle. Available: {available}"
         )
 
     if verify_integrity:
@@ -71,33 +91,32 @@ def load_bundle(
     return manifest, matches[0], source_path, derived_path
 
 
-def frozen_qa_blueprint(
+def frozen_qa_config(
     source_path: Path,
     derived_path: Path,
     cutoff: CutoffRecord,
-    *,
-    mcp_port: int = 9990,
-) -> Blueprint:
-    """Compose the offline one-tool policy service for a selected cutoff."""
-    return autoconnect(
-        CodePolicyModule.blueprint(
+) -> CodePolicySessionConfig:
+    """Build the module-independent session configuration for one cutoff."""
+    return CodePolicySessionConfig(
+        environment=FrozenMemoryEnvironment(
             recording_path=str(source_path),
             derived_recording_path=str(derived_path),
             memory_cutoff_timestamp=cutoff.cutoff_timestamp,
-            connect_app=False,
-        ),
-        McpServer.blueprint(),
-    ).global_config(viewer="none", n_workers=2, mcp_port=mcp_port)
-
-
-def serve_bundle(bundle: Path, cutoff_seconds: float, *, mcp_port: int = 9990) -> None:
-    """Run the frozen QA MCP endpoint until interrupted."""
-    _, cutoff, source_path, derived_path = load_bundle(bundle, cutoff_seconds)
-    blueprint = frozen_qa_blueprint(
-        source_path,
-        derived_path,
-        cutoff,
-        mcp_port=mcp_port,
+        )
     )
-    coordinator = ModuleCoordinator.build(blueprint)
-    coordinator.loop()
+
+
+def serve_bundle(
+    bundle: Path,
+    cutoff_seconds: float | None = None,
+    *,
+    progress: float | None = None,
+    mcp_port: int = 9990,
+) -> None:
+    """Run the frozen QA MCP endpoint until interrupted."""
+    _, cutoff, source_path, derived_path = load_bundle(bundle, cutoff_seconds, progress=progress)
+    server = StandaloneCodePolicyServer(
+        frozen_qa_config(source_path, derived_path, cutoff),
+        port=mcp_port,
+    )
+    server.run_forever()

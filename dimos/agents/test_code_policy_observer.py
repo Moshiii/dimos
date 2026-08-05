@@ -27,9 +27,9 @@ import time
 import nbformat
 import pytest
 
-from dimos.agents.code_policy import (
+from dimos.agents.code_policy import CodePolicyModule
+from dimos.agents.code_policy_core import (
     CodePolicyExecutionRecord,
-    CodePolicyModule,
     CodePolicyObserverDescriptor,
     CodePolicyObserverProbeReceipt,
     CodePolicyObserverState,
@@ -59,7 +59,7 @@ def _descriptor() -> CodePolicyObserverDescriptor:
 
 @pytest.fixture
 def code_policy(mocker, tmp_path) -> Iterator[CodePolicyModule]:
-    mocker.patch("dimos.agents.code_policy._bootstrap_source", return_value="pass")
+    mocker.patch("dimos.agents.code_policy_core._bootstrap_source", return_value="pass")
     module = CodePolicyModule(recording_path=str(tmp_path / "unused.db"))
     module.start()
     try:

@@ -34,7 +34,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from dimos.agents.code_policy import MAX_EXECUTION_TIMEOUT_S
+from dimos.agents.code_policy_core import MAX_EXECUTION_TIMEOUT_S
 from dimos.benchmark.agent_eval.models import (
     AttemptId,
     CodePolicySessionId,

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "case_id": "go2-hongkong-office-room-count",
+  "source": {
+    "schema_version": "1.0",
+    "kind": "frozen_memory",
+    "recording": "go2_hongkong_office",
+    "progress": 1.0,
+    "bundle_manifest_sha256": null
+  },
+  "task": {
+    "schema_version": "1.0",
+    "kind": "integer_question",
+    "prompt": "How many rooms in total?",
+    "answer_marker": "ANSWER:"
+  },
+  "interaction": {
+    "schema_version": "1.0",
+    "kind": "frozen_code_policy",
+    "driver_revision": "standalone-frozen-v1",
+    "session_lifetime": "one_attempt"
+  }
+}

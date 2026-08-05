@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Host-only RPC controls for the attached evaluation blueprint."""
+"""Host controls joining standalone CodePolicy with attached robot motion."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from dimos.agents.code_policy import CodePolicySessionReceipt
+from dimos.agents.code_policy_core import CodePolicySessionReceipt
+from dimos.agents.code_policy_server import StandaloneCodePolicyProcess
 from dimos.navigation.base import NavigationState
 from dimos.porcelain.dimos import Dimos
 
@@ -28,21 +29,11 @@ class AttachedDimosControl:
 
     def __init__(self, app: Dimos) -> None:
         self._app = app
-        self._code_policy: Any = app.CodePolicyModule
         self._navigation: Any = app.ReplanningAStarPlanner
 
     @classmethod
     def connect(cls, timeout_s: float) -> AttachedDimosControl:
         return cls(Dimos.connect(timeout=timeout_s))
-
-    def reset_session(self, timeout_s: float) -> CodePolicySessionReceipt:
-        del timeout_s
-        value = self._code_policy.reset_session()
-        return CodePolicySessionReceipt.model_validate(value)
-
-    def interrupt_active(self, timeout_s: float) -> bool:
-        del timeout_s
-        return bool(self._code_policy.interrupt_active())
 
     def motion_active(self, timeout_s: float) -> bool:
         del timeout_s
@@ -54,3 +45,35 @@ class AttachedDimosControl:
 
     def close(self) -> None:
         self._app.stop()
+
+
+class StandaloneLiveCodePolicyControl:
+    """Compatibility control facade for the migrated live runner."""
+
+    def __init__(
+        self,
+        process: StandaloneCodePolicyProcess,
+        motion: AttachedDimosControl,
+    ) -> None:
+        self._process = process
+        self._motion = motion
+
+    def reset_session(self, timeout_s: float) -> CodePolicySessionReceipt:
+        del timeout_s
+        return CodePolicySessionReceipt.model_validate(self._process.reset())
+
+    def interrupt_active(self, timeout_s: float) -> bool:
+        del timeout_s
+        return self._process.interrupt()
+
+    def motion_active(self, timeout_s: float) -> bool:
+        return self._motion.motion_active(timeout_s)
+
+    def cancel_motion(self, timeout_s: float) -> None:
+        self._motion.cancel_motion(timeout_s)
+
+    def close(self) -> None:
+        try:
+            self._process.close()
+        finally:
+            self._motion.close()

@@ -32,7 +32,7 @@ import nbformat
 from pydantic import BaseModel, ConfigDict, Field
 import zmq
 
-from dimos.agents.code_policy import (
+from dimos.agents.code_policy_core import (
     CodePolicyExecutionRecord,
     CodePolicyObserverDescriptor,
     CodePolicyObserverProbeReceipt,

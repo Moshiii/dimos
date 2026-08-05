@@ -21,9 +21,14 @@ import numpy as np
 import open3d as o3d
 import pytest
 
+from dimos.agents.code_policy_core import FrozenMemoryEnvironment
 from dimos.benchmark.short_horizon_qa.models import MapperSettings
-from dimos.benchmark.short_horizon_qa.prepare import file_sha256, prepare_bundle
-from dimos.benchmark.short_horizon_qa.service import frozen_qa_blueprint, load_bundle
+from dimos.benchmark.short_horizon_qa.prepare import (
+    file_sha256,
+    prepare_bundle,
+    resolve_progress,
+)
+from dimos.benchmark.short_horizon_qa.service import frozen_qa_config, load_bundle
 from dimos.memory2.store.frozen import FrozenMemoryStore
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -94,6 +99,59 @@ def test_prepare_reuses_one_derived_map_for_nearby_cutoffs(recording: Path, tmp_
         assert derived.stream("global_map").count() == 1
 
 
+def test_progress_resolves_exact_end_and_persists_provenance(
+    recording: Path, tmp_path: Path
+) -> None:
+    output = tmp_path / "progress-bundle"
+    manifest = prepare_bundle(
+        recording,
+        [],
+        output,
+        progress=[4 / 9, 1.0, 1.0],
+        mapper=MapperSettings(device="CPU:0"),
+    )
+
+    assert [item.normalized_progress for item in manifest.cutoffs] == [4 / 9, 1.0]
+    assert [item.cutoff_timestamp for item in manifest.cutoffs] == [104.0, 109.0]
+    assert manifest.cutoffs[-1].stream_boundaries[0].count == 10
+    loaded_manifest, cutoff, _, _ = load_bundle(output, progress=1.0)
+    assert cutoff.cutoff_timestamp == loaded_manifest.recording_end_timestamp
+
+    encoded = json.loads((output / "manifest.v1.json").read_text())
+    assert encoded["cutoffs"][-1]["normalized_progress"] == 1.0
+
+
+def test_progress_resolution_has_exact_endpoints_and_linear_interior() -> None:
+    assert resolve_progress(0.0, 100.0, 109.0) == 100.0
+    assert resolve_progress(0.5, 100.0, 110.0) == 105.0
+    assert resolve_progress(1.0, 100.0, 109.0) == 109.0
+
+
+@pytest.mark.parametrize("progress", [-0.1, 1.1, float("inf"), float("nan")])
+def test_prepare_rejects_invalid_progress(recording: Path, tmp_path: Path, progress: float) -> None:
+    with pytest.raises(ValueError, match="progress|Progress"):
+        prepare_bundle(
+            recording,
+            [],
+            tmp_path / "bundle",
+            progress=[progress],
+            mapper=MapperSettings(device="CPU:0"),
+        )
+
+
+def test_progress_before_first_map_preserves_runtime_emission_rule(
+    recording: Path, tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="No runtime map was emitted"):
+        prepare_bundle(
+            recording,
+            [],
+            tmp_path / "bundle",
+            progress=[0.0],
+            mapper=MapperSettings(device="CPU:0"),
+        )
+
+
 def test_prepare_rejects_cutoff_before_first_runtime_emission(
     recording: Path, tmp_path: Path
 ) -> None:
@@ -127,7 +185,7 @@ def test_prepare_rejects_non_world_lidar(tmp_path: Path) -> None:
         )
 
 
-def test_bundle_loads_into_offline_code_policy_blueprint(recording: Path, tmp_path: Path) -> None:
+def test_bundle_loads_into_standalone_code_policy_config(recording: Path, tmp_path: Path) -> None:
     output = tmp_path / "bundle"
     prepare_bundle(
         recording,
@@ -137,16 +195,11 @@ def test_bundle_loads_into_offline_code_policy_blueprint(recording: Path, tmp_pa
     )
 
     _, cutoff, source_path, derived_path = load_bundle(output, 4.0)
-    blueprint = frozen_qa_blueprint(source_path, derived_path, cutoff, mcp_port=10090)
-    code_policy = next(
-        atom for atom in blueprint.blueprints if atom.module.__name__ == "CodePolicyModule"
-    )
-
-    assert code_policy.kwargs["recording_path"] == str(recording.resolve())
-    assert code_policy.kwargs["derived_recording_path"] == str(derived_path)
-    assert code_policy.kwargs["memory_cutoff_timestamp"] == 104.0
-    assert code_policy.kwargs["connect_app"] is False
-    assert blueprint.global_config_overrides["mcp_port"] == 10090
+    config = frozen_qa_config(source_path, derived_path, cutoff)
+    assert isinstance(config.environment, FrozenMemoryEnvironment)
+    assert config.environment.recording_path == str(recording.resolve())
+    assert config.environment.derived_recording_path == str(derived_path)
+    assert config.environment.memory_cutoff_timestamp == 104.0
 
 
 def test_bundle_integrity_check_rejects_changed_derived_recording(

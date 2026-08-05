@@ -31,7 +31,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 import uvicorn
 
-from dimos.agents.code_policy import CodePolicyObserverDescriptor
+from dimos.agents.code_policy_core import CodePolicyObserverDescriptor
 from dimos.agents.code_policy_observer import ObservationEvent
 
 DEFAULT_WEB_PORT = 8766

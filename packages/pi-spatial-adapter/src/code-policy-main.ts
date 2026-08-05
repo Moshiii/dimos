@@ -16,6 +16,13 @@ import type {
   StoredAuthOptions,
 } from "./session.js";
 
+export type CodePolicySessionFactory = (
+  broker: CodePolicyBroker,
+  options: StoredAuthOptions,
+  config: { thinkingLevel: "medium" },
+  initialPrompt: string,
+) => Promise<SessionAdapterHandle>;
+
 function authOptionsFromEnvironment(env: NodeJS.ProcessEnv): StoredAuthOptions {
   const mode = env.PI_SPATIAL_AUTH_MODE ?? "codex-oauth";
   if (mode === "codex-oauth" && env.PI_SPATIAL_AUTH_PATH) {
@@ -73,10 +80,28 @@ class HostBroker implements CodePolicyBroker {
   }
 }
 
-function eventType(event: unknown): string | undefined {
-  if (typeof event !== "object" || event === null || Array.isArray(event)) return undefined;
-  const type = (event as Record<string, unknown>).type;
-  return typeof type === "string" ? type : undefined;
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function progressFrame(event: unknown): CodePolicyOutbound | undefined {
+  if (!record(event)) return undefined;
+  if (event.type === "agent_start" || event.type === "turn_start" || event.type === "agent_end") {
+    return { version: 1, type: "transcript", event: event.type };
+  }
+  if (event.type !== "message_update" || !record(event.assistantMessageEvent)) {
+    return undefined;
+  }
+  const update = event.assistantMessageEvent;
+  if (update.type !== "text_delta" || typeof update.delta !== "string" || update.delta.length === 0) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    type: "transcript",
+    event: "assistant_text_delta",
+    delta: update.delta,
+  };
 }
 
 function evidenceFrame(evidence: SessionEvidenceMetadata) {
@@ -109,6 +134,7 @@ export async function runCodePolicyAdapter(
   input: NodeJS.ReadableStream = stdin,
   output: NodeJS.WritableStream = stdout,
   diagnostics: NodeJS.WritableStream = stderr,
+  sessionFactory: CodePolicySessionFactory = createFreshCodePolicySession,
 ): Promise<void> {
   const lines = createInterface({ input, crlfDelay: Infinity });
   const emit = (frame: CodePolicyOutbound): void => {
@@ -118,6 +144,7 @@ export async function runCodePolicyAdapter(
   let broker: HostBroker | undefined;
   let sessionId = "";
   let activeTurn: Promise<void> | undefined;
+  let activeVisibleText = "";
   let closed = false;
   try {
     for await (const line of lines) {
@@ -126,29 +153,45 @@ export async function runCodePolicyAdapter(
         if (session || broker) throw new Error("duplicate session_start");
         sessionId = frame.id;
         broker = new HostBroker(emit);
-        session = await createFreshCodePolicySession(
+        session = await sessionFactory(
           broker,
           authOptionsFromEnvironment(process.env),
           { thinkingLevel: frame.thinking_level },
           frame.initial_prompt,
         );
         session.subscribe((event) => {
-          const type = eventType(event);
-          if (type) emit({ version: 1, type: "transcript", event: type });
+          if (record(event) && event.type === "turn_start") {
+            activeVisibleText = "";
+          } else if (
+            record(event) &&
+            event.type === "message_update" &&
+            record(event.assistantMessageEvent) &&
+            event.assistantMessageEvent.type === "text_delta" &&
+            typeof event.assistantMessageEvent.delta === "string"
+          ) {
+            activeVisibleText = (activeVisibleText + event.assistantMessageEvent.delta).slice(
+              0,
+              16_384,
+            );
+          }
+          const frame = progressFrame(event);
+          if (frame) emit(frame);
         });
         emit({ version: 1, type: "session_started", id: sessionId, tools: ["python_exec"] });
       } else if (frame.type === "prompt") {
         if (!session || !broker || activeTurn) throw new Error("prompt outside idle session");
         const before = broker.count();
+        activeVisibleText = "";
         activeTurn = session
           .prompt(frame.text)
           .then((result: unknown) => {
-            const finalText =
+            const returnedText =
               typeof result === "string"
                 ? result
                 : typeof result === "object" && result !== null
                   ? JSON.stringify(result).slice(0, 16_384)
                   : "";
+            const finalText = returnedText || activeVisibleText;
             emit({
               version: 1,
               type: "turn_complete",

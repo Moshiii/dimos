@@ -19,8 +19,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, model_validator
 
+from dimos.benchmark.agent_eval.base import BaseEvalModel
 from dimos.benchmark.dimsim.models import OpaqueId, Pose2, Sha256
 
 NonEmpty = Annotated[str, Field(min_length=1)]
@@ -29,12 +30,7 @@ OperationId = Annotated[str, Field(pattern=r"^operation_[0-9a-f]{32}$")]
 CodePolicySessionId = Annotated[str, Field(pattern=r"^code_policy_session_[0-9a-f]{32}$")]
 
 
-class EvalModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-    schema_version: Literal["1.0"] = "1.0"
-
-
-class PiSettings(EvalModel):
+class PiSettings(BaseEvalModel):
     record_type: Literal["pi-settings"] = "pi-settings"
     model: NonEmpty
     thinking_level: Literal["off", "minimal", "low", "medium", "high"]
@@ -55,7 +51,7 @@ class PiSettings(EvalModel):
         return self
 
 
-class InfrastructureTimeouts(EvalModel):
+class InfrastructureTimeouts(BaseEvalModel):
     record_type: Literal["infrastructure-timeouts"] = "infrastructure-timeouts"
     readiness_s: Annotated[float, Field(gt=0)]
     mcp_call_s: Annotated[float, Field(gt=0)]
@@ -64,13 +60,13 @@ class InfrastructureTimeouts(EvalModel):
     cancellation_s: Annotated[float, Field(gt=0)]
 
 
-class DimSimBackendOptions(EvalModel):
+class DimSimBackendOptions(BaseEvalModel):
     record_type: Literal["dimsim-backend-options"] = "dimsim-backend-options"
     endpoint: NonEmpty
     expected_scene_id: NonEmpty
 
 
-class SmokeConfig(EvalModel):
+class SmokeConfig(BaseEvalModel):
     record_type: Literal["agent-eval-smoke-config"] = "agent-eval-smoke-config"
     release_root: NonEmpty
     task_id: OpaqueId
@@ -82,7 +78,7 @@ class SmokeConfig(EvalModel):
     dimsim: DimSimBackendOptions
 
 
-class ResolvedSmokeConfig(EvalModel):
+class ResolvedSmokeConfig(BaseEvalModel):
     record_type: Literal["agent-eval-resolved-config"] = "agent-eval-resolved-config"
     release_root: NonEmpty
     task_id: OpaqueId
@@ -97,14 +93,14 @@ class ResolvedSmokeConfig(EvalModel):
     dimsim: DimSimBackendOptions
 
 
-class BackendEpisodeReference(EvalModel):
+class BackendEpisodeReference(BaseEvalModel):
     record_type: Literal["backend-episode-reference"] = "backend-episode-reference"
     backend: NonEmpty
     episode_id: NonEmpty
     opaque: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class ResetReceipt(EvalModel):
+class ResetReceipt(BaseEvalModel):
     record_type: Literal["backend-reset-receipt"] = "backend-reset-receipt"
     attempt_id: AttemptId
     operation_id: OperationId
@@ -119,7 +115,7 @@ class ResetReceipt(EvalModel):
     acknowledged_at: datetime
 
 
-class EvaluationHandle(EvalModel):
+class EvaluationHandle(BaseEvalModel):
     record_type: Literal["backend-evaluation-handle"] = "backend-evaluation-handle"
     attempt_id: AttemptId
     operation_id: OperationId
@@ -128,7 +124,7 @@ class EvaluationHandle(EvalModel):
     opaque: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class ArtifactReference(EvalModel):
+class ArtifactReference(BaseEvalModel):
     record_type: Literal["artifact-reference"] = "artifact-reference"
     path: NonEmpty
     sha256: Sha256
@@ -141,14 +137,14 @@ class ArtifactReference(EvalModel):
         return self
 
 
-class NativeResultReference(EvalModel):
+class NativeResultReference(BaseEvalModel):
     record_type: Literal["native-result-reference"] = "native-result-reference"
     backend: NonEmpty
     artifact: ArtifactReference
     native_result_id: NonEmpty
 
 
-class LifecycleEvent(EvalModel):
+class LifecycleEvent(BaseEvalModel):
     record_type: Literal["agent-eval-lifecycle-event"] = "agent-eval-lifecycle-event"
     sequence: Annotated[int, Field(ge=1)]
     attempt_id: AttemptId
@@ -159,7 +155,7 @@ class LifecycleEvent(EvalModel):
     payload: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class AttemptManifest(EvalModel):
+class AttemptManifest(BaseEvalModel):
     record_type: Literal["agent-eval-attempt-manifest"] = "agent-eval-attempt-manifest"
     attempt_id: AttemptId
     created_at: datetime
@@ -176,7 +172,7 @@ class AttemptManifest(EvalModel):
     artifacts: tuple[ArtifactReference, ...] = ()
 
 
-class NormalizedOutcome(EvalModel):
+class NormalizedOutcome(BaseEvalModel):
     record_type: Literal["agent-eval-outcome"] = "agent-eval-outcome"
     attempt_id: AttemptId
     attempt_status: Literal["completed", "failed"]

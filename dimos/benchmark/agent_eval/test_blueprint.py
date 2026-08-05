@@ -14,7 +14,6 @@
 
 from typing import get_args, get_type_hints
 
-from dimos.agents.code_policy import CodePolicyModule
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 from dimos.agents.skills.speak_skill import SpeakSkill
@@ -70,14 +69,13 @@ def test_observation_recorder_has_exact_agent_visible_allowlist() -> None:
     assert recorder_goal_reached_type is planner_goal_reached_type
 
 
-def test_external_pi_blueprint_has_one_code_policy_and_no_internal_agent() -> None:
+def test_external_pi_blueprint_has_no_agent_runtime_or_internal_agent() -> None:
     modules = [atom.module for atom in unitree_go2_dimsim_external_pi_eval.blueprints]
 
-    assert modules.count(CodePolicyModule) == 1
     assert modules.count(AgentEvalObservationRecorder) == 1
     assert modules.count(SpatialMemory) == 1
     assert PerceiveLoopSkill not in modules
-    assert modules.count(McpServer) == 1
+    assert McpServer not in modules
     assert McpClient not in modules
     assert SpeakSkill not in modules
     assert WebInput not in modules
@@ -85,19 +83,12 @@ def test_external_pi_blueprint_has_one_code_policy_and_no_internal_agent() -> No
     assert all("viser" not in module.__module__ for module in modules)
 
 
-def test_blueprint_binds_code_policy_to_allowlisted_recording() -> None:
+def test_blueprint_binds_allowlisted_recording_for_standalone_policy() -> None:
     recorder = next(
         atom
         for atom in unitree_go2_dimsim_external_pi_eval.blueprints
         if atom.module is AgentEvalObservationRecorder
     )
-    code_policy = next(
-        atom
-        for atom in unitree_go2_dimsim_external_pi_eval.blueprints
-        if atom.module is CodePolicyModule
-    )
-
     assert recorder.kwargs["db_path"] == DEFAULT_AGENT_EVAL_RECORDING_PATH
     assert recorder.kwargs["on_existing"] == "overwrite"
-    assert code_policy.kwargs["recording_path"] == DEFAULT_AGENT_EVAL_RECORDING_PATH
     assert unitree_go2_dimsim_external_pi_eval.global_config_overrides["simulation"] == "dimsim"

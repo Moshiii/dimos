@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "record_type": "frozen-memory-preparation-receipt",
+  "recording": "go2_hongkong_office",
+  "source_size_bytes": 2462744576,
+  "source_sha256": "b5474f0d65a1f4c43275172a9aebc1a19e0f0bce30ee656513ad51fa5ccadb03",
+  "derived_sha256": "3cb971114be4bb58aa646ddfd15488a3ecf86fabea4a9f1eef6e59254241449e",
+  "generated_manifest_sha256": "4544e2234785bb66b438fb544d502a31040207703691d6e43b91b4731af93a8f",
+  "recording_start_timestamp": 1778055129.547183,
+  "recording_end_timestamp": 1778055687.5864289,
+  "selection": {
+    "normalized_progress": 1.0,
+    "cutoff_seconds": 558.0392458438873,
+    "cutoff_timestamp": 1778055687.5864289,
+    "map_observation_id": 1,
+    "map_timestamp": 1778055687.5864289,
+    "map_frame_count": 4235,
+    "stream_boundaries": [
+      {
+        "name": "color_image",
+        "count": 7953,
+        "last_observation_id": 7953,
+        "last_timestamp": 1778055687.5175548
+      },
+      {
+        "name": "color_image_embedded",
+        "count": 1008,
+        "last_observation_id": 1008,
+        "last_timestamp": 1778055687.383171
+      },
+      {
+        "name": "lidar",
+        "count": 4235,
+        "last_observation_id": 4235,
+        "last_timestamp": 1778055687.5864289
+      },
+      {
+        "name": "odom",
+        "count": 10437,
+        "last_observation_id": 10437,
+        "last_timestamp": 1778055687.5846546
+      }
+    ]
+  },
+  "mapper": {
+    "voxel_size_m": 0.05,
+    "block_count": 2000000,
+    "carve_columns": true,
+    "frame_id": "world",
+    "emit_every": 5,
+    "device": "CPU:0"
+  }
+}

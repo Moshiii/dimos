@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
 import tempfile
-from typing import Any
+from typing import Any, NamedTuple
 
 from dimos.benchmark.short_horizon_qa.models import (
     CutoffRecord,
@@ -49,17 +50,17 @@ def file_sha256(path: Path) -> str:
 
 def prepare_bundle(
     recording: str | Path,
-    cutoff_seconds: list[float],
+    cutoff_seconds: list[float] | None,
     output: Path,
     *,
+    progress: list[float] | None = None,
     mapper: MapperSettings = MapperSettings(),
 ) -> FrozenMemoryManifest:
     """Build one derived map sidecar without copying the source recording."""
-    if not cutoff_seconds:
-        raise ValueError("At least one cutoff is required")
-    cutoffs = sorted(set(cutoff_seconds))
-    if cutoffs[0] < 0:
-        raise ValueError("Cutoffs must be non-negative")
+    cutoffs = _validate_seconds(cutoff_seconds or [])
+    progresses = _validate_progress(progress or [])
+    if not cutoffs and not progresses:
+        raise ValueError("At least one cutoff in seconds or normalized progress is required")
     if output.exists():
         raise FileExistsError(f"Output already exists: {output}")
 
@@ -73,7 +74,7 @@ def prepare_bundle(
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{output.name}-", dir=output.parent) as temporary:
         temporary_path = Path(temporary)
-        manifest = _prepare_into(source_path, cutoffs, temporary_path, mapper)
+        manifest = _prepare_into(source_path, cutoffs, progresses, temporary_path, mapper)
         os.replace(temporary_path, output)
         return manifest
 
@@ -81,6 +82,7 @@ def prepare_bundle(
 def _prepare_into(
     source_path: Path,
     cutoffs: list[float],
+    progresses: list[float],
     output: Path,
     mapper: MapperSettings,
 ) -> FrozenMemoryManifest:
@@ -93,24 +95,33 @@ def _prepare_into(
             raise ValueError("Source recording contains no observations")
         recording_start = min(item[1] for item in ranges.values())
         recording_end = max(item[2] for item in ranges.values())
-        absolute_cutoffs = [recording_start + cutoff for cutoff in cutoffs]
+        duration = recording_end - recording_start
+        selections = [_CutoffSelection(seconds=value, progress=None) for value in cutoffs] + [
+            _CutoffSelection(
+                seconds=resolve_progress(value, recording_start, recording_end) - recording_start,
+                progress=value,
+            )
+            for value in progresses
+        ]
+        selections.sort(key=lambda item: (item.seconds, item.progress is None))
+        absolute_cutoffs = [recording_start + item.seconds for item in selections]
         if absolute_cutoffs[-1] > recording_end:
             raise ValueError(
-                f"Cutoff {cutoffs[-1]}s exceeds recording duration "
-                f"{recording_end - recording_start:.3f}s"
+                f"Cutoff {selections[-1].seconds}s exceeds recording duration {duration:.3f}s"
             )
         cutoff_maps = _write_maps(source, derived_path, absolute_cutoffs, mapper)
         records = tuple(
             CutoffRecord(
-                cutoff_seconds=relative,
+                cutoff_seconds=selection.seconds,
                 cutoff_timestamp=absolute,
+                normalized_progress=selection.progress,
                 stream_boundaries=_stream_boundaries(source, absolute),
                 map_observation_id=map_obs.id,
                 map_timestamp=map_obs.ts,
                 map_frame_count=int(map_obs.tags["frame_count"]),
             )
-            for relative, absolute, map_obs in zip(
-                cutoffs, absolute_cutoffs, cutoff_maps, strict=True
+            for selection, absolute, map_obs in zip(
+                selections, absolute_cutoffs, cutoff_maps, strict=True
             )
         )
 
@@ -130,6 +141,36 @@ def _prepare_into(
         encoding="utf-8",
     )
     return manifest
+
+
+class _CutoffSelection(NamedTuple):
+    seconds: float
+    progress: float | None
+
+
+def resolve_progress(progress: float, recording_start: float, recording_end: float) -> float:
+    """Resolve normalized progress to an exact timestamp over a sealed range."""
+    if not math.isfinite(progress) or not 0 <= progress <= 1:
+        raise ValueError("Normalized progress must be finite and within [0, 1]")
+    if recording_end < recording_start:
+        raise ValueError("Recording end precedes recording start")
+    if progress == 0:
+        return recording_start
+    if progress == 1:
+        return recording_end
+    return recording_start + progress * (recording_end - recording_start)
+
+
+def _validate_seconds(values: list[float]) -> list[float]:
+    if any(not math.isfinite(value) or value < 0 for value in values):
+        raise ValueError("Cutoffs must be finite and non-negative")
+    return sorted(set(values))
+
+
+def _validate_progress(values: list[float]) -> list[float]:
+    for value in values:
+        resolve_progress(value, 0.0, 1.0)
+    return sorted(set(values))
 
 
 def _stream_ranges(source: SqliteStore) -> dict[str, tuple[int, float, float]]:
