@@ -58,6 +58,16 @@ class BeforeFilter(Filter):
 
 
 @dataclass(frozen=True)
+class ThroughFilter(Filter):
+    """Include observations at or before an absolute timestamp."""
+
+    t: float
+
+    def matches(self, obs: Observation[Any]) -> bool:
+        return obs.ts <= self.t
+
+
+@dataclass(frozen=True)
 class TimeRangeFilter(Filter):
     t1: float
     t2: float
