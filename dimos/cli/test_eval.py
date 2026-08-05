@@ -23,7 +23,11 @@ import pytest
 from typer.testing import CliRunner
 
 from dimos.benchmark.agent_eval.models import CompactEvalResult
-from dimos.benchmark.agent_eval.progress import StatusProgress
+from dimos.benchmark.agent_eval.progress import (
+    AssistantTextProgress,
+    StatusProgress,
+    ToolEndProgress,
+)
 from dimos.cli.dimos import main
 import dimos.cli.eval as eval_cli
 
@@ -164,3 +168,22 @@ def test_base_cli_help_imports_without_eval_runtime() -> None:
         [sys.executable, "-c", script], capture_output=True, text=True, check=False
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_progress_renderer_ignores_leading_assistant_whitespace(capsys) -> None:
+    renderer = eval_cli.ProgressRenderer()
+
+    renderer(AssistantTextProgress(delta="\n"))
+
+    assert capsys.readouterr().err == ""
+
+
+def test_progress_renderer_truncates_large_tool_results(capsys) -> None:
+    renderer = eval_cli.ProgressRenderer()
+    result = "x" * 10_000
+
+    renderer(ToolEndProgress(ok=True, result=result, duration_seconds=0.1))
+
+    rendered = capsys.readouterr().err
+    assert len(rendered) < len(result)
+    assert "terminal output truncated" in rendered

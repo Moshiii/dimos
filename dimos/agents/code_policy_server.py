@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 import threading
 import time
@@ -36,6 +37,11 @@ The frozen evaluation session exposes read-only `memory`. Imports, functions, an
 variables persist between calls. Use this tool to inspect the recording and compute
 the answer; do not guess from the prompt.
 """
+
+_NOISY_MCP_TRANSPORT_LOGGERS = (
+    "mcp.server.streamable_http",
+    "mcp.server.streamable_http_manager",
+)
 
 
 class CodePolicyMcpServer:
@@ -79,6 +85,8 @@ class CodePolicyMcpServer:
     def start(self) -> None:
         if self._thread is not None:
             raise RuntimeError("CodePolicy MCP server is already running")
+        for logger_name in _NOISY_MCP_TRANSPORT_LOGGERS:
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((self.host, 0))

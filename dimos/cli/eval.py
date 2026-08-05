@@ -24,6 +24,8 @@ import typer
 
 app = typer.Typer(help="Run immutable agent evaluation cases", no_args_is_help=True)
 
+MAX_RENDERED_TOOL_RESULT_CHARS = 2_000
+
 
 def execute_single_case(*args: Any, **kwargs: Any) -> Any:
     """Import and dispatch the evaluation runtime only when ``eval run`` executes."""
@@ -117,6 +119,8 @@ class ProgressRenderer:
     def __call__(self, event: Any) -> None:
         with self._lock:
             if event.kind == "assistant_text":
+                if not self._assistant_open and not event.delta.strip():
+                    return
                 if not self._assistant_open:
                     typer.echo("[pi] ", err=True, nl=False)
                     self._assistant_open = True
@@ -142,7 +146,7 @@ class ProgressRenderer:
                 status = "ok" if event.ok else "error"
                 typer.echo(f"[python_exec] {status} ({event.duration_seconds:.1f}s)", err=True)
                 if event.result:
-                    typer.echo(_indent(event.result), err=True)
+                    typer.echo(_indent(_truncate_tool_result(event.result)), err=True)
             elif event.kind == "final_response" and not self._saw_assistant_text:
                 typer.echo(f"[pi] {event.text}", err=True)
 
@@ -158,3 +162,10 @@ class ProgressRenderer:
 
 def _indent(value: str) -> str:
     return "\n".join(f"  {line}" for line in value.splitlines())
+
+
+def _truncate_tool_result(value: str) -> str:
+    if len(value) <= MAX_RENDERED_TOOL_RESULT_CHARS:
+        return value
+    visible = value[:MAX_RENDERED_TOOL_RESULT_CHARS].rstrip()
+    return f"{visible}\n... [terminal output truncated; full result retained]"
