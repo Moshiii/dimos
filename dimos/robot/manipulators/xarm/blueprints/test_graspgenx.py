@@ -98,7 +98,10 @@ def test_xarm_grasp_sim_uses_gt_scene_and_pick_diagnostics() -> None:
     assert _module_count(xarm_grasp_sim, GraspGenXModule) == 1
     assert _module_count(xarm_grasp_sim, PickAndPlaceModule) == 1
     assert config.max_grasp_candidates_to_check == 30
-    assert config.pick_suppress_all_object_obstacles is True
+    assert config.pick_suppress_all_object_obstacles is False
+    assert config.grasp_viz_gripper == XARM_GRIPPER_SWEEP
+    assert config.grasp_viz_frame_to_tcp == XARM_GRASP_FRAME_TO_TCP
+    assert config.use_mesh_obstacles is True
 
 
 def test_xarm_grasp_sim_agent_keeps_gt_scene_provider() -> None:
