@@ -25,7 +25,6 @@ from dimos.manipulation.visualization.layers import (
     PointCloudElement,
     VisualizationLayer,
 )
-from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -44,10 +43,61 @@ _PATH_COLOR = (255, 255, 255)
 _MAX_CLOUD_POINTS = 20000
 
 
-def _wireframe(pose: Pose, gripper: Any, grasp_frame_to_tcp: Any) -> tuple[np.ndarray, np.ndarray]:
-    from dimos.manipulation.demo_graspgenx.render import gripper_wireframe_geometry
+def _rotation(q: Any) -> np.ndarray:
+    x, y, z, w = (float(q.x), float(q.y), float(q.z), float(q.w))
+    return np.asarray(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=float,
+    )
 
-    return gripper_wireframe_geometry(GraspCandidate(pose, 0.0), gripper, grasp_frame_to_tcp)
+
+def _fork_strips_local(gripper: Any) -> tuple[np.ndarray, ...]:
+    open_extents = np.asarray(gripper.extents_open, dtype=float)
+    half_extents = np.asarray(gripper.extents_half_open, dtype=float)
+    open_offset = np.asarray(gripper.offset_open, dtype=float)
+    half_offset = np.asarray(gripper.offset_half_open, dtype=float)
+
+    rear_center = np.asarray([half_offset[0], 0.0, half_offset[2] - half_extents[2] / 2.0])
+    mouth_center = np.asarray([open_offset[0], 0.0, open_offset[2] + open_extents[2] / 2.0])
+    if mouth_center[2] <= rear_center[2]:
+        raise ValueError("configured sweep profiles must open toward increasing local +Z")
+
+    rear_half_width = max(float(half_extents[0]) / 2.0, 1e-6)
+    mouth_half_width = max(float(open_extents[0]) / 2.0, rear_half_width)
+    rear_left = rear_center + np.asarray([-rear_half_width, 0.0, 0.0])
+    rear_right = rear_center + np.asarray([rear_half_width, 0.0, 0.0])
+    mouth_left = mouth_center + np.asarray([-mouth_half_width, 0.0, 0.0])
+    mouth_right = mouth_center + np.asarray([mouth_half_width, 0.0, 0.0])
+    return (
+        np.asarray([rear_center, [0.0, 0.0, 0.0]]),
+        np.asarray([rear_left, rear_right]),
+        np.asarray([rear_left, mouth_left]),
+        np.asarray([rear_right, mouth_right]),
+    )
+
+
+def _wireframe(pose: Pose, gripper: Any, grasp_frame_to_tcp: Any) -> tuple[np.ndarray, np.ndarray]:
+    world_to_tcp = np.eye(4, dtype=float)
+    world_to_tcp[:3, :3] = _rotation(pose.orientation)
+    world_to_tcp[:3, 3] = np.asarray(
+        [pose.position.x, pose.position.y, pose.position.z], dtype=float
+    )
+    grasp_to_tcp = np.asarray(grasp_frame_to_tcp, dtype=float)
+    if grasp_to_tcp.shape != (4, 4):
+        raise ValueError("grasp_frame_to_tcp must have shape (4, 4)")
+    world_to_grasp = world_to_tcp @ np.linalg.inv(grasp_to_tcp)
+    rotation = world_to_grasp[:3, :3]
+    translation = world_to_grasp[:3, 3]
+    strips = tuple(
+        (rotation @ strip.T).T + translation for strip in _fork_strips_local(gripper)
+    )
+    vertices = np.vstack(strips).astype(np.float32)
+    edges = np.arange(len(vertices), dtype=np.int32).reshape((-1, 2))
+    return vertices, edges
 
 
 def _rank_color(index: int, total: int) -> tuple[int, int, int]:
