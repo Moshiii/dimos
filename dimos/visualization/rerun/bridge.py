@@ -22,6 +22,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import (
     TYPE_CHECKING,
@@ -41,7 +42,7 @@ from toolz import pipe  # type: ignore[import-untyped]
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.zenohpubsub import Zenoh
 from dimos.protocol.pubsub.patterns import Glob, pattern_matches
@@ -57,7 +58,6 @@ from dimos.visualization.rerun.constants import (
     RerunOpenOption,
 )
 from dimos.visualization.rerun.init import rerun_init
-from dimos.visualization.rerun.tf_tree import TFTreeVis
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype
@@ -245,12 +245,13 @@ class RerunBridgeModule(Module):
         self._last_log = {}
         self._override_cache: dict[str, Callable[[Any], RerunData | None]] = {}
         self._frame_attached: dict[str, str] = {}
+        self._tf_lock = threading.Lock()
         self._tf_tree = self._new_tf_tree()
 
-    def _new_tf_tree(self) -> TFTreeVis | None:
+    def _new_tf_tree(self) -> TfFrameTree | None:
         if self.config.tf_axes <= 0:
             return None
-        return TFTreeVis(
+        return TfFrameTree(
             axis_length=self.config.tf_axes,
             root=f"{self.config.entity_prefix}/tf",
         )
@@ -334,6 +335,12 @@ class RerunBridgeModule(Module):
                 return
             self._last_log[entity_path] = now
 
+        if self._tf_tree is not None and isinstance(msg, TFMessage):
+            with self._tf_lock:
+                for path, archetype in msg.to_rerun(self._tf_tree):
+                    rr.log(path, archetype)
+            return
+
         rerun_data: RerunData | None = self._visual_override_for_entity_path(entity_path)(msg)
 
         if not rerun_data:
@@ -341,10 +348,6 @@ class RerunBridgeModule(Module):
 
         # TFMessage for example returns list of (entity_path, archetype) tuples
         if is_rerun_multi(rerun_data):
-            tf_tree = self._tf_tree
-            if tf_tree is not None and isinstance(msg, TFMessage):
-                tf_tree.log(msg, [archetype for _, archetype in rerun_data])
-                return
             for path, archetype in rerun_data:
                 rr.log(path, archetype)
         else:
@@ -595,8 +598,6 @@ class RerunBridgeModule(Module):
     def stop(self) -> None:
         self._override_cache.clear()
         self._frame_attached.clear()
-        if self._tf_tree is not None:
-            self._tf_tree.flush()
         self._tf_tree = None
         super().stop()
 

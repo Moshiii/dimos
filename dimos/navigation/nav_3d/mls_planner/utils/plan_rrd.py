@@ -37,12 +37,11 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
 from dimos.navigation.nav_3d.mls_planner.mls_planner import MLSPlanner
 from dimos.navigation.tf_pose import base_height_above_ground
 from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
 from dimos.utils.data import resolve_named_path
-from dimos.visualization.rerun.tf_tree import RerunTFTree
 
 if TYPE_CHECKING:
     import rerun.blueprint as rrb
@@ -152,6 +151,24 @@ def _tf_over(store: SqliteStore, window: Stream[Any]) -> Stream[TFMessage] | Non
     except LookupError:
         return None
     return recorded.order_by("ts").time_range(first, last)
+
+
+class _TfSync:
+    """Logs a recorded tf stream up to a given timestamp, in step with another stream."""
+
+    def __init__(self, tf: Stream[TFMessage] | None) -> None:
+        self._pending = iter(tf) if tf is not None else iter(())
+        self._next = next(self._pending, None)
+        self._tree = TfFrameTree()
+
+    def up_to(self, ts: float) -> None:
+        import rerun as rr
+
+        while self._next is not None and self._next.ts <= ts:
+            rr.set_time(TIMELINE, timestamp=self._next.ts)
+            for path, archetype in self._next.data.to_rerun(self._tree):
+                rr.log(path, archetype)
+            self._next = next(self._pending, None)
 
 
 def _base_from_sensor(store: SqliteStore) -> Transform | None:
@@ -588,8 +605,7 @@ def main(
                 support_min=support_min,
             )
         )
-        if tf is not None:
-            ray_pipeline = ray_pipeline.transform(RerunTFTree(tf))
+        tf_sync = _TfSync(tf)
 
         configs = _parse_configs(config, wall_clearance, wall_buffer, wall_buffer_weight)
         ref_clearance = configs[0][0]
@@ -637,6 +653,7 @@ def main(
         try:
             frame = 0
             for ray_obs in ray_pipeline:
+                tf_sync.up_to(ray_obs.ts)
                 if ray_obs.pose_tuple is None:
                     continue
                 start, base = _plan_start(
