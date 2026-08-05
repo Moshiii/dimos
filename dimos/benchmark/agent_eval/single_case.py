@@ -28,12 +28,16 @@ from dimos.benchmark.agent_eval.base import BaseEvalModel
 from dimos.benchmark.agent_eval.case import (
     AgentCondition,
     AgentOutcome,
+    AttemptRequest,
     EvalCase,
     FrozenRecordingSource,
+    LiveCodePolicyInteraction,
     Prediction,
     RuntimeBinding,
+    SimulatorSceneSource,
 )
 from dimos.benchmark.agent_eval.config import RuntimeCredential
+from dimos.benchmark.agent_eval.periodic_goal import load_periodic_goal
 from dimos.benchmark.agent_eval.pi_adapter import credential_binding_sha256
 from dimos.benchmark.agent_eval.pi_process import NodePiSessionFactory
 from dimos.benchmark.agent_eval.progress import (
@@ -42,6 +46,9 @@ from dimos.benchmark.agent_eval.progress import (
     StatusProgress,
     emit_progress,
 )
+from dimos.benchmark.agent_eval.realtime import RealtimeAttemptEngine
+from dimos.benchmark.agent_eval.realtime_agent import ExternalPiWorkerFactory
+from dimos.benchmark.agent_eval.realtime_runtime import DimosSimulatorRuntimeFactory
 from dimos.benchmark.short_horizon_qa.eval import (
     load_exact_integer_oracle,
     run_frozen_case,
@@ -49,7 +56,7 @@ from dimos.benchmark.short_horizon_qa.eval import (
 from dimos.benchmark.short_horizon_qa.prepare import prepare_bundle
 from dimos.constants import CACHE_DIR, STATE_DIR
 
-DEFAULT_MODEL = "gpt-5.6-luna"
+DEFAULT_MODEL: Literal["gpt-5.6-luna"] = "gpt-5.6-luna"
 DEFAULT_OUTPUT_ROOT = STATE_DIR / "evals"
 DEFAULT_CODEX_AUTH_PATH = Path.home() / ".pi" / "agent" / "auth.json"
 DEFAULT_OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
@@ -88,6 +95,7 @@ class CompactEvalResult(BaseEvalModel):
     attempt_id: str
     case_id: str
     source: str
+    source_kind: Literal["frozen_memory", "simulator_scene"] = "frozen_memory"
     progress: float | None
     question: str
     attempt_status: Literal["completed", "failed"]
@@ -108,29 +116,47 @@ def execute_single_case(
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     progress: ProgressSink | None = None,
 ) -> CompactEvalResult:
-    """Preflight and execute exactly one static frozen-memory case."""
+    """Preflight and execute exactly one canonical static or real-time case."""
     path = case_path.expanduser().resolve()
     emit_progress(progress, StatusProgress(channel="eval", message="loading case"))
     case = EvalCase.model_validate_json(path.read_bytes())
-    if not isinstance(case.source, FrozenRecordingSource):
-        raise ValueError("single-case CLI currently supports frozen-memory cases only")
     task = case.task
+    source_name = (
+        case.source.recording
+        if isinstance(case.source, FrozenRecordingSource)
+        else case.source.scene
+        if isinstance(case.source, SimulatorSceneSource)
+        else case.source.runtime
+    )
     emit_progress(
         progress,
         CaseHeaderProgress(
             case_id=case.case_id,
-            source=case.source.recording,
-            progress=case.source.progress,
+            source=source_name,
+            progress=(
+                case.source.progress if isinstance(case.source, FrozenRecordingSource) else None
+            ),
             question=getattr(task, "prompt", ""),
         ),
     )
 
     # Resolve all private case material before starting Pi.
     emit_progress(progress, StatusProgress(channel="eval", message="verifying validator"))
-    load_exact_integer_oracle(case, path.parent)
-    emit_progress(progress, StatusProgress(channel="eval", message="preparing frozen memory"))
-    bundle = _materialize_frozen_memory(case)
-    emit_progress(progress, StatusProgress(channel="eval", message="frozen memory ready"))
+    private_goal = None
+    runtime_factory = None
+    if isinstance(case.source, FrozenRecordingSource):
+        load_exact_integer_oracle(case, path.parent)
+        emit_progress(progress, StatusProgress(channel="eval", message="preparing frozen memory"))
+        bundle = _materialize_frozen_memory(case)
+        emit_progress(progress, StatusProgress(channel="eval", message="frozen memory ready"))
+    elif isinstance(case.source, SimulatorSceneSource):
+        private_goal = load_periodic_goal(case, path.parent)
+        runtime_factory = DimosSimulatorRuntimeFactory()
+        emit_progress(progress, StatusProgress(channel="eval", message="checking simulator"))
+        runtime_factory.preflight(case.source)
+        emit_progress(progress, StatusProgress(channel="eval", message="simulator ready"))
+    else:
+        raise ValueError("single-case CLI does not support legacy live_dimos sources")
     credential, binding_digest = _resolve_credential(config.agent.auth)
     adapter = _adapter_entrypoint()
     condition = AgentCondition(
@@ -140,7 +166,11 @@ def execute_single_case(
         thinking_level=config.agent.thinking_level,
     )
     runtime = RuntimeBinding(
-        runtime_id="local-standalone-code-policy",
+        runtime_id=(
+            "local-standalone-code-policy"
+            if isinstance(case.source, FrozenRecordingSource)
+            else "case-bound-simulator-scene"
+        ),
         parameters={
             "auth_mode": config.agent.auth.mode,
             "credential_binding_sha256": binding_digest,
@@ -157,16 +187,35 @@ def execute_single_case(
     )
     emit_progress(progress, StatusProgress(channel="eval", message="starting attempt"))
     started = time.monotonic()
-    engine_result = run_frozen_case(
-        case=case,
-        bundle=bundle,
-        private_root=path.parent,
-        output_root=output_root.expanduser(),
-        pi_factory=factory,
-        agent_condition=condition,
-        runtime_binding=runtime,
-        turn_timeout_s=SINGLE_CASE_TURN_TIMEOUT_SECONDS,
-    )
+    if isinstance(case.source, FrozenRecordingSource):
+        engine_result = run_frozen_case(
+            case=case,
+            bundle=bundle,
+            private_root=path.parent,
+            output_root=output_root.expanduser(),
+            pi_factory=factory,
+            agent_condition=condition,
+            runtime_binding=runtime,
+            turn_timeout_s=SINGLE_CASE_TURN_TIMEOUT_SECONDS,
+        )
+    else:
+        assert (
+            isinstance(case.interaction, LiveCodePolicyInteraction)
+            and private_goal is not None
+            and runtime_factory is not None
+        )
+        request = AttemptRequest(case=case, agent=condition, runtime=runtime)
+        engine_result = RealtimeAttemptEngine(
+            request=request,
+            private_goal=private_goal,
+            output_root=output_root.expanduser(),
+            runtime_factory=runtime_factory,
+            agent_factory=ExternalPiWorkerFactory(
+                pi_factory=factory,
+                turn_timeout_seconds=case.interaction.timeout_seconds,
+            ),
+            progress=progress,
+        ).run()
     duration = time.monotonic() - started
     emit_progress(progress, StatusProgress(channel="eval", message="attempt finished"))
     prediction = _optional_model(engine_result.attempt_path / "prediction.v1.json", Prediction)
@@ -176,8 +225,11 @@ def execute_single_case(
     return CompactEvalResult(
         attempt_id=engine_result.outcome.attempt_id,
         case_id=case.case_id,
-        source=case.source.recording,
-        progress=case.source.progress,
+        source=source_name,
+        source_kind=(
+            "frozen_memory" if isinstance(case.source, FrozenRecordingSource) else "simulator_scene"
+        ),
+        progress=(case.source.progress if isinstance(case.source, FrozenRecordingSource) else None),
         question=getattr(task, "prompt", ""),
         attempt_status=engine_result.outcome.attempt_status,
         task_result=engine_result.outcome.task_result,

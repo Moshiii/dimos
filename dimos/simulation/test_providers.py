@@ -28,8 +28,11 @@ class _Provider:
 class _EntryPoint:
     name = "test"
 
+    def __init__(self, value: Any | None = None) -> None:
+        self.value = _Provider() if value is None else value
+
     def load(self) -> Any:
-        return _Provider()
+        return self.value
 
 
 def test_load_external_simulation_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,3 +43,38 @@ def test_load_external_simulation_provider(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(providers.importlib_metadata, "entry_points", entry_points)
 
     assert isinstance(providers.load_simulation_provider("test"), _Provider)
+
+
+def test_missing_provider_lists_available_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    available = _EntryPoint()
+    available.name = "other"
+    monkeypatch.setattr(
+        providers.importlib_metadata,
+        "entry_points",
+        lambda **kwargs: [] if "name" in kwargs else [available],
+    )
+
+    with pytest.raises(ValueError, match="not installed.*other"):
+        providers.load_simulation_provider("test")
+
+
+def test_duplicate_provider_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        providers.importlib_metadata,
+        "entry_points",
+        lambda **kwargs: [_EntryPoint(), _EntryPoint()],
+    )
+
+    with pytest.raises(ValueError, match="registered more than once"):
+        providers.load_simulation_provider("test")
+
+
+def test_incompatible_provider_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        providers.importlib_metadata,
+        "entry_points",
+        lambda **kwargs: [_EntryPoint(value=object())],
+    )
+
+    with pytest.raises(TypeError, match="must implement SimulationProvider"):
+        providers.load_simulation_provider("test")

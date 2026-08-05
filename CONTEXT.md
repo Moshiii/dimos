@@ -60,6 +60,22 @@ _Avoid_: collected trajectory, demonstration trajectory, source-data trajectory
 One immutable, agent-visible map-question instance together with its declared public input contract and allowed evaluation capabilities.
 _Avoid_: oracle case, scene-wide corpus access, mutable episode
 
+**Live embodied evaluation case**:
+An immutable evaluation definition composed of a scene source, an embodied task, an ongoing observation-and-action interaction contract, and a private validator. A simulator backend materializes the scene for an attempt; it is not itself the source. The case defines what is evaluated without embedding the agent loop inside the robot runtime or treating a pytest system test as the evaluation contract.
+_Avoid_: internal-agent test, pytest scenario, simulator-specific test harness, runner configuration
+
+**Evaluation scene source**:
+The case-declared scene that an evaluation backend starts or resets for each attempt so the agent receives the same intended environment and the validator uses the corresponding world frame. The first PiMSim integration relies on PiMSim's existing scene and reset behavior; stronger content immutability or materialization attestation is not part of that integration.
+_Avoid_: simulator process, backend connection, mutable live world, attempt artifact
+
+**Evaluation simulator backend**:
+An adapter that materializes an evaluation scene source, controls its lifecycle, and exposes private state needed for validation. PiMSim and DimSim are backends; neither is the scene source itself.
+_Avoid_: scene, evaluation case, agent interaction, source identity
+
+**Evaluator-owned goal check**:
+A private predicate that the evaluation control loop invokes periodically while the DimOS runtime and evaluated agent remain active. A satisfied predicate terminates the attempt successfully; the episode deadline terminates it as a timeout. Goal completion does not depend on a self-reported DimOS `/goal_reached` event.
+_Avoid_: agent completion claim, post-hoc-only scoring, simulator-owned agent loop
+
 **Native MCP evaluation track**:
 An evaluation track that measures a configured DimOS agent through its normal MCP skill interface and explicitly permitted public capabilities.
 _Avoid_: model-only evaluation, benchmark wrapper result, code-as-action result

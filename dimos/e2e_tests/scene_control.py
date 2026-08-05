@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 from importlib.metadata import entry_points
-from typing import Protocol, cast
+from typing import Protocol, runtime_checkable
 
 from dimos.e2e_tests.dim_sim_client import DimSimClient
 from dimos.e2e_tests.scene_contract import PlanarBounds
 
+ENTRY_POINT_GROUP = "dimos.simulation.scene_controls"
 
+
+@runtime_checkable
 class SceneControl(Protocol):
     def start(self) -> None: ...
 
@@ -38,17 +41,20 @@ class SceneControl(Protocol):
 def load_scene_control(simulator: str) -> SceneControl:
     if simulator == "dimsim":
         return DimSimClient()
-    matches = [
-        entry
-        for entry in entry_points(group="dimos.simulation.scene_controls")
-        if entry.name == simulator
-    ]
+    matches = [entry for entry in entry_points(group=ENTRY_POINT_GROUP) if entry.name == simulator]
     if len(matches) != 1:
         raise ValueError(
             f"expected one scene-control provider for {simulator!r}, found {len(matches)}"
         )
-    client = matches[0].load()()
-    return cast("SceneControl", client)
+    factory = matches[0].load()
+    if not callable(factory):
+        raise TypeError(f"Scene-control provider {simulator!r} must be callable, got {factory!r}")
+    client = factory()
+    if not isinstance(client, SceneControl):
+        raise TypeError(
+            f"Scene-control provider {simulator!r} must implement SceneControl, got {client!r}"
+        )
+    return client
 
 
-__all__ = ["PlanarBounds", "SceneControl", "load_scene_control"]
+__all__ = ["ENTRY_POINT_GROUP", "PlanarBounds", "SceneControl", "load_scene_control"]

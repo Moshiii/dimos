@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 import time
@@ -104,6 +104,7 @@ def compile_dimsim_case(
     selected: SelectedDestination,
     *,
     runtime: str = "unitree-go2-dimsim-external-pi-eval",
+    timeout_seconds: float = 600.0,
 ) -> EvalCase:
     """Project one generated destination triple into the canonical case shape."""
     source = selected.contract.source
@@ -115,7 +116,10 @@ def compile_dimsim_case(
             episode=selected.manifest.release_id,
         ),
         task=EmbodiedInstructionTask(prompt=selected.public.text),
-        interaction=LiveCodePolicyInteraction(driver_revision="dimsim-live-v1"),
+        interaction=LiveCodePolicyInteraction(
+            driver_revision="dimsim-live-v1",
+            timeout_seconds=timeout_seconds,
+        ),
         validator=NativeValidatorRef(
             revision="dimsim-native-v1",
             contract_sha256=selected.contract_sha256,
@@ -353,7 +357,7 @@ class LiveCodePolicyInteractionDriver:
         self.episode_timeout_s = episode_timeout_s
         self.process_factory = process_factory
         self.mcp_factory = mcp_factory or (
-            lambda endpoint, timeout: McpAdapter(endpoint, timeout=timeout)
+            lambda endpoint, timeout: McpAdapter(endpoint, timeout=max(1, int(timeout)))
         )
         self.process: LivePolicyProcess | None = None
         self.call_log: CodePolicyCallLog | None = None
@@ -446,8 +450,9 @@ class LiveCodePolicyInteractionDriver:
                         timeout_s=remaining,
                     ),
                 )
+                pending_futures: set[Future[Any]] = {native_future, turn_future}
                 done, _ = wait(
-                    {native_future, turn_future},
+                    pending_futures,
                     timeout=remaining,
                     return_when=FIRST_COMPLETED,
                 )
@@ -545,7 +550,7 @@ def run_live_case(
     ),
     mcp_factory: Callable[[str, float], McpBinding] | None = None,
 ) -> EngineResult:
-    case = compile_dimsim_case(selected)
+    case = compile_dimsim_case(selected, timeout_seconds=episode_timeout_s)
     request = AttemptRequest(
         case=case,
         agent=AgentCondition(

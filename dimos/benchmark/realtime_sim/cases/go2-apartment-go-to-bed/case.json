@@ -1,0 +1,137 @@
+{
+  "schema_version": "1.0",
+  "case_id": "go2-apartment-go-to-bed",
+  "source": {
+    "schema_version": "1.0",
+    "kind": "simulator_scene",
+    "scene": "dimsim-apartment",
+    "simulation_provider": "pimsim",
+    "robot": "unitree-go2",
+    "dimos_blueprint": "unitree-go2",
+    "preparation": {
+      "schema_version": "1.0",
+      "kind": "apartment_spatial_memory",
+      "revision": "apartment-route-v1",
+      "exploration_route": [
+        [
+          3.881,
+          4.803
+        ],
+        [
+          4.16,
+          1.615
+        ],
+        [
+          1.596,
+          1.505
+        ],
+        [
+          1.649,
+          0.137
+        ],
+        [
+          -3.644,
+          -0.064
+        ],
+        [
+          -3.759,
+          -2.661
+        ],
+        [
+          -4.186,
+          -4.83
+        ],
+        [
+          -3.759,
+          -2.661
+        ],
+        [
+          -1.07,
+          -3.285
+        ],
+        [
+          -2.504,
+          -2.452
+        ],
+        [
+          -2.647,
+          5.243
+        ],
+        [
+          -3.663,
+          3.591
+        ],
+        [
+          -1.178,
+          1.974
+        ],
+        [
+          -2.416,
+          2.629
+        ],
+        [
+          -2.581,
+          0.164
+        ],
+        [
+          1.834,
+          0.072
+        ],
+        [
+          3.01,
+          -3.883
+        ],
+        [
+          1.756,
+          -3.742
+        ],
+        [
+          6.336,
+          -4.077
+        ],
+        [
+          8.264,
+          -5.119
+        ],
+        [
+          6.258,
+          -0.964
+        ],
+        [
+          6.453,
+          5.327
+        ]
+      ],
+      "final_start_pose": [
+        3.0,
+        0.0,
+        0.52
+      ],
+      "step_timeout_seconds": 60.0,
+      "observation_dwell_seconds": 1.0,
+      "odometry_timeout_seconds": 30.0,
+      "start_tolerance_metres": 0.25
+    }
+  },
+  "task": {
+    "schema_version": "1.0",
+    "kind": "embodied_instruction",
+    "prompt": "Go to the bed"
+  },
+  "interaction": {
+    "schema_version": "1.0",
+    "kind": "live_code_policy",
+    "driver_revision": "realtime-supervisor-v1",
+    "session_lifetime": "one_attempt",
+    "completion": "agent_or_native_terminal",
+    "timeout_seconds": 180.0
+  },
+  "validator": {
+    "schema_version": "1.0",
+    "kind": "periodic_goal",
+    "revision": "semantic-proximity-v1",
+    "private_path": "private/goal.json",
+    "private_sha256": "e4ecd6c2e9be8a5bcff18867784b3c6374c74ab6124c2f59ef01254e85d987fa"
+  },
+  "fingerprint": "031ac2b886691267c918de3785e165a3418d9f25c4eee0fd37637710bc43713f"
+}

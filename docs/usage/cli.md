@@ -60,6 +60,33 @@ Environment variables and `.env` values use the field name in uppercase, for exa
 
 ## Commands
 
+### `dimos eval run`
+
+Run one canonical agent-evaluation case. The case selects frozen QA or a
+real-time simulator scene; agent authentication, output, and presentation stay
+as command options.
+
+```bash
+dimos eval run <case.json> [--output <directory>] [--json] [--quiet]
+```
+
+Simulator cases bind their provider, scene, robot, DimOS blueprint,
+preparation, deadline, and private validator. They do not accept a separate
+runtime or source override. For example:
+
+```bash
+uv run dimos eval run \
+  dimos/benchmark/realtime_sim/cases/go2-apartment-go-to-bed/case.json \
+  --output=/tmp/dimos-eval-go-to-bed
+```
+
+Use `--agent.auth.mode=codex-oauth` with `--agent.auth.path`, or
+`--agent.auth.mode=openai-api-key` with `--agent.auth.env`. The command exits
+zero for completed evaluations (whether the task passed or failed), one for an
+infrastructure failure, and two for preflight failure. See the
+[evaluation stack overview](/docs/benchmark/agent-evaluation-stack-overview.md)
+for result meanings, PiMSim prerequisites, evidence, and privacy.
+
 ### `dimos run`
 
 Start one or more robot blueprints. Built-in DimOS blueprints use bare names such as

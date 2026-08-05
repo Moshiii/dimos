@@ -190,6 +190,7 @@ def test_load_scene_package_tolerates_missing_objects_sidecar(tmp_path: Path) ->
 def test_browser_visual_profiles_are_backend_specific() -> None:
     rerun = browser_visual_spec_for_target("rerun")
     babylon = browser_visual_spec_for_target("babylon")
+    mesh = browser_visual_spec_for_target("mesh", optimizer="copy")
 
     assert rerun.artifact_name == "visual.rerun.glb"
     assert rerun.quantize is False
@@ -200,6 +201,10 @@ def test_browser_visual_profiles_are_backend_specific() -> None:
     assert babylon.quantize is True
     assert babylon.normalize_textures is False
     assert babylon.demote_required_extensions == ()
+
+    assert mesh.artifact_name == "visual.mesh.glb"
+    assert mesh.optimizer == "copy"
+    assert mesh.quantize is False
 
 
 def test_extract_scene_objects_emits_per_prim_aabb() -> None:

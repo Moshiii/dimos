@@ -90,6 +90,10 @@ _BROWSER_VISUAL_PROFILES: dict[str, dict[str, Any]] = {
         "max_vertex_growth_ratio": 1.5,
     },
 }
+# PiMSim publishes its provider-neutral visual artifact under the ``mesh``
+# target. It uses the generic compatibility profile while retaining that target
+# name in the cooked package manifest.
+_BROWSER_VISUAL_PROFILES["mesh"] = dict(_BROWSER_VISUAL_PROFILES["generic"])
 BROWSER_VISUAL_TARGETS = tuple(sorted({"rerun", *_BROWSER_VISUAL_PROFILES}))
 
 

@@ -14,6 +14,7 @@
 
 import math
 import threading
+import time
 from typing import TYPE_CHECKING, cast
 
 from dimos.core.transport import PubSubTransport
@@ -66,10 +67,10 @@ class DirectCmdVelExplorer:
         self._pose = msg
         self._new_pose.set()
 
-    def _wait_for_pose(self) -> PoseStamped:
+    def _wait_for_pose(self, timeout: float = 5.0) -> PoseStamped:
         self._new_pose.clear()
-        self._new_pose.wait(timeout=5.0)
-        assert self._pose is not None, "No odom received"
+        if not self._new_pose.wait(timeout=timeout) or self._pose is None:
+            raise TimeoutError("No odometry received")
         return self._pose
 
     @staticmethod
@@ -84,10 +85,16 @@ class DirectCmdVelExplorer:
         assert self._cmd_vel is not None
         self._cmd_vel.broadcast(None, Twist(linear=Vector3(), angular=Vector3()))
 
-    def _drive_to(self, target_x: float, target_y: float) -> None:
+    def _drive_to(self, target_x: float, target_y: float, timeout: float | None = None) -> None:
         """Pursuit controller: steer toward the target while driving forward."""
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
-            pose = self._wait_for_pose()
+            if deadline is not None and time.monotonic() >= deadline:
+                self._stop()
+                raise TimeoutError(f"Timed out driving to x={target_x}, y={target_y}")
+            pose = self._wait_for_pose(
+                min(5.0, max(0.001, deadline - time.monotonic())) if deadline is not None else 5.0
+            )
             dx = target_x - pose.x
             dy = target_y - pose.y
             distance = math.hypot(dx, dy)
@@ -108,7 +115,26 @@ class DirectCmdVelExplorer:
             )
         self._stop()
 
-    def follow_points(self, waypoints: list[tuple[float, float]]) -> None:
+    def follow_points(
+        self,
+        waypoints: list[tuple[float, float]],
+        *,
+        per_waypoint_timeout: float | None = None,
+    ) -> None:
         self._wait_for_pose()
         for tx, ty in waypoints:
-            self._drive_to(tx, ty)
+            self._drive_to(tx, ty, timeout=per_waypoint_timeout)
+
+    def position(self) -> tuple[float, float]:
+        """Return the most recently observed planar odometry position."""
+
+        pose = self._wait_for_pose()
+        return pose.position.x, pose.position.y
+
+    def wait_until_position(self, x: float, y: float, *, tolerance: float, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            pose = self._wait_for_pose(min(5.0, max(0.001, deadline - time.monotonic())))
+            if math.hypot(pose.position.x - x, pose.position.y - y) <= tolerance:
+                return
+        raise TimeoutError(f"Odometry did not converge to x={x}, y={y}")

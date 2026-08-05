@@ -32,6 +32,7 @@ from dimos.benchmark.agent_eval.progress import (
 )
 from dimos.benchmark.agent_eval.single_case import (
     DEFAULT_OPENAI_API_KEY_ENV,
+    AgentAuthConfig,
     CodexOAuthConfig,
     CompactEvalResult,
     EvalRunConfig,
@@ -75,7 +76,7 @@ def run(
     if auth_mode == "codex-oauth":
         if auth_env is not None:
             raise typer.BadParameter("--agent.auth.env requires --agent.auth.mode=openai-api-key")
-        auth = CodexOAuthConfig(path=auth_path)
+        auth: AgentAuthConfig = CodexOAuthConfig(path=auth_path)
     else:
         if auth_path is not None:
             raise typer.BadParameter("--agent.auth.path requires --agent.auth.mode=codex-oauth")
@@ -124,12 +125,13 @@ def format_result(result: CompactEvalResult) -> str:
     if result.progress is not None:
         source += f" @ {result.progress * 100:g}%"
     answer = str(result.integer_answer) if result.integer_answer is not None else "—"
-    rows = (
+    task_label = "Task" if result.source_kind == "simulator_scene" else "Question"
+    rows = [
         ("Case", result.case_id),
         ("Source", source),
-        ("Question", result.question),
-        ("Answer", answer),
+        (task_label, result.question),
         ("Result", result.task_result),
+        ("Reason", result.reason),
         (
             "Agent",
             f"{result.agent.agent_id} · {result.agent.model} · {result.agent.thinking_level}",
@@ -138,7 +140,9 @@ def format_result(result: CompactEvalResult) -> str:
         ("Duration", f"{result.duration_seconds:.1f}s"),
         ("Attempt", result.attempt_id),
         ("Artifacts", str(result.artifact_path)),
-    )
+    ]
+    if result.source_kind == "frozen_memory":
+        rows.insert(3, ("Answer", answer))
     body = "\n".join(f"  {label:<10} {value}" for label, value in rows)
     return f"{heading}\n\n{body}"
 
@@ -168,8 +172,12 @@ class ProgressRenderer:
                 typer.echo("[eval] Session", err=True)
                 typer.echo(f"  {'Case':<10} {event.case_id}", err=True)
                 typer.echo(f"  {'Source':<10} {source}", err=True)
-                typer.echo(f"  {'Question':<10} {event.question}", err=True)
-                typer.echo(f"  {'Answer':<10} pending", err=True)
+                if event.progress is None:
+                    typer.echo(f"  {'Task':<10} {event.question}", err=True)
+                    typer.echo(f"  {'Result':<10} pending", err=True)
+                else:
+                    typer.echo(f"  {'Question':<10} {event.question}", err=True)
+                    typer.echo(f"  {'Answer':<10} pending", err=True)
             elif isinstance(event, StatusProgress):
                 typer.echo(f"[{event.channel}] {event.message}", err=True)
             elif isinstance(event, ToolStartProgress):

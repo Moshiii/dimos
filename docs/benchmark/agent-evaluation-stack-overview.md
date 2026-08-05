@@ -264,9 +264,9 @@ It is not an authoritative room-count benchmark. The real acceptance case still
 needs a human-authored room inventory, a clear counting policy, and independent
 review. We must not derive the expected answer from the agent being evaluated.
 
-## Future live, long-horizon evaluation
+## Real-time simulator evaluation
 
-A long-horizon agent must observe, act, and adjust over time. It therefore runs
+A long-horizon agent must observe, act, and adjust over time. It runs
 beside a live simulator or real DimOS robot system.
 
 ```text
@@ -318,6 +318,65 @@ The source is now a live environment rather than a sealed recording. The task
 may span many turns. The interaction gives the agent both live `memory` and the
 Porcelain-backed `app`. The validator may watch robot state throughout the run
 instead of checking only one final answer.
+
+The static and real-time cases vary their contracts, not their command:
+
+| Contract | Frozen QA | Real-time simulation |
+|---|---|---|
+| `source` | recording + progress | scene + provider + robot + DimOS blueprint + optional preparation |
+| `task` | integer question | embodied instruction |
+| `interaction` | frozen CodePolicy | live CodePolicy + case deadline |
+| `validator` | private exact integer | private periodically sampled world-state goal |
+| agent interface | read-only frozen `memory` | updating read-only `memory` + Porcelain `app` |
+| success | parsed answer matches | evaluator observes the private goal |
+
+The evaluator owns the live runtime. It loads the case-bound simulator provider,
+starts a non-agentic DimOS blueprint, waits for sensors, odometry, Memory2,
+Porcelain, and motion control, runs source preparation, and only then starts the
+task deadline and external Pi session. The control thread periodically checks
+the private goal while Pi is active. Pi text and `/goal_reached` are never
+evaluation truth. Goal success ends the attempt immediately; at the deadline,
+the evaluator samples once more before recording `episode_timeout`.
+
+### PiMSim Go2 apartment example
+
+The checked-in case reproduces the apartment go-to-bed system test. PiMSim
+materializes the `dimsim-apartment` scene. Before Pi starts, the evaluator samples
+the fixed public exploration route to populate spatial memory, respawns Go2 at
+`(3.0, 0.0, 0.52)`, and verifies odometry convergence. Pi then receives exactly
+`Go to the bed`. A private validator queries semantic bed bounds and checks the
+robot's current planar distance periodically.
+
+Install the PiMSim core and DimOS integration packages (editable checkouts are
+fine), build `packages/pi-spatial-adapter`, and configure either Codex OAuth in
+`~/.pi/agent/auth.json` or `OPENAI_API_KEY`. Then run:
+
+```bash
+uv run dimos eval run \
+  dimos/benchmark/realtime_sim/cases/go2-apartment-go-to-bed/case.json \
+  --output=/tmp/dimos-eval-go-to-bed
+```
+
+The case already binds PiMSim, its scene, Go2, the blueprint, preparation, and
+the deadline. There is intentionally no `--runtime` or source override.
+
+- `completed/passed`: the private goal was observed by the deadline.
+- `completed/failed`: the runtime stayed healthy but the final deadline sample
+  did not satisfy the goal.
+- `failed/not_evaluated`: provider, startup, preparation, agent, validator, or
+  required live state failed, so no trustworthy task result exists.
+
+Artifacts under the printed attempt path contain startup and preparation
+receipts, Pi and CodePolicy evidence, private goal observations, cleanup
+diagnostics, a manifest, and one normalized outcome. Public CLI output omits the
+private query, target bounds, distance, and threshold.
+
+If preflight reports that `pimsim` is missing, install both the PiMSim package
+and its `integrations/dimos` package into the same environment as DimOS. A scene
+startup error often means the apartment assets have not been prepared or the
+host lacks MuJoCo rendering support. A readiness or preparation error is an
+infrastructure failure; inspect `events.jsonl`, `runtime-startup.v1.json`, and
+`source-preparation.v1.json` in the attempt directory.
 
 ## What remains the same
 

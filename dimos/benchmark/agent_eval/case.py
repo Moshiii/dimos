@@ -29,6 +29,31 @@ from dimos.benchmark.spatial.utilities import canonical_json
 NonEmpty = Annotated[str, Field(min_length=1)]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 NormalizedProgress = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+PositiveFinite = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
+
+
+class SourcePreparationRef(BaseEvalModel):
+    """Versioned public recipe used to establish a simulator task's start state."""
+
+    kind: Literal["apartment_spatial_memory"] = "apartment_spatial_memory"
+    revision: NonEmpty
+    exploration_route: tuple[tuple[float, float], ...] = Field(min_length=1)
+    final_start_pose: tuple[float, float, float]
+    step_timeout_seconds: PositiveFinite
+    observation_dwell_seconds: PositiveFinite = 1.0
+    odometry_timeout_seconds: PositiveFinite
+    start_tolerance_metres: PositiveFinite
+
+    @model_validator(mode="after")
+    def coordinates_are_finite(self) -> SourcePreparationRef:
+        coordinates = (
+            coordinate
+            for point in (*self.exploration_route, self.final_start_pose)
+            for coordinate in point
+        )
+        if not all(math.isfinite(coordinate) for coordinate in coordinates):
+            raise ValueError("source preparation coordinates must be finite")
+        return self
 
 
 class FrozenRecordingSource(BaseEvalModel):
@@ -51,8 +76,17 @@ class LiveDimosSource(BaseEvalModel):
     episode: NonEmpty | None = None
 
 
+class SimulatorSceneSource(BaseEvalModel):
+    kind: Literal["simulator_scene"] = "simulator_scene"
+    scene: NonEmpty
+    simulation_provider: NonEmpty
+    robot: NonEmpty
+    dimos_blueprint: NonEmpty
+    preparation: SourcePreparationRef | None = None
+
+
 SourceSpec = Annotated[
-    FrozenRecordingSource | LiveDimosSource,
+    FrozenRecordingSource | LiveDimosSource | SimulatorSceneSource,
     Field(discriminator="kind"),
 ]
 
@@ -85,6 +119,7 @@ class LiveCodePolicyInteraction(BaseEvalModel):
     driver_revision: NonEmpty
     session_lifetime: Literal["one_attempt"] = "one_attempt"
     completion: Literal["agent_or_native_terminal"] = "agent_or_native_terminal"
+    timeout_seconds: PositiveFinite
 
 
 InteractionSpec = Annotated[
@@ -113,8 +148,27 @@ class NativeValidatorRef(BaseEvalModel):
     contract_sha256: Sha256
 
 
+class PeriodicGoalValidatorRef(BaseEvalModel):
+    kind: Literal["periodic_goal"] = "periodic_goal"
+    revision: NonEmpty
+    private_path: NonEmpty
+    private_sha256: Sha256
+
+    @model_validator(mode="after")
+    def private_path_is_relative(self) -> PeriodicGoalValidatorRef:
+        _validate_private_path(self.private_path)
+        return self
+
+
+class SemanticObjectProximityGoal(BaseEvalModel):
+    kind: Literal["semantic_object_proximity"] = "semantic_object_proximity"
+    semantic_query: NonEmpty
+    maximum_distance_metres: PositiveFinite
+    poll_interval_seconds: PositiveFinite
+
+
 ValidatorRef = Annotated[
-    ExactIntegerValidatorRef | NativeValidatorRef,
+    ExactIntegerValidatorRef | NativeValidatorRef | PeriodicGoalValidatorRef,
     Field(discriminator="kind"),
 ]
 
@@ -267,3 +321,9 @@ def _case_payload(
         "interaction": interaction.model_dump(mode="json"),
         "validator": validator.model_dump(mode="json"),
     }
+
+
+def _validate_private_path(value: str) -> None:
+    path = PurePosixPath(value)
+    if path.is_absolute() or not path.parts or ".." in path.parts:
+        raise ValueError("validator private_path must be a safe relative path")
