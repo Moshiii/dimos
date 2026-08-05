@@ -493,8 +493,8 @@ class ManipulationModule(Module):
         Use this after an error or fault to allow new commands.
         Cannot reset while a motion is executing — cancel first.
 
-        TODO: Planning failures should not enter FAULT in the future; execution
-        failures may still require reset because the physical state is uncertain.
+        Planning failures return to IDLE on their own; execution failures
+        require reset because the physical state is uncertain.
         """
         with self._lock:
             if self._state == ManipulationState.EXECUTING:
@@ -825,22 +825,19 @@ class ManipulationModule(Module):
         self._error_message = message
         return False
 
-    def _fail(self, msg: str) -> bool:
-        """Set FAULT state with error message."""
-        self._record_error(msg)
-        with self._lock:
-            self._state = ManipulationState.FAULT
-        return False
-
     def _fail_planning_epoch(self, planning_epoch: int, msg: str) -> bool:
-        """Fault only the still-current planning operation."""
+        """Fail the still-current planning operation and return to IDLE.
+
+        Planning failures leave the robot stationary, so they are recoverable
+        without a reset; only execution failures enter FAULT.
+        """
         with self._lock:
             if self._state != ManipulationState.PLANNING or planning_epoch != self._planning_epoch:
                 logger.info("Discarding cancelled planning result")
                 return False
             logger.warning(msg)
             self._last_plan = None
-            self._state = ManipulationState.FAULT
+            self._state = ManipulationState.IDLE
             self._error_message = msg
             return False
 
@@ -1090,7 +1087,7 @@ class ManipulationModule(Module):
         if self._world_monitor is None or self._planner is None:
             return None
         if not joint_targets:
-            self._fail("At least one joint target is required")
+            self._record_error("At least one joint target is required")
             return None
 
         group_ids = tuple(
@@ -1131,7 +1128,7 @@ class ManipulationModule(Module):
         if self._world_monitor is None or self._kinematics is None:
             return None
         if not pose_targets:
-            self._fail("At least one pose target is required")
+            self._record_error("At least one pose target is required")
             return None
         stamped_targets = {
             planning_group_id_from_selector(group): PoseStamped(
@@ -1270,13 +1267,13 @@ class ManipulationModule(Module):
         if self._world_monitor is None or self._planner is None:
             return None
         if not targets:
-            self._fail("At least one Cartesian target is required")
+            self._record_error("At least one Cartesian target is required")
             return None
         normalized_targets = {
             planning_group_id_from_selector(group): target for group, target in targets.items()
         }
         if len(normalized_targets) != len(targets):
-            self._fail("Cartesian target groups must be unique")
+            self._record_error("Cartesian target groups must be unique")
             return None
         auxiliary_ids = tuple(planning_group_id_from_selector(group) for group in auxiliary_groups)
         group_ids = tuple((*normalized_targets.keys(), *auxiliary_ids))

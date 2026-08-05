@@ -413,14 +413,14 @@ class TestStateMachine:
         assert not result.is_success()
         assert result.error_code == "INVALID_STATE"
 
-    def test_fail_sets_fault_state(self, module_factory):
-        """_fail helper sets FAULT state and message."""
+    def test_record_error_keeps_state(self, module_factory):
+        """_record_error stores the message without changing state."""
         module = module_factory()
         module._state = ManipulationState.PLANNING
 
-        result = module._fail("Test error")
+        result = module._record_error("Test error")
         assert result is False
-        assert module._state == ManipulationState.FAULT
+        assert module._state == ManipulationState.PLANNING
         assert module._error_message == "Test error"
 
     def test_begin_planning_state_checks(self, robot_config, module_factory):
@@ -1183,7 +1183,7 @@ class TestPlanningGroupApis:
         )
 
         assert success is False
-        assert module._state == ManipulationState.FAULT
+        assert module._state == ManipulationState.IDLE
         assert module._last_plan is None
         assert module.has_planned_path() is False
 
@@ -1378,7 +1378,7 @@ class TestPlanningDiagnostics:
         )
 
         assert module.get_error() == "Planning failed: TIMEOUT: planner timed out"
-        assert module._state == ManipulationState.FAULT
+        assert module._state == ManipulationState.IDLE
 
 
 class TestExecute:
