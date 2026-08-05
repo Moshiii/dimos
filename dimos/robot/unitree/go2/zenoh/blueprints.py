@@ -48,7 +48,8 @@ voxel_size = 0.08
 planner_viz_hz = 2.0
 
 # GO2Zenoh publishes this mount onto tf, where nav reads its odometry corrections.
-MID360_MOUNT_RPY_DEG = (0.0, 60.0, 0.0)
+# Either a raw (roll, pitch, yaw) tuple in degrees or a GO2ZenohConfig.mid360_mount preset.
+MID360_MOUNT = "SF"
 
 
 def _static_robot_body(rr: Any) -> list[Any]:
@@ -144,7 +145,7 @@ def _rerun_config(visual_override: dict[str, Any] | None = None) -> dict[str, An
 # is the layer to drive from when something upstream is suspect.
 go2_zenoh_basic = autoconnect(
     vis_module(viewer_backend=global_config.viewer, rerun_config=_rerun_config()),
-    GO2Zenoh.blueprint(mid360_mount_rpy_deg=MID360_MOUNT_RPY_DEG),
+    GO2Zenoh.blueprint(mid360_mount=MID360_MOUNT),
     MovementManager.blueprint(),
 ).global_config(transport="zenoh", n_workers=4, robot_model="unitree_go2")
 
