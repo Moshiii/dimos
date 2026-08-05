@@ -50,6 +50,10 @@ TIMELINE = "ts"
 AXIS_LEN = 0.5
 AXIS_RADIUS_RATIO = 25
 
+# --voxel-size default, and the render size --render-voxel scales from when unset.
+DEFAULT_VOXEL_SIZE = 0.08
+DEFAULT_RENDER_VOXEL = 0.05
+
 # Mount frames as recorded on the tf stream.
 BASE_FRAME = "base_link"
 SENSOR_FRAME = "mid360_link"
@@ -451,7 +455,9 @@ def main(
         "pointlio_odometry", "--odom-stream", help="Odometry stream in the recording"
     ),
     align_tol: float = typer.Option(0.05, "--align-tol", help="Lidar/odom alignment tolerance (s)"),
-    voxel_size: float = typer.Option(0.08, "--voxel-size", help="Voxel edge length (m)"),
+    voxel_size: float = typer.Option(
+        DEFAULT_VOXEL_SIZE, "--voxel-size", help="Voxel edge length (m)"
+    ),
     max_range: float = typer.Option(30.0, "--max-range", help="Max ray cast distance (m)"),
     ray_subsample: int = typer.Option(1, "--ray-subsample", help="Keep every Nth ray"),
     shadow_depth: float = typer.Option(
@@ -516,7 +522,12 @@ def main(
     live: bool = typer.Option(
         False, "--live", help="Also spawn the rerun viewer when --out is set"
     ),
-    render_voxel: float = typer.Option(0.05, "--render-voxel", help="Rerun voxel render size (m)"),
+    render_voxel: float | None = typer.Option(
+        None,
+        "--render-voxel",
+        help="Rerun voxel render size (m); scales with --voxel-size when unset "
+        f"({DEFAULT_RENDER_VOXEL} at the default voxel size of {DEFAULT_VOXEL_SIZE})",
+    ),
     local_radius: float = typer.Option(
         5.0, "--local-radius", help="Close-up view: crop radius around the robot (m)"
     ),
@@ -540,6 +551,9 @@ def main(
     ),
 ) -> None:
     import rerun as rr
+
+    if render_voxel is None:
+        render_voxel = DEFAULT_RENDER_VOXEL * (voxel_size / DEFAULT_VOXEL_SIZE)
 
     db_path = resolve_named_path(dataset, ".db")
     crop = LocalCrop(local_radius, local_above, local_below)

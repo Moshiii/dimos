@@ -37,6 +37,10 @@ from dimos.utils.data import resolve_named_path
 
 TIMELINE = "ts"
 
+# --voxel-size default, and the render size --render-voxel scales from when unset.
+DEFAULT_VOXEL_SIZE = 0.1
+DEFAULT_RENDER_VOXEL = 0.05
+
 PairObs = Observation[tuple[Observation[PointCloud2], Observation[Odometry]]]
 
 COLORS = {
@@ -84,16 +88,26 @@ def main(
     lidar_stream: str = typer.Option("fastlio_lidar", "--lidar-stream"),
     odom_stream: str = typer.Option("fastlio_odometry", "--odom-stream"),
     align_tol: float = typer.Option(0.05, "--align-tol", help="Lidar/odom alignment tolerance (s)"),
-    voxel_size: float = typer.Option(0.1, "--voxel-size", help="Voxel edge length (m)"),
+    voxel_size: float = typer.Option(
+        DEFAULT_VOXEL_SIZE, "--voxel-size", help="Voxel edge length (m)"
+    ),
     max_range: float = typer.Option(30.0, "--max-range", help="Max ray cast distance (m)"),
     emit_every: int = typer.Option(1, "--emit-every", help="Log the maps every N frames"),
-    render_voxel: float = typer.Option(0.05, "--render-voxel", help="Voxel render size (m)"),
+    render_voxel: float | None = typer.Option(
+        None,
+        "--render-voxel",
+        help="Voxel render size (m); scales with --voxel-size when unset "
+        f"({DEFAULT_RENDER_VOXEL} at the default voxel size of {DEFAULT_VOXEL_SIZE})",
+    ),
     normal_scale: float = typer.Option(0.08, "--normal-scale", help="Normal arrow length (m)"),
     from_time: float | None = typer.Option(
         None, "--from-time", help="Start replay at this stream timestamp (s)"
     ),
 ) -> None:
     import rerun as rr
+
+    if render_voxel is None:
+        render_voxel = DEFAULT_RENDER_VOXEL * (voxel_size / DEFAULT_VOXEL_SIZE)
 
     db_path = resolve_named_path(dataset, ".db")
 
