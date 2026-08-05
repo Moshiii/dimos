@@ -109,7 +109,6 @@ _nav_rerun_config = {
     },
     # Ring buffer replayed to a connecting viewer. Small so connect catches up fast.
     "memory_limit": "64MB",
-    "tf_axes": 0.5,
     # The robot box hangs off base_link on its own entity: a static transform
     # under world/tf would override the live one.
     "static": {
