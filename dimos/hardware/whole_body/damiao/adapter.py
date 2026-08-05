@@ -237,6 +237,11 @@ class DamiaoWholeBodyAdapter(ABC):
     def read_motor_states(self) -> list[MotorState]:
         if not self._connected:
             raise RuntimeError("Damiao whole-body adapter is not connected")
+        if not self._active:
+            # The write path pumps the bus once per control cycle while
+            # active; without it feedback would stay frozen at the connect
+            # snapshot, so keep it flowing for read-only sessions.
+            self._refresh()
         states: list[MotorState] = []
         for name, expected_joints in self.arm_joints.items():
             arm = self._arms[name]
