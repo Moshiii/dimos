@@ -53,4 +53,3 @@ The existing `CodePolicyModule` MAY remain temporarily as a wrapper over the ext
 #### Scenario: Run a legacy blueprint during migration
 - **WHEN** an existing blueprint still instantiates `CodePolicyModule`
 - **THEN** its compatible `python_exec`, reset, and evidence behavior delegates to the extracted core without becoming the topology used by new evaluations
-

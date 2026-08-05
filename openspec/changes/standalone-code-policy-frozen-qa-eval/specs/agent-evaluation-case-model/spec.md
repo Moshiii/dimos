@@ -65,4 +65,3 @@ Future evaluation runners added under the generic agent-evaluation package SHALL
 #### Scenario: Add another evaluation kind
 - **WHEN** a future evaluation uses a different source or validation mechanism
 - **THEN** it adds typed source, interaction, and validator implementations without redefining Pi session ownership, generic attempt outcomes, or evidence identity
-
