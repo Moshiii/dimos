@@ -123,17 +123,27 @@ from dimos.manipulation.planning.planners.config import (
     RoboPlanCartesianPathConfig,
 )
 
-path_config = RoboPlanCartesianPathConfig(
-    speed_mode="bounded",
-    max_linear_speed=0.1,
-    max_angular_speed=0.5,
-    max_position_error=0.005,
-    max_orientation_error=0.01,
-)
+path_config = RoboPlanCartesianPathConfig()
 
 module.plan_cartesian_targets(
     {"arm/manipulator": (current_tcp_pose, goal_tcp_pose)},
     path_config,
+)
+```
+
+The default `time_optimal` mode returns the TOPP-RA trajectory constrained by
+the robot's joint velocity and acceleration limits. To enforce Cartesian speed
+and acceleration maxima instead, opt into bounded mode:
+
+```python skip
+bounded_config = RoboPlanCartesianPathConfig(
+    speed_mode="bounded",
+    max_linear_speed=0.1,
+    max_angular_speed=0.5,
+    max_linear_acceleration=0.5,
+    max_angular_acceleration=2.5,
+    max_position_error=0.005,
+    max_orientation_error=0.01,
 )
 ```
 

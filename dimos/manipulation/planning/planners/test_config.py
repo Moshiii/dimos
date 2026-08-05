@@ -20,6 +20,11 @@ import pytest
 from dimos.manipulation.planning.planners.config import RoboPlanCartesianPathConfig
 
 
+def test_roboplan_cartesian_path_config_defaults_to_time_optimal_and_allows_bounded() -> None:
+    assert RoboPlanCartesianPathConfig().speed_mode == "time_optimal"
+    assert RoboPlanCartesianPathConfig(speed_mode="bounded").speed_mode == "bounded"
+
+
 @pytest.mark.parametrize(
     "path_config",
     [
