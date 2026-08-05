@@ -92,9 +92,7 @@ def _wireframe(pose: Pose, gripper: Any, grasp_frame_to_tcp: Any) -> tuple[np.nd
     world_to_grasp = world_to_tcp @ np.linalg.inv(grasp_to_tcp)
     rotation = world_to_grasp[:3, :3]
     translation = world_to_grasp[:3, 3]
-    strips = tuple(
-        (rotation @ strip.T).T + translation for strip in _fork_strips_local(gripper)
-    )
+    strips = tuple((rotation @ strip.T).T + translation for strip in _fork_strips_local(gripper))
     vertices = np.vstack(strips).astype(np.float32)
     edges = np.arange(len(vertices), dtype=np.int32).reshape((-1, 2))
     return vertices, edges
