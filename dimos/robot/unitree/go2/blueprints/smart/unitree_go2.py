@@ -19,6 +19,7 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.stream import In
 from dimos.core.transport import LCMTransport
 from dimos.mapping.costmapper import CostMapper
+from dimos.mapping.pointclouds.occupancy import HeightCostConfig
 from dimos.mapping.relocalization.module import RelocalizationModule
 from dimos.mapping.voxels.module import VoxelGridMapper
 from dimos.memory2.module import Recorder, RecorderConfig, pose_setter_for
@@ -36,13 +37,27 @@ from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.perception.fiducial.marker_detection_stream_module import MarkerDetectionStreamModule
 from dimos.perception.fiducial.marker_tf_module import MarkerTfModule
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
+from dimos.robot.unitree.go2.config import GO2
 from dimos.robot.unitree.go2.connection import GO2Connection
+
+# Overhead margin added to the standing height before a gap counts as
+# pass-under space, mirroring the G1 navigation composition.
+_NAV_OVERHEAD_SAFETY_MARGIN = 0.2
+_NAV_MAX_STEP_HEIGHT = 0.15
 
 unitree_go2 = autoconnect(
     unitree_go2_basic,
     VoxelGridMapper.blueprint(emit_every=5),
-    CostMapper.blueprint(),
-    ReplanningAStarPlanner.blueprint(),
+    CostMapper.blueprint(
+        config=HeightCostConfig(
+            can_pass_under=GO2.height_clearance + _NAV_OVERHEAD_SAFETY_MARGIN,
+            can_climb=_NAV_MAX_STEP_HEIGHT,
+        ),
+    ),
+    ReplanningAStarPlanner.blueprint(
+        robot_width=GO2.width_clearance,
+        robot_rotation_diameter=GO2.rotation_diameter,
+    ),
     WavefrontFrontierExplorer.blueprint(),
     PatrollingModule.blueprint(),
     MovementManager.blueprint(),

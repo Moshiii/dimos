@@ -338,6 +338,25 @@ class TestStateMachine:
         assert not result.is_success()
         assert result.error_code == "INVALID_STATE"
 
+    def test_reset_crosses_optional_episode_boundary_and_invalidates_plan(
+        self, module_factory
+    ) -> None:
+        module = module_factory()
+        episode_control = MagicMock()
+        episode_control.reset_episode.return_value = True
+        module._episode_control = episode_control
+        module._last_plan = GeneratedPlan(
+            trajectory=JointTrajectory(),
+            group_ids=("arm/manipulator",),
+            path=[],
+        )
+
+        result = module.reset()
+
+        assert result.is_success()
+        episode_control.reset_episode.assert_called_once_with()
+        assert module._last_plan is None
+
     def test_fail_sets_fault_state(self, module_factory):
         """_fail helper sets FAULT state and message."""
         module = module_factory()
@@ -494,7 +513,7 @@ class TestPlanningInitialization:
         )
 
     def test_nested_kinematics_config_parses_cli_override_shape(self) -> None:
-        """Pydantic parses the nested CLI config shape used by -o overrides."""
+        """Pydantic parses the nested shape used by dynamic CLI overrides."""
         config = ManipulationModuleConfig(
             kinematics={
                 "backend": "pink",
@@ -591,6 +610,44 @@ class TestPlanningInitialization:
         _, kwargs = module._kinematics.solve_pose_targets.call_args
         assert kwargs["seed"] is explicit_seed
         module._world_monitor.current_global_joint_state.assert_not_called()
+
+    def test_interactive_ik_is_bounded_and_keeps_strict_rpc_defaults_separate(
+        self, robot_config, module_factory
+    ):
+        module = module_factory()
+        module._world_monitor = MagicMock()
+        module._world_monitor.world = MagicMock()
+        module._world_monitor.planning_groups = PlanningGroupRegistry([robot_config])
+        module._kinematics = MagicMock()
+        expected = IKResult(status=IKStatus.NO_SOLUTION)
+        module._kinematics.solve_pose_targets.return_value = expected
+        seed = JointState(
+            name=["test_arm/joint1", "test_arm/joint2", "test_arm/joint3"],
+            position=[0.0, 0.0, 0.0],
+        )
+
+        def on_step(
+            _joints: JointState, _position: float, _orientation: float, _attempt: int
+        ) -> bool:
+            return False
+
+        result = module.inverse_kinematics_interactive(
+            {
+                "test_arm/manipulator": PoseStamped(
+                    frame_id="world", position=Vector3(), orientation=Quaternion()
+                )
+            },
+            seed=seed,
+            on_step=on_step,
+        )
+
+        assert result is expected
+        _, kwargs = module._kinematics.solve_pose_targets.call_args
+        assert kwargs["seed"] is seed
+        assert kwargs["position_tolerance"] == 0.02
+        assert kwargs["orientation_tolerance"] == pytest.approx(3.141592653589793)
+        assert kwargs["max_attempts"] == 1
+        assert kwargs["on_step"] is on_step
 
 
 class TestPlanningGroupApis:

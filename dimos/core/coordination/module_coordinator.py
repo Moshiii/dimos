@@ -20,11 +20,13 @@ import dataclasses
 from dataclasses import dataclass
 import importlib
 import inspect
+import os
 import shutil
 import sys
 import threading
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
+from dimos.core.coordination.blueprint_config.values import deep_merge, plain
 from dimos.core.coordination.blueprints import TransportSpec, config_key, transport_config_name
 from dimos.core.coordination.coordinator_rpc import CoordinatorRPC
 from dimos.core.coordination.worker_launcher import CommandWorkerLauncher, VenvWorkerLauncher
@@ -54,12 +56,18 @@ from dimos.core.transport import (
     pZenohTransport,
 )
 from dimos.core.transport_factory import make_transport
+from dimos.protocol.service.zenohservice import (
+    ZENOH_LOCAL_ROUTER_ENDPOINT,
+    ZENOH_ROUTER_ENDPOINT_ENV,
+    ZenohRouter,
+)
 from dimos.spec.utils import is_spec, spec_annotation_compliance, spec_structural_compliance
 from dimos.utils.generic import short_id
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.safe_thread_map import safe_thread_map
 
 if TYPE_CHECKING:
+    from dimos.core.coordination.blueprint_config.parsed import ParsedBlueprintConfig
     from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
     from dimos.core.rpc_client import ModuleProxy, ModuleProxyProtocol
 
@@ -118,13 +126,24 @@ class ModuleCoordinator(Resource):
         self._modules_lock = threading.RLock()
         self._rpc_lock = threading.RLock()
         self._coordinator_rpc: CoordinatorRPC | None = None
+        self._zenoh_router: ZenohRouter | None = None
+        self._previous_zenoh_router_endpoint: str | None = None
 
     def start(self) -> None:
         from dimos.core.o3dpickle import register_picklers
 
         register_picklers()
-        for m in self._managers.values():
-            m.start()
+        if self._global_config.transport == "zenoh":
+            self._zenoh_router = ZenohRouter()
+            self._zenoh_router.start()
+            self._previous_zenoh_router_endpoint = os.environ.get(ZENOH_ROUTER_ENDPOINT_ENV)
+            os.environ[ZENOH_ROUTER_ENDPOINT_ENV] = ZENOH_LOCAL_ROUTER_ENDPOINT
+        try:
+            for m in self._managers.values():
+                m.start()
+        except BaseException:
+            self._stop_zenoh_router()
+            raise
         self._started = True
 
     def stop(self) -> None:
@@ -148,6 +167,18 @@ class ModuleCoordinator(Resource):
                 logger.error("Error stopping manager", manager=type(m).__name__, exc_info=True)
 
         safe_thread_map(tuple(self._managers.values()), _stop_manager)
+        self._stop_zenoh_router()
+
+    def _stop_zenoh_router(self) -> None:
+        if self._zenoh_router is not None:
+            self._zenoh_router.stop()
+            self._zenoh_router = None
+        if self._global_config.transport != "zenoh":
+            return
+        if self._previous_zenoh_router_endpoint is None:
+            os.environ.pop(ZENOH_ROUTER_ENDPOINT_ENV, None)
+        else:
+            os.environ[ZENOH_ROUTER_ENDPOINT_ENV] = self._previous_zenoh_router_endpoint
 
     def start_rpc_service(self) -> None:
         """Expose the coordinator's API as @rpc methods over LCM."""
@@ -530,15 +561,13 @@ class ModuleCoordinator(Resource):
     def build(
         cls,
         blueprint: Blueprint,
-        blueprint_args: MutableMapping[str, Any] | None = None,
+        blueprint_args: MutableMapping[str, Any] | ParsedBlueprintConfig | None = None,
     ) -> ModuleCoordinator:
         logger.info("Building the blueprint")
-        global_config.update(**dict(blueprint.global_config_overrides))
-        resolved_args = dict(blueprint_args or {})
-        global_overrides = resolved_args.pop("g", None)
-        if global_overrides:
-            global_config.update(**dict(global_overrides))
-        transport_overrides = resolved_args.pop("transports", None) or {}
+        global_values, resolved_args, transport_overrides = _resolve_blueprint_config(
+            blueprint, blueprint_args
+        )
+        global_config.update(**global_values)
         transports = _materialize_transports(blueprint, transport_overrides)
 
         _run_configurators(blueprint)
@@ -567,7 +596,7 @@ class ModuleCoordinator(Resource):
     def load_blueprint(
         self,
         blueprint: Blueprint,
-        blueprint_args: MutableMapping[str, Mapping[str, Any]] | None = None,
+        blueprint_args: MutableMapping[str, Any] | ParsedBlueprintConfig | None = None,
     ) -> None:
         """Load a blueprint into an already-running coordinator.
 
@@ -584,14 +613,12 @@ class ModuleCoordinator(Resource):
     def _load_blueprint(
         self,
         blueprint: Blueprint,
-        blueprint_args: MutableMapping[str, Mapping[str, Any]] | None = None,
+        blueprint_args: MutableMapping[str, Any] | ParsedBlueprintConfig | None = None,
     ) -> None:
-        self._global_config.update(**dict(blueprint.global_config_overrides))
-        resolved_args: dict[str, Any] = dict(blueprint_args or {})
-        global_overrides = resolved_args.pop("g", None)
-        if global_overrides:
-            self._global_config.update(**dict(global_overrides))
-        transport_overrides = resolved_args.pop("transports", None) or {}
+        global_values, resolved_args, transport_overrides = _resolve_blueprint_config(
+            blueprint, blueprint_args, sparse_globals=True
+        )
+        self._global_config.update(**global_values)
         transports = _materialize_transports(blueprint, transport_overrides)
 
         n_extra = int(blueprint.global_config_overrides.get("n_workers", 0))
@@ -982,6 +1009,40 @@ def _get_transport_for(
     return make_transport(topic, stream_type)
 
 
+def _resolve_blueprint_config(
+    blueprint: Blueprint,
+    supplied: MutableMapping[str, Any] | ParsedBlueprintConfig | None,
+    *,
+    sparse_globals: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Mapping[str, Any]]]:
+    """Resolve legacy mappings or exact parsed configuration for one build."""
+    if supplied is None or isinstance(supplied, MutableMapping):
+        resolved = dict(supplied or {})
+        global_values = dict(blueprint.global_config_overrides)
+        global_values.update(dict(resolved.pop("g", None) or {}))
+        transports = resolved.pop("transports", None) or {}
+        return global_values, resolved, transports
+
+    from dimos.core.coordination.blueprint_config.parsed import ParsedBlueprintConfig
+
+    if not isinstance(supplied, ParsedBlueprintConfig):
+        raise TypeError(
+            "blueprint_args must be a mapping or ParsedBlueprintConfig; "
+            "resolve CLI values with BlueprintConfigParser.parse()"
+        )
+    supplied.assert_matches(blueprint)
+    global_values = (
+        supplied.explicit_global_config_values()
+        if sparse_globals
+        else supplied.global_config_values()
+    )
+    module_values = {
+        config_key(atom.name): supplied.module_kwargs(atom.name)
+        for atom in blueprint.active_blueprints
+    }
+    return global_values, module_values, supplied.transport_overrides()
+
+
 def _coerce_transport_to_backend(transport: Transport[Any]) -> Transport[Any]:
     """Rebuild an explicitly-mapped LCM/Zenoh transport for the active backend.
 
@@ -1030,10 +1091,13 @@ def _materialize_transports(
         config = None
         config_cls = spec.config_cls
         if config_cls is not None:
-            # Config-field kwargs pinned on the spec
-            spec_fields = {k: v for k, v in spec.kwargs.items() if k in config_cls.model_fields}
-            sub = overrides.get(transport_config_name(config_cls), {})
-            config = config_cls(**{**spec_fields, **sub})
+            spec_fields = {
+                key: plain(value)
+                for key, value in spec.kwargs.items()
+                if key in config_cls.model_fields
+            }
+            deep_merge(spec_fields, overrides.get(transport_config_name(config_cls), {}))
+            config = config_cls(**spec_fields)
         materialized[key] = _coerce_transport_to_backend(spec.build(config=config))
     return materialized
 

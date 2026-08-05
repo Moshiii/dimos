@@ -60,6 +60,7 @@ data/*
 # Runtime output
 /logs
 /recordings
+/MUJOCO_LOG.TXT
 results/
 artifacts/
 /assets/output/

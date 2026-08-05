@@ -18,6 +18,7 @@ from collections.abc import Callable
 import threading
 
 from dimos.manipulation.planning.spec.models import PlanningGroupID
+from dimos.manipulation.visualization.operator import TargetEvaluationResult
 from dimos.manipulation.visualization.viser.state import (
     ActionStatus,
     BackendConnectionStatus,
@@ -25,9 +26,11 @@ from dimos.manipulation.visualization.viser.state import (
     PanelRuntime,
     PanelState,
     PlanStatus,
+    TargetEvaluationRequest,
     TargetEvaluationWorker,
     TargetStatus,
 )
+from dimos.msgs.sensor_msgs.JointState import JointState
 
 
 def test_panel_cannot_plan_from_fault_without_explicit_reset() -> None:
@@ -115,6 +118,51 @@ def test_operation_worker_uses_operation_error_callback_on_timeout() -> None:
 
     assert default_errors == []
     assert operation_errors == ["Operation timed out after 0.0s"]
+
+
+def test_target_worker_supersedes_inflight_work_and_reuses_collision_free_seed() -> None:
+    first_started = threading.Event()
+    newer_submitted = threading.Event()
+    second_applied = threading.Event()
+    handled: list[TargetEvaluationRequest] = []
+    stale_checks: list[bool] = []
+
+    def handler(
+        request: TargetEvaluationRequest, is_stale: Callable[[], bool]
+    ) -> TargetEvaluationResult:
+        handled.append(request)
+        if request.sequence_id == 1:
+            first_started.set()
+            newer_submitted.wait(timeout=1.0)
+            stale_checks.append(is_stale())
+        return TargetEvaluationResult(
+            True,
+            "FEASIBLE",
+            "",
+            True,
+            target_joints=JointState(name=["arm/joint"], position=[float(request.sequence_id)]),
+        )
+
+    def apply(request: TargetEvaluationRequest, _result: TargetEvaluationResult) -> None:
+        if request.sequence_id == 2:
+            second_applied.set()
+
+    worker = TargetEvaluationWorker(handler, apply)
+    worker.start()
+    try:
+        group_ids = (PlanningGroupID("arm/manipulator"),)
+        worker.submit(TargetEvaluationRequest(1, "cartesian", group_ids=group_ids))
+        assert first_started.wait(timeout=1.0)
+        worker.submit(TargetEvaluationRequest(2, "cartesian", group_ids=group_ids))
+        newer_submitted.set()
+        assert second_applied.wait(timeout=1.0)
+    finally:
+        worker.stop()
+
+    assert stale_checks == [True]
+    assert len(handled) == 2
+    assert handled[1].joints is not None
+    assert handled[1].joints.position == [1.0]
 
 
 class FakeTargetEvaluationWorker(TargetEvaluationWorker):

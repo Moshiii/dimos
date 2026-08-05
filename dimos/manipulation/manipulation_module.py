@@ -40,6 +40,7 @@ from dimos.control.coordinator import ControlCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.hardware.simulation.episode_control import SimulationEpisodeControlSpec
 from dimos.manipulation.execution_manager import (
     ExecutionOutcome,
     ExecutionTarget,
@@ -80,7 +81,11 @@ from dimos.manipulation.planning.spec.models import (
     RobotName,
     WorldRobotID,
 )
-from dimos.manipulation.planning.spec.protocols import KinematicsSpec, PlannerSpec
+from dimos.manipulation.planning.spec.protocols import (
+    IKStepCallback,
+    KinematicsSpec,
+    PlannerSpec,
+)
 from dimos.manipulation.planning.trajectory_generator.joint_trajectory_generator import (
     JointTrajectoryGenerator,
 )
@@ -103,6 +108,10 @@ from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+_INTERACTIVE_IK_POSITION_TOLERANCE_M = 0.02
+_INTERACTIVE_IK_ORIENTATION_TOLERANCE_RAD = math.pi
+_INTERACTIVE_IK_MAX_ATTEMPTS = 1
 
 # Composite type aliases for readability (using semantic IDs from planning.spec)
 RobotEntry: TypeAlias = tuple[WorldRobotID, RobotModelConfig, JointTrajectoryGenerator]
@@ -166,6 +175,7 @@ class ManipulationModule(Module):
 
     config: ManipulationModuleConfig
     _control_coordinator: ControlCoordinator
+    _episode_control: SimulationEpisodeControlSpec | None = None
 
     # Input: Joint state from coordinator (for world sync)
     coordinator_joint_state: In[JointState]
@@ -472,8 +482,18 @@ class ManipulationModule(Module):
                 )
             if self._state == ManipulationState.PLANNING:
                 self._planning_epoch += 1
+            plan = self._last_plan
+            self._last_plan = None
             self._state = ManipulationState.IDLE
             self._error_message = ""
+        if self._episode_control is not None and not self._episode_control.reset_episode():
+            message = "Simulation provider failed to reset the episode"
+            with self._lock:
+                self._state = ManipulationState.FAULT
+                self._error_message = message
+            return SkillResult.fail("EXECUTION_FAILED", message)
+        if plan is not None:
+            self._dismiss_preview(plan.group_ids)
         return SkillResult.ok("Reset to IDLE — ready for new commands")
 
     @rpc
@@ -863,6 +883,43 @@ class ManipulationModule(Module):
         check_collision: bool = True,
     ) -> IKResult:
         """Solve planning-group pose targets without planning a joint path."""
+        return self._inverse_kinematics(
+            pose_targets=pose_targets,
+            auxiliary_group_ids=auxiliary_group_ids,
+            seed=seed,
+            check_collision=check_collision,
+        )
+
+    def inverse_kinematics_interactive(
+        self,
+        pose_targets: Mapping[PlanningGroupID, PoseStamped],
+        auxiliary_group_ids: Sequence[PlanningGroupID] = (),
+        seed: JointState | None = None,
+        on_step: IKStepCallback | None = None,
+    ) -> IKResult:
+        """Run bounded advisory IK for an in-process interactive target editor."""
+        return self._inverse_kinematics(
+            pose_targets=pose_targets,
+            auxiliary_group_ids=auxiliary_group_ids,
+            seed=seed,
+            check_collision=True,
+            position_tolerance=_INTERACTIVE_IK_POSITION_TOLERANCE_M,
+            orientation_tolerance=_INTERACTIVE_IK_ORIENTATION_TOLERANCE_RAD,
+            max_attempts=_INTERACTIVE_IK_MAX_ATTEMPTS,
+            on_step=on_step,
+        )
+
+    def _inverse_kinematics(
+        self,
+        pose_targets: Mapping[PlanningGroupID, PoseStamped],
+        auxiliary_group_ids: Sequence[PlanningGroupID] = (),
+        seed: JointState | None = None,
+        check_collision: bool = True,
+        position_tolerance: float = 0.001,
+        orientation_tolerance: float = 0.01,
+        max_attempts: int = 10,
+        on_step: IKStepCallback | None = None,
+    ) -> IKResult:
         if self._kinematics is None or self._world_monitor is None:
             return IKResult(status=IKStatus.NO_SOLUTION, message="Planning not initialized")
         if not pose_targets:
@@ -897,7 +954,11 @@ class ManipulationModule(Module):
             pose_targets=target_groups,
             auxiliary_groups=auxiliary_groups,
             seed=seed_state,
+            position_tolerance=position_tolerance,
+            orientation_tolerance=orientation_tolerance,
             check_collision=check_collision,
+            max_attempts=max_attempts,
+            on_step=on_step,
         )
 
     @rpc

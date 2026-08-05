@@ -14,34 +14,41 @@
 
 import pytest
 
+from dimos.msgs.std_msgs.Bool import Bool
+
 
 @pytest.mark.self_hosted_large
 def test_path_replanning(
-    lcm_spy, start_blueprint, dim_sim, direct_cmd_vel_explorer, spawn_wall_on_pose
+    lcm_spy,
+    start_blueprint,
+    wait_for_agent_ready,
+    scene_control,
+    simulator_name,
+    direct_cmd_vel_explorer,
+    spawn_wall_on_pose,
 ) -> None:
-    start_blueprint(
-        "--dimsim-scene=empty",
-        "run",
-        "unitree-go2-agentic",
-        simulator="dimsim",
+    args = (
+        ("--dimsim-scene=empty", "run", "unitree-go2-agentic")
+        if simulator_name == "dimsim"
+        else ("run", "unitree-go2-agentic")
     )
-    lcm_spy.save_topic("/rpc/McpClient/on_system_modules/res")
-    lcm_spy.wait_for_saved_topic("/rpc/McpClient/on_system_modules/res", timeout=1200.0)
+    start_blueprint(*args, simulator=simulator_name, scene_package="none")
+    wait_for_agent_ready(timeout=1200.0)
 
-    # robot spawns at (3, 2)
+    scene_control.set_agent_position(3, 2)
 
     # side wall
-    dim_sim.add_wall(2, -2.5, 12, -2.5)
+    scene_control.add_wall(2, -2.5, 12, -2.5)
     # other side wall
-    dim_sim.add_wall(2, 3.5, 12, 3.5)
+    scene_control.add_wall(2, 3.5, 12, 3.5)
     # back wall (behind robot)
-    dim_sim.add_wall(2, -2.5, 2, 3.5)
+    scene_control.add_wall(2, -2.5, 2, 3.5)
     # forward wall (far end)
-    dim_sim.add_wall(12, -2.5, 12, 3.5)
+    scene_control.add_wall(12, -2.5, 12, 3.5)
     # dividing wall at x=7 with doors at y=[-1.5,-0.5] and y=[1.5,2.5]
-    dim_sim.add_wall(7, -2.5, 7, -1.5)
-    dim_sim.add_wall(7, -0.5, 7, 1.5)
-    dim_sim.add_wall(7, 2.5, 7, 3.5)
+    scene_control.add_wall(7, -2.5, 7, -1.5)
+    scene_control.add_wall(7, -0.5, 7, 1.5)
+    scene_control.add_wall(7, 2.5, 7, 3.5)
 
     direct_cmd_vel_explorer.linear_speed = 0.8
     direct_cmd_vel_explorer.follow_points([(10, 2), (2.5, 2), (3, 2)])
@@ -55,6 +62,12 @@ def test_path_replanning(
         wall=(7, 1.5, 7, 2.5),
     )
 
-    dim_sim.publish_goal(10.913, 0.588)
+    scene_control.publish_goal(10.913, 0.588)
 
-    lcm_spy.wait_until_odom_position(10.913, 0.588, threshold=1, timeout=120)
+    lcm_spy.wait_for_message_result(
+        "/goal_reached#std_msgs.Bool",
+        Bool,
+        predicate=bool,
+        fail_message="Planner did not complete the replanned route",
+        timeout=120,
+    )

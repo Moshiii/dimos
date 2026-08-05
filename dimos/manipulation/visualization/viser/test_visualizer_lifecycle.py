@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -187,6 +189,61 @@ def test_visualizer_initializes_all_scene_robots_from_planning_scene(
         ("robot-2", "arm2"),
         ("refresh", "gui"),
     ]
+
+
+def test_visualizer_concurrent_initialization_starts_one_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_barrier = threading.Barrier(2)
+    start_calls = 0
+
+    class FakeRuntime:
+        url = "http://localhost:8095"
+
+        def __init__(self, config: ViserVisualizationConfig) -> None:
+            self.config = config
+
+        def start(self) -> FakeServer:
+            nonlocal start_calls
+            start_calls += 1
+            try:
+                start_barrier.wait(timeout=0.2)
+            except threading.BrokenBarrierError:
+                pass
+            return FakeServer()
+
+        def close(self) -> None:
+            pass
+
+    class FakeScene:
+        def __init__(
+            self,
+            server: FakeServer,
+            viser_urdf: type[FakeViserUrdf],
+        ) -> None:
+            pass
+
+        def register_robot(self, robot_id: str, config: RobotModelConfig) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(visualizer_module, "ViserRuntime", FakeRuntime)
+    monkeypatch.setattr(visualizer_module, "ViserUrdf", FakeViserUrdf)
+    monkeypatch.setattr(visualizer_module, "ViserManipulationScene", FakeScene)
+    visualizer = ViserManipulationVisualizer(
+        config=ViserVisualizationConfig(panel_enabled=False),
+    )
+    session = VisualizationSession(PlanningSceneInfo(robots={}))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(visualizer.initialize, session) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=1.0)
+
+    assert start_calls == 1
+    visualizer.close()
 
 
 def test_visualizer_closes_partial_startup_when_gui_start_fails(

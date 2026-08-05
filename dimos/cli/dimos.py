@@ -361,14 +361,13 @@ def _with_relay_bridge(blueprint: Blueprint) -> Blueprint:
     return with_relay_bridge(blueprint)
 
 
-@main.command()
+@main.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 @cache_usage_locked
 def run(
     ctx: typer.Context,
     robot_types: list[str] = typer.Argument(..., help="Blueprints or modules to run"),
     daemon: bool = typer.Option(False, "--daemon", "-d", help="Run in background"),
     disable: list[str] = typer.Option([], "--disable", help="Module names to disable"),
-    blueprint_args: list[str] = typer.Option((), "--option", "-o"),
     config_path: Path = typer.Option(
         CONFIG_DIR / "dimos", "--config", "-c", help="Path to config file"
     ),
@@ -383,8 +382,11 @@ def run(
     show_help: bool = typer.Option(False, "--help"),
 ) -> None:
     """Start a robot blueprint"""
-    logger.info("Starting DimOS")
-
+    from dimos.core.coordination.blueprint_config.errors import BlueprintConfigError
+    from dimos.core.coordination.blueprint_config.parser import (
+        BlueprintConfigParser,
+        split_run_arguments,
+    )
     from dimos.core.coordination.blueprints import autoconnect
     from dimos.core.coordination.module_coordinator import ModuleCoordinator
     from dimos.core.coordination.process_lifecycle import (
@@ -401,7 +403,13 @@ def run(
 
     setup_exception_handler()
 
-    cli_config_overrides: dict[str, Any] = ctx.obj
+    try:
+        blueprint_names, config_tokens = split_run_arguments(robot_types)
+    except BlueprintConfigError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    cli_config_overrides: dict[str, Any] = dict(ctx.obj or {})
 
     # These flags are accepted on `run` itself, not just as global options.
     run_overrides = {
@@ -411,14 +419,64 @@ def run(
     }
     if run_overrides:
         cli_config_overrides.update(run_overrides)
-        global_config.update(**run_overrides)
+
+    try:
+        preparsed_global_config = BlueprintConfigParser.preparse_global_config(
+            config_tokens,
+            config_path=config_path,
+            environ=os.environ,
+            global_overrides=cli_config_overrides,
+        )
+    except BlueprintConfigError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(2) from error
+    global_config.update(**preparsed_global_config)
+
+    blueprint = autoconnect(*map(get_by_name_or_exit, blueprint_names))
+
+    if disable:
+        disabled_classes = tuple(
+            get_module_by_name_or_exit(name).blueprints[0].module for name in disable
+        )
+        blueprint = blueprint.disabled_modules(*disabled_classes)
+
+    blueprint = _with_relay_bridge(blueprint)
+    parser = BlueprintConfigParser(blueprint)
+
+    if show_help:
+        reserved_options = {
+            option
+            for parameter in ctx.command.params
+            for option in (
+                *getattr(parameter, "opts", ()),
+                *getattr(parameter, "secondary_opts", ()),
+            )
+            if option.startswith("--")
+        }
+        typer.echo(ctx.get_help())
+        typer.echo()
+        typer.echo(parser.format_help(reserved_options))
+        return
+
+    try:
+        parsed_config = parser.parse(
+            config_tokens,
+            config_path=config_path,
+            environ=os.environ,
+            global_overrides=cli_config_overrides,
+        )
+    except BlueprintConfigError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    logger.info("Starting DimOS")
 
     # Clean stale registry entries
     stale = cleanup_stale()
     if stale:
         logger.info(f"Cleaned {stale} stale run entries")
 
-    blueprint_name = "-".join(robot_types)
+    blueprint_name = "-".join(blueprint_names)
     run_id = generate_run_id(blueprint_name)
     log_dir = LOG_DIR / run_id
 
@@ -430,28 +488,8 @@ def run(
     # Workers inherit DIMOS_RUN_LOG_DIR env var via forkserver.
     set_run_log_dir(log_dir)
 
-    blueprint = autoconnect(*map(get_by_name_or_exit, robot_types))
-
-    if disable:
-        disabled_classes = tuple(
-            get_module_by_name_or_exit(name).blueprints[0].module for name in disable
-        )
-        blueprint = blueprint.disabled_modules(*disabled_classes)
-
-    blueprint = _with_relay_bridge(blueprint)
-
-    if show_help:
-        print("Blueprint arguments:")
-        print("  Override with --option/-o module.field=value.")
-        print("  Nested config paths use dotted names, e.g. module.nested.field=value.")
-        print(arg_help(blueprint.config(), blueprint))
-        return
-
-    blueprint_config = blueprint.config()
-    kwargs = load_config_args(blueprint_config, blueprint_args, config_path, cli_config_overrides)
-
     try:
-        coordinator = ModuleCoordinator.build(blueprint, kwargs)
+        coordinator = ModuleCoordinator.build(blueprint, parsed_config)
     except MissingPreparedPythonProjectError as exc:
         raise typer.BadParameter(
             f"Blueprint '{blueprint_name}' uses unprepared Python project runtime "
@@ -490,7 +528,7 @@ def run(
             blueprint=blueprint_name,
             started_at=datetime.now(timezone.utc).isoformat(),
             log_dir=str(log_dir),
-            cli_args=list(robot_types),
+            cli_args=list(blueprint_names),
             config_overrides=cli_config_overrides,
             original_argv=sys.argv,
         )
@@ -505,7 +543,7 @@ def run(
             blueprint=blueprint_name,
             started_at=datetime.now(timezone.utc).isoformat(),
             log_dir=str(log_dir),
-            cli_args=list(robot_types),
+            cli_args=list(blueprint_names),
             config_overrides=cli_config_overrides,
             original_argv=sys.argv,
         )

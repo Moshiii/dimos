@@ -17,18 +17,18 @@ from contextlib import contextmanager
 import math
 import pickle
 import threading
-from typing import Any
+from typing import Any, cast
 
-import lcm
-
+from dimos.core.transport import PubSubTransport
+from dimos.core.transport_factory import make_transport
+from dimos.e2e_tests.scene_contract import PlanarBounds
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.helpers import resolve_msg_type
 from dimos.msgs.protocol import DimosMsg
-from dimos.protocol.service.lcmservice import LCMService
 from dimos.utils.testing.waiting import wait_until
 
 
-class LcmSpy(LCMService):
-    l: lcm.LCM
+class LcmSpy:
     messages: dict[str, list[bytes]]
     _messages_lock: threading.Lock
     _saved_topics: set[str]
@@ -36,23 +36,33 @@ class LcmSpy(LCMService):
     _topic_listeners: dict[str, list[Callable[[bytes], None]]]
     _topic_listeners_lock: threading.Lock
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.l = lcm.LCM()
+    def __init__(self) -> None:
         self.messages = {}
         self._messages_lock = threading.Lock()
         self._saved_topics = set()
         self._saved_topics_lock = threading.Lock()
         self._topic_listeners = {}
         self._topic_listeners_lock = threading.Lock()
+        self._transports: dict[str, PubSubTransport[Any]] = {}
+        self._unsubscribers: dict[str, Callable[[], None]] = {}
+        self._publishers: dict[str, PubSubTransport[Any]] = {}
+        self._transports_lock = threading.Lock()
 
     def start(self) -> None:
-        super().start()
-        if self.l:
-            self.l.subscribe(".*", self.msg)
+        pass
 
     def stop(self) -> None:
-        super().stop()
+        with self._transports_lock:
+            unsubscribers = tuple(self._unsubscribers.values())
+            transports = tuple(self._transports.values())
+            publishers = tuple(self._publishers.values())
+            self._unsubscribers.clear()
+            self._transports.clear()
+            self._publishers.clear()
+        for unsubscribe in unsubscribers:
+            unsubscribe()
+        for transport in (*transports, *publishers):
+            transport.stop()
 
     def msg(self, topic: str, data: bytes) -> None:
         with self._saved_topics_lock:
@@ -67,15 +77,23 @@ class LcmSpy(LCMService):
                     listener(data)
 
     def publish(self, topic: str, msg: Any) -> None:
-        self.l.publish(topic, msg.lcm_encode())
+        with self._transports_lock:
+            transport = self._publishers.get(topic)
+            if transport is None:
+                name, msg_type = _parse_topic(topic, type(msg))
+                transport = make_transport(name, msg_type)
+                self._publishers[topic] = transport
+        transport.broadcast(None, msg)
 
     def save_topic(self, topic: str) -> None:
         with self._saved_topics_lock:
             self._saved_topics.add(topic)
+        self._ensure_subscription(topic)
 
     def register_topic_listener(self, topic: str, listener: Callable[[bytes], None]) -> None:
         with self._topic_listeners_lock:
             self._topic_listeners.setdefault(topic, []).append(listener)
+        self._ensure_subscription(topic)
 
     def unregister_topic_listener(self, topic: str, listener: Callable[[bytes], None]) -> None:
         with self._topic_listeners_lock:
@@ -156,6 +174,23 @@ class LcmSpy(LCMService):
                 message=fail_message,
             )
 
+    def wait_for_saved_message_result(
+        self,
+        topic: str,
+        type: type[DimosMsg],
+        predicate: Callable[[Any], bool],
+        fail_message: str,
+        timeout: float = 30.0,
+    ) -> None:
+        """Wait for a matching message saved since ``save_topic`` was called."""
+
+        def condition() -> bool:
+            with self._messages_lock:
+                messages = tuple(self.messages.get(topic, ()))
+            return any(predicate(type.lcm_decode(message)) for message in messages)
+
+        wait_until(condition, timeout=timeout, message=fail_message)
+
     def wait_until_odom_position(
         self, x: float, y: float, threshold: float = 1, timeout: float = 60
     ) -> None:
@@ -171,3 +206,46 @@ class LcmSpy(LCMService):
             f"Failed to get to position x={x}, y={y}",
             timeout,
         )
+
+    def wait_until_odom_near_bounds(
+        self,
+        bounds: PlanarBounds,
+        max_distance: float,
+        timeout: float = 60.0,
+    ) -> None:
+        def predicate(msg: PoseStamped) -> bool:
+            return bounds.distance_to(msg.position.x, msg.position.y) <= max_distance
+
+        self.wait_for_message_result(
+            "/odom#geometry_msgs.PoseStamped",
+            PoseStamped,
+            predicate,
+            f"Robot did not get within {max_distance} m of semantic target bounds {bounds}",
+            timeout,
+        )
+
+    def _ensure_subscription(self, topic: str) -> None:
+        with self._transports_lock:
+            if topic in self._transports:
+                return
+            name, msg_type = _parse_topic(topic)
+            transport = make_transport(name, msg_type)
+            unsubscribe = transport.subscribe(lambda msg: self.msg(topic, _encode_message(msg)))
+            self._transports[topic] = transport
+            self._unsubscribers[topic] = unsubscribe
+
+
+def _parse_topic(topic: str, default_type: type[Any] | None = None) -> tuple[str, type[Any] | None]:
+    if "#" not in topic:
+        return topic, default_type if hasattr(default_type, "lcm_encode") else None
+    name, type_name = topic.rsplit("#", 1)
+    msg_type = resolve_msg_type(type_name)
+    if msg_type is None:
+        raise ValueError(f"Unknown message type {type_name!r} in topic {topic!r}")
+    return name, msg_type
+
+
+def _encode_message(message: Any) -> bytes:
+    if hasattr(message, "lcm_encode"):
+        return cast("bytes", message.lcm_encode())
+    return pickle.dumps(message)

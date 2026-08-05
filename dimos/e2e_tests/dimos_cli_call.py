@@ -24,6 +24,7 @@ class DimosCliCall:
     mcp_port: int | None = None
     # None: no --simulation flag (e.g. replay runs via --robot-ip fake).
     simulator: str | None = "mujoco"
+    scene_package: str | None = None
 
     def __init__(self) -> None:
         self.process = None
@@ -44,26 +45,36 @@ class DimosCliCall:
         # defaults to a hard-coded `http://localhost:9990/mcp`) so server
         # and client agree on the same port.
         #
-        # The McpClient URL goes through an env var rather than a `-o`
-        # blueprint override: `load_config_args` silently skips env-var
-        # overrides whose module is absent from the blueprint, but rejects
-        # unknown `-o` keys outright. Blueprints without an mcpclient (e.g.
-        # `coordinator-mock`) would otherwise fail config validation.
+        # The McpClient URL goes through an env var rather than a dynamic
+        # blueprint flag: BlueprintConfigParser skips environment overrides
+        # whose module is absent from the blueprint, but rejects unknown CLI
+        # configuration flags. Blueprints without an mcpclient (e.g.
+        # `coordinator-mock`) would otherwise fail configuration validation.
         global_overrides: list[str] = list(self.global_args)
         env = os.environ.copy()
         env.update(self.extra_env)
         if self.mcp_port is not None:
             global_overrides += ["--mcp-port", str(self.mcp_port)]
             env["MCPCLIENT__MCP_SERVER_URL"] = f"http://localhost:{self.mcp_port}/mcp"
-        if self.simulator is not None:
+
+        viewer = os.environ.get("DIMOS_E2E_VIEWER", "none")
+        if "--viewer" not in global_overrides:
+            global_overrides += ["--viewer", viewer]
+
+        if self.simulator == "pimsim":
+            global_overrides += [
+                "--simulation",
+                "mujoco",
+                "--simulation-provider",
+                "pimsim",
+                "--scene-package",
+                self.scene_package or "dimsim-apartment",
+            ]
+        elif self.simulator is not None:
             global_overrides += ["--simulation", self.simulator]
 
         self.process = subprocess.Popen(
-            [
-                "dimos",
-                *global_overrides,
-                *args,
-            ],
+            ["dimos", *global_overrides, *args],
             start_new_session=True,
             env=env,
         )
@@ -73,7 +84,7 @@ class DimosCliCall:
         # call reaps the process its pgid can be recycled, and a second
         # killpg could hit an unrelated process group.
         process, self.process = self.process, None
-        if process is None:
+        if process is None or process.poll() is not None:
             return
 
         try:
