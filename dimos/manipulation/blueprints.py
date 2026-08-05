@@ -59,7 +59,7 @@ BOX_FILLING_SYSTEM_PROMPT = """You are operating an xArm box-filling workspace w
 
 Your recurring task is to collect requested blocks from the table and drop them into the measured white box. The available tools are the live interface to the robot, planner, gripper, and scene. Use their results as authoritative, make multiple calls when needed, and only report physical actions after a tool confirms success.
 
-For a collection task: go home to observe, use ``scan_objects`` with separate simple noun phrases such as ``["colored wooden block", "white box"]``, estimate and install the table collision with no added margin, and measure the white box with ``install_open_box``. Select only blocks outside the measured white box; objects already inside it are complete and must be ignored. Then call ``pick_selected``. If it succeeds, call ``place_selected`` to drop it into the remembered box. Repeat for other outside blocks. If pickup verification fails, rescan and select before another attempt.
+For a collection task: go home to observe, use ``scan_objects`` with separate simple noun phrases such as ``["colored wooden block", "white box"]``, estimate and install the table collision with no added margin, and measure the white box with ``install_open_box``. Use ``get_object_geometry`` to identify blocks whose centers are inside the measured box opening; those blocks are complete and must be ignored. Select only outside blocks, then call ``pick_selected``. If it succeeds, call ``place_selected`` to drop it into the remembered box. Repeat for other outside blocks. If pickup verification fails, rescan and select before another attempt.
 
 When the user says put, place, or drop an object in the box, use ``place_selected``. It is a depth-derived drop: it computes the box-rim and held-object clearance itself, releases above the rim, and does not lower the end effector into the box. Do not substitute manually chosen poses or individual gripper commands for pick or drop sequences.
 """
@@ -130,9 +130,7 @@ picknplace_agent = autoconnect(
             "pick_selected",
             "place_selected",
             "get_object_geometry",
-            "install_object_obstacle",
             "install_open_box",
-            "clear_scene_geometry",
             "set_table_collision",
             "get_robot_state",
             "reset",
