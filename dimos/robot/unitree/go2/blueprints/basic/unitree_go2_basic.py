@@ -18,7 +18,11 @@ from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
-from dimos.robot.unitree.go2.connection import GO2Connection
+from dimos.robot.unitree.go2.blueprints.basic.go2_platform import (
+    resolve_go2_platform,
+    resolve_go2_rerun_config,
+)
+from dimos.visualization.rerun.costmap import classic_costmap
 from dimos.visualization.vis_module import vis_module
 
 
@@ -34,12 +38,7 @@ def _convert_global_map(grid: Any) -> Any:
 
 
 def _convert_navigation_costmap(grid: Any) -> Any:
-    return grid.to_rerun(
-        colormap="Accent",
-        z_offset=0.015,
-        opacity=0.2,
-        background="#484981",
-    )
+    return classic_costmap(grid, z_offset=0.015)
 
 
 def _static_base_link(rr: Any) -> list[Any]:
@@ -89,6 +88,7 @@ rerun_config: dict[str, Any] = {
         "world/camera_info": _convert_camera_info,
         "world/global_map": _convert_global_map,
         "world/merged_map": _convert_global_map,
+        "world/global_costmap": _convert_navigation_costmap,
         "world/navigation_costmap": _convert_navigation_costmap,
     },
     "max_hz": {
@@ -103,6 +103,16 @@ rerun_config: dict[str, Any] = {
     },
 }
 
+_provider_rerun_config = resolve_go2_rerun_config()
+for _section in ("static", "visual_override", "max_hz"):
+    rerun_config[_section] = {
+        **rerun_config.get(_section, {}),
+        **_provider_rerun_config.get(_section, {}),
+    }
+for _key, _value in _provider_rerun_config.items():
+    if _key not in {"static", "visual_override", "max_hz"}:
+        rerun_config[_key] = _value
+
 _with_vis = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
@@ -114,7 +124,7 @@ _with_vis = autoconnect(
 unitree_go2_basic = (
     autoconnect(
         _with_vis,
-        GO2Connection.blueprint(),
+        resolve_go2_platform(),
     ).global_config(n_workers=4, robot_model="unitree_go2")
     # we temporarily disabled sensor timestamps
     # and are derriving all timestmaps upon reception

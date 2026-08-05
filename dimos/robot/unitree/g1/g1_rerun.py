@@ -18,8 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-
+from dimos.visualization.rerun.costmap import classic_costmap
 from dimos.visualization.rerun.urdf_robot import (
     UrdfRobotJointStateRerunFactory,
     UrdfRobotStaticRerunFactory,
@@ -28,14 +27,6 @@ from dimos.visualization.rerun.urdf_robot import (
 G1_RERUN_ROOT = "world/odom/g1"
 G1_RERUN_URDF = "g1_urdf/g1.fixed.urdf"
 
-# Classic costmap palette, indexed by grid value + 1:
-# transparent unknown, blue free, orange occupied, red lethal.
-_COSTMAP_LOOKUP_TABLE = np.zeros((102, 4), dtype=np.uint8)
-_COSTMAP_LOOKUP_TABLE[0] = (0, 0, 0, 0)
-_COSTMAP_LOOKUP_TABLE[1] = (72, 73, 129, 255)
-_COSTMAP_LOOKUP_TABLE[2:101] = (255, 140, 0, 255)
-_COSTMAP_LOOKUP_TABLE[101] = (220, 30, 30, 255)
-
 
 def g1_costmap(grid: Any, z_offset: float = 0.02) -> Any:
     """Render an OccupancyGrid with the classic costmap palette.
@@ -43,7 +34,7 @@ def g1_costmap(grid: Any, z_offset: float = 0.02) -> Any:
     The default z_offset lifts the mesh 2cm off the floor plane to avoid
     z-fighting with the ground.
     """
-    return grid.to_rerun(color_lookup_table=_COSTMAP_LOOKUP_TABLE, z_offset=z_offset)
+    return classic_costmap(grid, z_offset=z_offset)
 
 
 def g1_urdf_static_robot(root_path: str = G1_RERUN_ROOT) -> UrdfRobotStaticRerunFactory:
