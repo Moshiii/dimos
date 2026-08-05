@@ -16,18 +16,14 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import open3d as o3d
 import pytest
 
-from dimos.agents.skill_result import SkillResult
 from dimos.core.module import ModuleBase
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
-from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -151,17 +147,6 @@ class TestGraspHeuristics:
             and abs(q_near.w - q_far.w) < 0.01
         )
 
-    def test_exact_simulation_detection_does_not_apply_occlusion_offset(self, module):
-        det = _make_det_object(name="can", center=(0.5, 0.0, 0.19))
-        det.identity_basis = "pimsim_scene"
-        module._detection_snapshot = [det]
-
-        grasps = module._generate_grasps_for_pick("can")
-
-        assert grasps is not None
-        assert grasps[0].position.x == pytest.approx(0.5)
-        assert grasps[0].position.y == pytest.approx(0.0)
-
 
 class TestPlaceBack:
     """Test place_back guard logic."""
@@ -173,62 +158,3 @@ class TestPlaceBack:
         assert not result.is_success()
         assert result.error_code == "NO_PRIOR_POSE"
         assert "pick" in result.message.lower()
-
-
-class TestPickPlaceObstacleLifecycle:
-    def _prepare_motion(self, module: PickAndPlaceModule) -> None:
-        module._get_robot = MagicMock(
-            return_value=("arm", "robot_1", SimpleNamespace(pre_grasp_offset=0.1), None)
-        )
-        module._lift_if_low = MagicMock(return_value=SkillResult.ok())
-        module._preview_execute_wait = MagicMock(return_value=SkillResult.ok())
-        module._set_gripper_position = MagicMock(return_value=True)
-        module._world_monitor = MagicMock()
-        module._world_monitor.remove_object_obstacle.return_value = True
-
-    def test_pick_removes_target_for_contact_and_holds_gripper_state(self, module):
-        self._prepare_motion(module)
-        target = _make_det_object(name="can", object_id="pimsim:manip_can")
-        module._detection_snapshot = [target]
-        grasp = Pose(Vector3(0.5, 0.0, 0.25), Quaternion())
-        module._generate_grasps_for_pick = MagicMock(return_value=[grasp])
-        module.plan_to_pose = MagicMock(return_value=True)
-
-        with patch("dimos.manipulation.pick_and_place_module.time.sleep"):
-            result = module.pick("can")
-
-        assert result.is_success()
-        module._world_monitor.remove_object_obstacle.assert_called_once_with("pimsim:manip_can")
-        assert module._set_gripper_position.call_args_list == [call(0.85, "arm"), call(0.0, "arm")]
-        assert module._held_object_id == "pimsim:manip_can"
-
-    def test_pick_restores_target_when_contact_plan_fails(self, module):
-        self._prepare_motion(module)
-        target = _make_det_object(name="can", object_id="pimsim:manip_can")
-        module._detection_snapshot = [target]
-        module._generate_grasps_for_pick = MagicMock(
-            return_value=[Pose(Vector3(0.5, 0.0, 0.25), Quaternion())]
-        )
-        module.plan_to_pose = MagicMock(side_effect=[True, False])
-        module.refresh_obstacles = MagicMock(return_value=[])
-
-        with patch("dimos.manipulation.pick_and_place_module.time.sleep"):
-            result = module.pick("can")
-
-        assert not result.is_success()
-        module.refresh_obstacles.assert_called_once_with()
-        assert module._held_object_id is None
-
-    def test_place_releases_then_restores_perception_obstacles(self, module):
-        self._prepare_motion(module)
-        module._held_object_id = "pimsim:manip_can"
-        module.plan_to_pose = MagicMock(return_value=True)
-        module.refresh_obstacles = MagicMock(return_value=[])
-
-        with patch("dimos.manipulation.pick_and_place_module.time.sleep"):
-            result = module.place(0.45, 0.1, 0.19)
-
-        assert result.is_success()
-        module._set_gripper_position.assert_called_once_with(0.85, "arm")
-        module.refresh_obstacles.assert_called_once_with()
-        assert module._held_object_id is None

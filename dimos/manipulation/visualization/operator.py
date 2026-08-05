@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, cast
 from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.planners.config import CartesianPathConfig
 from dimos.manipulation.planning.spec.models import GeneratedPlan, PlanningGroupID, RobotName
-from dimos.manipulation.planning.spec.protocols import IKStepCallback
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 
@@ -113,20 +112,16 @@ class ManipulationOperator:
             return self._invalid(request.group_ids, "Incomplete robot target state")
         return self._evaluate_global_target(groups, JointState(request.target), complete)
 
-    def evaluate_pose_target(
-        self,
-        request: PoseTargetRequest,
-        on_step: IKStepCallback | None = None,
-    ) -> TargetEvaluationResult:
+    def evaluate_pose_target(self, request: PoseTargetRequest) -> TargetEvaluationResult:
         """Validate and evaluate explicit world-frame pose targets."""
         group_ids, validation = self._validate_pose_request(request)
         if validation is not None:
             return validation
-        ik = self._module.inverse_kinematics_interactive(
+        ik = self._module.inverse_kinematics(
             pose_targets=dict(request.pose_targets),
             auxiliary_group_ids=request.auxiliary_group_ids,
             seed=JointState(request.seed) if request.seed is not None else None,
-            on_step=on_step,
+            check_collision=True,
         )
         if not ik.is_success() or ik.joint_state is None:
             return TargetEvaluationResult(
@@ -211,15 +206,6 @@ class ManipulationOperator:
     def reset(self) -> bool:
         result = self._module.reset()
         return result.is_success()
-
-    def go_home(self, robot_name: RobotName | None = None) -> bool:
-        return self._module.go_home(robot_name).is_success()
-
-    def open_gripper(self, robot_name: RobotName | None = None) -> bool:
-        return self._module.open_gripper(robot_name).is_success()
-
-    def close_gripper(self, robot_name: RobotName | None = None) -> bool:
-        return self._module.close_gripper(robot_name).is_success()
 
     def _validate_joint_request(
         self, request: JointTargetRequest

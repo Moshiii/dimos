@@ -17,60 +17,31 @@
 from __future__ import annotations
 
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.global_config import global_config
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
+from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
-    XARM7_MODEL_PATH,
-    XARM7_TABLETOP_SCENE,
+    XARM7_SIM_PATH,
     make_xarm7_sim_hardware,
+    make_xarm7_sim_module_kwargs,
     make_xarm7_sim_robot_config,
 )
-from dimos.simulation.providers import (
-    SimulationBinding,
-    SimulationRequest,
-    load_simulation_provider,
-)
-from dimos.visualization.vis_module import vis_module
+from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
+from dimos.visualization.rerun.bridge import RerunBridgeModule
 
-
-def _resolve_xarm7_simulation() -> SimulationBinding:
-    binding = load_simulation_provider("pimsim").build(
-        SimulationRequest(
-            robot_model="xarm7",
-            model_path=XARM7_MODEL_PATH,
-            scene_package=XARM7_TABLETOP_SCENE,
-        )
-    )
-    if binding.adapter_type != "sim_mujoco":
-        raise ValueError("xarm-perception-sim requires a provider using the sim_mujoco adapter")
-    return binding
-
-
-def _require_pimsim() -> str | None:
-    if global_config.simulation != "mujoco":
-        return "xarm-perception-sim requires --simulation mujoco"
-    if global_config.simulation_provider != "pimsim":
-        return "xarm-perception-sim requires --simulation-provider pimsim"
-    return None
-
-
-_simulation = _resolve_xarm7_simulation()
-_xarm7_sim_hw = make_xarm7_sim_hardware(_simulation.adapter_address)
+_xarm7_sim_hw = make_xarm7_sim_hardware(XARM7_SIM_PATH)
 
 xarm_perception_sim = autoconnect(
     PickAndPlaceModule.blueprint(
-        robots=[make_xarm7_sim_robot_config(_simulation.robot_base_pose)],
+        robots=[make_xarm7_sim_robot_config()],
         planning_timeout=10.0,
-        visualization={"backend": "viser"},
+        visualization={"backend": "meshcat"},
     ),
-    _simulation.backend,
+    MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(XARM7_SIM_PATH)),
+    ObjectSceneRegistrationModule.blueprint(target_frame="world"),
     coordinator(
         hardware=[_xarm7_sim_hw],
         tasks=[trajectory_task(_xarm7_sim_hw)],
     ),
-    vis_module(
-        viewer_backend=global_config.viewer,
-        rerun_config=_simulation.rerun_config,
-    ),
-).requirements(_require_pimsim)
+    RerunBridgeModule.blueprint(),
+)

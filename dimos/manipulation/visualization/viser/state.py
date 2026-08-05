@@ -15,9 +15,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
-from functools import partial
 import queue
 import threading
 from typing import Literal
@@ -229,14 +228,13 @@ class TargetEvaluationWorker:
 
     def __init__(
         self,
-        handler: Callable[[TargetEvaluationRequest, Callable[[], bool]], TargetEvaluationResult],
+        handler: Callable[[TargetEvaluationRequest], TargetEvaluationResult],
         apply_result: Callable[[TargetEvaluationRequest, TargetEvaluationResult], None],
     ) -> None:
         self._handler = handler
         self._apply_result = apply_result
         self._requests: queue.Queue[TargetEvaluationRequest] = queue.Queue(maxsize=1)
         self._submit_lock = threading.Lock()
-        self._latest_request_key: tuple[int, int, tuple[PlanningGroupID, ...]] | None = None
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -257,7 +255,6 @@ class TargetEvaluationWorker:
 
     def submit(self, request: TargetEvaluationRequest) -> None:
         with self._submit_lock:
-            self._latest_request_key = self._request_key(request)
             while True:
                 try:
                     self._requests.get_nowait()
@@ -266,8 +263,6 @@ class TargetEvaluationWorker:
             self._requests.put_nowait(request)
 
     def _run(self) -> None:
-        warm_seed_key: tuple[int, tuple[PlanningGroupID, ...]] | None = None
-        warm_seed: JointState | None = None
         while not self._stop_event.is_set():
             try:
                 request = self._requests.get(timeout=0.1)
@@ -278,29 +273,11 @@ class TargetEvaluationWorker:
                     request = self._requests.get_nowait()
                 except queue.Empty:
                     break
-            request_seed_key = (request.selection_epoch, request.group_ids)
-            if warm_seed is not None and warm_seed_key == request_seed_key:
-                request = replace(request, joints=JointState(warm_seed))
             try:
-                result = self._handler(request, partial(self._request_is_stale, request))
-                if result.success and result.collision_free and result.target_joints is not None:
-                    warm_seed_key = request_seed_key
-                    warm_seed = JointState(result.target_joints)
+                result = self._handler(request)
                 self._apply_result(request, result)
             except Exception:
                 logger.warning("Target evaluation worker caught unhandled exception", exc_info=True)
-
-    @staticmethod
-    def _request_key(
-        request: TargetEvaluationRequest,
-    ) -> tuple[int, int, tuple[PlanningGroupID, ...]]:
-        return request.selection_epoch, request.sequence_id, request.group_ids
-
-    def _request_is_stale(self, request: TargetEvaluationRequest) -> bool:
-        if self._stop_event.is_set():
-            return True
-        with self._submit_lock:
-            return self._latest_request_key != self._request_key(request)
 
 
 class OperationWorker:

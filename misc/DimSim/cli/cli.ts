@@ -303,9 +303,9 @@ async function main() {
 
   // ── Eval ────────────────────────────────────────────────────────────
   if (subcommand === "eval") {
-    // Positional workflow: `dimsim eval scene-smoke` is shorthand for
-    // `dimsim eval --workflow scene-smoke --connect`. Accepts either bare
-    // workflow name ("scene-smoke") or scene-qualified ("apartment/scene-smoke").
+    // Positional workflow: `dimsim eval go-to-tv` is shorthand for
+    // `dimsim eval --workflow go-to-tv --connect`.  Accepts either bare
+    // workflow name ("go-to-tv") or scene-qualified ("apartment/go-to-tv").
     const positional = Deno.args[1] && !Deno.args[1].startsWith("--") ? Deno.args[1] : null;
     let posScene: string | undefined;
     let posWorkflow: string | undefined;

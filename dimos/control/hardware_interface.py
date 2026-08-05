@@ -202,19 +202,6 @@ class ConnectedHardware:
 
         return arm_ok and gripper_ok
 
-    def set_gripper_position(self, position: float) -> bool:
-        """Command the gripper and preserve that value across arm-only commands."""
-        if not self._gripper_joints:
-            return False
-        if not self._initialized:
-            self._initialize_last_commanded()
-        if not self._adapter.write_gripper_position(position):
-            return False
-        normalized = self._physical_to_normalized(position)
-        for joint_name in self._gripper_joints:
-            self._last_commanded[joint_name] = normalized
-        return True
-
     def _initialize_last_commanded(self) -> None:
         """Initialize last_commanded with current hardware positions."""
         for _ in range(10):

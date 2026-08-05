@@ -306,11 +306,13 @@ def _export_with_gltfpack(
             "-o",
             str(target),
             "-mm",
+            "-si",
+            str(spec.simplify_ratio),
+            "-se",
+            str(spec.simplify_error),
             "-r",
             str(report_path),
         ]
-        if spec.simplify_ratio < 1.0:
-            args.extend(["-si", str(spec.simplify_ratio), "-se", str(spec.simplify_error)])
         if not spec.quantize:
             args.append("-noq")
         if spec.use_gpu_instancing:
@@ -415,14 +417,6 @@ def _validate_output(
     output_stats: dict[str, Any],
     spec: BrowserVisualSpec,
 ) -> None:
-    if spec.preserve_geometry:
-        source_triangles = int(source_stats.get("expanded_triangle_count") or 0)
-        output_triangles = int(output_stats.get("expanded_triangle_count") or 0)
-        if source_triangles != output_triangles:
-            raise RuntimeError(
-                "geometry-preserving visual cook changed expanded triangle count from "
-                f"{source_triangles} to {output_triangles}"
-            )
     source_vertices = int(source_stats.get("vertex_count") or 0)
     output_vertices = int(output_stats.get("vertex_count") or 0)
     if source_vertices <= 0 or output_vertices <= 0:

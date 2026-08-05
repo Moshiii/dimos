@@ -1,22 +1,18 @@
-# Simulator-local evals
+# Evals
 
-DimSim's JavaScript eval harness is for simulator-local engine and scene checks. It has privileged access to Three.js objects, Rapier, and the agent pose. The `task` field is a display and reporting label; it is **not** sent to a DimOS agent.
-
-End-to-end robot tasks belong in `dimos/e2e_tests/`. Those tests send commands through DimOS, observe public DimOS streams, and run unchanged against each simulator through the `SceneControl` provider contract. Do not duplicate a system acceptance scenario as a JavaScript workflow.
-
-A simulator-local workflow is one JS file at `scenes/<env>/evals/<name>.js`. It imports `runEval` from `@dimsim/eval` and calls it.
+An eval workflow is one JS file at `scenes/<env>/evals/<name>.js`. It imports `runEval` from `@dimsim/eval` and calls it. That's the whole authoring surface.
 
 ## Create a new eval
 
 ```js
-// scenes/apartment/evals/sectional-bounds-smoke.js
+// scenes/apartment/evals/go-to-couch.js
 import { runEval } from '@dimsim/eval';
 
 await runEval({
   scene:      'apartment',
-  task:       'Sectional object-distance rubric resolves live bounds',
+  task:       'Go to the couch',
   timeoutSec: 30,
-  startPose:  { x: 4, y: 0.5, z: 1, yaw: 0 },
+  startPose:  { x: 0, y: 0.5, z: 3, yaw: 0 },
   success:    (ctx) => ctx.rubrics.objectDistance({ target: 'sectional', thresholdM: 2.0 }),
 });
 ```
@@ -26,9 +22,9 @@ Drop the file under any scene's `evals/` folder and `dimsim eval list` picks it 
 ## Run it
 
 ```bash
-dimsim eval sectional-bounds-smoke
-dimsim eval --headless --scene apartment --workflow sectional-bounds-smoke
-deno run -A misc/DimSim/scenes/apartment/evals/sectional-bounds-smoke.js
+dimsim eval go-to-couch                    # against the open sim
+dimsim eval --headless --scene apartment --workflow go-to-couch   # standalone / CI
+deno run -A misc/DimSim/scenes/apartment/evals/go-to-couch.js     # direct execution
 ```
 
 All three end up at the same harness in the browser. Pick whichever fits the moment.
@@ -38,7 +34,7 @@ All three end up at the same harness in the browser. Pick whichever fits the mom
 | Field | Required | Description |
 |---|---|---|
 | `scene` | ✓ | Scene name. Must match a directory under `scenes/`. |
-| `task` | ✓ | Human-readable label shown in the overlay and logs. It is not delivered to DimOS. |
+| `task` | ✓ | Human-readable goal. Shown in the overlay + logged. |
 | `success(ctx)` | ✓ | Returns `{passed, reason?, score?}`. Polled every 250 ms until it passes or timeout. |
 | `timeoutSec` | – | Default 120. Wall-clock cap. |
 | `startPose` | – | `{x, y, z, yaw?}`, applied before `setup`. Yaw in degrees. |
@@ -93,7 +89,6 @@ You can spawn obstacles, change embodiments mid-eval, or set up multi-stage test
 
 ## Tips
 
-- Use pytest for agent, perception, mapping, planning, transport, or robot behavior. Use this harness only when the assertion inherently needs browser-local scene or engine state.
 - One eval at a time. The harness is a singleton, so running two evals concurrently isn't supported. Use `--parallel N` with multiple browser pages for throughput.
 - Score is yours to define. Lower-is-better for distances, higher-is-better for coverage. CI consumers should not assume.
 - `startPose` yaw is in degrees, not radians.

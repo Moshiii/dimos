@@ -180,18 +180,6 @@ dimos --simulation run unitree-go2
 dimos --simulation run unitree-g1-sim
 ```
 
-PimSim environments are stored in Git LFS. From a source checkout, fetch the
-scene package before the first PimSim run; DimOS extracts it into
-`data/scene_packages/` on first use.
-
-```bash
-git lfs install
-git lfs pull --include="data/.lfs/scene_packages.tar.gz" --exclude=""
-```
-
-See [Large File Management](docs/development/large_file_management.md) for the
-data packaging and update workflow.
-
 ```bash
 # Control a real robot (Unitree quadruped over WebRTC)
 export ROBOT_IP=<YOUR_ROBOT_IP>

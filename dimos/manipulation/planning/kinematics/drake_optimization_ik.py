@@ -29,7 +29,7 @@ from dimos.manipulation.planning.kinematics.utils import (
 )
 from dimos.manipulation.planning.spec.enums import IKStatus
 from dimos.manipulation.planning.spec.models import IKResult, WorldRobotID
-from dimos.manipulation.planning.spec.protocols import IKStepCallback, WorldSpec
+from dimos.manipulation.planning.spec.protocols import WorldSpec
 from dimos.manipulation.planning.utils.kinematics_utils import compute_pose_error
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Transform import Transform
@@ -84,7 +84,6 @@ class DrakeOptimizationIK:
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
-        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         """Solve IK with multiple random restarts, returning the best collision-free solution."""
         error = self._validate_world(world)
@@ -181,7 +180,6 @@ class DrakeOptimizationIK:
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
-        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         """Solve a planning-group-scoped pose target with Drake IK."""
         error = self._validate_world(world)

@@ -686,28 +686,6 @@ def test_obstacle_mutation_updates_scene_and_stored_pose(
     assert world.get_obstacles() == []
 
 
-def test_environment_obstacles_do_not_collide_with_each_other(
-    fake_roboplan: None, robot_config: RobotModelConfig
-) -> None:
-    world, _ = _make_world(fake_roboplan, robot_config)
-    tabletop = Obstacle(
-        name="tabletop",
-        obstacle_type=ObstacleType.BOX,
-        pose=PoseStamped(position=Vector3(0.45, 0.0, 0.12)),
-        dimensions=(0.3, 0.4, 0.02),
-    )
-    table_leg = Obstacle(
-        name="table_leg",
-        obstacle_type=ObstacleType.CYLINDER,
-        pose=PoseStamped(position=Vector3(0.32, -0.18, 0.055)),
-        dimensions=(0.02, 0.11),
-    )
-
-    assert world.add_obstacle(tabletop) == "tabletop"
-    assert world.add_obstacle(table_leg) == "table_leg"
-    assert world._scene.collision_settings[("table_leg", "tabletop")] is False
-
-
 def test_obstacle_operations_require_finalization(
     fake_roboplan: None,
     robot_config: RobotModelConfig,

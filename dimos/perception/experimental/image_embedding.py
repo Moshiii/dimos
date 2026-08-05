@@ -80,13 +80,13 @@ class ImageEmbeddingProvider:
 
                 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
                 if sys.platform == "darwin":
-                    # CoreML's Metal compiler connection is not reliable in forkserver workers.
-                    providers = ["CPUExecutionProvider"]
+                    # 2025-11-17 12:36:47.877215 [W:onnxruntime:, helper.cc:82 IsInputSupported] CoreML does not support input dim > 16384. Input:text_model.embeddings.token_embedding.weight, shape: {49408,512}
+                    # 2025-11-17 12:36:47.878496 [W:onnxruntime:, coreml_execution_provider.cc:107 GetCapability] CoreMLExecutionProvider::GetCapability, number of partitions supported by CoreML: 88 number of nodes in the graph: 1504 number of nodes supported by CoreML: 933
+                    providers = ["CoreMLExecutionProvider"] + [
+                        each for each in providers if each != "CUDAExecutionProvider"
+                    ]
 
-                self.model = ort.InferenceSession(
-                    str(model_id),
-                    providers=providers,
-                )
+                self.model = ort.InferenceSession(str(model_id), providers=providers)
 
                 actual_providers = self.model.get_providers()  # type: ignore[attr-defined]
                 self.processor = CLIPProcessor.from_pretrained(processor_id)

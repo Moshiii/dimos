@@ -582,36 +582,6 @@ def test_solve_pose_targets_uses_group_tip_and_filters_group_joints(
     assert world.joint_state_calls == 0
 
 
-def test_solve_pose_targets_aborts_superseded_interactive_search(
-    mocker: MockerFixture,
-) -> None:
-    ik = _pink_ik(mocker, converge=False)
-    ik._robot_contexts = {("robot", "tool"): _context()}
-    world = _FakeWorld()
-    progress: list[JointState] = []
-
-    def abort(joints: JointState, _position: float, _orientation: float, _attempt: int) -> bool:
-        progress.append(joints)
-        return True
-
-    result = ik.solve_pose_targets(
-        world=cast("Any", world),
-        pose_targets={
-            world.groups["arm/manipulator"]: PoseStamped(
-                position=Vector3(0.1, 0.0, 0.0),
-                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
-            )
-        },
-        seed=JointState({"name": ["arm/joint_a", "arm/joint_b"], "position": [0.0, 0.0]}),
-        on_step=abort,
-    )
-
-    assert result.status == IKStatus.NO_SOLUTION
-    assert result.message == "Pink IK superseded by a newer target"
-    assert len(progress) == 1
-    assert progress[0].name == ["arm/joint_a", "arm/joint_b"]
-
-
 def test_solve_pose_targets_rejects_group_without_tip(mocker: MockerFixture) -> None:
     ik = _pink_ik(mocker)
     world = _FakeWorld()

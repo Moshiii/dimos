@@ -36,7 +36,7 @@ from dimos.manipulation.planning.kinematics.utils import (
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.enums import IKStatus
 from dimos.manipulation.planning.spec.models import IKResult, RobotName, WorldRobotID
-from dimos.manipulation.planning.spec.protocols import IKStepCallback, WorldSpec
+from dimos.manipulation.planning.spec.protocols import WorldSpec
 from dimos.manipulation.planning.utils.kinematics_utils import compute_pose_error
 from dimos.manipulation.planning.utils.mesh_utils import prepare_urdf_for_drake
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -64,11 +64,6 @@ class _PinkModules:
 
 
 _MANIPULATION_EXTRA_HINT = "Install manipulation dependencies with: uv sync --extra manipulation."
-_INTERACTIVE_STEP_STRIDE = 12
-
-
-class _IKSolveAbortedError(Exception):
-    """Stop a superseded interactive solve without treating it as an IK failure."""
 
 
 @dataclass(frozen=True)
@@ -123,7 +118,6 @@ class PinkIK:
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
-        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         """Solve IK with Pink, returning the standard planning ``IKResult``."""
         if not world.is_finalized:
@@ -161,11 +155,7 @@ class PinkIK:
                     upper_limits=upper_limits,
                     position_tolerance=position_tolerance,
                     orientation_tolerance=orientation_tolerance,
-                    attempt=attempt,
-                    on_step=on_step,
                 )
-            except _IKSolveAbortedError:
-                return _failure(IKStatus.NO_SOLUTION, "Pink IK superseded by a newer target")
             except ValueError as exc:
                 return _failure(IKStatus.NO_SOLUTION, f"Pink IK mapping failed: {exc}")
             except Exception as exc:
@@ -199,7 +189,6 @@ class PinkIK:
         orientation_tolerance: float = 0.01,
         check_collision: bool = True,
         max_attempts: int = 10,
-        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         """Solve planning-group-scoped pose targets with Pink IK."""
         if not world.is_finalized:
@@ -267,7 +256,6 @@ class PinkIK:
                 return _failure(IKStatus.NO_SOLUTION, f"Pink IK model setup failed: {exc}")
 
             fallback_result: IKResult | None = None
-            progress_callback = self._group_progress_callback(groups, on_step)
             for attempt in range(max_attempts):
                 current_positions = seed_positions.copy()
                 if attempt > 0:
@@ -286,8 +274,6 @@ class PinkIK:
                             position_tolerance=position_tolerance,
                             orientation_tolerance=orientation_tolerance,
                             locked_joint_positions=locked_positions,
-                            attempt=attempt,
-                            on_step=progress_callback,
                         )
                     else:
                         result = self._solve_multi(
@@ -298,11 +284,7 @@ class PinkIK:
                             position_tolerance=position_tolerance,
                             orientation_tolerance=orientation_tolerance,
                             locked_joint_positions=locked_positions,
-                            attempt=attempt,
-                            on_step=progress_callback,
                         )
-                except _IKSolveAbortedError:
-                    return _failure(IKStatus.NO_SOLUTION, "Pink IK superseded by a newer target")
                 except ValueError as exc:
                     return _failure(IKStatus.NO_SOLUTION, f"Pink IK mapping failed: {exc}")
                 except Exception as exc:
@@ -377,40 +359,6 @@ class PinkIK:
             return _collision_failure(combined)
         return combined
 
-    @staticmethod
-    def _group_progress_callback(
-        groups: Sequence[PlanningGroup], on_step: IKStepCallback | None
-    ) -> IKStepCallback | None:
-        if on_step is None:
-            return None
-
-        def report(
-            local_state: JointState,
-            position_error: float,
-            orientation_error: float,
-            attempt: int,
-        ) -> bool:
-            values = dict(zip(local_state.name, local_state.position, strict=True))
-            names: list[str] = []
-            positions: list[float] = []
-            for group in groups:
-                for global_name, local_name in zip(
-                    group.joint_names, group.local_joint_names, strict=True
-                ):
-                    value = values.get(local_name, values.get(global_name))
-                    if value is None:
-                        continue
-                    names.append(global_name)
-                    positions.append(float(value))
-            return on_step(
-                JointState({"name": names, "position": positions}),
-                position_error,
-                orientation_error,
-                attempt,
-            )
-
-        return report
-
     def _solve_multi(
         self,
         targets: Sequence[tuple[_PinkRobotContext, NDArray[np.float64]]],
@@ -420,8 +368,6 @@ class PinkIK:
         position_tolerance: float,
         orientation_tolerance: float,
         locked_joint_positions: Mapping[int, float] | None = None,
-        attempt: int = 0,
-        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         robot_context = targets[0][0]
         pink = self._modules.pink
@@ -451,17 +397,6 @@ class PinkIK:
             ]
             final_position_error = max(error[0] for error in errors)
             final_orientation_error = max(error[1] for error in errors)
-            if on_step is not None and iteration % _INTERACTIVE_STEP_STRIDE == 0:
-                progress = JointState(
-                    {
-                        "name": robot_context.mapping.dimos_joint_names,
-                        "position": self._q_to_dimos_positions(
-                            robot_context, configuration.q
-                        ).tolist(),
-                    }
-                )
-                if on_step(progress, final_position_error, final_orientation_error, attempt):
-                    raise _IKSolveAbortedError
             if (
                 final_position_error <= position_tolerance
                 and final_orientation_error <= orientation_tolerance
@@ -513,8 +448,6 @@ class PinkIK:
         position_tolerance: float,
         orientation_tolerance: float,
         locked_joint_positions: Mapping[int, float] | None = None,
-        attempt: int = 0,
-        on_step: IKStepCallback | None = None,
     ) -> IKResult:
         pink = self._modules.pink
         pinocchio = self._modules.pinocchio
@@ -545,17 +478,6 @@ class PinkIK:
             final_position_error, final_orientation_error = compute_pose_error(
                 current_pose, target_model
             )
-            if on_step is not None and iteration % _INTERACTIVE_STEP_STRIDE == 0:
-                progress = JointState(
-                    {
-                        "name": robot_context.mapping.dimos_joint_names,
-                        "position": self._q_to_dimos_positions(
-                            robot_context, configuration.q
-                        ).tolist(),
-                    }
-                )
-                if on_step(progress, final_position_error, final_orientation_error, attempt):
-                    raise _IKSolveAbortedError
             if (
                 final_position_error <= position_tolerance
                 and final_orientation_error <= orientation_tolerance

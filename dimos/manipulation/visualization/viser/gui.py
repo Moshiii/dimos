@@ -14,14 +14,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from typing import TypeAlias, cast
 
 from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.planners.config import RoboPlanCartesianPathConfig
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.models import PlanningGroupID, PlanningSceneInfo, RobotName
-from dimos.manipulation.planning.spec.protocols import IKStepCallback
 from dimos.manipulation.visualization.operator import (
     CartesianTargetRequest,
     JointTargetRequest,
@@ -256,15 +255,6 @@ class ViserPanelGui:
     def reset(self) -> bool:
         return self.operator.reset()
 
-    def go_home(self) -> bool:
-        return self.operator.go_home(self.state.selected_robot)
-
-    def open_gripper(self) -> bool:
-        return self.operator.open_gripper(self.state.selected_robot)
-
-    def close_gripper(self) -> bool:
-        return self.operator.close_gripper(self.state.selected_robot)
-
     def evaluate_joint_target_set(
         self, group_ids: Sequence[PlanningGroupID], targets: Mapping[PlanningGroupID, JointState]
     ) -> TargetEvaluationResult:
@@ -287,7 +277,6 @@ class ViserPanelGui:
         pose_targets: Mapping[PlanningGroupID, Pose],
         auxiliary_group_ids: Sequence[PlanningGroupID] = (),
         seed: JointState | None = None,
-        on_step: IKStepCallback | None = None,
     ) -> TargetEvaluationResult:
         stamped = {
             group_id: PoseStamped(
@@ -296,8 +285,7 @@ class ViserPanelGui:
             for group_id, pose in pose_targets.items()
         }
         return self.operator.evaluate_pose_target(
-            PoseTargetRequest(stamped, tuple(auxiliary_group_ids), _copy_joint_state(seed)),
-            on_step=on_step,
+            PoseTargetRequest(stamped, tuple(auxiliary_group_ids), _copy_joint_state(seed))
         )
 
     def cancel(self) -> bool:
@@ -396,7 +384,6 @@ class ViserPanelGui:
             "### Planning Groups\nActive planning groups for pose goals, planning, and joint edits."
         )
         self._sync_group_selector(self.list_planning_groups())
-        self._build_operator_controls(gui)
         self._handles["target_heading"] = gui.add_markdown("### Target")
         preset_dropdown = gui.add_dropdown(
             "Preset",
@@ -433,28 +420,6 @@ class ViserPanelGui:
         joint_controls = gui.add_folder("Joint Control", expand_by_default=False)
         self._handles["joint_control_folder"] = joint_controls
         self._build_joint_sliders()
-
-    def _build_operator_controls(self, gui: GuiApi) -> None:
-        self._handles["operator_heading"] = gui.add_markdown("### Robot Controls")
-        actions: tuple[tuple[str, str, Callable[[], bool]], ...] = (
-            ("reset", "Reset", self.reset),
-            ("go_home", "Go Home", self.go_home),
-            ("open_gripper", "Open Gripper", self.open_gripper),
-            ("close_gripper", "Close Gripper", self.close_gripper),
-        )
-        for key, label, action in actions:
-            button = gui.add_button(label)
-
-            def on_click(
-                _event: object,
-                action_key: str = key,
-                action_label: str = label,
-                callback: Callable[[], bool] = action,
-            ) -> None:
-                self._submit_operator_action(action_key, action_label, callback)
-
-            button.on_click(on_click)
-            self._handles[key] = button
 
     def _sync_group_selector(self, groups: list[PlanningGroup]) -> None:
         """Render source-order group toggle buttons without a robot dropdown."""
@@ -821,13 +786,11 @@ class ViserPanelGui:
         return self._local_values_for_robot(robot_name, state)
 
     def _remove_panel_handles(self) -> None:
-        for key, handle in reversed(list(self._handles.items())):
-            self._handles.pop(key, None)
-            if key.startswith("ee_control:"):
-                continue
+        for key, handle in list(self._handles.items()):
             remove = getattr(handle, "remove", None)
             if callable(remove):
                 remove()
+            self._handles.pop(key, None)
 
     def _sync_preset_dropdown(self) -> None:
         handle = self._handles.get("preset")
@@ -959,8 +922,7 @@ class ViserPanelGui:
                 pose_targets=dict(self._active_pose_targets()),
             )
         )
-        # A drag can emit tens of updates per second from the Viser client
-        # thread. The coalescing worker refreshes once for the accepted result.
+        self.refresh()
 
     def _submit_joint_target_evaluation(self) -> None:
         targets = self._target_set_from_sliders()
@@ -1041,32 +1003,13 @@ class ViserPanelGui:
             self.scene.set_target_active(str(robot_id), str(robot_id) in active_robot_ids)
 
     def _handle_target_evaluation_request(
-        self,
-        request: TargetEvaluationRequest,
-        is_stale: Callable[[], bool],
+        self, request: TargetEvaluationRequest
     ) -> TargetEvaluationResult:
         if request.source == "cartesian":
             if not request.pose_targets:
                 return TargetEvaluationResult(False, "INVALID", "No pose target")
-
-            def on_step(
-                joints: JointState,
-                _position_error: float,
-                _orientation_error: float,
-                _attempt: int,
-            ) -> bool:
-                if is_stale():
-                    return True
-                targets = self._group_targets_from_joint_state(request.group_ids, joints)
-                if targets:
-                    self._move_joint_target_visuals(targets)
-                return False
-
             return self.evaluate_pose_target_set(
-                request.pose_targets,
-                request.auxiliary_group_ids,
-                request.joints,
-                on_step=on_step,
+                request.pose_targets, request.auxiliary_group_ids, request.joints
             )
         if not request.joint_targets:
             return TargetEvaluationResult(False, "INVALID", "No joint target")
@@ -1116,41 +1059,22 @@ class ViserPanelGui:
         self._move_joint_target_visuals(self.state.group_joint_targets)
 
     def _split_target_joints_by_group(self, target_joints: JointState) -> None:
-        self.state.group_joint_targets.update(
-            self._group_targets_from_joint_state(self.state.selected_group_ids, target_joints)
-        )
-
-    def _group_targets_from_joint_state(
-        self,
-        group_ids: Sequence[PlanningGroupID],
-        target_joints: JointState,
-    ) -> dict[PlanningGroupID, JointState]:
         if len(target_joints.name) != len(target_joints.position):
-            return {}
+            return
         positions = {
             str(name): float(value)
             for name, value in zip(target_joints.name, target_joints.position, strict=True)
         }
-        targets: dict[PlanningGroupID, JointState] = {}
-        for group_id in group_ids:
+        for group_id in self.state.selected_group_ids:
             group = self._groups_by_id().get(group_id)
-            if group is None:
+            if group is None or any(str(name) not in positions for name in group.joint_names):
                 continue
-            values = [
-                positions.get(str(global_name), positions.get(str(local_name)))
-                for global_name, local_name in zip(
-                    group.joint_names, group.local_joint_names, strict=True
-                )
-            ]
-            if any(value is None for value in values):
-                continue
-            targets[group_id] = JointState(
+            self.state.group_joint_targets[group_id] = JointState(
                 {
                     "name": list(group.joint_names),
-                    "position": [float(value) for value in values if value is not None],
+                    "position": [positions[str(name)] for name in group.joint_names],
                 }
             )
-        return targets
 
     def _sync_pose_targets_from_group_poses(self) -> None:
         groups = self._groups_by_id()
@@ -1195,11 +1119,6 @@ class ViserPanelGui:
         )
 
     def _update_control_state(self) -> None:
-        operator_busy = self.state.action_status != ActionStatus.IDLE or (
-            self.state.manipulation_state in {"PLANNING", "EXECUTING"}
-        )
-        for key in ("reset", "go_home", "open_gripper", "close_gripper"):
-            self._set_disabled(key, operator_busy)
         self._set_disabled("plan", not self.state.can_plan())
         self._set_disabled("preview", not self.state.can_preview())
         self._set_disabled(
@@ -1343,45 +1262,6 @@ class ViserPanelGui:
 
         self._operation_worker.submit(
             operation, on_error=lambda message: self._set_operation_error(message, operation_id)
-        )
-
-    def _submit_operator_action(
-        self,
-        key: str,
-        label: str,
-        action: Callable[[], bool],
-    ) -> None:
-        if self._closed:
-            return
-        if self.state.action_status != ActionStatus.IDLE or self.state.manipulation_state in {
-            "PLANNING",
-            "EXECUTING",
-        }:
-            self._set_recoverable_error(f"Cannot {label.lower()} while manipulation is busy")
-            return
-        operation_id = self._next_operation_id()
-        self.state.action_status = ActionStatus.RUNNING
-        self.refresh()
-
-        def operation() -> None:
-            if not self._operation_is_current(operation_id):
-                return
-            ok = action()
-            if not self._operation_is_current(operation_id):
-                return
-            if key == "reset" and ok:
-                self.state.plan_state = PanelPlanState()
-            if not ok:
-                self.state.error = self.get_error() or f"{label} failed"
-            self._finish_operation(
-                f"{key}={ok}",
-                clear_error=ok,
-                operation_id=operation_id,
-            )
-
-        self._operation_worker.submit(
-            operation,
-            on_error=lambda message: self._set_operation_error(message, operation_id),
         )
 
     def _set_planning_mode(self, label: str) -> None:

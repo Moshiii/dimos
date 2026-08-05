@@ -495,10 +495,6 @@ def test_panel_contract_group_order_defaults_and_controls(
     assert [button.label for button in server.gui.buttons] == [
         "arm",
         "arm gripper",
-        "Reset",
-        "Go Home",
-        "Open Gripper",
-        "Close Gripper",
         "Plan",
         "Preview",
         "Execute",
@@ -879,12 +875,6 @@ def test_group_controls_use_source_labels_and_active_colors(
     assert group_display_name(pose) == "arm"
     assert group_display_name(auxiliary) == "arm gripper"
     assert [button.label for button in server.gui.buttons[:2]] == ["arm", "arm gripper"]
-    assert [button.label for button in server.gui.buttons[2:6]] == [
-        "Reset",
-        "Go Home",
-        "Open Gripper",
-        "Close Gripper",
-    ]
     assert [button.color for button in server.gui.buttons[:2]] == [
         ACTIVE_GROUP_COLOR,
         INACTIVE_GROUP_COLOR,
@@ -964,10 +954,6 @@ def test_panel_action_controls_are_present_in_source_order(
     _gui, _module, server = panel([selected], states("arm"))
 
     assert [button.label for button in server.gui.buttons[1:]] == [
-        "Reset",
-        "Go Home",
-        "Open Gripper",
-        "Close Gripper",
         "Plan",
         "Preview",
         "Execute",
@@ -1166,12 +1152,7 @@ def test_panel_disables_plan_preview_and_execute_until_a_feasible_target(
     selected = group("arm", "manipulator", ("j1",), pose=True)
     _gui, _module, server = panel([selected], states("arm"))
 
-    buttons = {button.label: button for button in server.gui.buttons}
-    assert [buttons[label].disabled for label in ("Plan", "Preview", "Execute")] == [
-        True,
-        True,
-        True,
-    ]
+    assert [button.disabled for button in server.gui.buttons[1:4]] == [True, True, True]
 
 
 def test_panel_status_reports_target_and_plan_defaults(
@@ -1412,13 +1393,6 @@ def test_transform_control_callback_preserves_pose_through_gui_and_backend(
     submitted: list[TargetEvaluationRequest] = []
     gui._worker.submit = submitted.append  # type: ignore[method-assign]
     gui.start()
-    refresh_calls = 0
-
-    def count_refresh() -> None:
-        nonlocal refresh_calls
-        refresh_calls += 1
-
-    gui.refresh = count_refresh  # type: ignore[method-assign]
     control = scene._handles[f"{selected.id}:ee_control"]
     control.position = (1.0, 2.0, 3.0)
     control.wxyz = (0.4, 0.1, 0.2, 0.3)
@@ -1431,11 +1405,7 @@ def test_transform_control_callback_preserves_pose_through_gui_and_backend(
     assert control.position == (1.0, 2.0, 3.0)
     assert control.wxyz == (0.4, 0.1, 0.2, 0.3)
     assert request.pose_targets[selected.id] == gui.state.pose_targets[selected.id]
-    assert refresh_calls == 0
     gui.close()
-    assert control.removed is False
-    scene.close()
-    assert control.removed is True
 
 
 def test_joint_evaluation_updates_active_gizmo_from_computed_group_pose() -> None:

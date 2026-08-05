@@ -5,8 +5,8 @@ Browser-based 3D simulator (Three.js + Rapier) plus a Deno bridge that talks LCM
 ```
 src/        — browser engine (vite-bundled)
 cli/        — Deno CLI + bridge server + headless launcher + LCM vendor
-evals/      — simulator-local harness (browser) + runner (Deno) + rubrics
-scenes/     — user-authored scenes (JS) + optional engine-level workflows
+evals/      — eval harness (browser) + runner (Deno) + rubrics
+scenes/     — user-authored scenes (JS) + per-scene eval workflows
 public/     — static assets (agent GLB, logo)
 docs/       — guides
 ```
@@ -26,7 +26,7 @@ On first run, `cli/cli.ts` will build `dist/` via Vite (dimsim ships its fronten
 
 - [docs/getting-started.md](docs/getting-started.md) — 5-minute tour
 - [docs/scenes.md](docs/scenes.md) — create + edit scenes
-- [docs/evals.md](docs/evals.md) — simulator-local workflows vs DimOS system tests
+- [docs/evals.md](docs/evals.md) — write eval workflows
 
 ## Install the CLI (optional)
 
@@ -42,8 +42,8 @@ After install:
 ```bash
 dimsim dev --scene apartment              # standalone dev server + browser
 dimsim eval list                          # list workflows under scenes/*/evals/
-dimsim eval <workflow>                    # run a simulator-local workflow
-dimsim eval --headless --scene apartment --workflow <workflow>
+dimsim eval go-to-couch                   # run one workflow against an open sim
+dimsim eval --headless --scene apartment  # full headless run (CI)
 ```
 
 ## Build manually

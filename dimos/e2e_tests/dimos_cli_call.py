@@ -24,7 +24,6 @@ class DimosCliCall:
     mcp_port: int | None = None
     # None: no --simulation flag (e.g. replay runs via --robot-ip fake).
     simulator: str | None = "mujoco"
-    scene_package: str | None = None
 
     def __init__(self) -> None:
         self.process = None
@@ -56,25 +55,15 @@ class DimosCliCall:
         if self.mcp_port is not None:
             global_overrides += ["--mcp-port", str(self.mcp_port)]
             env["MCPCLIENT__MCP_SERVER_URL"] = f"http://localhost:{self.mcp_port}/mcp"
-
-        viewer = os.environ.get("DIMOS_E2E_VIEWER", "none")
-        if "--viewer" not in global_overrides:
-            global_overrides += ["--viewer", viewer]
-
-        if self.simulator == "pimsim":
-            global_overrides += [
-                "--simulation",
-                "mujoco",
-                "--simulation-provider",
-                "pimsim",
-                "--scene-package",
-                self.scene_package or "dimsim-apartment",
-            ]
-        elif self.simulator is not None:
+        if self.simulator is not None:
             global_overrides += ["--simulation", self.simulator]
 
         self.process = subprocess.Popen(
-            ["dimos", *global_overrides, *args],
+            [
+                "dimos",
+                *global_overrides,
+                *args,
+            ],
             start_new_session=True,
             env=env,
         )
@@ -84,7 +73,7 @@ class DimosCliCall:
         # call reaps the process its pgid can be recycled, and a second
         # killpg could hit an unrelated process group.
         process, self.process = self.process, None
-        if process is None or process.poll() is not None:
+        if process is None:
             return
 
         try:

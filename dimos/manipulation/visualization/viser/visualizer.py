@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import suppress
-import threading
 from typing import TYPE_CHECKING
 
 from dimos.manipulation.visualization.viser.animation import (
@@ -80,57 +79,55 @@ class ViserManipulationVisualizer:
         self._robot_names_by_id: dict[str, str] = {}
         self._robot_ids_by_name: dict[str, str] = {}
         self._configs_by_name: dict[str, RobotModelConfig] = {}
-        self._lifecycle_lock = threading.RLock()
         self._closed = False
 
     def _ensure_started(self) -> None:
-        with self._lifecycle_lock:
-            if self._closed or self._runtime is not None:
-                return
-            runtime = ViserRuntime(self.config)
-            scene: ViserManipulationScene | None = None
-            gui: ViserPanelGui | None = None
-            try:
-                server = runtime.start()
-                apply_dimos_theme(server)
-                scene = ViserManipulationScene(server, ViserUrdf)
-                gui = (
-                    ViserPanelGui(
-                        server,
-                        self._session_scene,
-                        self._operator,
-                        self._current_states,
-                        self.config,
-                        scene,
-                    )
-                    if self.config.panel_enabled
-                    and self._session_scene is not None
-                    and self._operator is not None
-                    else None
+        if self._closed or self._runtime is not None:
+            return
+        runtime = ViserRuntime(self.config)
+        scene: ViserManipulationScene | None = None
+        gui: ViserPanelGui | None = None
+        try:
+            server = runtime.start()
+            apply_dimos_theme(server)
+            scene = ViserManipulationScene(server, ViserUrdf)
+            gui = (
+                ViserPanelGui(
+                    server,
+                    self._session_scene,
+                    self._operator,
+                    self._current_states,
+                    self.config,
+                    scene,
                 )
-                if gui is not None:
-                    gui.start()
-            except Exception:
-                if gui is not None:
-                    with suppress(Exception):
-                        gui.close()
-                if scene is not None:
-                    with suppress(Exception):
-                        scene.close()
+                if self.config.panel_enabled
+                and self._session_scene is not None
+                and self._operator is not None
+                else None
+            )
+            if gui is not None:
+                gui.start()
+        except Exception:
+            if gui is not None:
                 with suppress(Exception):
-                    runtime.close()
-                self._runtime = None
-                self._server = None
-                self._scene = None
-                self._gui = None
-                self._closed = True
-                raise
-            self._runtime = runtime
-            self._server = server
-            self._scene = scene
-            self._gui = gui
-            self._closed = False
-            logger.info(f"Viser manipulation visualization: {self.get_visualization_url()}")
+                    gui.close()
+            if scene is not None:
+                with suppress(Exception):
+                    scene.close()
+            with suppress(Exception):
+                runtime.close()
+            self._runtime = None
+            self._server = None
+            self._scene = None
+            self._gui = None
+            self._closed = True
+            raise
+        self._runtime = runtime
+        self._server = server
+        self._scene = scene
+        self._gui = gui
+        self._closed = False
+        logger.info(f"Viser manipulation visualization: {self.get_visualization_url()}")
 
     def initialize(self, session: VisualizationSession) -> None:
         """Initialize Viser robot visuals from a one-shot visualization session."""
@@ -320,31 +317,30 @@ class ViserManipulationVisualizer:
         return values if all(name in values for name in config.joint_names) else None
 
     def close(self) -> None:
-        with self._lifecycle_lock:
-            if self._closed:
-                return
-            self._closed = True
-            errors: list[BaseException] = []
-            try:
-                if self._gui is not None:
-                    try:
-                        self._gui.close()
-                    except Exception as e:
-                        errors.append(e)
-                if self._scene is not None:
-                    try:
-                        self._scene.close()
-                    except Exception as e:
-                        errors.append(e)
-            finally:
-                if self._runtime is not None:
-                    try:
-                        self._runtime.close()
-                    except Exception as e:
-                        errors.append(e)
-                self._runtime = None
-                self._server = None
-                self._scene = None
-                self._gui = None
-            if errors:
-                raise errors[0]
+        if self._closed:
+            return
+        self._closed = True
+        errors: list[BaseException] = []
+        try:
+            if self._gui is not None:
+                try:
+                    self._gui.close()
+                except Exception as e:
+                    errors.append(e)
+            if self._scene is not None:
+                try:
+                    self._scene.close()
+                except Exception as e:
+                    errors.append(e)
+        finally:
+            if self._runtime is not None:
+                try:
+                    self._runtime.close()
+                except Exception as e:
+                    errors.append(e)
+            self._runtime = None
+            self._server = None
+            self._scene = None
+            self._gui = None
+        if errors:
+            raise errors[0]

@@ -243,7 +243,6 @@ class McpClient(Module):
             )
             if not self._thread.is_alive():
                 self._thread.start()
-        self.agent_idle.publish(True)
 
     @rpc
     def stop(self) -> None:

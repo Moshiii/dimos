@@ -13,28 +13,20 @@
 # limitations under the License.
 
 from collections.abc import Callable, Generator, Iterator
-import os
 import threading
 import time
 
 import pytest
 
-from dimos.core.global_config import global_config
-from dimos.core.transport_factory import make_transport
+from dimos.core.transport import pLCMTransport
 from dimos.e2e_tests.conf_types import StartPersonTrack
+from dimos.e2e_tests.dim_sim_client import DimSimClient
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
-from dimos.e2e_tests.scene_control import SceneControl, load_scene_control
-from dimos.e2e_tests.simulation_scenarios import APARTMENT_EXPLORATION_ROUTE
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 from dimos.msgs.std_msgs.Bool import Bool
-from dimos.protocol.service.zenohservice import (
-    ZENOH_LOCAL_ROUTER_ENDPOINT,
-    ZENOH_ROUTER_ENDPOINT_ENV,
-    ZenohRouter,
-)
 from dimos.simulation.mujoco.direct_cmd_vel_explorer import DirectCmdVelExplorer
 from dimos.simulation.mujoco.person_on_track import PersonTrackPublisher
 
@@ -48,49 +40,11 @@ def _pose(x: float, y: float, theta: float) -> PoseStamped:
 
 
 @pytest.fixture
-def transport_runtime(monkeypatch) -> Iterator[None]:
-    if global_config.transport != "zenoh":
-        yield
-        return
-
-    router = ZenohRouter()
-    router.start()
-    monkeypatch.setenv(ZENOH_ROUTER_ENDPOINT_ENV, ZENOH_LOCAL_ROUTER_ENDPOINT)
-    try:
-        yield
-    finally:
-        router.stop()
-
-
-@pytest.fixture
-def lcm_spy(transport_runtime: None) -> Iterator[LcmSpy]:
-    del transport_runtime
+def lcm_spy() -> Iterator[LcmSpy]:
     lcm_spy = LcmSpy()
     lcm_spy.start()
     yield lcm_spy
     lcm_spy.stop()
-
-
-@pytest.fixture
-def wait_for_agent_ready(lcm_spy: LcmSpy) -> Callable[[float], None]:
-    topic = "/agent_idle"
-    lcm_spy.save_topic(topic)
-
-    def wait(timeout: float = 120.0) -> None:
-        lcm_spy.wait_for_saved_topic(topic, timeout=timeout)
-
-    return wait
-
-
-@pytest.fixture
-def wait_for_robot_odometry(lcm_spy: LcmSpy) -> Callable[[float], None]:
-    topic = "/odom#geometry_msgs.PoseStamped"
-    lcm_spy.save_topic(topic)
-
-    def wait(timeout: float = 60.0) -> None:
-        lcm_spy.wait_for_saved_topic(topic, timeout=timeout)
-
-    return wait
 
 
 @pytest.fixture
@@ -113,23 +67,17 @@ def follow_points(lcm_spy: LcmSpy):
 
 
 @pytest.fixture
-def start_blueprint(
-    mcp_port: int,
-    transport_runtime: None,
-) -> Iterator[Callable[..., DimosCliCall]]:
-    del transport_runtime
+def start_blueprint(mcp_port: int) -> Iterator[Callable[..., DimosCliCall]]:
     dimos_robot_call = DimosCliCall()
     dimos_robot_call.mcp_port = mcp_port
 
     def set_name_and_start(
         *demo_args: str,
         simulator: str | None = None,
-        scene_package: str | None = None,
     ) -> DimosCliCall:
         dimos_robot_call.demo_args = list(demo_args)
         if simulator is not None:
             dimos_robot_call.simulator = simulator
-        dimos_robot_call.scene_package = scene_package
         dimos_robot_call.start()
         return dimos_robot_call
 
@@ -139,17 +87,16 @@ def start_blueprint(
 
 
 @pytest.fixture
-def human_input(transport_runtime: None):
-    del transport_runtime
-    transport = make_transport("/human_input")
-    transport.start()
+def human_input():
+    transport = pLCMTransport("/human_input")
+    transport.lcm.start()
 
     def send_human_input(message: str) -> None:
-        transport.broadcast(None, message)
+        transport.publish(message)
 
     yield send_human_input
 
-    transport.stop()
+    transport.lcm.stop()
 
 
 @pytest.fixture
@@ -180,10 +127,7 @@ def start_person_track() -> Generator[StartPersonTrack, None, None]:
 
 
 @pytest.fixture
-def direct_cmd_vel_explorer(
-    transport_runtime: None,
-) -> Generator[DirectCmdVelExplorer, None, None]:
-    del transport_runtime
+def direct_cmd_vel_explorer() -> Generator[PersonTrackPublisher, None, None]:
     explorer = DirectCmdVelExplorer()
     explorer.start()
     yield explorer
@@ -218,30 +162,15 @@ def explore_office(
 
 
 @pytest.fixture
-def simulator_name() -> str:
-    simulator = os.environ.get("DIMOS_E2E_SIMULATOR", "pimsim")
-    if simulator == "dimsim" and global_config.transport != "lcm":
-        raise pytest.UsageError(
-            "native DimSim publishes its robot bridge over LCM; use "
-            "DIMOS_TRANSPORT=lcm for DIMOS_E2E_SIMULATOR=dimsim"
-        )
-    return simulator
-
-
-@pytest.fixture
-def scene_control(
-    simulator_name: str,
-    transport_runtime: None,
-) -> Iterator[SceneControl]:
-    del transport_runtime
-    client = load_scene_control(simulator_name)
+def dim_sim():
+    client = DimSimClient()
     client.start()
     yield client
     client.stop()
 
 
 @pytest.fixture
-def spawn_wall_on_pose(lcm_spy: LcmSpy, scene_control: SceneControl):
+def spawn_wall_on_pose(lcm_spy: LcmSpy, dim_sim: DimSimClient):
     """Spawn a dim_sim wall when the robot's /odom comes within `threshold` metres of `point`."""
     odom_topic = "/odom#geometry_msgs.PoseStamped"
     stop_event = threading.Event()
@@ -267,7 +196,7 @@ def spawn_wall_on_pose(lcm_spy: LcmSpy, scene_control: SceneControl):
                 with lcm_spy.topic_listener(odom_topic, on_odom):
                     while not stop_event.is_set():
                         if triggered.wait(timeout=0.1):
-                            scene_control.add_wall(*wall)
+                            dim_sim.add_wall(*wall)
                             return
             except BaseException as e:
                 errors.append(e)
@@ -289,9 +218,34 @@ def spawn_wall_on_pose(lcm_spy: LcmSpy, scene_control: SceneControl):
 def explore_house(
     direct_cmd_vel_explorer: DirectCmdVelExplorer,
 ) -> Callable[[], None]:
+    points = [
+        (3.881, 4.803),
+        (4.160, 1.615),
+        (1.596, 1.505),
+        (1.649, 0.137),
+        (-3.644, -0.064),
+        (-3.759, -2.661),
+        (-4.186, -4.830),
+        (-3.759, -2.661),
+        (-1.070, -3.285),
+        (-2.504, -2.452),
+        (-2.647, 5.243),
+        (-3.663, 3.591),
+        (-1.178, 1.974),
+        (-2.416, 2.629),
+        (-2.581, 0.164),
+        (1.834, 0.072),
+        (3.010, -3.883),
+        (1.756, -3.742),
+        (6.336, -4.077),
+        (8.264, -5.119),
+        (6.258, -0.964),
+        (6.453, 5.327),
+    ]
+
     direct_cmd_vel_explorer.linear_speed = 0.5
 
     def explore() -> None:
-        direct_cmd_vel_explorer.follow_points(list(APARTMENT_EXPLORATION_ROUTE))
+        direct_cmd_vel_explorer.follow_points(points)
 
     return explore

@@ -28,7 +28,6 @@ from dimos.manipulation.planning.spec.models import (
     PlanningGroupID,
     RobotName,
 )
-from dimos.manipulation.planning.spec.protocols import IKStepCallback
 from dimos.manipulation.visualization.operator import (
     CartesianTargetRequest,
     JointTargetRequest,
@@ -109,7 +108,6 @@ class FakeModule:
                 dict[PlanningGroupID, PoseStamped], tuple[PlanningGroupID, ...], JointState | None
             ]
         ] = []
-        self.ik_progress_callbacks: list[IKStepCallback | None] = []
         self.plan_success = True
         self.preview_success = True
         self.execute_success = True
@@ -152,21 +150,6 @@ class FakeModule:
             status=IKStatus.SUCCESS,
             joint_state=JointState(name=["arm/j0", "arm/j1"], position=[0.4, 0.5]),
             message="ok",
-        )
-
-    def inverse_kinematics_interactive(
-        self,
-        pose_targets: dict[PlanningGroupID, PoseStamped],
-        auxiliary_group_ids: tuple[PlanningGroupID, ...] = (),
-        seed: JointState | None = None,
-        on_step: IKStepCallback | None = None,
-    ) -> IKResult:
-        self.ik_progress_callbacks.append(on_step)
-        return self.inverse_kinematics(
-            pose_targets,
-            auxiliary_group_ids=auxiliary_group_ids,
-            seed=seed,
-            check_collision=True,
         )
 
     def plan_to_joint_targets(self, targets: dict[PlanningGroupID, JointState]) -> bool:
@@ -353,16 +336,12 @@ def test_pose_evaluation_accepts_world_frame_and_delegates_original_request() ->
     seed = JointState(name=["arm/j0", "arm/j1"], position=[0.0, 0.0])
     request = PoseTargetRequest({"arm/manipulator": pose}, seed=seed)
 
-    def on_step(_joints: JointState, _position: float, _orientation: float, _attempt: int) -> bool:
-        return False
-
-    result = operator.evaluate_pose_target(request, on_step=on_step)
+    result = operator.evaluate_pose_target(request)
 
     assert result.success is True
     assert result.target_joints is not None
     assert list(result.target_joints.name) == ["arm/j0", "arm/j1"]
     assert module.ik_calls == [({"arm/manipulator": pose}, (), seed)]
-    assert module.ik_progress_callbacks == [on_step]
 
 
 def test_pose_validation_rejects_frame_capability_and_seed_errors() -> None:

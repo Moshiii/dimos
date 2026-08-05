@@ -69,39 +69,6 @@ When writing or debugging a specific self-hosted test, override `-m` yourself to
 pytest -m self_hosted dimos/path/to/test_something.py
 ```
 
-### Cross-simulator system tests
-
-DimOS system acceptance scenarios live in `dimos/e2e_tests/` and run against
-each supported simulator through the `SceneControl` provider contract. The
-test owns the command, setup, public completion assertion, and scoring rule;
-the provider owns only simulator-specific control and test-oracle queries.
-
-Select the provider without changing the test body:
-
-```bash
-DIMOS_TRANSPORT=zenoh DIMOS_E2E_SIMULATOR=pimsim \
-  pytest -o addopts='' -m self_hosted_large \
-  dimos/e2e_tests/test_dimsim_spatial_memory.py
-
-DIMOS_TRANSPORT=lcm DIMOS_E2E_SIMULATOR=dimsim \
-  pytest -o addopts='' -m self_hosted_large \
-  dimos/e2e_tests/test_dimsim_spatial_memory.py
-```
-
-The scenario body and acceptance contract are provider-neutral, but native
-DimSim's browser bridge is currently LCM-only. PimSim is the maintained Zenoh
-path. Selecting native DimSim with Zenoh is rejected immediately instead of
-waiting for odometry that cannot arrive.
-
-Semantic scene metadata may be used by the test after the task as ground truth
-for scoring. It must not be published to the robot or substituted for its
-camera, perception, mapping, memory, or navigation inputs.
-
-DimSim's JavaScript eval harness is a separate simulator-local layer for checks
-that inherently require privileged Three.js or Rapier state. Its `task` field
-is only a display label and is not delivered to DimOS, so agent and robot
-workflows must not be owned or duplicated there.
-
 ## Testing on a fresh Ubuntu install
 
 CI tests dimos with pre-built images and cached deps, so it can't catch gaps

@@ -310,32 +310,6 @@ def test_gui_preview_enters_previewing_before_worker_runs(
     assert len(submissions) == 1
 
 
-def test_gui_operator_action_uses_operation_worker(monkeypatch: pytest.MonkeyPatch) -> None:
-    submissions: list[Callable[[], None]] = []
-    calls: list[str] = []
-    gui = make_gui()
-    gui._operation_worker.stop()
-    monkeypatch.setattr(gui, "_operation_worker", FakeOperationSubmitWorker(submissions))
-    monkeypatch.setattr(gui, "refresh", lambda: None)
-    gui.state.manipulation_state = "IDLE"
-
-    def reset() -> bool:
-        calls.append("reset")
-        return True
-
-    gui._submit_operator_action("reset", "Reset", reset)
-
-    assert gui.state.action_status == ActionStatus.RUNNING
-    assert calls == []
-    assert len(submissions) == 1
-
-    submissions[0]()
-
-    assert calls == ["reset"]
-    assert gui.state.action_status == ActionStatus.IDLE
-    assert gui.state.last_result == "reset=True"
-
-
 def test_gui_selection_change_clears_invalidated_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
