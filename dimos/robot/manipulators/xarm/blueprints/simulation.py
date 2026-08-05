@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.global_config import global_config
 from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
+from dimos.manipulation.visualization.rerun import picknplace_rerun_config
 from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.perception.sim_object_scene import SimObjectScene
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
@@ -32,7 +34,7 @@ from dimos.robot.manipulators.xarm.config import (
 from dimos.robot.manipulators.xarm.grasp_config import make_xarm_graspgenx_config
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.utils.data import LfsPath
-from dimos.visualization.rerun.bridge import RerunBridgeModule
+from dimos.visualization.vis_module import vis_module
 
 
 def _xarm7_perception_sim(
@@ -54,7 +56,7 @@ def _xarm7_perception_sim(
         MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(scene_path)),
         object_scene or ObjectSceneRegistrationModule.blueprint(target_frame="world"),
         coordinator(hardware=[hw], tasks=[trajectory_task(hw)]),
-        RerunBridgeModule.blueprint(),
+        vis_module(global_config.viewer, rerun_config=picknplace_rerun_config()),
     )
 
 
@@ -111,10 +113,14 @@ xarm_grasp_sim_perception = autoconnect(
         ObjectSceneRegistrationModule.blueprint(
             target_frame="world",
             distance_threshold=0.08,
-            min_detections_for_permanent=3,
             max_distance=1.0,
             use_aabb=True,
             max_obstacle_width=0.06,
+            # The wrist camera sees the arm's own links mid-trajectory and YOLO-E
+            # registers them as objects; only detect on request, from still frames.
+            # Each request is a single view, so promotion cannot require several.
+            detect_on_request=True,
+            min_detections_for_permanent=1,
         )
     ),
     _xarm_graspgenx(),
