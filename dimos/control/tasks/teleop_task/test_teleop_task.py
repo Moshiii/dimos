@@ -250,7 +250,9 @@ def test_estop_rejects_commands_and_never_replays_them(
     assert gripper_task.on_teleop_buttons(_buttons(True), 2.7)
     assert gripper_task.on_cartesian_command(_delta(), 3.0)
     assert gripper_task.compute(_state(3.01, (0.2, 0.3))) is not None
-    assert len(fake_ik.fk_calls) == 2
+    # Two baseline captures (one per engagement) plus one telemetry lag
+    # FK at the 1 Hz emit that fires on the second engagement's compute.
+    assert len(fake_ik.fk_calls) == 3
 
 
 def test_gripper_claim_interpolation_and_hold_output(

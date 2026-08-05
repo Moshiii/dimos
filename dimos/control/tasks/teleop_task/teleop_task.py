@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+import time
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -89,6 +90,16 @@ class TeleopIKTask(CartesianIKTask):
         self._estopped = False
         self._gripper_target = config.gripper_open_pos
         self._gripper_active = config.gripper_joint is not None
+        # Feel telemetry (1 Hz emit; lag FK only at emit time). Hardware
+        # sessions are judged on these lines, so they survive ports.
+        self._telem_last_emit: float | None = None
+        self._telem_computes = 0
+        self._telem_holds = 0
+        self._telem_solve_ms_max = 0.0
+        self._telem_last_target: pinocchio.SE3 | None = None
+        self._telem_engage_t0: float | None = None
+        self._telem_engage_computes = 0
+        self._telem_engage_lag_max_cm = 0.0
 
     def claim(self) -> ResourceClaim:
         """Claim arm joints and the optional gripper joint."""
@@ -108,6 +119,8 @@ class TeleopIKTask(CartesianIKTask):
         with self._lock:
             self._estopped = estopped
             if estopped:
+                if self._engagement is _EngagementState.ENGAGED:
+                    self._telem_finish_engage("estop")
                 self._engagement = _EngagementState.WAITING_FOR_RELEASE
                 self._active = False
                 self._target_pose = None
@@ -156,17 +169,70 @@ class TeleopIKTask(CartesianIKTask):
         values = np.concatenate((target.translation, target.rotation.reshape(-1)))
         if not np.all(np.isfinite(values)):
             return None
+        self._telem_last_target = target.copy()
         return target
 
     def compute(self, state: CoordinatorState) -> JointCommandOutput | None:
         """Run the inherited Pink solve and append the optional gripper target."""
+        was_active = self.is_active()
+        t0 = time.perf_counter()
         output = super().compute(state)
+        if was_active:
+            self._telem_solve_ms_max = max(
+                self._telem_solve_ms_max, (time.perf_counter() - t0) * 1e3
+            )
+            if output is not None:
+                self._telem_computes += 1
+                self._telem_engage_computes += 1
+            else:
+                self._telem_holds += 1
+            self._telem_emit(state.t_now, output)
         with self._lock:
             if self._estopped:
                 return None
             gripper_target = self._gripper_target
             gripper_joint = self._config.gripper_joint if self._gripper_active else None
         return append_gripper_position(output, gripper_joint, gripper_target)
+
+    def _telem_emit(self, t_now: float, output: JointCommandOutput | None) -> None:
+        if self._telem_last_emit is None:
+            # First active tick anchors the window; no FK, no line.
+            self._telem_last_emit = t_now
+            return
+        if t_now - self._telem_last_emit < 1.0:
+            return
+        window = max(1e-6, t_now - self._telem_last_emit)
+        self._telem_last_emit = t_now
+        hand_lag_cm = rot_lag_deg = float("nan")
+        target = self._telem_last_target
+        if target is not None and output is not None:
+            ee = self.forward_kinematics(np.asarray(output.positions, dtype=np.float64))
+            hand_lag_cm = float(np.linalg.norm(target.translation - ee.translation)) * 100.0
+            w = pinocchio.log3(ee.rotation.T @ target.rotation)
+            rot_lag_deg = float(np.rad2deg(np.linalg.norm(w)))
+            self._telem_engage_lag_max_cm = max(self._telem_engage_lag_max_cm, hand_lag_cm)
+        logger.info(
+            f"TELEM ik {self._name}: computes_hz={self._telem_computes / window:.0f} "
+            f"holds={self._telem_holds} solve_ms_max={self._telem_solve_ms_max:.1f} "
+            f"hand_lag_cm={hand_lag_cm:.1f} rot_lag_deg={rot_lag_deg:.1f}"
+        )
+        self._telem_computes = 0
+        self._telem_holds = 0
+        self._telem_solve_ms_max = 0.0
+
+    def _telem_finish_engage(self, reason: str) -> None:
+        t0 = self._telem_engage_t0
+        self._telem_engage_t0 = None
+        if t0 is None:
+            return
+        logger.info(
+            f"TELEM engage {self._name}: reason={reason} "
+            f"duration_s={time.monotonic() - t0:.1f} "
+            f"computes={self._telem_engage_computes} "
+            f"lag_max_cm={self._telem_engage_lag_max_cm:.1f}"
+        )
+        self._telem_engage_computes = 0
+        self._telem_engage_lag_max_cm = 0.0
 
     def on_buttons(self, msg: Buttons) -> bool:
         """Use the configured primary button as press-and-hold engagement."""
@@ -190,12 +256,14 @@ class TeleopIKTask(CartesianIKTask):
                 self._target_pose = None
                 self._initial_ee_pose = None
                 self._last_commanded_joints = None
+                self._telem_engage_t0 = time.monotonic()
             elif self._engagement is _EngagementState.ENGAGED and not primary:
                 self._engagement = _EngagementState.DISENGAGED
                 self._active = False
                 self._target_pose = None
                 self._initial_ee_pose = None
                 self._last_commanded_joints = None
+                self._telem_finish_engage("release")
 
         if self._config.gripper_joint is not None:
             self.on_gripper_trigger(trigger)
