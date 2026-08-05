@@ -61,7 +61,7 @@ def test_frozen_memory_rejects_mutation(recorded_stores) -> None:
         derived=SqliteStore(path=str(derived_path), must_exist=True, read_only=True),
         through_timestamp=20.0,
     ) as memory:
-        with pytest.raises(PermissionError, match="read-only stream"):
+        with pytest.raises(PermissionError, match="read-only SQLite store"):
             memory.streams.camera.append("nope", ts=15.0)
         with pytest.raises(PermissionError, match="frozen memory"):
             memory.delete_stream("camera")
@@ -77,7 +77,7 @@ def test_read_only_sqlite_store_does_not_create_wal(recorded_stores) -> None:
 
     with SqliteStore(path=str(source_path), must_exist=True, read_only=True) as source:
         assert source.stream("camera").last().data == "future"
-        with pytest.raises(PermissionError, match="read-only stream"):
+        with pytest.raises(PermissionError, match="read-only SQLite store"):
             source.stream("camera").append("nope")
         with pytest.raises(PermissionError, match="read-only store"):
             source.delete_stream("camera")

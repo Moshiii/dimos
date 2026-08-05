@@ -12,113 +12,99 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import hashlib
-import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from dimos.benchmark.agent_eval.case import (
+from dimos.benchmark.agent_eval.models import (
     EvalCase,
+    EvalRunConfig,
     ExactIntegerValidatorRef,
-    FrozenCodePolicyInteraction,
     FrozenRecordingSource,
     IntegerQuestionTask,
 )
+from dimos.benchmark.agent_eval.pi_process import PiRunResult
 import dimos.benchmark.agent_eval.single_case as single_case
-from dimos.benchmark.agent_eval.single_case import (
-    EvalRunConfig,
-    OpenAIApiKeyConfig,
-    _resolve_credential,
-    execute_single_case,
-)
-from dimos.benchmark.short_horizon_qa.eval import load_exact_integer_oracle
+from dimos.benchmark.agent_eval.single_case import execute_single_case
 
 
-def test_run_config_round_trips_through_pydantic() -> None:
-    configured = EvalRunConfig()
-
-    decoded = EvalRunConfig.model_validate_json(configured.model_dump_json())
-
-    assert decoded == configured
-    assert decoded.agent.backend == "pi"
-    assert decoded.agent.model == "gpt-5.6-luna"
-    assert decoded.agent.auth.mode == "codex-oauth"
-
-
-def test_api_key_auth_uses_named_environment_without_serializing_secret(monkeypatch) -> None:
-    monkeypatch.setenv("EVAL_TEST_KEY", "private-value")
-    auth = OpenAIApiKeyConfig(env="EVAL_TEST_KEY")
-
-    credential, digest = _resolve_credential(auth)
-
-    assert credential.value == "private-value"
-    assert len(digest) == 64
-    assert "private-value" not in auth.model_dump_json()
-    assert "private-value" not in digest
-
-
-def test_private_validator_resolves_relative_to_case_directory(tmp_path) -> None:
+def _case(tmp_path: Path) -> Path:
     private = tmp_path / "private"
     private.mkdir()
-    oracle = private / "oracle.json"
-    oracle.write_text(
-        json.dumps(
-            {
-                "schema_version": "1.0",
-                "expected_count": 4,
-                "counting_policy": "Count enclosed rooms.",
-                "rooms": [],
-                "reviewed_by": ["reviewer"],
-            }
-        )
+    (private / "oracle.json").write_text(
+        '{"schema_version":"1.0","expected_count":2,'
+        '"counting_policy":"count rooms","rooms":[],'
+        '"reviewed_by":["reviewer"]}'
     )
-    case = EvalCase.compile(
-        case_id="case",
+    case = EvalCase(
+        case_id="demo",
         source=FrozenRecordingSource(recording="recording", progress=1.0),
         task=IntegerQuestionTask(prompt="How many rooms?"),
-        interaction=FrozenCodePolicyInteraction(driver_revision="v1"),
-        validator=ExactIntegerValidatorRef(
-            revision="v1",
-            private_path="private/oracle.json",
-            private_sha256=hashlib.sha256(oracle.read_bytes()).hexdigest(),
+        validator=ExactIntegerValidatorRef(revision="v1", private_path="private/oracle.json"),
+    )
+    path = tmp_path / "case.json"
+    path.write_text(case.model_dump_json())
+    return path
+
+
+def test_direct_run_publishes_only_compact_result_and_native_transcript(
+    monkeypatch, tmp_path: Path
+) -> None:
+    case_path = _case(tmp_path)
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setattr(single_case, "_materialize_frozen_memory", lambda *_args: bundle)
+    monkeypatch.setattr(
+        single_case,
+        "load_bundle",
+        lambda *_args, **_kwargs: (
+            object(),
+            SimpleNamespace(cutoff_timestamp=10.0),
+            tmp_path / "source.db",
+            tmp_path / "derived.db",
         ),
     )
+    monkeypatch.setattr(single_case, "_pi_paths", lambda: (case_path, case_path))
 
-    loaded = load_exact_integer_oracle(case, tmp_path)
+    class Server:
+        mcp_url = "http://127.0.0.1:1234/mcp"
+        session = SimpleNamespace(execution_count=3)
 
-    assert loaded.expected_count == 4
+        def __init__(self, _config):
+            pass
 
+        def start(self):
+            pass
 
-def test_single_case_emits_public_question_before_private_preflight(tmp_path, monkeypatch) -> None:
-    case = EvalCase.compile(
-        case_id="case",
-        source=FrozenRecordingSource(recording="recording", progress=1.0),
-        task=IntegerQuestionTask(prompt="How many rooms?"),
-        interaction=FrozenCodePolicyInteraction(driver_revision="v1"),
-        validator=ExactIntegerValidatorRef(
-            revision="v1",
-            private_path="private/oracle.json",
-            private_sha256="0" * 64,
-        ),
-    )
-    case_path = tmp_path / "case.json"
-    case_path.write_text(case.model_dump_json())
-    events = []
+        def stop(self):
+            pass
 
-    def stop_at_private_preflight(*args, **kwargs):
-        raise RuntimeError("stop after public header")
+    class Runner:
+        def __init__(self, **_kwargs):
+            pass
 
-    monkeypatch.setattr(single_case, "load_exact_integer_oracle", stop_at_private_preflight)
+        def run(self, *, run_dir, **_kwargs):
+            transcript = run_dir / "native.jsonl"
+            transcript.write_text('{"type":"session"}\n')
+            return PiRunResult("Checked\nANSWER: 2", 3, 1.0, transcript, "")
 
-    with pytest.raises(RuntimeError, match="stop after public header"):
-        execute_single_case(case_path, config=EvalRunConfig(), progress=events.append)
-
-    assert [event.kind for event in events] == ["status", "case_header", "status"]
-    header = events[1]
-    assert header.model_dump() == {
-        "kind": "case_header",
-        "case_id": "case",
-        "source": "recording",
-        "progress": 1.0,
-        "question": "How many rooms?",
+    monkeypatch.setattr(single_case, "CodePolicyMcpServer", Server)
+    monkeypatch.setattr(single_case, "PiCliRunner", Runner)
+    output = tmp_path / "output"
+    result = execute_single_case(case_path, config=EvalRunConfig(), output=output)
+    assert result.passed is True
+    assert {path.name for path in output.iterdir()} == {
+        "result.json",
+        "pi-transcript.jsonl",
     }
+
+
+def test_nonempty_output_is_rejected_before_execution(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "keep").write_text("user data")
+    with pytest.raises(FileExistsError, match="absent or an empty"):
+        execute_single_case(_case(tmp_path), config=EvalRunConfig(), output=output)
+    assert (output / "keep").read_text() == "user data"

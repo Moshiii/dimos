@@ -1,53 +1,42 @@
 ## ADDED Requirements
 
 ### Requirement: True read-only SQLite access
-Frozen Memory2 source and derived databases SHALL be opened using SQLite read-only mode with query-only enforcement. All public mutation paths SHALL reject writes, and opening or reading a frozen view SHALL not create WAL or other database mutation sidecars.
+Frozen Memory2 source and derived databases SHALL use SQLite URI read-only mode and `PRAGMA query_only=ON`. Read-only initialization SHALL skip WAL configuration and table creation. Public frozen-store mutation operations SHALL fail, and reading SHALL not create database sidecars.
 
-#### Scenario: Read a frozen recording
+#### Scenario: Read without mutation
 - **GIVEN** existing source and derived SQLite stores
-- **WHEN** DimOS opens them as a frozen view and reads observations
-- **THEN** the observations are available without modifying either database
-- **AND** no WAL file is created by the frozen access
+- **WHEN** a frozen view opens and reads them
+- **THEN** the databases remain byte-identical
+- **AND** no WAL or SHM sidecar is created
 
-#### Scenario: Attempt a mutation
-- **GIVEN** an open frozen view or stream
-- **WHEN** a caller appends an observation, deletes a stream, creates a stream, or invokes another mutation path
-- **THEN** the operation fails with a read-only error
-- **AND** source and derived bytes remain unchanged
+#### Scenario: Reject mutation
+- **GIVEN** an open frozen view
+- **WHEN** a caller creates, retypes, deletes, or appends to a stream
+- **THEN** the operation fails as read-only
 
-### Requirement: Inclusive authored cutoff
-Every stream exposed through a frozen Memory2 view SHALL include observations whose timestamps are less than or equal to the authored cutoff and SHALL hide all observations after it.
+### Requirement: Inclusive cutoff overlay
+A frozen view SHALL expose the deterministic union of non-colliding source and derived stream names. Every returned stream SHALL use existing time-range filtering to include observations with timestamps `<= cutoff` and hide later observations.
 
-#### Scenario: Observe the exact cutoff boundary
-- **GIVEN** observations immediately before, exactly at, and immediately after a cutoff
-- **WHEN** the stream is queried through the frozen view
-- **THEN** observations before and exactly at the cutoff are visible
-- **AND** the observation after the cutoff is absent
+#### Scenario: Read the cutoff boundary
+- **GIVEN** observations before, exactly at, and after the cutoff
+- **WHEN** the frozen stream is read
+- **THEN** the first two observations are visible
+- **AND** the later observation is hidden
 
-### Requirement: Source and derived overlay
-A frozen view SHALL expose the union of source and derived stream names under the same cutoff. It SHALL reject ambiguous overlays in which both stores contain the same stream name and SHALL not allow callers to create or retype streams through the overlay.
+#### Scenario: Reject collision
+- **GIVEN** source and derived stores containing the same stream name
+- **WHEN** the overlay is created
+- **THEN** construction fails and identifies the collision
 
-#### Scenario: Access a derived map with source observations
-- **GIVEN** a source recording and a derived store containing a non-colliding `global_map` stream
-- **WHEN** a caller lists and reads frozen streams
-- **THEN** both source streams and `global_map` are available through one memory object
-- **AND** the inclusive cutoff applies to all of them
+### Requirement: Metadata-based frozen bundle cache
+Bundle preparation SHALL resolve progress over the recording range and cache a derived `global_map`. Cache reuse SHALL compare recording identity, source file size/mtime, mapper settings, progress, and cutoff metadata. It SHALL not hash full database files.
 
-#### Scenario: Reject colliding streams
-- **GIVEN** source and derived stores with the same stream name
-- **WHEN** DimOS constructs the overlay
-- **THEN** construction fails with the colliding names identified
+#### Scenario: Reuse an unchanged bundle
+- **GIVEN** matching source metadata, mapper settings, and normalized progress
+- **WHEN** preparation runs again
+- **THEN** it reuses the derived bundle without remapping or hashing the databases
 
-### Requirement: Deterministic frozen bundle preparation
-DimOS SHALL resolve normalized progress over the sealed recording range, materialize or reuse a derived frozen bundle, and retain a manifest describing the selected cutoff and source/derived integrity. Progress `1.0` SHALL resolve to the recording end inclusively.
-
-#### Scenario: Prepare the final recording state
-- **GIVEN** a named recording and normalized progress `1.0`
-- **WHEN** DimOS prepares a frozen bundle
-- **THEN** the selected cutoff equals the recording end
-- **AND** the derived map and manifest describe only data available through that cutoff
-
-#### Scenario: Reject invalid progress
-- **GIVEN** non-finite progress or a value outside `[0, 1]`
-- **WHEN** bundle preparation validates the source
-- **THEN** preparation fails before attempt execution
+#### Scenario: Rebuild stale metadata
+- **GIVEN** changed source metadata, mapper settings, or cutoff inputs
+- **WHEN** preparation runs
+- **THEN** it rebuilds the derived bundle before evaluation

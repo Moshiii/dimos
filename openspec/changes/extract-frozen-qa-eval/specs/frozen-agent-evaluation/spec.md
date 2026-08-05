@@ -1,107 +1,71 @@
 ## ADDED Requirements
 
-### Requirement: Single-case evaluation CLI
-DimOS SHALL provide `dimos eval run CASE` as a synchronous command for exactly one immutable evaluation case. The command SHALL accept only the `pi` backend, `gpt-5.6-luna` model, and `medium` thinking level, and SHALL reject unsupported values or semantic overrides.
+### Requirement: One-case frozen evaluation command
+DimOS SHALL provide `dimos eval run CASE --output=DIR` for one synchronous frozen-memory integer-question case. The case SHALL use strict tagged source, task, and validator models and SHALL reject unknown fields, unsafe oracle paths, non-finite progress, and unsupported kinds.
 
 #### Scenario: Run a supported case
-- **GIVEN** a valid frozen-memory case, available recording, built adapter, and valid credentials
-- **WHEN** the user runs `dimos eval run CASE`
-- **THEN** DimOS executes one attempt to a terminal infrastructure outcome
-- **AND** prints the final result even when live progress is suppressed
+- **GIVEN** a valid case, prepared recording, built Pi extension, and API-key environment variable
+- **WHEN** the user runs `dimos eval run CASE --output=DIR`
+- **THEN** DimOS runs one fresh agent turn and privately scores its terminal integer answer
+- **AND** publishes a compact result even when the semantic score fails
 
-#### Scenario: Request an unsupported agent condition
-- **GIVEN** a valid case
-- **WHEN** the user supplies an unsupported backend, model, or thinking level
-- **THEN** the command rejects the request before starting an attempt
+#### Scenario: Reject an unsafe case
+- **GIVEN** a case with an escaped oracle path, invalid progress, unknown field, or unsupported kind
+- **WHEN** preflight parses the case
+- **THEN** the command exits `2` before starting CodePolicy or Pi
 
-### Requirement: Credential-safe authentication selection
-The CLI SHALL support Codex OAuth and an OpenAI API-key environment binding without accepting secret values directly. Explicit authentication mode SHALL win; otherwise a nonempty `OPENAI_API_KEY` SHALL select API-key authentication and Codex OAuth SHALL be the fallback. Credential contents MUST NOT appear in command arguments, progress, results, or retained artifacts.
+### Requirement: API-key-only authentication
+The evaluator SHALL read an OpenAI API key from `OPENAI_API_KEY` or a user-selected environment variable. The key MUST be passed only to the Pi subprocess environment and MUST NOT appear in argv, the Jupyter kernel environment, MCP data, results, transcripts, stderr, or cache metadata.
 
-#### Scenario: Infer API-key authentication
-- **GIVEN** no explicit authentication mode and a nonempty `OPENAI_API_KEY`
-- **WHEN** the command resolves runtime authentication
-- **THEN** it selects API-key authentication using the environment binding
-- **AND** does not serialize the key value
+#### Scenario: Run with the default key environment
+- **GIVEN** a nonempty `OPENAI_API_KEY`
+- **WHEN** the evaluator launches Pi
+- **THEN** Pi receives the value through its environment
+- **AND** CodePolicy cannot read that value from the Jupyter kernel environment
 
-#### Scenario: Resolve OAuth authentication
-- **GIVEN** no API key and no explicit authentication mode
-- **WHEN** the command resolves runtime authentication
-- **THEN** it selects Codex OAuth using `--agent.auth.path`, `PI_SPATIAL_AUTH_PATH`, or `~/.pi/agent/auth.json` in precedence order
-- **AND** fails preflight if the selected credential file is unavailable
+### Requirement: Exact private integer scoring
+The evaluator SHALL accept only final text with exactly one marker ending in `ANSWER: <integer>`. The private oracle SHALL be loaded only by the scorer and SHALL never enter the model-facing prompt or runtime.
 
-### Requirement: Immutable and private case contract
-An evaluation case SHALL consist of a frozen recording source, integer question, one-attempt frozen interaction, and exact-integer validator reference. Unknown fields, unsafe validator paths, non-finite progress, fingerprint mismatches, and runtime-specific fields in the semantic case SHALL be rejected. Runtime paths, credentials, ports, and output locations SHALL remain outside the case fingerprint.
+#### Scenario: Score a valid answer
+- **GIVEN** final text ending in exactly one `ANSWER: 4`
+- **WHEN** the private oracle expects `4`
+- **THEN** the compact result records parsed integer `4` and task result `passed`
 
-#### Scenario: Validate a case before agent dispatch
-- **GIVEN** a case containing a safe case-relative oracle path and expected SHA-256
-- **WHEN** the command performs preflight
-- **THEN** it verifies the case fingerprint and exact oracle bytes before starting the agent
-- **AND** rejects an escaped path or digest mismatch
+#### Scenario: Score malformed or mismatched output
+- **GIVEN** a missing, repeated, non-integer, trailing, or mismatched answer
+- **WHEN** scoring completes
+- **THEN** the run is a completed semantic failure
+- **AND** the command exits `0`
 
-#### Scenario: Produce an agent-safe projection
-- **GIVEN** a validated private case
-- **WHEN** DimOS creates the public case projection and prompt
-- **THEN** the projection omits the validator reference and all oracle content
-- **AND** the private expected answer is not exposed to the agent runtime
+### Requirement: Compact non-overwriting output
+The `--output` value SHALL be the exact directory for one run. A nonempty target SHALL fail preflight. The evaluator SHALL atomically publish `result.json`, the Pi-native transcript when available, and bounded nonempty Node stderr when present. It SHALL NOT copy source databases, cache manifests, case files, oracle files, prompts, MCP inventories, kernel records, or duplicate call logs.
 
-### Requirement: Exact terminal integer scoring
-The response parser SHALL succeed only when final text contains exactly one `ANSWER:` marker and ends with `ANSWER: <integer>`. A malformed answer or validator mismatch SHALL be a completed semantic failure, not an infrastructure failure.
+#### Scenario: Publish a completed run
+- **GIVEN** an unused output path and a completed agent turn
+- **WHEN** scoring finishes
+- **THEN** `result.json` contains case/source/model, final response, prediction, score, duration, and tool count
+- **AND** the native Pi transcript is the sole tool/assistant trajectory
 
-#### Scenario: Parse a valid terminal answer
-- **GIVEN** final agent text containing exactly one terminal `ANSWER: -3`
-- **WHEN** DimOS parses and validates the response
-- **THEN** it records integer prediction `-3`
-- **AND** compares it privately with the exact-integer oracle
+#### Scenario: Publish a caught infrastructure failure
+- **GIVEN** Pi or CodePolicy fails after preflight
+- **WHEN** cleanup completes
+- **THEN** `result.json` records an infrastructure error and the command exits `1`
+- **AND** any available native transcript or nonempty bounded stderr is retained
 
-#### Scenario: Reject malformed answer text
-- **GIVEN** final text with multiple markers, a non-integer marker, or trailing content after the answer
-- **WHEN** DimOS parses the response
-- **THEN** it records an invalid prediction and a completed failed task
-- **AND** returns process exit code `0`
+### Requirement: Output channel contract
+The final human or JSON result SHALL go to stdout. Coarse runtime status SHALL go to stderr and `--quiet` SHALL suppress it. Credentials and oracle contents MUST NOT appear on either channel.
 
-### Requirement: Immutable attempt evidence
-Each started attempt SHALL reserve a fresh mode-`0700` `attempt_<uuid>` directory beneath the output root while holding a nonblocking output-root lock. Artifacts SHALL use safe attempt-relative paths, exclusive creation, SHA-256 descriptors, fsync, and atomic terminal publication. Concurrent attempts targeting the same output root SHALL not interleave.
+#### Scenario: Consume JSON output
+- **GIVEN** `--json` with progress enabled
+- **WHEN** a run finishes
+- **THEN** stdout contains exactly one JSON value
+- **AND** coarse status appears only on stderr
 
-#### Scenario: Retain a completed attempt
-- **GIVEN** an attempt reaches scoring and cleanup succeeds
-- **WHEN** DimOS publishes the terminal outcome
-- **THEN** the attempt contains private and public case projections, source evidence, MCP and session evidence, tool-call and execution records, Pi evidence, prediction, private score, ordered lifecycle events, manifest, and terminal outcome
-- **AND** existing artifacts are never overwritten
+### Requirement: Demo fixture identity
+The shipped fixture directory SHALL start with `demo_`, its case ID SHALL start with `demo-`, and its README SHALL state that oracle value `0` tests plumbing rather than authoritative room-count accuracy.
 
-#### Scenario: Reject a concurrent attempt
-- **GIVEN** one attempt holds the lock for an output root
-- **WHEN** another attempt targets the same root
-- **THEN** the second attempt fails cleanly without creating an interleaved attempt
-
-### Requirement: Failure classification and lock release
-Failures before attempt reservation SHALL exit `2`. Infrastructure, finalization, or cleanup failures normalized into a reserved attempt SHALL produce a failed attempt and exit `1`. Completed semantic pass or failure SHALL exit `0`. The output lock MUST be released after success, failure, interruption, partial startup, and artifact-publication failure.
-
-#### Scenario: Preflight failure
-- **GIVEN** an invalid case, unavailable oracle, missing credentials, missing adapter, or source-preparation error before reservation
-- **WHEN** the error escapes preflight
-- **THEN** the command exits `2`
-- **AND** no attempt is reported as completed
-
-#### Scenario: Attempt cleanup failure
-- **GIVEN** an otherwise completed attempt whose process or resource cleanup fails
-- **WHEN** DimOS finalizes the attempt
-- **THEN** it reports a failed infrastructure attempt and exits `1`
-- **AND** releases the output lock even if terminal artifact publication also fails
-
-### Requirement: Machine-readable output and private progress
-With `--json`, stdout SHALL contain exactly one compact result while progress and tool-call rendering remain on stderr. `--quiet` SHALL suppress progress but not the final result. Neither channel SHALL expose private oracle material or credentials.
-
-#### Scenario: Consume compact JSON
-- **GIVEN** a valid invocation using `--json`
-- **WHEN** the attempt runs with progress enabled
-- **THEN** stdout remains parseable as exactly one JSON result
-- **AND** progress appears only on stderr
-
-### Requirement: Synthetic plumbing fixture
-The shipped Hong Kong office room-count smoke case SHALL preserve its `case.json`, private oracle, and warning README. The expected value `0` MUST be described as a synthetic plumbing sentinel and MUST NOT be presented as the authoritative room count.
-
-#### Scenario: Agent disagrees with the sentinel
-- **GIVEN** the fixture and an agent response other than `ANSWER: 0`
-- **WHEN** infrastructure and scoring complete
-- **THEN** the task may report semantic failure with exit code `0`
-- **AND** documentation does not characterize that outcome as a mapping or agent regression
+#### Scenario: Agent disagrees with the demo oracle
+- **GIVEN** a completed answer other than `0`
+- **WHEN** the demo case scores the answer
+- **THEN** it reports semantic failure with exit `0`
+- **AND** documentation does not characterize the result as an agent or mapping regression

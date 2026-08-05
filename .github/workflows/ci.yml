@@ -70,7 +70,7 @@ jobs:
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
 
-  pi-code-policy-adapter:
+  pi-code-policy-extension:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
@@ -82,11 +82,11 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: npm
-          cache-dependency-path: packages/pi-code-policy-adapter/package-lock.json
-      - name: Install adapter dependencies
-        run: npm ci --prefix packages/pi-code-policy-adapter
-      - name: Test adapter
-        run: npm test --prefix packages/pi-code-policy-adapter
+          cache-dependency-path: packages/pi-code-policy-extension/package-lock.json
+      - name: Install extension dependencies
+        run: npm ci --prefix packages/pi-code-policy-extension
+      - name: Test extension
+        run: npm test --prefix packages/pi-code-policy-extension
 
   rust:
     timeout-minutes: 20
@@ -995,6 +995,7 @@ jobs:
 
     needs:
     - lint
+    - pi-code-policy-extension
     - rust
     - cpp
     - md-babel

@@ -30,7 +30,6 @@ from dimos.memory2.type.filter import (
     BeforeFilter,
     NearFilter,
     TagsFilter,
-    ThroughFilter,
     TimeRangeFilter,
 )
 from dimos.memory2.type.observation import _UNLOADED, Observation, PoseTuple
@@ -72,8 +71,6 @@ def _compile_filter(f: Filter, stream: str, prefix: str = "") -> tuple[str, list
         return (f"{prefix}ts > ?", [f.t])
     if isinstance(f, BeforeFilter):
         return (f"{prefix}ts < ?", [f.t])
-    if isinstance(f, ThroughFilter):
-        return (f"{prefix}ts <= ?", [f.t])
     if isinstance(f, TimeRangeFilter):
         return (f"{prefix}ts >= ? AND {prefix}ts <= ?", [f.t1, f.t2])
     if isinstance(f, AtFilter):
@@ -344,6 +341,8 @@ class SqliteObservationStore(ObservationStore[T]):
                 self._tag_indexes.add(key)
 
     def insert(self, obs: Observation[T]) -> int:
+        if self.config.read_only:
+            raise PermissionError("Cannot append to a read-only SQLite store")
         pose = obs.pose_tuple
         tags_json = json.dumps(obs.tags) if obs.tags else "{}"
         value = obs._data if isinstance(obs._data, (int, float)) else None

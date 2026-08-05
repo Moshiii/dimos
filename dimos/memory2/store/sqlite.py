@@ -27,7 +27,6 @@ from dimos.memory2.codecs.base import codec_id
 from dimos.memory2.observationstore.sqlite import SqliteObservationStore
 from dimos.memory2.registry import RegistryStore, deserialize_component, qual
 from dimos.memory2.store.base import Store, StoreConfig
-from dimos.memory2.stream import Stream
 from dimos.memory2.utils.sqlite import open_disposable_sqlite_connection
 from dimos.memory2.utils.validation import validate_identifier
 from dimos.memory2.vectorstore.base import VectorStore
@@ -221,12 +220,6 @@ class SqliteStore(Store):
     def list_streams(self) -> list[str]:
         db_names = set(self._registry.list_streams())
         return sorted(db_names | set(self._streams.keys()))
-
-    def stream(
-        self, name: str, payload_type: type[Any] | None = None, **overrides: Any
-    ) -> Stream[Any]:
-        stream = super().stream(name, payload_type, **overrides)
-        return stream.as_read_only() if self.config.read_only else stream
 
     def delete_stream(self, name: str) -> None:
         if self.config.read_only:
