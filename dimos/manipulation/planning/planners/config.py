@@ -49,10 +49,8 @@ class RoboPlanCartesianPathConfig(BaseConfig):
     config_task_weight: float = Field(default=0.05, ge=0.0)
     velocity_scale: float = Field(default=1.0, gt=0.0, le=1.0)
     acceleration_scale: float = Field(default=1.0, gt=0.0, le=1.0)
-    limit_ratio_tolerance: float = Field(default=1.05, ge=1.0)
-    toppra_blend_deviation: float = 0.05
+    toppra_blend_deviation: float = Field(default=0.05, ge=0.0)
     position_limit_gain: float = Field(default=1.0, gt=0.0, le=1.0)
-    max_attempts_per_step: int = Field(default=16, ge=1)
 
 
 CartesianPathConfig = RoboPlanCartesianPathConfig
