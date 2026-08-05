@@ -47,10 +47,10 @@ from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
-from dimos.perception.detection.type.detection3d.object import (
+from dimos.perception.experimental.object import (
     Object as DetObject,
 )
-from dimos.perception.object_scene_registration_spec import ObjectSceneRegistrationSpec
+from dimos.perception.experimental.object_scene_registration_spec import ObjectSceneRegistrationSpec
 from dimos.protocol.service.spec import BaseConfig
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import offset_distance

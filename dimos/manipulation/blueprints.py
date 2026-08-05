@@ -32,7 +32,7 @@ from dimos.manipulation.visualization.viser.config import ViserVisualizationConf
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.perception.object_scene_registration import ObjectSceneRegistrationModule
+from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.blueprints.agentic import (
     xarm7_planner_coordinator_agent as xarm7_planner_coordinator_agent,

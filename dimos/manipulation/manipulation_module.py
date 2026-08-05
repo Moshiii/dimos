@@ -1288,6 +1288,64 @@ class ManipulationModule(Module):
         )
 
     @rpc
+    def plan_cartesian_targets(
+        self,
+        targets: Mapping[PlanningGroupID | PlanningGroup, CartesianTarget],
+        config: CartesianPathConfig,
+        auxiliary_groups: Sequence[PlanningGroupID | PlanningGroup] = (),
+    ) -> bool:
+        """Plan TCP motion through absolute or relative Cartesian waypoints."""
+        return self.generate_cartesian_plan(targets, config, auxiliary_groups) is not None
+
+    def generate_cartesian_plan(
+        self,
+        targets: Mapping[PlanningGroupID | PlanningGroup, CartesianTarget],
+        config: CartesianPathConfig,
+        auxiliary_groups: Sequence[PlanningGroupID | PlanningGroup] = (),
+    ) -> GeneratedPlan | None:
+        """Generate and store a timed Cartesian plan through PlannerSpec."""
+        if self._world_monitor is None or self._planner is None:
+            return None
+        if not targets:
+            self._fail("At least one Cartesian target is required")
+            return None
+        normalized_targets = {
+            planning_group_id_from_selector(group): target for group, target in targets.items()
+        }
+        if len(normalized_targets) != len(targets):
+            self._fail("Cartesian target groups must be unique")
+            return None
+        auxiliary_ids = tuple(planning_group_id_from_selector(group) for group in auxiliary_groups)
+        group_ids = tuple((*normalized_targets.keys(), *auxiliary_ids))
+        planning_epoch = self._begin_group_planning()
+        if planning_epoch is None:
+            return None
+        resolved = self._resolve_group_plan_start(group_ids, planning_epoch)
+        if resolved is None:
+            return None
+        selection, start = resolved
+        result = self._planner.plan_cartesian_path(
+            world=self._world_monitor.world,
+            selection=selection,
+            start=start,
+            targets=normalized_targets,
+            config=config,
+            auxiliary_groups=auxiliary_ids,
+        )
+        if not result.is_success():
+            detail = f": {result.message}" if result.message else ""
+            self._fail_planning_epoch(
+                planning_epoch, f"Cartesian planning failed: {result.status.name}{detail}"
+            )
+            return None
+        return self._store_generated_plan(
+            group_ids,
+            result,
+            planning_epoch,
+            preserve_timing=True,
+        )
+
+    @rpc
     def preview_path(
         self,
         duration: float | None = None,
@@ -1647,7 +1705,6 @@ class ManipulationModule(Module):
                         self._state = ManipulationState.FAULT
                         self._error_message = result.message
         return bool(result and result.accepted)
-
     @rpc
     def execute_and_wait(self, timeout: float = 60.0) -> bool:
         """Execute the stored plan and wait for its expected trajectory duration."""
@@ -1856,7 +1913,6 @@ class ManipulationModule(Module):
             return False
         time.sleep(wait_time)
         return True
-
     def _safety_lift_pose(
         self, robot_name: RobotName | None = None, min_z: float = 0.05
     ) -> Pose | None:

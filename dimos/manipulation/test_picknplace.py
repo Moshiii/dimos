@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.core.module import ModuleBase
 from dimos.manipulation.blueprints import _picknplace_xarm6_model, _xarm_graspgenx, picknplace
 from dimos.manipulation.picknplace import (
@@ -215,13 +216,15 @@ def test_parallel_jaw_yaw_uses_the_nearest_equivalent_orientation() -> None:
 
 
 def test_picknplace_blueprint_accepts_short_backend_and_grasp_options() -> None:
-    config = picknplace.config()
+    config = BlueprintConfigParser(picknplace)
 
-    options = config(osr={"det": "moondream", "seg": "edgetam"}, pnp={"grasp": "graspgenx"})
+    options = config.parse(
+        overrides={"osr": {"det": "moondream", "seg": "edgetam"}, "pnp": {"grasp": "graspgenx"}}
+    )
 
-    assert options.osr.det == "moondream"
-    assert options.osr.seg == "edgetam"
-    assert options.pnp.grasp == "graspgenx"
+    assert options.module_configs["osr"]["det"] == "moondream"
+    assert options.module_configs["osr"]["seg"] == "edgetam"
+    assert options.module_configs["pnp"]["grasp"] == "graspgenx"
 
 
 def test_table_surface_estimate_ignores_objects_above_the_table() -> None:

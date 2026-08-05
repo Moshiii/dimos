@@ -48,11 +48,11 @@ from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
-from dimos.perception.detection.type.detection3d.object import (
+from dimos.perception.experimental.object import (
     Object as DetObject,
     to_detection3d_array,
 )
-from dimos.perception.object_scene_registration_spec import ObjectSceneRegistrationSpec
+from dimos.perception.experimental.object_scene_registration_spec import ObjectSceneRegistrationSpec
 
 
 def _estimate_table_surface(points: np.ndarray) -> dict[str, float] | None:

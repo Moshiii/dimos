@@ -132,7 +132,7 @@ def format_message_content(msg: AnyMessage) -> str:
             return f"{content}\n[Tool Calls: {', '.join(tool_info)}]"
         elif tool_info:
             return f"[Tool Calls: {', '.join(tool_info)}]"
-        return content
+        return content  # type: ignore[return-value]
     else:
         return _display_message_content(msg.content) if hasattr(msg, "content") else str(msg)
 
