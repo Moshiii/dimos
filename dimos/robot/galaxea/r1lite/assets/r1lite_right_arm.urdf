@@ -99,4 +99,14 @@
     <axis xyz="1 0 0" />
     <limit lower="-2.86234670748" upper="2.86234670748" effort="14" velocity="32.9867" />
   </joint>
+  <!-- Grasp center between the fingertips: 0.08165 gripper mount +
+       0.0369 finger base + mid-finger, from the vendor description. The
+       teleop tip_link controls this frame (formerly the task-level
+       tool_offset_m). -->
+  <link name="right_arm_grasp_center" />
+  <joint name="right_arm_grasp_center_joint" type="fixed">
+    <origin xyz="0.17 0 0" rpy="0 0 0" />
+    <parent link="right_arm_link6" />
+    <child link="right_arm_grasp_center" />
+  </joint>
 </robot>

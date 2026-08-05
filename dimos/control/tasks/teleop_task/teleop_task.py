@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Engagement-relative teleop control through measured-state Pink IK."""
+"""Engagement-relative teleop control through command-integrating Pink IK."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -28,9 +29,11 @@ from dimos.control.task import CoordinatorState, JointCommandOutput, ResourceCla
 from dimos.control.tasks.cartesian_ik_task.cartesian_ik_task import (
     CartesianIKTask,
     CartesianIKTaskConfig,
+    CartesianIKTaskParams,
+    append_gripper_position,
+    claim_with_gripper,
 )
 from dimos.control.tasks.cartesian_ik_task.pink_control_ik import PinkControlIKConfig
-from dimos.protocol.service.spec import BaseConfig
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -43,13 +46,20 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 
+class _EngagementState(Enum):
+    DISENGAGED = auto()
+    ENGAGED = auto()
+    WAITING_FOR_RELEASE = auto()
+
+
 class TeleopControlIKConfig(PinkControlIKConfig):
     """Pink control policy for engagement-relative arm teleoperation."""
 
-    max_velocity: FiniteFloat = Field(2.0, gt=0.0)
+    max_velocity: FiniteFloat = Field(1.0, gt=0.0)
     position_cost: FiniteFloat = Field(1.0, ge=0.0)
     orientation_cost: FiniteFloat = Field(1.0, ge=0.0)
     posture_cost: FiniteFloat = Field(0.0, ge=0.0)
+    joint_centering_cost: FiniteFloat = Field(1e-3, ge=0.0)
     damping_cost: FiniteFloat = Field(1e-3, ge=0.0)
 
 
@@ -58,36 +68,10 @@ class TeleopIKTaskConfig(CartesianIKTaskConfig):
     """Configuration for engagement-relative teleop IK."""
 
     max_joint_delta_deg: float = 5.0
-    max_step_deg_per_tick: float | None = None
-    max_target_offset_m: float | None = None
-    max_target_rot_deg: float | None = None
-    joint_limit_margin_deg: float = 0.0
-    tool_offset_m: tuple[float, float, float] | None = None
-    rotation_frame: Literal["world", "local"] = "world"
-    rotation_deadband_deg: float = 0.0
     hand: Literal["left", "right"] | None = None
     gripper_joint: str | None = None
     gripper_open_pos: float = 0.0
     gripper_closed_pos: float = 0.0
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        positive_optional = {
-            "max_step_deg_per_tick": self.max_step_deg_per_tick,
-            "max_target_offset_m": self.max_target_offset_m,
-            "max_target_rot_deg": self.max_target_rot_deg,
-        }
-        for field_name, value in positive_optional.items():
-            if value is not None and (not np.isfinite(value) or value <= 0.0):
-                raise ValueError(f"TeleopIKTask {field_name} must be positive and finite")
-        if not np.isfinite(self.joint_limit_margin_deg) or self.joint_limit_margin_deg < 0.0:
-            raise ValueError("TeleopIKTask joint_limit_margin_deg must be finite and non-negative")
-        if not np.isfinite(self.rotation_deadband_deg) or self.rotation_deadband_deg < 0.0:
-            raise ValueError("TeleopIKTask rotation_deadband_deg must be finite and non-negative")
-        if self.tool_offset_m is not None and (
-            len(self.tool_offset_m) != 3 or not np.all(np.isfinite(self.tool_offset_m))
-        ):
-            raise ValueError("TeleopIKTask tool_offset_m must contain three finite values")
 
 
 class TeleopIKTask(CartesianIKTask):
@@ -99,53 +83,16 @@ class TeleopIKTask(CartesianIKTask):
         if config.hand not in ("left", "right"):
             raise ValueError(f"TeleopIKTask '{name}' requires hand='left' or 'right'")
         super().__init__(name, config)
-        self._tool_offset = (
-            pinocchio.SE3(np.eye(3), np.asarray(config.tool_offset_m, dtype=np.float64))
-            if config.tool_offset_m is not None
-            else None
-        )
-        self._tool_offset_inv = (
-            self._tool_offset.inverse() if self._tool_offset is not None else None
-        )
         self._initial_ee_pose: pinocchio.SE3 | None = None
-        self._prev_primary = False
+        self._engagement = _EngagementState.DISENGAGED
+        self._primary_down = False
         self._estopped = False
-        self._rot_deadband_ref: NDArray[np.float64] | None = None
         self._gripper_target = config.gripper_open_pos
-        # Telemetry (TELEM ik line, 1 Hz while tracking). seed_oob counts
-        # ticks where the MEASURED joints sit outside the model limits:
-        # the vendor URDF limits are about 1 degree tighter than the real
-        # arm, and a measured seed below a bound fails the Pink solve, so
-        # this counter measures how much of a session that costs before
-        # any remedy is chosen.
-        self._telem_last_emit = 0.0
-        self._telem_attempts = 0
-        self._telem_computes = 0
-        self._telem_rejects = 0
-        self._telem_seed_oob = 0
-        self._telem_seed_oob_worst = 0.0
-        self._telem_step_sat = 0
-        self._telem_ask = None
-        self._telem_lag_m = 0.0
-        self._telem_rot_lag_rad = 0.0
-        self._telem_solve_ms_max = 0.0
-        self._was_tracking = False
-        self._engage_t0 = 0.0
-        self._engage_lag_max = 0.0
-        self._engage_rejects = 0
-        self._engage_computes = 0
-        self._engage_last_t = 0.0
+        self._gripper_active = config.gripper_joint is not None
 
     def claim(self) -> ResourceClaim:
         """Claim arm joints and the optional gripper joint."""
-        claim = super().claim()
-        if self._config.gripper_joint is None:
-            return claim
-        return ResourceClaim(
-            joints=claim.joints | frozenset([self._config.gripper_joint]),
-            priority=claim.priority,
-            mode=claim.mode,
-        )
+        return claim_with_gripper(super().claim(), self._config.gripper_joint)
 
     def is_active(self) -> bool:
         """Run only when a non-E-STOPped pose target is active."""
@@ -161,11 +108,18 @@ class TeleopIKTask(CartesianIKTask):
         with self._lock:
             self._estopped = estopped
             if estopped:
+                self._engagement = _EngagementState.WAITING_FOR_RELEASE
                 self._active = False
                 self._target_pose = None
                 self._initial_ee_pose = None
-                self._prev_primary = False
-                self._rot_deadband_ref = None
+                self._last_commanded_joints = None
+                self._gripper_active = False
+            else:
+                self._engagement = (
+                    _EngagementState.WAITING_FOR_RELEASE
+                    if self._primary_down
+                    else _EngagementState.DISENGAGED
+                )
 
     def _prepare_target(
         self,
@@ -184,7 +138,7 @@ class TeleopIKTask(CartesianIKTask):
             baseline = self._initial_ee_pose
 
         if baseline is None:
-            captured = self._tool_fk(q_current)
+            captured = self.forward_kinematics(q_current)
             values = np.concatenate((captured.translation, captured.rotation.reshape(-1)))
             if not np.all(np.isfinite(values)):
                 return None
@@ -195,209 +149,24 @@ class TeleopIKTask(CartesianIKTask):
                     self._initial_ee_pose = captured.copy()
                 baseline = self._initial_ee_pose
 
-        target_rotation = (
-            baseline.rotation @ delta.rotation
-            if self._config.rotation_frame == "local"
-            else delta.rotation @ baseline.rotation
-        )
-        target_rotation = self._apply_rotation_deadband(target_rotation)
         target = pinocchio.SE3(
-            target_rotation,
+            delta.rotation @ baseline.rotation,
             baseline.translation + delta.translation,
         )
         values = np.concatenate((target.translation, target.rotation.reshape(-1)))
         if not np.all(np.isfinite(values)):
             return None
-        # Telemetry: the raw ask (pre-window) is what the operator feels
-        # the arm lagging behind.
-        self._telem_ask = target.copy()
-        target = self._windowed_target(q_current, target)
-        if self._tool_offset_inv is not None:
-            target = target * self._tool_offset_inv
         return target
 
     def compute(self, state: CoordinatorState) -> JointCommandOutput | None:
         """Run the inherited Pink solve and append the optional gripper target."""
-        tracking = bool(getattr(self, "is_tracking", lambda: False)())
-        if tracking:
-            self._telem_attempts += 1
-            q_seed = self._get_current_joints(state)
-            limits = getattr(self._ik, "position_limits", None)
-            if q_seed is not None and limits is not None:
-                lower, upper = limits
-                below = np.clip(lower - q_seed, 0.0, None)
-                above = np.clip(q_seed - upper, 0.0, None)
-                worst = float(np.max(np.maximum(below, above)))
-                if worst > 0.0:
-                    self._telem_seed_oob += 1
-                    self._telem_seed_oob_worst = max(self._telem_seed_oob_worst, worst)
-        import time as _time
-
-        t0 = _time.perf_counter()
         output = super().compute(state)
-        if tracking:
-            self._telem_solve_ms_max = max(
-                self._telem_solve_ms_max, (_time.perf_counter() - t0) * 1000.0
-            )
-            if output is None:
-                self._telem_rejects += 1
-                self._engage_rejects += 1
-            else:
-                self._telem_computes += 1
-                self._engage_computes += 1
-            now_emit = float(getattr(state, "t_now", 0.0))
-            if self._telem_last_emit == 0.0:
-                self._telem_last_emit = now_emit
-            elif now_emit - self._telem_last_emit >= 1.0:
-                q_now = self._get_current_joints(state)
-                ask = self._telem_ask
-                if q_now is not None and ask is not None:
-                    current = self._tool_fk(q_now)
-                    self._telem_lag_m = float(
-                        np.linalg.norm(ask.translation - current.translation)
-                    )
-                    rot_vec = pinocchio.log3(current.rotation.T @ ask.rotation)
-                    self._telem_rot_lag_rad = float(np.linalg.norm(rot_vec))
-                    self._engage_lag_max = max(self._engage_lag_max, self._telem_lag_m)
-                self._emit_telemetry(state)
-        now_t = float(getattr(state, "t_now", 0.0))
-        if tracking:
-            if not self._was_tracking:
-                self._engage_t0 = now_t
-                self._engage_lag_max = 0.0
-                self._engage_rejects = 0
-                self._engage_computes = 0
-            self._engage_last_t = now_t
-        self._was_tracking = tracking
-        if output is None:
-            return output
-        q_current = self._get_current_joints(state)
-        if q_current is None or output.positions is None:
-            return None
-        positions = np.asarray(output.positions, dtype=np.float64)
-        limits = getattr(self._ik, "position_limits", None)
-        if limits is not None and self._config.joint_limit_margin_deg > 0.0:
-            lower, upper = limits
-            margin = np.deg2rad(self._config.joint_limit_margin_deg)
-            positions = np.clip(positions, lower + margin, upper - margin)
-        if self._config.max_step_deg_per_tick is not None:
-            step = np.deg2rad(self._config.max_step_deg_per_tick)
-            stepped = np.clip(positions - q_current, -step, step)
-            if np.max(np.abs(positions - q_current)) > step:
-                self._telem_step_sat += 1
-            positions = q_current + stepped
-        if self._config.gripper_joint is None:
-            return JointCommandOutput(
-                joint_names=output.joint_names,
-                positions=positions.tolist(),
-                mode=output.mode,
-            )
         with self._lock:
             if self._estopped:
                 return None
             gripper_target = self._gripper_target
-        return JointCommandOutput(
-            joint_names=[*output.joint_names, self._config.gripper_joint],
-            positions=[*positions.tolist(), gripper_target],
-            mode=output.mode,
-        )
-
-    def _emit_telemetry(self, state: CoordinatorState) -> None:
-        """One TELEM ik line per second while tracking, then reset counters."""
-        now = float(getattr(state, "t_now", 0.0))
-        logger.info(
-            "TELEM ik %s: computes_hz=%d rejects=%d attempts=%d hand_lag_cm=%.1f "
-            "rot_lag_deg=%.1f solve_ms_max=%.1f seed_oob=%d seed_oob_worst_deg=%.2f "
-            "step_sat=%d limit_margin_deg=%.1f",
-            self._name,
-            self._telem_computes,
-            self._telem_rejects,
-            self._telem_attempts,
-            self._telem_lag_m * 100.0,
-            np.rad2deg(self._telem_rot_lag_rad),
-            self._telem_solve_ms_max,
-            self._telem_seed_oob,
-            np.rad2deg(self._telem_seed_oob_worst),
-            self._telem_step_sat,
-            self._config.joint_limit_margin_deg,
-        )
-        self._telem_last_emit = now
-        self._telem_attempts = 0
-        self._telem_computes = 0
-        self._telem_rejects = 0
-        self._telem_seed_oob = 0
-        self._telem_seed_oob_worst = 0.0
-        self._telem_step_sat = 0
-        self._telem_solve_ms_max = 0.0
-
-    def _apply_rotation_deadband(self, target_rotation: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Apply a soft angular deadband against the previous target."""
-        deadband = np.deg2rad(self._config.rotation_deadband_deg)
-        if deadband <= 0.0:
-            return target_rotation
-        with self._lock:
-            reference = self._rot_deadband_ref
-            if reference is None:
-                self._rot_deadband_ref = target_rotation
-                return target_rotation
-            rotation_vector = pinocchio.log3(reference.T @ target_rotation)
-            angle = float(np.linalg.norm(rotation_vector))
-            if angle <= deadband:
-                return reference
-            filtered = np.asarray(
-                reference @ pinocchio.exp3(rotation_vector * ((angle - deadband) / angle))
-            )
-            self._rot_deadband_ref = filtered
-            return filtered
-
-    def _windowed_target(
-        self,
-        q_current: NDArray[np.float64],
-        target: pinocchio.SE3,
-    ) -> pinocchio.SE3:
-        """Clamp the target into a recentered neighborhood of measured state."""
-        if self._config.max_target_offset_m is None and self._config.max_target_rot_deg is None:
-            return target
-        current = self._tool_fk(q_current)
-        position = target.translation
-        rotation = target.rotation
-        if self._config.max_target_offset_m is not None:
-            offset = position - current.translation
-            distance = float(np.linalg.norm(offset))
-            if distance > self._config.max_target_offset_m:
-                position = current.translation + offset * (
-                    self._config.max_target_offset_m / distance
-                )
-        if self._config.max_target_rot_deg is not None:
-            rotation_vector = pinocchio.log3(current.rotation.T @ rotation)
-            angle = float(np.linalg.norm(rotation_vector))
-            max_angle = np.deg2rad(self._config.max_target_rot_deg)
-            if angle > max_angle:
-                rotation = current.rotation @ pinocchio.exp3(rotation_vector * (max_angle / angle))
-        return pinocchio.SE3(rotation, position)
-
-    def _tool_fk(self, q: NDArray[np.float64]) -> pinocchio.SE3:
-        """Return the controlled tool point pose."""
-        pose = self._ik.forward_kinematics(q)
-        if self._tool_offset is not None:
-            pose = pose * self._tool_offset
-        return pose
-
-
-    def _finish_engage(self, reason: str) -> None:
-        """Log the per-engagement summary; safe to call when not engaged."""
-        if not self._was_tracking:
-            return
-        self._was_tracking = False
-        logger.info(
-            "TELEM engage %s: reason=%s duration_s=%.1f computes=%d rejects=%d lag_max_cm=%.1f",
-            self._name,
-            reason,
-            max(0.0, self._engage_last_t - self._engage_t0),
-            self._engage_computes,
-            self._engage_rejects,
-            self._engage_lag_max * 100.0,
-        )
+            gripper_joint = self._config.gripper_joint if self._gripper_active else None
+        return append_gripper_position(output, gripper_joint, gripper_target)
 
     def on_buttons(self, msg: Buttons) -> bool:
         """Use the configured primary button as press-and-hold engagement."""
@@ -405,23 +174,29 @@ class TeleopIKTask(CartesianIKTask):
         primary = msg.left_primary if is_left else msg.right_primary
         trigger = msg.left_trigger_analog if is_left else msg.right_trigger_analog
 
-        released = False
         with self._lock:
+            was_primary_down = self._primary_down
+            self._primary_down = primary
             if self._estopped:
                 return False
-            if primary and not self._prev_primary:
-                self._initial_ee_pose = None
-                self._rot_deadband_ref = None
-            elif not primary and self._prev_primary:
+            if self._engagement is _EngagementState.WAITING_FOR_RELEASE:
+                if not primary:
+                    self._engagement = _EngagementState.DISENGAGED
+            elif (
+                self._engagement is _EngagementState.DISENGAGED and primary and not was_primary_down
+            ):
+                self._engagement = _EngagementState.ENGAGED
                 self._active = False
                 self._target_pose = None
                 self._initial_ee_pose = None
-                self._rot_deadband_ref = None
-                released = True
-            self._prev_primary = primary
+                self._last_commanded_joints = None
+            elif self._engagement is _EngagementState.ENGAGED and not primary:
+                self._engagement = _EngagementState.DISENGAGED
+                self._active = False
+                self._target_pose = None
+                self._initial_ee_pose = None
+                self._last_commanded_joints = None
 
-        if released:
-            self._finish_engage("release")
         if self._config.gripper_joint is not None:
             self.on_gripper_trigger(trigger)
         return True
@@ -431,10 +206,12 @@ class TeleopIKTask(CartesianIKTask):
         return self.on_buttons(msg)
 
     def on_cartesian_command(self, pose: Pose | PoseStamped, t_now: float) -> bool:
-        """Accept an engagement-relative pose delta unless E-STOP is latched."""
+        """Accept an engagement-relative pose delta only while its button is held."""
         with self._lock:
-            if self._estopped:
+            if self._estopped or self._engagement is not _EngagementState.ENGAGED:
                 return False
+            if not self._active:
+                self._last_commanded_joints = None
             self._target_pose = pose
             self._last_update_time = t_now
             self._active = True
@@ -453,51 +230,41 @@ class TeleopIKTask(CartesianIKTask):
             if self._estopped:
                 return False
             self._gripper_target = position
+            self._gripper_active = True
         return True
 
     def _on_timeout(self) -> None:
         """Discard the baseline while the parent holds the task lock."""
-        self._finish_engage("timeout")
         self._initial_ee_pose = None
-        self._prev_primary = False
-        self._rot_deadband_ref = None
+        self._engagement = (
+            _EngagementState.WAITING_FOR_RELEASE
+            if self._primary_down
+            else _EngagementState.DISENGAGED
+        )
 
     def stop(self) -> None:
         """Stop output and discard engagement-relative state."""
-        self._finish_engage("stop")
         super().stop()
+        self._reset_engagement_state()
+
+    def _reset_engagement_state(self) -> None:
+        """Discard state owned specifically by engagement-relative teleop."""
         with self._lock:
-            self._active = False
-            self._target_pose = None
             self._initial_ee_pose = None
-            self._prev_primary = False
-            self._rot_deadband_ref = None
+            self._engagement = _EngagementState.DISENGAGED
+            self._primary_down = False
+            self._gripper_active = False
 
     def clear(self) -> None:
         """Clear output and discard engagement-relative state."""
         super().clear()
-        with self._lock:
-            self._active = False
-            self._target_pose = None
-            self._initial_ee_pose = None
-            self._prev_primary = False
-            self._rot_deadband_ref = None
+        self._reset_engagement_state()
 
 
-class TeleopIKTaskParams(BaseConfig):
+class TeleopIKTaskParams(CartesianIKTaskParams):
     control_ik: TeleopControlIKConfig
     hand: Literal["left", "right"] | None = None
-    timeout: float = 0.5
     max_joint_delta_deg: float = 5.0
-    max_step_deg_per_tick: float | None = None
-    max_target_offset_m: float | None = None
-    max_target_rot_deg: float | None = None
-    joint_limit_margin_deg: float = 0.0
-    tool_offset_m: tuple[float, float, float] | None = None
-    rotation_frame: Literal["world", "local"] = "world"
-    rotation_deadband_deg: float = 0.0
-    min_dt: FiniteFloat = 1e-4
-    max_dt: FiniteFloat = 0.05
     gripper_joint: str | None = None
     gripper_open_pos: float = 0.0
     gripper_closed_pos: float = 0.0
@@ -514,13 +281,7 @@ def create_task(cfg: TaskConfig, hardware: object) -> TeleopIKTask:
             priority=cfg.priority,
             timeout=params.timeout,
             max_joint_delta_deg=params.max_joint_delta_deg,
-            max_step_deg_per_tick=params.max_step_deg_per_tick,
-            max_target_offset_m=params.max_target_offset_m,
-            max_target_rot_deg=params.max_target_rot_deg,
-            joint_limit_margin_deg=params.joint_limit_margin_deg,
-            tool_offset_m=params.tool_offset_m,
-            rotation_frame=params.rotation_frame,
-            rotation_deadband_deg=params.rotation_deadband_deg,
+            max_tracking_error_deg=params.max_tracking_error_deg,
             min_dt=params.min_dt,
             max_dt=params.max_dt,
             hand=params.hand,

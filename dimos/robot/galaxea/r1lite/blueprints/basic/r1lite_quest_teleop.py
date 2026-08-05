@@ -53,29 +53,24 @@ from dimos.robot.manipulators.a1z.config import (
 _TASK_NAMES = {"left": "teleop_left_arm", "right": "teleop_right_arm"}
 _TELEOP_PRIORITY = 20  # preempts the servo holder (10) on the arm joints while engaged
 
-# Speed-test configuration for the second hardware session: the Pink
-# velocity clamp (max_velocity, smooth follow with no jerk) is the sole
-# joint-rate cap, backed by the vendor tracker's own speed limit; the
-# per-tick step gate is off so a slow coordinator tick cannot shrink the
-# effective rate. The chase window (recentered every tick) keeps catch-up
-# bounded and the 45 degree hard reject stays as the gross-error gate.
-# The controlled point is the grasp center between the fingertips, 0.17 m
-# past joint 6 (0.08165 gripper mount + 0.0369 finger base + mid-finger,
-# from the vendor description). Orientation is held as firmly as position;
-# at lower weights the solver reaches position targets by swinging the
-# free wrist, which sweeps the tool sideways through the lever arm.
-_ARM_IK_LIMITS = {
-    "max_joint_delta_deg": 45.0,
-    "max_step_deg_per_tick": None,
-    "max_target_offset_m": 0.20,
-    "max_target_rot_deg": 30.0,
-    "joint_limit_margin_deg": 2.0,
-    "tool_offset_m": (0.17, 0.0, 0.0),
-    "rotation_frame": "local",
-    "rotation_deadband_deg": 4.0,
-    # Ride through pose-stream gaps instead of cycling engage state;
-    # catch-up stays bounded by the chase window either way.
+# Merged Pink teleop architecture (PR #3237): the solver's velocity
+# clamp and damping task own smoothness, configuration limits own
+# safety, and the old chase-window/step-gate machinery is gone. Values
+# mirror the A1Z quest config that hardware-validated as smooth, with
+# two field-informed R1 Lite deviations: the timeout rides through
+# vendor pose-stream gaps (2026-07-28), and seed_limit_tolerance covers
+# the folded boot pose, measured up to 1.74 deg below the vendor URDF
+# lower bound — the merged default of ~0.57 deg would still hard-fail
+# there. The controlled point is the grasp-center URDF frame, 0.17 m
+# past joint 6 (formerly the task-level tool_offset_m).
+_ARM_IK_PARAMS = {
     "timeout": 1.5,
+    # Ride through pose-stream gaps instead of cycling engage state.
+}
+_ARM_CONTROL_IK = {
+    "max_velocity": 2.0,
+    "orientation_cost": 1.0,
+    "seed_limit_tolerance": 0.05,
 }
 
 
@@ -93,7 +88,7 @@ def _teleop_control_model(side: str) -> RobotModelConfig:
                 name="manipulator",
                 joint_names=tuple(model_joints),
                 base_link=f"{side}_arm_base_link",
-                tip_link=f"{side}_arm_link6",
+                tip_link=f"{side}_arm_grasp_center",
             )
         ],
         joint_name_mapping=dict(zip(coordinator_joints, model_joints, strict=True)),
@@ -110,13 +105,9 @@ def _teleop_tasks() -> list[TaskConfig]:
             joint_names=list(cfg.LEFT_ARM_JOINTS),
             priority=_TELEOP_PRIORITY,
             params={
-                "control_ik": {
-                    "robot_model": left_model,
-                    "orientation_cost": 1.0,
-                    "posture_cost": 0.05,
-                },
+                "control_ik": {"robot_model": left_model, **_ARM_CONTROL_IK},
                 "hand": "left",
-                **_ARM_IK_LIMITS,
+                **_ARM_IK_PARAMS,
             },
         ),
         TaskConfig(
@@ -125,13 +116,9 @@ def _teleop_tasks() -> list[TaskConfig]:
             joint_names=list(cfg.RIGHT_ARM_JOINTS),
             priority=_TELEOP_PRIORITY,
             params={
-                "control_ik": {
-                    "robot_model": right_model,
-                    "orientation_cost": 1.0,
-                    "posture_cost": 0.05,
-                },
+                "control_ik": {"robot_model": right_model, **_ARM_CONTROL_IK},
                 "hand": "right",
-                **_ARM_IK_LIMITS,
+                **_ARM_IK_PARAMS,
             },
         ),
     ]

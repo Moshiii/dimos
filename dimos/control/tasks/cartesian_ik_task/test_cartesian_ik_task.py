@@ -15,7 +15,7 @@
 from pathlib import Path
 import subprocess
 import sys
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pinocchio
@@ -32,7 +32,6 @@ from dimos.control.tasks.cartesian_ik_task.pink_control_ik import (
     IKControlRuntimeError,
     PinkControlIKConfig,
 )
-from dimos.control.tasks.eef_twist_task.eef_twist_task import create_task as _eef_create_task
 from dimos.control.tasks.registry import control_task_registry
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
@@ -57,13 +56,9 @@ def _robot(path: Path) -> RobotModelConfig:
     )
 
 
-def _pink_config(path: Path) -> PinkControlIKConfig:
-    return PinkControlIKConfig.model_validate({"robot_model": _robot(path)})
-
-
-def _state(t_now: float, dt: float = 0.01) -> CoordinatorState:
+def _state(t_now: float, dt: float = 0.01, position: float = 0.0) -> CoordinatorState:
     return CoordinatorState(
-        joints=JointStateSnapshot(joint_positions={"joint1": 0.0}), t_now=t_now, dt=dt
+        joints=JointStateSnapshot(joint_positions={"joint1": position}), t_now=t_now, dt=dt
     )
 
 
@@ -71,28 +66,30 @@ class _FakeControlIK:
     nq = 1
 
     def __init__(self) -> None:
-        self.target: object | None = None
+        self.target: Any | None = None
         self.dt: float | None = None
+        self.increment = 0.0
+        self.solve_seeds: list[np.ndarray] = []
 
-    def solve(self, target: object, measured: np.ndarray, dt: float) -> ControlIKResult:
+    def solve(self, target: Any, measured: np.ndarray, dt: float) -> ControlIKResult:
         self.target = target
         self.dt = dt
-        return ControlIKResult(measured.copy(), np.zeros(1))
+        self.solve_seeds.append(measured.copy())
+        positions = measured + self.increment
+        return ControlIKResult(positions, positions - measured)
 
 
-def test_cartesian_pipeline_passes_se3_target_and_bounded_dt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cartesian_pipeline_passes_se3_target_and_bounded_dt(tmp_path: Path, mocker) -> None:
     backend = _FakeControlIK()
-    monkeypatch.setattr(
-        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.PinkControlIK",
-        lambda *args, **kwargs: backend,
+    mocker.patch(
+        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.create_pink_control_ik",
+        return_value=backend,
     )
     task = CartesianIKTask(
         "cartesian",
         CartesianIKTaskConfig(
             joint_names=["joint1"],
-            control_ik=_pink_config(tmp_path / "unused.urdf"),
+            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
             min_dt=0.01,
             max_dt=0.05,
         ),
@@ -109,19 +106,17 @@ def test_cartesian_pipeline_passes_se3_target_and_bounded_dt(
     assert backend.dt == 0.05
 
 
-def test_cartesian_pipeline_rejects_invalid_quaternion_with_hold(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cartesian_pipeline_rejects_invalid_quaternion_with_hold(tmp_path: Path, mocker) -> None:
     backend = _FakeControlIK()
-    monkeypatch.setattr(
-        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.PinkControlIK",
-        lambda *args, **kwargs: backend,
+    mocker.patch(
+        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.create_pink_control_ik",
+        return_value=backend,
     )
     task = CartesianIKTask(
         "cartesian",
         CartesianIKTaskConfig(
             joint_names=["joint1"],
-            control_ik=_pink_config(tmp_path / "unused.urdf"),
+            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
         ),
     )
     assert task.on_cartesian_command(PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 0]), 1.0)
@@ -140,8 +135,15 @@ def test_factory_rejects_invalid_default_pink_configuration() -> None:
         control_task_registry.create("cartesian_ik", config, hardware={})
 
 
-def test_cartesian_and_eef_modules_import_without_pink() -> None:
-    script = """
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task",
+        "dimos.control.tasks.eef_twist_task.eef_twist_task",
+    ],
+)
+def test_control_task_import_fails_actionably_without_pink(module_name: str) -> None:
+    script = f"""
 import sys
 
 class BlockPink:
@@ -151,59 +153,108 @@ class BlockPink:
         return None
 
 sys.meta_path.insert(0, BlockPink())
-import dimos.control.tasks.cartesian_ik_task.cartesian_ik_task
-import dimos.control.tasks.eef_twist_task.eef_twist_task
-import dimos.control.tasks.teleop_task.teleop_task
+import {module_name}
 """
-    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
-
-def test_pink_factories_fail_actionably_when_pink_is_absent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import dimos.control.tasks.cartesian_ik_task.pink_control_ik as pink_control_ik
-
-    robot = _robot(tmp_path / "unused.urdf")
-    params = {"control_ik": {"robot_model": robot}}
-    monkeypatch.setattr(pink_control_ik, "pink", None)
-
-    for task_type in ("cartesian_ik", "eef_twist", "teleop_ik"):
-        task_params = {**params, **({"hand": "right"} if task_type == "teleop_ik" else {})}
-        config = TaskConfig(
-            name=task_type,
-            type=task_type,
-            joint_names=["joint1"],
-            params=task_params,
-        )
-        with pytest.raises(ModuleNotFoundError, match="uv sync --extra manipulation"):
-            if task_type == "eef_twist":
-                _eef_create_task(config, {})
-            else:
-                control_task_registry.create(task_type, config, hardware={})
+    assert result.returncode != 0
+    assert "Install it with `uv sync`" in result.stderr
 
 
 def test_cartesian_runtime_error_is_a_measured_state_hold(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker
 ) -> None:
     backend = _FakeControlIK()
 
-    def fail(target: object, measured: np.ndarray, dt: float) -> ControlIKResult:
+    def fail(target: Any, measured: np.ndarray, dt: float) -> ControlIKResult:
         raise IKControlRuntimeError("solver failed")
 
     monkeypatch.setattr(backend, "solve", fail)
-    monkeypatch.setattr(
-        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.PinkControlIK",
-        lambda *args, **kwargs: backend,
+    mocker.patch(
+        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.create_pink_control_ik",
+        return_value=backend,
     )
     task = CartesianIKTask(
         "cartesian",
         CartesianIKTaskConfig(
             joint_names=["joint1"],
-            control_ik=_pink_config(tmp_path / "unused.urdf"),
+            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
         ),
     )
     assert task.on_cartesian_command(PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]), 1.0)
 
     hold = task.compute(_state(1.01))
+    assert hold is not None
+    assert hold.positions == [0.0]
+
+
+def test_cartesian_pipeline_accumulates_from_accepted_commands_while_feedback_tracks(
+    tmp_path: Path, mocker
+) -> None:
+    backend = _FakeControlIK()
+    backend.increment = 0.01
+    mocker.patch(
+        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.create_pink_control_ik",
+        return_value=backend,
+    )
+    task = CartesianIKTask(
+        "cartesian",
+        CartesianIKTaskConfig(
+            joint_names=["joint1"],
+            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
+            max_tracking_error_deg=10.0,
+        ),
+    )
+    assert task.on_cartesian_command(PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]), 1.0)
+
+    first = task.compute(_state(1.01))
+    second = task.compute(_state(1.02))
+
+    assert first is not None
+    assert second is not None
+    assert first.positions == pytest.approx([0.01])
+    assert second.positions == pytest.approx([0.02])
+    np.testing.assert_allclose(backend.solve_seeds, [[0.0], [0.01]])
+
+
+def test_cartesian_pipeline_rebases_when_command_outpaces_feedback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker
+) -> None:
+    backend = _FakeControlIK()
+    backend.increment = 0.1
+    mocker.patch(
+        "dimos.control.tasks.cartesian_ik_task.cartesian_ik_task.create_pink_control_ik",
+        return_value=backend,
+    )
+    task = CartesianIKTask(
+        "cartesian",
+        CartesianIKTaskConfig(
+            joint_names=["joint1"],
+            control_ik=PinkControlIKConfig(robot_model=_robot(tmp_path / "unused.urdf")),
+            max_tracking_error_deg=5.0,
+        ),
+    )
+    assert task.on_cartesian_command(PoseStamped(position=[0, 0, 0], orientation=[0, 0, 0, 1]), 1.0)
+
+    first = task.compute(_state(1.01))
+    second = task.compute(_state(1.02))
+
+    assert first is not None
+    assert second is not None
+    assert first.positions == pytest.approx([0.1])
+    assert second.positions == pytest.approx([0.1])
+    np.testing.assert_allclose(backend.solve_seeds, [[0.0], [0.0]])
+
+    def fail(target: Any, measured: np.ndarray, dt: float) -> ControlIKResult:
+        raise IKControlRuntimeError("solver failed")
+
+    monkeypatch.setattr(backend, "solve", fail)
+    hold = task.compute(_state(1.03))
+
     assert hold is not None
     assert hold.positions == [0.0]

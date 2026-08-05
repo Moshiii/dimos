@@ -256,15 +256,15 @@ def test_teleop_tasks_use_arm_slices_and_pink() -> None:
             robot_model = control_ik["robot_model"]
             assert robot_model.joint_names == urdf_names
             assert robot_model.get_coordinator_joint_names() == task.joint_names
-            assert task.params["rotation_frame"] == "local"
-            assert task.params["rotation_deadband_deg"] == 4.0
+            # The controlled point is the grasp-center URDF frame
+            # (formerly the task-level tool_offset_m).
+            assert robot_model.end_effector_link.endswith("_arm_grasp_center")
             assert control_ik["orientation_cost"] == 1.0
-            assert control_ik["posture_cost"] == 0.05
-            assert task.params["tool_offset_m"] == (0.17, 0.0, 0.0)
-            assert task.params["max_joint_delta_deg"] == 45.0
-            assert task.params["max_step_deg_per_tick"] is None
-            assert task.params["max_target_offset_m"] == 0.20
-            assert task.params["max_target_rot_deg"] == 30.0
+            assert control_ik["max_velocity"] == 2.0
+            # Folded boot pose: measured up to 1.74 deg below the vendor
+            # URDF lower bound; the tolerance must cover it.
+            assert control_ik["seed_limit_tolerance"] >= 0.04
+            assert task.params["timeout"] == 1.5
 
 
 def test_sim_planner_models_have_matching_trajectory_tasks() -> None:
@@ -637,6 +637,14 @@ class _FakeJoints:
         return self._positions.get(name)
 
 
+def _task_limits(task: Any) -> tuple[Any, Any]:
+    """Controlled-joint position bounds from the solver's runtime model."""
+    rt = task._ik._runtime
+    lower = np.array([rt.model.lowerPositionLimit[i] for i in rt.mapping.q_indices])
+    upper = np.array([rt.model.upperPositionLimit[i] for i in rt.mapping.q_indices])
+    return lower, upper
+
+
 def test_replay_fixture_drives_production_pipeline() -> None:
     from dimos_lcm.geometry_msgs import PoseStamped as LCMPoseStamped
     from dimos_lcm.sensor_msgs import Joy as LCMJoy
@@ -657,19 +665,13 @@ def test_replay_fixture_drives_production_pipeline() -> None:
     fp_pose = LCMPoseStamped._get_packed_fingerprint()
     fp_joy = LCMJoy._get_packed_fingerprint()
 
-    margin = np.deg2rad(left_cfg.params["joint_limit_margin_deg"]) - 1e-9
-    # With the per-tick step gate off, the Pink velocity clamp bounds the
-    # per-tick delta at max_velocity * dt instead.
-    raw_step = left_cfg.params["max_step_deg_per_tick"]
-    step_limit = (
-        np.deg2rad(raw_step)
-        if raw_step is not None
-        else task._config.control_ik.max_velocity * 0.02
-    ) + 1e-9
-    lower, upper = task._ik.position_limits
+    # The merged solver owns limits and rate: per-tick deltas are bounded
+    # by the velocity clamp, and positions stay inside the model bounds.
+    step_limit = task._config.control_ik.max_velocity * 0.02 + 1e-9
+    lower, upper = _task_limits(task)
     q_start = (lower + upper) / 2.0
     positions = dict(zip(cfg.LEFT_ARM_JOINTS, q_start.tolist(), strict=True))
-    tool_start = task._tool_fk(q_start)
+    tool_start = task._ik.forward_kinematics(q_start)
 
     engaged_seen = False
     commands = 0
@@ -710,8 +712,8 @@ def test_replay_fixture_drives_production_pipeline() -> None:
         assert out.joint_names == cfg.LEFT_ARM_JOINTS
         q_new = np.array(out.positions)
         assert np.all(np.isfinite(q_new))
-        assert np.all(q_new >= lower + margin)
-        assert np.all(q_new <= upper - margin)
+        assert np.all(q_new >= lower - 1e-9)
+        assert np.all(q_new <= upper + 1e-9)
         assert np.max(np.abs(q_new - prev_q)) <= step_limit
         prev_q = q_new
         positions = dict(zip(cfg.LEFT_ARM_JOINTS, out.positions, strict=True))
@@ -719,7 +721,7 @@ def test_replay_fixture_drives_production_pipeline() -> None:
     assert engaged_seen
     assert commands > 10
     # The fixture moves the hand; the production solver moved the tool.
-    tool_end = task._tool_fk(prev_q)
+    tool_end = task._ik.forward_kinematics(prev_q)
     assert float(np.linalg.norm(tool_end.translation - tool_start.translation)) > 0.005
     # After the release frames at the fixture tail, the task is inert.
     state = types.SimpleNamespace(t_now=t_now + 0.02, dt=0.02, joints=_FakeJoints(positions))
@@ -729,13 +731,19 @@ def test_replay_fixture_drives_production_pipeline() -> None:
 def test_engaged_task_times_out_when_stream_stops() -> None:
     from dimos.control.tasks.teleop_task.teleop_task import create_task
     from dimos.robot.galaxea.r1lite.blueprints.basic.r1lite_quest_teleop import _teleop_tasks
+    from dimos.teleop.quest.quest_types import Buttons
 
     left_cfg = next(t for t in _teleop_tasks() if t.name == "teleop_left_arm")
     task = create_task(left_cfg, None)
     task.start()
+    # The merged task only accepts pose deltas while its engage button is
+    # held (left hand -> left_primary).
+    engage = Buttons()
+    engage.left_primary = True
+    assert task.on_teleop_buttons(engage, 1.0)
     positions = {name: 0.1 for name in cfg.LEFT_ARM_JOINTS}
     pose = PoseStamped(position=[0.01, 0.0, 0.0], frame_id="teleop_left_arm")
-    task.on_cartesian_command(pose, t_now=1.0)
+    assert task.on_cartesian_command(pose, t_now=1.0)
     state = types.SimpleNamespace(t_now=1.02, dt=0.02, joints=_FakeJoints(positions))
     assert task.compute(state) is not None
     # No further commands: past the configured timeout the task goes inert.
@@ -873,7 +881,7 @@ def test_stale_stream_release_reaches_production_task() -> None:
         task_names={"left": "teleop_left_arm", "right": "teleop_right_arm"},
         local_rotation=True,
     )
-    lower, upper = task._ik.position_limits
+    lower, upper = _task_limits(task)
     q_start = (lower + upper) / 2.0
     positions = dict(zip(cfg.LEFT_ARM_JOINTS, q_start.tolist(), strict=True))
 
