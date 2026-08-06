@@ -73,7 +73,13 @@ def _read_motor_position(packet_handler: Any, motor_id: int) -> int:
         position = values[0]
     else:
         position = result
-    return int(position)
+    encoder_tick = int(position)
+    if not 0 <= encoder_tick <= FEETECH_POSITION_SPAN:
+        raise RuntimeError(
+            f"Feetech motor {motor_id} position read returned invalid encoder tick "
+            f"{encoder_tick}; expected 0..{FEETECH_POSITION_SPAN}"
+        )
+    return encoder_tick
 
 
 class FeetechLeaderReader:
