@@ -118,16 +118,16 @@ def test_read_motor_position_rejects_sdk_error_tuple() -> None:
 
 
 @pytest.mark.parametrize(
-    "result",
+    ("result", "expected"),
     [
-        -1,
-        FEETECH_POSITION_SPAN + 1,
-        (-1, 0, 0),
-        (FEETECH_POSITION_SPAN + 1, 0, 0),
+        (-1, FEETECH_POSITION_SPAN),
+        (FEETECH_POSITION_SPAN + 82, 81),
+        ((-82, 0, 0), FEETECH_POSITION_SPAN - 81),
+        ((FEETECH_POSITION_SPAN + 1, 0, 0), 0),
     ],
 )
-def test_read_motor_position_rejects_out_of_range_encoder_ticks(
+def test_read_motor_position_wraps_multi_turn_encoder_ticks(
     result: int | tuple[int, int, int],
+    expected: int,
 ) -> None:
-    with pytest.raises(RuntimeError, match="invalid encoder tick"):
-        _read_motor_position(_PositionPacketHandler(result), 3)
+    assert _read_motor_position(_PositionPacketHandler(result), 3) == expected

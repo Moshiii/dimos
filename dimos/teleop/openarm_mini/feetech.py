@@ -73,13 +73,10 @@ def _read_motor_position(packet_handler: Any, motor_id: int) -> int:
         position = values[0]
     else:
         position = result
-    encoder_tick = int(position)
-    if not 0 <= encoder_tick <= FEETECH_POSITION_SPAN:
-        raise RuntimeError(
-            f"Feetech motor {motor_id} position read returned invalid encoder tick "
-            f"{encoder_tick}; expected 0..{FEETECH_POSITION_SPAN}"
-        )
-    return encoder_tick
+    # STS3215 firmware accumulates multi-turn ticks, so reads legitimately
+    # leave 0..4095 whenever a joint crosses the encoder boundary; wrap to
+    # one turn instead of rejecting.
+    return int(position) % _FEETECH_ENCODER_TICKS
 
 
 class FeetechLeaderReader:
