@@ -40,6 +40,16 @@ def _libero_root() -> Path:
     return root
 
 
+def _libero_bundle() -> Path:
+    configured = os.environ.get("PIMSIM_LIBERO_BUNDLE")
+    if configured is None:
+        pytest.skip("set PIMSIM_LIBERO_BUNDLE to run native tabletop E2E tests")
+    root = Path(configured).expanduser().resolve()
+    if not root.exists():
+        pytest.fail(f"PIMSIM_LIBERO_BUNDLE does not exist: {root}")
+    return root
+
+
 def _connect_when_ready(call: DimosCliCall, timeout: float = 120.0) -> Dimos:
     deadline = time.monotonic() + timeout
     last_error: BaseException | None = None
@@ -77,17 +87,49 @@ def test_generated_lift_uses_public_skill_and_private_goal(tmp_path: Path) -> No
     episode = pimsim_authoring.generate_xarm_tabletop_episode(
         tmp_path / "episode",
         libero_root=_libero_root(),
-        scene_seed=7,
+        scene_seed=6,
         scenario_seed=3,
     )
-    scenario = episode.scenarios["lift-alphabet-soup"]
+    _run_lift_episode(
+        episode.scene_package,
+        episode.scenarios["lift-alphabet-soup"],
+        scenario_id="lift-alphabet-soup-seed-3",
+        object_name="alphabet-soup",
+        show_viewer=show_viewer,
+    )
 
+
+def test_native_bundle_lift_uses_exact_suite_scene(tmp_path: Path) -> None:
+    show_viewer = os.environ.get("PIMSIM_TEST_VIEWER") == "1"
+    episode = pimsim_authoring.materialize_xarm_tabletop_episode(
+        tmp_path / "episode",
+        asset_bundle=_libero_bundle(),
+        scene_seed=34,
+        scenario_seed=1,
+    )
+    _run_lift_episode(
+        episode.scene_package,
+        episode.scenarios["lift-object"],
+        scenario_id="lift-object-seed-1",
+        object_name="alphabet-soup",
+        show_viewer=show_viewer,
+    )
+
+
+def _run_lift_episode(
+    scene_package: Path,
+    scenario: Path,
+    *,
+    scenario_id: str,
+    object_name: str,
+    show_viewer: bool,
+) -> None:
     call = DimosCliCall()
     call.global_args = [
         "--simulation-provider",
         "pimsim",
         "--scene-package",
-        str(episode.scene_package),
+        str(scene_package),
         "--transport",
         "zenoh",
         "--viewer",
@@ -103,16 +145,16 @@ def test_generated_lift_uses_public_skill_and_private_goal(tmp_path: Path) -> No
         app = _connect_when_ready(call)
         scene_control.start()
         reset = scene_control.reset_scenario(str(scenario))
-        assert reset["scenario_id"] == "lift-alphabet-soup-seed-3"
+        assert reset["scenario_id"] == scenario_id
         assert all(condition["passed"] for condition in reset["initial_conditions"])
 
         pick_and_place = app.get_module("PickAndPlaceModule")
-        observation = _wait_for_object(pick_and_place, "alphabet-soup")
+        observation = _wait_for_object(pick_and_place, object_name)
         assert observation.success, observation
-        result = pick_and_place.pick("alphabet-soup")
+        result = pick_and_place.pick(object_name)
         evaluation = scene_control.evaluate_goal()
         assert result.success, f"{result}; private evaluation: {evaluation}"
-        assert evaluation["scenario_id"] == "lift-alphabet-soup-seed-3"
+        assert evaluation["scenario_id"] == scenario_id
         assert evaluation["passed"] is True
     finally:
         scene_control.stop()
