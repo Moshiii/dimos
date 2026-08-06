@@ -37,8 +37,12 @@ from dimos.teleop.openarm_mini.calibration import (
     load_calibration,
     save_calibration,
 )
-from dimos.teleop.openarm_mini.feetech import FeetechLeaderReader, _calibrated_motor_radians
-from dimos.teleop.openarm_mini.mapping import map_side_readings
+from dimos.teleop.openarm_mini.cli._errors import exit_for_missing_dependency
+from dimos.teleop.openarm_mini.feetech import (
+    FeetechLeaderReader,
+    OpenArmMiniDependencyError,
+    _calibrated_motor_radians,
+)
 
 DEFAULT_MOTOR_IDS = {
     joint_name: index + 1 for index, joint_name in enumerate(OPENARM_MINI_ARM_JOINT_NAMES)
@@ -76,6 +80,34 @@ def main(
     ),
 ) -> None:
     """Zero-calibrate OpenArm Mini leader teleop."""
+    try:
+        _run(
+            side=side,
+            port_left=port_left,
+            port_right=port_right,
+            baudrate=baudrate,
+            left_calibration_path=left_calibration_path,
+            right_calibration_path=right_calibration_path,
+            left_flips=left_flips,
+            right_flips=right_flips,
+            live_readout=live_readout,
+        )
+    except OpenArmMiniDependencyError as error:
+        exit_for_missing_dependency(error)
+
+
+def _run(
+    *,
+    side: Literal["left", "right", "both"],
+    port_left: str,
+    port_right: str,
+    baudrate: int,
+    left_calibration_path: Path,
+    right_calibration_path: Path,
+    left_flips: str | None,
+    right_flips: str | None,
+    live_readout: bool,
+) -> None:
     sides: tuple[OpenArmMiniSide, ...]
     if side == "both":
         sides = ("left", "right")
@@ -125,6 +157,9 @@ def _calibrate_side(
 
 
 def _live_readout(side: OpenArmMiniSide, port: str, path: Path, baudrate: int) -> None:
+    # Deferred because this command module is imported by the global hardware CLI.
+    from dimos.teleop.openarm_mini.mapping import map_side_readings
+
     calibration = load_calibration(path, side)
     reader = FeetechLeaderReader(port, baudrate)
     reader.connect()

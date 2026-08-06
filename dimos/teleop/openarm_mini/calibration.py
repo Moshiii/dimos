@@ -100,7 +100,7 @@ def load_calibration(path: Path, side: OpenArmMiniSide) -> OpenArmMiniCalibratio
     if not artifact_path.exists():
         raise OpenArmMiniCalibrationError(
             f"Missing OpenArm Mini {side} calibration at {artifact_path}. "
-            "Run `python -m dimos.teleop.openarm_mini.tools.calibrate` "
+            "Run `dimos hardware openarm-mini calibrate` "
             "to create calibration artifacts before starting teleop."
         )
     try:

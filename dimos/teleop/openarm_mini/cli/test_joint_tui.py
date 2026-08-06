@@ -31,7 +31,7 @@ from dimos.teleop.openarm_mini.calibration import (
     OpenArmMiniMotorCalibration,
     save_calibration,
 )
-from dimos.teleop.openarm_mini.tools.joint_tui import (
+from dimos.teleop.openarm_mini.cli.joint_tui import (
     OpenArmMiniJointRow,
     _build_joint_dashboard,
     _load_tui_calibration,
@@ -112,7 +112,7 @@ def test_resolve_calibration_path_uses_side_default(
         return tmp_path / side
 
     monkeypatch.setattr(
-        "dimos.teleop.openarm_mini.tools.joint_tui.default_calibration_path",
+        "dimos.teleop.openarm_mini.cli.joint_tui.default_calibration_path",
         fake_default_calibration_path,
     )
 

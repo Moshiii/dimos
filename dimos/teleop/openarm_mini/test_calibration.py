@@ -75,7 +75,7 @@ def test_save_and_load_side_specific_calibration(tmp_path: Path) -> None:
 
 
 def test_missing_calibration_error_mentions_calibration_utility(tmp_path: Path) -> None:
-    with pytest.raises(OpenArmMiniCalibrationError, match="tools.calibrate"):
+    with pytest.raises(OpenArmMiniCalibrationError, match="hardware openarm-mini calibrate"):
         load_calibration(tmp_path / "missing", "left")
 
 
@@ -121,3 +121,4 @@ def test_missing_dependency_error_names_optional_extra() -> None:
 
     assert "openarm-mini-teleop" in str(error)
     assert "Feetech" in str(error)
+    assert "--extra openarm`" not in str(error)

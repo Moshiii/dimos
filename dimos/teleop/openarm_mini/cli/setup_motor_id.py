@@ -26,7 +26,11 @@ from typing import Any
 
 import typer
 
-from dimos.teleop.openarm_mini.feetech import _create_sdk_handlers
+from dimos.teleop.openarm_mini.cli._errors import exit_for_missing_dependency
+from dimos.teleop.openarm_mini.feetech import (
+    OpenArmMiniDependencyError,
+    _create_sdk_handlers,
+)
 
 FEETECH_ID_ADDRESS = 5
 FEETECH_TORQUE_ENABLE_ADDRESS = 40
@@ -48,6 +52,14 @@ def main(
     baudrate: int = typer.Option(..., help="Feetech serial baudrate."),
     yes: bool = typer.Option(False, "--yes", help="Skip the safety confirmation prompt."),
 ) -> None:
+    """Discover or select one motor, safely rewrite its ID, and verify the change."""
+    try:
+        _run(port=port, new_id=new_id, old_id=old_id, baudrate=baudrate, yes=yes)
+    except OpenArmMiniDependencyError as error:
+        exit_for_missing_dependency(error)
+
+
+def _run(*, port: str, new_id: int, old_id: int | None, baudrate: int, yes: bool) -> None:
     _validate_motor_id(new_id, "new-id")
     if old_id is not None:
         _validate_motor_id(old_id, "old-id")

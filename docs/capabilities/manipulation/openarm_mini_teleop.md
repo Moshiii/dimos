@@ -8,6 +8,8 @@ depend on LeRobot at runtime.
 
 ```bash
 uv sync --extra openarm-mini-teleop
+# Or, outside a source checkout:
+pip install 'dimos[openarm-mini-teleop]'
 ```
 
 The Feetech package installs as `ftservo-python-sdk` and imports as
@@ -20,7 +22,7 @@ controller and run the one-shot setup helper. Do not leave multiple motors on
 the bus when changing IDs, especially if they may share the same current ID.
 
 ```bash
-python -m dimos.teleop.openarm_mini.tools.setup_motor_id \
+dimos hardware openarm-mini setup-motor-id \
   --port <feetech-port> \
   --baudrate <feetech-baudrate> \
   --new-id 3
@@ -29,7 +31,7 @@ python -m dimos.teleop.openarm_mini.tools.setup_motor_id \
 If the current ID is known, skip scanning:
 
 ```bash
-python -m dimos.teleop.openarm_mini.tools.setup_motor_id \
+dimos hardware openarm-mini setup-motor-id \
   --port <feetech-port> \
   --baudrate <feetech-baudrate> \
   --old-id 1 \
@@ -65,7 +67,7 @@ read or stored in v1 because the OpenArm follower gripper is not yet exposed as 
 formal coordinator-controllable API.
 
 ```bash
-python -m dimos.teleop.openarm_mini.tools.calibrate \
+dimos hardware openarm-mini calibrate \
   --side both \
   --port-left <left-feetech-port> \
   --port-right <right-feetech-port> \
@@ -85,9 +87,10 @@ Default flip sets match the known OpenArm Mini leader orientation. Override them
 when needed:
 
 ```bash
-python -m dimos.teleop.openarm_mini.tools.calibrate \
+dimos hardware openarm-mini calibrate \
   --side left \
   --port-left <left-feetech-port> \
+  --port-right <right-feetech-port> \
   --baudrate <feetech-baudrate> \
   --left-flips joint_1,joint_3,joint_4,joint_5,joint_6,joint_7
 ```
@@ -105,9 +108,10 @@ v1.
 To inspect calibrated leader readings without starting robot control:
 
 ```bash
-python -m dimos.teleop.openarm_mini.tools.calibrate \
+dimos hardware openarm-mini calibrate \
   --side left \
   --port-left <left-feetech-port> \
+  --port-right <right-feetech-port> \
   --baudrate <feetech-baudrate> \
   --live-readout
 ```
@@ -116,7 +120,7 @@ For a Rich terminal UI that continuously displays raw ticks, calibrated radians,
 sender-side clamped follower radians, motor ids, and flip values:
 
 ```bash
-python -m dimos.teleop.openarm_mini.tools.joint_tui \
+dimos hardware openarm-mini joint-tui \
   --side right \
   --port <feetech-port>
 ```
@@ -129,6 +133,21 @@ The TUI visualizes one side at a time. `--side` selects the side-specific defaul
 calibration path. Use `--calibration-path` to select a non-default calibration
 artifact. The default baudrate is `1000000`; pass `--baudrate` only if your
 leader was configured differently.
+
+The CLI loads serial and visualization dependencies only after a command runs.
+Listing OpenArm Mini commands and rendering their help does not discover devices
+or open serial ports.
+
+## Direct module invocation
+
+The hardware CLI is the preferred operator interface. Developers and existing
+scripts may invoke the same command functions as Python modules:
+
+```bash
+python -m dimos.teleop.openarm_mini.cli.calibrate --help
+python -m dimos.teleop.openarm_mini.cli.joint_tui --help
+python -m dimos.teleop.openarm_mini.cli.setup_motor_id --help
+```
 
 ## Visualization-only Viser bring-up
 

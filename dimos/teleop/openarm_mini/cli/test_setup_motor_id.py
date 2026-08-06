@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-import dimos.teleop.openarm_mini.tools.setup_motor_id as setup_motor_id_module
-from dimos.teleop.openarm_mini.tools.setup_motor_id import (
+import dimos.teleop.openarm_mini.cli.setup_motor_id as setup_motor_id_module
+from dimos.teleop.openarm_mini.cli.setup_motor_id import (
     FEETECH_ID_ADDRESS,
     FEETECH_TORQUE_ENABLE,
     FEETECH_TORQUE_ENABLE_ADDRESS,

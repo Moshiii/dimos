@@ -42,7 +42,6 @@ def missing_dependency_error() -> OpenArmMiniDependencyError:
     """Build the localized missing dependency error for OpenArm Mini teleop."""
     return OpenArmMiniDependencyError(
         "OpenArm Mini teleop requires the Feetech SDK. Install it with "
-        "`uv sync --extra openarm`, "
         f"`uv sync --extra {OPENARM_MINI_TELEOP_EXTRA}`, or "
         f"`pip install 'dimos[{OPENARM_MINI_TELEOP_EXTRA}]'`."
     )

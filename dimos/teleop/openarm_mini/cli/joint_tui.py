@@ -23,13 +23,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
+from typing import TYPE_CHECKING
 
-from rich.console import Group
-from rich.live import Live
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 import typer
+
+if TYPE_CHECKING:
+    from rich.console import Group
 
 from dimos.teleop.openarm_mini.calibration import (
     OPENARM_MINI_ARM_JOINT_NAMES,
@@ -38,13 +37,14 @@ from dimos.teleop.openarm_mini.calibration import (
     default_calibration_path,
     load_calibration,
 )
+from dimos.teleop.openarm_mini.cli._errors import exit_for_missing_dependency
+from dimos.teleop.openarm_mini.cli.calibrate import DEFAULT_MOTOR_IDS
 from dimos.teleop.openarm_mini.feetech import (
     OPENARM_MINI_DEFAULT_BAUDRATE,
     FeetechLeaderReader,
+    OpenArmMiniDependencyError,
     _calibrated_motor_radians,
 )
-from dimos.teleop.openarm_mini.mapping import map_side_readings
-from dimos.teleop.openarm_mini.tools.calibrate import DEFAULT_MOTOR_IDS
 
 
 @dataclass(frozen=True)
@@ -73,6 +73,29 @@ def main(
     refresh_hz: float = typer.Option(10.0),
 ) -> None:
     """Display one OpenArm Mini leader side in a Rich TUI."""
+    try:
+        _run(
+            side=side,
+            port=port,
+            baudrate=baudrate,
+            calibration_path=calibration_path,
+            refresh_hz=refresh_hz,
+        )
+    except OpenArmMiniDependencyError as error:
+        exit_for_missing_dependency(error)
+
+
+def _run(
+    *,
+    side: OpenArmMiniSide,
+    port: str,
+    baudrate: int,
+    calibration_path: Path | None,
+    refresh_hz: float,
+) -> None:
+    # Deferred because this command module is imported by the global hardware CLI.
+    from rich.live import Live
+
     refresh_seconds = 1.0 / refresh_hz
     calibration = _load_tui_calibration(side, _resolve_calibration_path(side, calibration_path))
     reader = FeetechLeaderReader(port, baudrate)
@@ -110,6 +133,9 @@ def _read_side_rows(
     calibration: OpenArmMiniCalibration,
     raw_positions: dict[str, int],
 ) -> list[OpenArmMiniJointRow]:
+    # Deferred because this command module is imported by the global hardware CLI.
+    from dimos.teleop.openarm_mini.mapping import map_side_readings
+
     side = calibration.side
     calibrated_readings = {
         joint_name: _calibrated_motor_radians(
@@ -138,6 +164,12 @@ def _read_side_rows(
 
 
 def _build_joint_dashboard(rows: list[OpenArmMiniJointRow]) -> Group:
+    # Deferred because this command module is imported by the global hardware CLI.
+    from rich.console import Group
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
     table = Table(title="OpenArm Mini leader joint readout", expand=True)
     table.add_column("Side", style="cyan", no_wrap=True)
     table.add_column("Joint", no_wrap=True)
