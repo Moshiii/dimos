@@ -71,6 +71,7 @@ class EvalConfig:
             "robot_width",
             "goal_tolerance",
             "visit_radius_m",
+            "kinematic_window_m",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
