@@ -22,7 +22,6 @@ from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.robot.manipulators.common.blueprints import eef_twist_task
 from dimos.robot.manipulators.openarm.config import (
     LEFT_CAN,
-    OPENARM_V10_FK_MODEL,
     openarm_hardware,
     openarm_model_config,
     openarm_single_hardware,
@@ -47,15 +46,21 @@ def _openarm_mini_teleop_config(*sides: OpenArmMiniSide) -> dict[str, tuple[Open
 
 
 _teleop_hw = openarm_single_hardware()
+_openarm_model = openarm_single_model_config()
 
 keyboard_teleop_openarm_mock = autoconnect(
     KeyboardTeleopModule.blueprint(),
     ControlCoordinator.blueprint(
         hardware=[_teleop_hw],
-        tasks=[eef_twist_task(_teleop_hw, model_path=OPENARM_V10_FK_MODEL, ee_joint_id=7)],
+        tasks=[
+            eef_twist_task(
+                _teleop_hw,
+                robot_model=_openarm_model,
+            )
+        ],
     ),
     ManipulationModule.blueprint(
-        robots=[openarm_single_model_config()],
+        robots=[_openarm_model],
         visualization={"backend": "meshcat"},
     ),
 )
@@ -69,13 +74,12 @@ keyboard_teleop_openarm = autoconnect(
         tasks=[
             eef_twist_task(
                 _teleop_real_hw,
-                model_path=OPENARM_V10_FK_MODEL,
-                ee_joint_id=7,
+                robot_model=_openarm_model,
             )
         ],
     ),
     ManipulationModule.blueprint(
-        robots=[openarm_single_model_config()],
+        robots=[_openarm_model],
         visualization={"backend": "meshcat"},
     ),
 )

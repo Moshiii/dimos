@@ -151,7 +151,7 @@ This gives you an interactive Python prompt with these functions:
 | `plan([q1..q7], robot_name)` | Plan a collision-free trajectory to a joint configuration |
 | `plan_pose(x, y, z, robot_name=...)` | Plan to a Cartesian EE pose (preserves current orientation) |
 | `preview(robot_name)` | Animate the planned path in Meshcat without executing |
-| `execute(robot_name)` | Send the planned trajectory to the coordinator |
+| `execute()` | Send the complete planned trajectory to the coordinator |
 | `home(robot_name)` | Plan + execute to home joints |
 | `commands()` | Print all available functions |
 
@@ -165,7 +165,7 @@ This gives you an interactive Python prompt with these functions:
 [0.02, -0.01, -0.13, 0.15, 0.17, -0.07, 0.10]
 
 >>> # One-liner: plan → preview in Meshcat → execute on hardware
->>> plan([0.3, 0, 0, 0, 0, 0, 0], robot_name="left_arm") and preview(robot_name="left_arm") and execute(robot_name="left_arm")
+>>> plan([0.3, 0, 0, 0, 0, 0, 0], robot_name="left_arm") and preview(robot_name="left_arm") and execute()
 True
 
 >>> joints(robot_name="left_arm")
@@ -185,9 +185,9 @@ If you ever get stuck in a `FAULT` state (e.g. an invalid plan was sent), reset 
 
 ```python skip
 >>> # Move both arms to mirrored poses
->>> plan([0.5, 0, 0, 0, 0, 0, 0], robot_name="left_arm") and execute(robot_name="left_arm")
+>>> plan([0.5, 0, 0, 0, 0, 0, 0], robot_name="left_arm") and execute()
 True
->>> plan([-0.5, 0, 0, 0, 0, 0, 0], robot_name="right_arm") and execute(robot_name="right_arm")
+>>> plan([-0.5, 0, 0, 0, 0, 0, 0], robot_name="right_arm") and execute()
 True
 ```
 
@@ -199,7 +199,7 @@ Each arm plans and executes independently — the coordinator runs both trajecto
 >>> ee(robot_name="left_arm")           # see where the EE currently is
 >>> plan_pose(0.1, 0.3, 0.5, robot_name="left_arm") and preview(robot_name="left_arm")
 True
->>> execute(robot_name="left_arm")
+>>> execute()
 True
 ```
 

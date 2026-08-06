@@ -84,7 +84,7 @@ Quick view on performance of our pubsub backends:
 python -m pytest -sv -k "not bytes" dimos/protocol/pubsub/benchmark/tool_benchmark.py
 ```
 
-![Benchmark results](../assets/pubsub_benchmark.png)
+![Benchmark results](https://raw.githubusercontent.com/dimensionalOS/dimos-docs-assets/main/usage/assets/pubsub_benchmark.png)
 
 ## Abstraction layers
 
@@ -116,17 +116,7 @@ text "pub/sub API" at P.s + (0, -0.2in)
 
 </details>
 
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
-
-![output](assets/abstraction_layers.svg)
+![output](../assets/abstraction_layers.svg)
 
 We’ll go through these layers top-down.
 
@@ -248,11 +238,19 @@ Received: (480, 640, 3)
 
 See [Modules](/docs/usage/modules.md) for more on module architecture.
 
-## Inspecting LCM traffic (CLI)
+## Inspecting traffic (CLI)
 
-`lcmspy` shows topic frequency/bandwidth stats:
+`dimos spy` is the universal transport spy: one live view of every topic moving on every
+DimOS pubsub transport — names, message rates, bandwidth, sizes, and liveness — whether the
+system runs on LCM, Zenoh, or both.
 
-![lcmspy](../assets/lcmspy.png)
+```bash
+dimos spy                     # everything, all transports
+dimos spy --transport zenoh   # filter to one transport (repeatable flag)
+dimos lcmspy                  # deprecated alias for: dimos spy --transport lcm
+```
+
+![dimos spy](https://raw.githubusercontent.com/dimensionalOS/dimos-docs-assets/main/usage/assets/lcmspy.png)
 
 `dimos topic echo /topic` listens on typed channels like `/topic#pkg.Msg` and decodes automatically:
 
@@ -372,7 +370,7 @@ blueprint = blueprint.transports(
 
 When the factory builds transports from the global switch, it applies defaults (`default_zenoh_qos` in [`transport_factory.py`](/dimos/core/transport_factory.py#L65)):
 
-* RPC topics and the agent channels (`human_input`, `agent`, `agent_idle`): reliable, block under congestion (never drop).
+* The agent channels (`human_input`, `agent`, `agent_idle`): reliable, block under congestion (never drop).
 * `Image`/`PointCloud2` streams: best-effort, drop under congestion (latest wins).
 * Everything else: zenoh defaults (reliable, drop under congestion).
 

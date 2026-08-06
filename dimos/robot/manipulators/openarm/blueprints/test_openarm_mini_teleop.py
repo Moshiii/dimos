@@ -15,15 +15,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.manipulation.manipulation_module import ManipulationModule
-from dimos.robot.cli.dimos import load_config_args
 from dimos.robot.manipulators.openarm.blueprints import teleop
 from dimos.teleop.openarm_mini.feetech import OPENARM_MINI_DEFAULT_BAUDRATE
 from dimos.teleop.openarm_mini.teleop_module import (
@@ -44,13 +43,12 @@ def _teleop_config_after_cli_override(
     blueprint: Blueprint,
     overrides: Sequence[str],
 ) -> OpenArmMiniTeleopModuleConfig:
-    config_args = load_config_args(
-        blueprint.config(),
+    parsed = BlueprintConfigParser(blueprint).parse(
         overrides,
-        Path("/tmp/nonexistent-dimos-config.json"),
+        environ={},
     )
     module_kwargs = _module_kwargs(blueprint, OpenArmMiniTeleopModule).copy()
-    module_kwargs.update(config_args[OpenArmMiniTeleopModule.name])
+    module_kwargs.update(parsed.module_kwargs(OpenArmMiniTeleopModule.name))
     return OpenArmMiniTeleopModuleConfig(**module_kwargs)
 
 
@@ -116,7 +114,7 @@ def test_right_openarm_mini_cli_port_override_preserves_right_side_default() -> 
     config = _teleop_config_after_cli_override(
         teleop.openarm_mini_right_teleop_viser,
         [
-            "openarmminiteleopmodule.port_right=/dev/ttyACM0",
+            "--openarmminiteleopmodule.port-right=/dev/ttyACM0",
         ],
     )
 
@@ -130,7 +128,7 @@ def test_dual_openarm_mini_cli_port_override_preserves_dual_side_default() -> No
     config = _teleop_config_after_cli_override(
         teleop.openarm_mini_dual_teleop_viser,
         [
-            "openarmminiteleopmodule.port_right=/dev/ttyACM0",
+            "--openarmminiteleopmodule.port-right=/dev/ttyACM0",
         ],
     )
 

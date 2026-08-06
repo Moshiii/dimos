@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 from typing import (
+    TYPE_CHECKING,
     Any,
     Protocol,
     TypeAlias,
@@ -35,10 +36,6 @@ from typing import (
 from urllib.parse import urlparse
 
 from reactivex.disposable import Disposable
-import rerun as rr
-from rerun._baseclasses import Archetype
-import rerun.blueprint as rrb
-from rerun.blueprint import Blueprint
 from toolz import pipe  # type: ignore[import-untyped]
 
 from dimos.core.core import rpc
@@ -59,6 +56,10 @@ from dimos.visualization.rerun.constants import (
     RerunOpenOption,
 )
 from dimos.visualization.rerun.init import rerun_init
+
+if TYPE_CHECKING:
+    from rerun._baseclasses import Archetype
+    from rerun.blueprint import Blueprint
 
 # TODO OUT visual annotations
 #
@@ -103,14 +104,22 @@ from dimos.visualization.rerun.init import rerun_init
 
 logger = setup_logger()
 
-BlueprintFactory: TypeAlias = Callable[[], "Blueprint"]
-
 RerunMulti: TypeAlias = "list[tuple[str, Archetype]]"
 RerunData: TypeAlias = "Archetype | RerunMulti"
+
+if TYPE_CHECKING:
+    BlueprintFactory: TypeAlias = Callable[[], "Blueprint"]
+    VisualOverride: TypeAlias = Callable[[Any], "Archetype"]
+else:
+    # Pydantic evaluates Config's annotations at runtime, so keep rerun types
+    # out of them - importing rerun here would defeat the lazy import below.
+    BlueprintFactory = VisualOverride = Callable[..., Any]
 
 
 def is_rerun_multi(data: Any) -> TypeGuard[RerunMulti]:
     """Check if data is a list of (entity_path, archetype) tuples."""
+    from rerun._baseclasses import Archetype
+
     return (
         isinstance(data, list)
         and bool(data)
@@ -136,14 +145,9 @@ def _hex_to_rgba(hex_color: str) -> int:
     return int(h[:8], 16)
 
 
-def _set_rerun_message_time(msg: Any) -> None:
-    ts = getattr(msg, "ts", None)
-    if isinstance(ts, (int, float)) and ts > 0:
-        rr.set_time("dimos_time", timestamp=float(ts))
-
-
 def _with_graph_tab(bp: Blueprint) -> Blueprint:
     """Add a Graph tab alongside the existing viewer layout without changing it."""
+    import rerun.blueprint as rrb
 
     root = bp.root_container
     return rrb.Blueprint(
@@ -159,6 +163,8 @@ def _with_graph_tab(bp: Blueprint) -> Blueprint:
 
 def _default_blueprint() -> Blueprint:
     """Default blueprint with black background and raised grid."""
+    import rerun as rr
+    import rerun.blueprint as rrb
 
     return rrb.Blueprint(
         rrb.Spatial3DView(
@@ -214,9 +220,7 @@ class Config(ModuleConfig):
 
     pubsubs: list[SubscribeAllCapable[Any, Any]] = field(default_factory=lambda: [LCM()])
 
-    visual_override: dict[Glob | str, Callable[[Any], Archetype] | None] = field(
-        default_factory=dict
-    )
+    visual_override: dict[Glob | str, VisualOverride | None] = field(default_factory=dict)
     static: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
     max_hz: dict[str, float] = field(default_factory=dict)
 
@@ -228,9 +232,6 @@ class Config(ModuleConfig):
     rerun_web: bool = RERUN_ENABLE_WEB
     web_port: int = RERUN_WEB_VIEWER_PORT
     blueprint: BlueprintFactory | None = _default_blueprint
-
-
-Config.model_rebuild(_types_namespace={"Archetype": Archetype, "Blueprint": Blueprint})
 
 
 class RerunBridgeModule(Module):
@@ -277,6 +278,8 @@ class RerunBridgeModule(Module):
         which handles .to_rerun() or passes through Archetypes. Cached per
         instance (not via ``lru_cache`` on a method, which would leak ``self``).
         """
+        from rerun._baseclasses import Archetype
+
         cached = self._override_cache.get(entity_path)
         if cached is not None:
             return cached
@@ -330,6 +333,7 @@ class RerunBridgeModule(Module):
 
     def _on_message(self, msg: Any, topic: Any) -> None:
         """Handle incoming message - log to rerun."""
+        import rerun as rr
 
         entity_path: str = self._get_entity_path(topic)
 
@@ -344,8 +348,6 @@ class RerunBridgeModule(Module):
 
         if not rerun_data:
             return
-
-        _set_rerun_message_time(msg)
 
         # TFMessage for example returns list of (entity_path, archetype) tuples
         if is_rerun_multi(rerun_data):
@@ -363,6 +365,8 @@ class RerunBridgeModule(Module):
 
     @rpc
     def start(self) -> None:
+        import rerun as rr
+
         super().start()
 
         logger.info("Rerun bridge starting")
@@ -496,6 +500,8 @@ class RerunBridgeModule(Module):
         logger.info("\n".join(lines))
 
     def _log_static(self) -> None:
+        import rerun as rr
+
         for entity_path, factory in self.config.static.items():
             data = factory(rr)
             if is_rerun_multi(data):
@@ -535,6 +541,7 @@ class RerunBridgeModule(Module):
             dot_code: The DOT-format graph (from ``introspection.blueprint.dot.render``).
             module_names: List of module class names (to distinguish modules from channels).
         """
+        import rerun as rr
 
         try:
             result = subprocess.run(
