@@ -47,6 +47,7 @@ from dimos.navigation.nav_3d.evaluator.tagging import retag_suite
 from dimos.utils.data import get_data_dir
 
 if TYPE_CHECKING:
+    import numpy as np
     from numpy.typing import NDArray
 
     from dimos.navigation.nav_3d.evaluator.curation import CaseStore
