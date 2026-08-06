@@ -71,13 +71,17 @@ class CaseStore:
         tags: list[str],
         case_id: str | None = None,
         expect_fail: bool = False,
+        expect_final_fail: bool = False,
     ) -> Case:
+        if expect_fail and expect_final_fail:
+            raise CurationError("a case cannot be both expect_fail and expect_final_fail")
         case = Case(
             id=case_id or self._next_id("neg" if expect_fail else "manual"),
             start=start,
             goal=goal,
-            tags=_curated_tags(tags, expect_fail),
+            tags=_curated_tags(tags, expect_fail, expect_final_fail),
             expect_fail=expect_fail,
+            expect_final_fail=expect_final_fail,
         )
         if any(c.id == case.id for c in self.suite.cases):
             raise CurationError(f"case id {case.id!r} already exists in {self.path}")
@@ -94,15 +98,24 @@ class CaseStore:
         )
         return case
 
-    def update(self, case_id: str, new_id: str, tags: list[str], *, expect_fail: bool) -> Case:
+    def update(
+        self,
+        case_id: str,
+        new_id: str,
+        tags: list[str],
+        *,
+        expect_fail: bool,
+        expect_final_fail: bool = False,
+    ) -> Case:
+        if expect_fail and expect_final_fail:
+            raise CurationError("a case cannot be both expect_fail and expect_final_fail")
         case = self.get(case_id)
         if new_id != case_id and any(c.id == new_id for c in self.suite.cases):
             raise CurationError(f"case id {new_id!r} already exists")
         case.id = new_id
-        case.tags = _curated_tags(tags, expect_fail, _provenance(case.tags))
+        case.tags = _curated_tags(tags, expect_fail, expect_final_fail, _provenance(case.tags))
         case.expect_fail = expect_fail
-        if expect_fail:
-            case.expect_final_fail = False
+        case.expect_final_fail = expect_final_fail
         self.save()
         return case
 
@@ -123,10 +136,20 @@ class CaseStore:
 PROVENANCE_TAGS = ("auto", "manual")
 
 
-def _curated_tags(tags: list[str], expect_fail: bool, provenance: str = "manual") -> list[str]:
+def _curated_tags(
+    tags: list[str],
+    expect_fail: bool,
+    expect_final_fail: bool = False,
+    provenance: str = "manual",
+) -> list[str]:
     """Rewrite a case's tags around exactly one provenance tag."""
-    keep = [t for t in tags if t not in (*PROVENANCE_TAGS, "negative")]
-    return [provenance, *(["negative"] if expect_fail else []), *keep]
+    keep = [t for t in tags if t not in (*PROVENANCE_TAGS, "negative", "dynamic")]
+    extra = []
+    if expect_fail:
+        extra.append("negative")
+    if expect_final_fail:
+        extra.append("dynamic")
+    return [provenance, *extra, *keep]
 
 
 def load_store(dataset: str) -> CaseStore:

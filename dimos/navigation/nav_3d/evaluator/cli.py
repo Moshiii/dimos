@@ -29,7 +29,6 @@ import typer
 
 from dimos.navigation.nav_3d.evaluator.cases import (
     Suite,
-    load_suite,
     load_suites,
     manifest_path,
     save_suite,
@@ -43,7 +42,6 @@ from dimos.navigation.nav_3d.evaluator.generate import (
 )
 from dimos.navigation.nav_3d.evaluator.progress import RunProgress
 from dimos.navigation.nav_3d.evaluator.runner import Report, evaluate
-from dimos.navigation.nav_3d.evaluator.tagging import retag_suite
 from dimos.utils.data import get_data_dir
 
 if TYPE_CHECKING:
@@ -133,7 +131,7 @@ def _print_report(report: Report) -> None:
     if inc_only:
         print(f"\nincremental-only ({len(inc_only)}) — passed online, failed final:")
         print(f"  {', '.join(inc_only)}")
-        print("  review with --rrd, confirm: dimos nav-eval tag <dataset> <id> --final-fail")
+        print("  review with --rrd, confirm with: dimos nav-eval pick-case <dataset>")
 
 
 @app.command()
@@ -290,87 +288,6 @@ def _open_store(dataset: str) -> CaseStore:
         return load_store(dataset)
     except CurationError as err:
         raise typer.BadParameter(str(err)) from err
-
-
-def _load_manifest(dataset: str) -> tuple[Suite, Path]:
-    manifest = manifest_path(dataset)
-    if not manifest.exists():
-        raise typer.BadParameter(f"no manifest {manifest}; run ingest first")
-    return load_suite(manifest), manifest
-
-
-@app.command("add-case")
-def add_case(
-    dataset: str = typer.Argument(..., help="Dataset whose manifest gets the case"),
-    start: tuple[float, float, float] = typer.Option(..., "--start", help="Foot-level xyz"),
-    goal: tuple[float, float, float] = typer.Option(..., "--goal", help="Foot-level xyz"),
-    case_id: str | None = typer.Option(None, "--id", help="Case id; default manual_<n> or neg_<n>"),
-    tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags"),
-    expect_fail: bool = typer.Option(
-        False, "--expect-fail", help="Certified-infeasible pair; the planner must refuse"
-    ),
-) -> None:
-    """Append a curated case. Endpoints are kept as given."""
-    store = _open_store(dataset)
-    try:
-        store.add(
-            start,
-            goal,
-            [t.strip() for t in (tags or "").split(",") if t.strip()],
-            case_id=case_id,
-            expect_fail=expect_fail,
-        )
-    except CurationError as err:
-        raise typer.BadParameter(str(err)) from err
-
-
-@app.command("tag")
-def tag_case(
-    dataset: str = typer.Argument(..., help="Dataset whose manifest holds the case"),
-    case_id: str = typer.Argument(..., help="Case id to edit"),
-    final_fail: bool = typer.Option(
-        True,
-        "--final-fail/--no-final-fail",
-        help="Mark a dynamic-obstacle route: online path expected, final path expected refused",
-    ),
-) -> None:
-    """Flag an auto case as a dynamic-obstacle route, e.g. a door that closed."""
-    suite, manifest = _load_manifest(dataset)
-    case = next((c for c in suite.cases if c.id == case_id), None)
-    if case is None:
-        raise typer.BadParameter(f"case {case_id!r} not found in {manifest}")
-    if final_fail and case.expect_fail:
-        raise typer.BadParameter(
-            f"case {case_id!r} is expect_fail; a case cannot be both infeasible and dynamic"
-        )
-    case.expect_final_fail = final_fail
-    tags = [t for t in case.tags if t != "dynamic"]
-    case.tags = [*tags, "dynamic"] if final_fail else tags
-    save_suite(suite, manifest)
-    flag = "expect_final_fail" if final_fail else "cleared expect_final_fail"
-    print(f"{case.id}: {flag} [{', '.join(case.tags)}]")
-
-
-@app.command("retag")
-def retag(
-    dataset: str = typer.Argument(..., help="Dataset whose manifest gets retagged"),
-) -> None:
-    """Recompute geometric tags for auto cases. Curated cases keep their tags."""
-    suite, manifest = _load_manifest(dataset)
-    recomputed = retag_suite(suite)
-    changed = 0
-    for case in suite.cases:
-        new_tags = recomputed.get(case.id)
-        if new_tags is None:
-            reason = "curated" if "auto" not in case.tags else "off-trajectory"
-            print(f"  {case.id}: {reason}, tags kept [{', '.join(case.tags)}]")
-            continue
-        if new_tags != case.tags:
-            changed += 1
-            print(f"  {case.id}: [{', '.join(case.tags)}] -> [{', '.join(new_tags)}]")
-        case.tags = new_tags
-    save_suite(suite, manifest)
-    print(f"\nretagged {changed} case(s) in {manifest.name}")
 
 
 @app.command("pick-case")

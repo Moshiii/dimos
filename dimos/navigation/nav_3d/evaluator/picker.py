@@ -188,12 +188,14 @@ class _PairEntry:
             self._checked = set(elevation_tags(_point(start), _point(goal)))
             self._custom = ""
             self._negative = False
+            self._dynamic = False
             self._status = "unsaved"
         else:
             self.saved_id = case.id
             self._name = case.id
             self._sync_tags(case.tags)
             self._negative = case.expect_fail
+            self._dynamic = case.expect_final_fail
             self._status = "in manifest"
         self.removed = False
         self._build(expanded=case is None, order=None)
@@ -236,7 +238,9 @@ class _PairEntry:
     def _sync_tags(self, tags: list[str]) -> None:
         """Split a tag list into checkbox and custom-text state."""
         self._checked = {t for t in tags if t in SUGGESTED_TAGS}
-        self._custom = ", ".join(t for t in tags if t not in SUGGESTED_TAGS and t != "negative")
+        self._custom = ", ".join(
+            t for t in tags if t not in SUGGESTED_TAGS and t not in ("negative", "dynamic")
+        )
 
     def _build(self, *, expanded: bool, order: float | None, scroll: bool = False) -> None:
         server = self._server
@@ -265,6 +269,9 @@ class _PairEntry:
                     "custom", initial_value=self._custom, hint="comma-separated"
                 )
             self.negative_box = server.gui.add_checkbox("negative (must refuse)", self._negative)
+            self.dynamic_box = server.gui.add_checkbox(
+                "dynamic (final map expected to refuse)", self._dynamic
+            )
             self.message = server.gui.add_markdown(self._status)
             self.button = server.gui.add_button("save / update")
             self.delete_button = server.gui.add_button("delete")
@@ -305,6 +312,7 @@ class _PairEntry:
         self._checked = {tag for tag, box in self.tag_boxes.items() if box.value}
         self._custom = self.custom_text.value
         self._negative = self.negative_box.value
+        self._dynamic = self.dynamic_box.value
 
     def extra_tags(self) -> list[str]:
         tags = [tag for tag, box in self.tag_boxes.items() if box.value]
@@ -315,6 +323,7 @@ class _PairEntry:
         name = self.id_text.value.strip()
         store = self._hooks.store
         negative = self.negative_box.value
+        dynamic = self.dynamic_box.value
         try:
             if self.saved_id is None:
                 case = store.add(
@@ -323,6 +332,7 @@ class _PairEntry:
                     self.extra_tags(),
                     case_id=name or None,
                     expect_fail=negative,
+                    expect_final_fail=dynamic,
                 )
             else:
                 case = store.update(
@@ -330,6 +340,7 @@ class _PairEntry:
                     name or self.saved_id,
                     self.extra_tags(),
                     expect_fail=negative,
+                    expect_final_fail=dynamic,
                 )
         except CurationError as err:
             print(err)

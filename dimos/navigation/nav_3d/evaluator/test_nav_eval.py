@@ -61,7 +61,6 @@ from dimos.navigation.nav_3d.evaluator.runner import (
     _run_plan,
     score_negative,
 )
-from dimos.navigation.nav_3d.evaluator.tagging import retag_suite
 from dimos.navigation.nav_3d.evaluator.voxel_keys import (
     cylinder_offsets,
     keys_contain,
@@ -434,30 +433,6 @@ def test_trajectory_memoizes_its_derived_views() -> None:
     assert traj.foot(0.3) is traj.foot(0.3)
     # A different height is a different view, and replaces the memo.
     assert not np.array_equal(traj.foot(0.5), traj.foot(0.3))
-
-
-def test_retag_recomputes_elevation_and_leaves_the_rest_alone() -> None:
-    """A retag rewrites elevation tags, keeps provenance, and skips curated cases."""
-    suite = Suite(
-        dataset="demo",
-        cases=[
-            Case(id="auto_00", start=(1, 0, 0), goal=(9, 0, 0), tags=["auto", "stairs", "up"]),
-            Case(id="manual_00", start=(1, 0, 0), goal=(9, 0, 0), tags=["manual", "stairs"]),
-            Case(id="auto_01", start=(1, 0, 0), goal=(9, 0, 2.0), tags=["auto", "flat"]),
-        ],
-    )
-    recomputed = retag_suite(suite)
-
-    # The stale climb tags go, the walk is flat, and "auto" survives as provenance.
-    assert recomputed["auto_00"] == ["auto", "flat"]
-    # A real climb picks the tags back up, long because of the rise.
-    assert recomputed["auto_01"] == ["auto", "stairs", "up", "long"]
-    assert "manual_00" not in recomputed
-    assert [c.tags for c in suite.cases] == [
-        ["auto", "stairs", "up"],
-        ["manual", "stairs"],
-        ["auto", "flat"],
-    ]
 
 
 def test_generate_cases_around_wall() -> None:

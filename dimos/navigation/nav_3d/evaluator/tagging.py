@@ -16,12 +16,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
-
-if TYPE_CHECKING:
-    from dimos.navigation.nav_3d.evaluator.cases import Suite
 
 # A pair of endpoints this far apart in z or beyond is a climb, not a flat
 # traverse. Half the body height.
@@ -29,9 +24,6 @@ STAIRS_DZ_M = 0.5
 # A climb earns long past either bound: a tall rise or a long walk.
 LONG_STAIRS_DZ_M = 1.5
 LONG_STAIRS_WALKED_M = 20.0
-
-# The tags a retag recomputes. Provenance tags are left untouched.
-GEOMETRIC_TAGS = frozenset({"flat", "up", "down", "stairs", "long"})
 
 
 def elevation_tags(
@@ -46,15 +38,3 @@ def elevation_tags(
     if abs(dz) >= LONG_STAIRS_DZ_M or euclid >= LONG_STAIRS_WALKED_M:
         tags.append("long")
     return tags
-
-
-def retag_suite(suite: Suite) -> dict[str, list[str]]:
-    """New tag lists keyed by case id, for the auto cases only."""
-    out: dict[str, list[str]] = {}
-    for case in suite.cases:
-        if "auto" not in case.tags:
-            continue
-        provenance = [t for t in case.tags if t not in GEOMETRIC_TAGS]
-        geo = elevation_tags(case.start, case.goal)
-        out[case.id] = provenance + [t for t in geo if t not in provenance]
-    return out
