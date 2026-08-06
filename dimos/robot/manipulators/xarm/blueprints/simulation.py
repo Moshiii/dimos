@@ -39,7 +39,7 @@ def _resolve_xarm7_simulation() -> SimulationBinding:
         SimulationRequest(
             robot_model="xarm7",
             model_path=XARM7_MODEL_PATH,
-            scene_package=XARM7_TABLETOP_SCENE,
+            scene_package=global_config.scene_package or XARM7_TABLETOP_SCENE,
         )
     )
     if binding.adapter_type != "sim_mujoco":

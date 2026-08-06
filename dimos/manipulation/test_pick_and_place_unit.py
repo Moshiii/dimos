@@ -16,13 +16,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import open3d as o3d
 import pytest
 
+from dimos.agents.skill_result import SkillResult
 from dimos.core.module import ModuleBase
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
+from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
@@ -146,6 +149,26 @@ class TestGraspHeuristics:
             and abs(q_near.z - q_far.z) < 0.01
             and abs(q_near.w - q_far.w) < 0.01
         )
+
+    def test_pick_excludes_selected_object_from_collision_world(self, module):
+        det = _make_det_object(name="cup", object_id="cup-1")
+        module._detection_snapshot = [det]
+        module._world_monitor = MagicMock()
+
+        with (
+            patch.object(
+                module,
+                "_get_robot",
+                return_value=("arm", "robot-1", SimpleNamespace(pre_grasp_offset=0.05), None),
+            ),
+            patch.object(module, "_generate_grasps_for_pick", return_value=[Pose()]),
+            patch.object(module, "_lift_if_low", return_value=SkillResult.ok()),
+            patch.object(module, "plan_to_pose", return_value=False),
+        ):
+            result = module.pick("cup")
+
+        assert not result.is_success()
+        module._world_monitor.remove_object_obstacle.assert_called_once_with("cup-1")
 
 
 class TestPlaceBack:

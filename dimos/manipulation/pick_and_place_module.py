@@ -485,6 +485,13 @@ then refreshes perception obstacles.
         rname, _, config, _ = robot
         pre_grasp_offset = config.pre_grasp_offset
 
+        target = self._find_object_in_detections(object_name, object_id)
+        if target is None:
+            return SkillResult.fail(
+                "GRASP_GENERATION_FAILED",
+                f"No grasp poses found for '{object_name}'. Object may not be detected.",
+            )
+
         # 1. Generate grasps (uses already-cached detections — call scan_objects first)
         logger.info(f"Generating grasp poses for '{object_name}'...")
         grasp_poses = self._generate_grasps_for_pick(object_name, object_id)
@@ -493,6 +500,11 @@ then refreshes perception obstacles.
                 "GRASP_GENERATION_FAILED",
                 f"No grasp poses found for '{object_name}'. Object may not be detected.",
             )
+
+        # The selected object must remain in simulator physics, but it cannot be
+        # a collision obstacle for the gripper motion intended to contact it.
+        if self._world_monitor is not None:
+            self._world_monitor.remove_object_obstacle(target.object_id)
 
         # Lift if EE is low before approaching
         lift = self._lift_if_low(rname)
