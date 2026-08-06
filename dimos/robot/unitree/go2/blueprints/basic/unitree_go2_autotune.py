@@ -36,7 +36,7 @@ from dimos.robot.unitree.keyboard_teleop import KeyboardTeleop
 unitree_go2_autotune = (
     autoconnect(
         unitree_go2_coordinator,
-        KeyboardTeleop.blueprint(),
+        KeyboardTeleop.blueprint(publish_only_when_active=True),
         AutotuneDriver.blueprint(
             robot_id="go2",
             joint_prefix="go2/",
