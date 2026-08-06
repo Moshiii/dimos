@@ -73,6 +73,7 @@ def _wait_for_object(pick_and_place: Any, name: str, timeout: float = 20.0) -> A
 
 
 def test_generated_lift_uses_public_skill_and_private_goal(tmp_path: Path) -> None:
+    show_viewer = os.environ.get("PIMSIM_TEST_VIEWER") == "1"
     episode = pimsim_authoring.generate_xarm_tabletop_episode(
         tmp_path / "episode",
         libero_root=_libero_root(),
@@ -90,10 +91,10 @@ def test_generated_lift_uses_public_skill_and_private_goal(tmp_path: Path) -> No
         "--transport",
         "zenoh",
         "--viewer",
-        "none",
+        "rerun" if show_viewer else "none",
     ]
     call.demo_args = ["run", "xarm-perception-sim"]
-    call.extra_env["PIMSIM_MUJOCO_VIEWER"] = "0"
+    call.extra_env["PIMSIM_MUJOCO_VIEWER"] = "1" if show_viewer else "0"
     call.start()
 
     app: Dimos | None = None
