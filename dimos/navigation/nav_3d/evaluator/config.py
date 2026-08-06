@@ -69,8 +69,13 @@ class EvalConfig:
             "robot_height",
             "robot_length",
             "robot_width",
+            "support_radius_m",
+            "support_depth_m",
             "goal_tolerance",
+            "align_tol",
             "visit_radius_m",
+            "max_slope",
+            "max_step_m",
             "kinematic_window_m",
         ):
             if getattr(self, name) <= 0:
