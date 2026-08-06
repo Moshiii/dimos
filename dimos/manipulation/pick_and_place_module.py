@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import math
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import Field
 
 from dimos.agents.annotation import skill
 from dimos.agents.skill_result import SkillResult
@@ -42,6 +44,7 @@ from dimos.perception.experimental.object import (
     Object as DetObject,
 )
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
 if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.PoseArray import PoseArray
@@ -64,6 +67,10 @@ _TALL_OBJECT_MIN_HEIGHT = 0.06
 
 class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     """Configuration for PickAndPlaceModule."""
+
+    pick_verification: Literal["none", "observed_lift"] = "none"
+    pick_minimum_lift_m: float = Field(default=0.02, gt=0.0)
+    pick_verification_timeout: float = Field(default=1.0, gt=0.0)
 
 
 class PickAndPlaceModule(ManipulationModule):
@@ -274,7 +281,10 @@ class PickAndPlaceModule(ManipulationModule):
         return Quaternion.from_euler(Vector3(0.0, pitch, yaw))
 
     def _generate_grasps_for_pick(
-        self, object_name: str, object_id: str | None = None
+        self,
+        object_name: str,
+        object_id: str | None = None,
+        grasp_frame_to_tcp: Pose | None = None,
     ) -> list[Pose] | None:
         """Generate a grasp pose for an object.
 
@@ -300,31 +310,58 @@ class PickAndPlaceModule(ManipulationModule):
         cx, cy, cz = det.center.x, det.center.y, det.center.z
         xy_dist = (cx**2 + cy**2) ** 0.5
 
-        # Distance-adaptive occlusion offset:
-        # Near (< 0.8m): small inset — grasp shifted well toward robot (front surface)
-        # Far (>= 0.8m): larger inset — less toward-robot shift (grasp closer to true center)
-        inset = 0.01 if xy_dist < _FAR_OCCLUSION_XY_THRESHOLD else 0.05
-        gx, gy = self._occlusion_offset(det.center, det.size, inset=inset)
-
-        # For tall objects, grasp in the upper third instead of center
-        # to avoid plunging deep and colliding with the object.
-        obj_height = det.size.z
-        if obj_height > _TALL_OBJECT_MIN_HEIGHT:
-            gz = cz + obj_height * 0.2  # shift up ~20% from center (upper third)
+        if self._is_mechanics_truth(det):
+            gx, gy, gz = cx, cy, cz
+            source = "mechanics truth"
         else:
-            gz = cz
+            # Perception estimates can represent the visible front surface instead of
+            # the object center. These corrections apply only to perception data.
+            inset = 0.01 if xy_dist < _FAR_OCCLUSION_XY_THRESHOLD else 0.05
+            gx, gy = self._occlusion_offset(det.center, det.size, inset=inset)
+            obj_height = det.size.z
+            gz = cz + obj_height * 0.2 if obj_height > _TALL_OBJECT_MIN_HEIGHT else cz
+            source = f"perception heuristic, inset={inset:.2f}m"
 
         grasp_dist = (gx**2 + gy**2) ** 0.5
         orientation = self._grasp_orientation(gx, gy, grasp_dist)
-        pose = Pose(Vector3(gx, gy, gz), orientation)
+        grasp_pose = Pose(Vector3(gx, gy, gz), orientation)
+        pose = grasp_pose
+        if grasp_frame_to_tcp is not None:
+            pose = matrix_to_pose(pose_to_matrix(grasp_pose) @ pose_to_matrix(grasp_frame_to_tcp))
 
         logger.info(
             f"Heuristic grasp for '{object_name}': center=({cx:.3f}, {cy:.3f}, {cz:.3f}), "
-            f"grasp=({gx:.3f}, {gy:.3f}, {gz:.3f}), xy_dist={xy_dist:.2f}m, "
-            f"inset={inset:.2f}m, "
+            f"grasp=({gx:.3f}, {gy:.3f}, {gz:.3f}), "
+            f"tcp=({pose.position.x:.3f}, {pose.position.y:.3f}, {pose.position.z:.3f}), "
+            f"xy_dist={xy_dist:.2f}m, "
+            f"source={source}, "
             f"size=({det.size.x:.3f}, {det.size.y:.3f}, {det.size.z:.3f})"
         )
         return [pose]
+
+    @staticmethod
+    def _is_mechanics_truth(det: DetObject) -> bool:
+        """Return whether a detection contains privileged simulator state."""
+        return (
+            det.identity_status == "privileged_ground_truth"
+            and det.identity_basis == "pimsim_mechanics_diagnostic"
+        )
+
+    def _verify_observed_lift(self, target: DetObject) -> bool:
+        """Verify a pick from the public object-observation stream."""
+        if self._world_monitor is None:
+            return False
+
+        deadline = time.monotonic() + self.config.pick_verification_timeout
+        lifted = False
+        while time.monotonic() <= deadline:
+            for observed in self._world_monitor.get_cached_objects():
+                if observed.object_id != target.object_id:
+                    continue
+                lifted = observed.center.z - target.center.z >= self.config.pick_minimum_lift_m
+                break
+            time.sleep(0.02)
+        return lifted
 
     def _resolve_object_position(self, object_name: str) -> tuple[float, float, float] | None:
         """Resolve an object name to its detected center position.
@@ -411,7 +448,10 @@ class PickAndPlaceModule(ManipulationModule):
         if not detections:
             return SkillResult.ok("No objects visible from current position")
 
-        lines = [f"Currently see {len(detections)} object(s):"]
+        lines: list[str] = []
+        if any(self._is_mechanics_truth(det) for det in detections):
+            lines.append("Observation source: privileged simulator mechanics truth")
+        lines.append(f"Currently see {len(detections)} object(s):")
         for det in detections:
             c = det.center
             lines.append(
@@ -494,7 +534,11 @@ then refreshes perception obstacles.
 
         # 1. Generate grasps (uses already-cached detections — call scan_objects first)
         logger.info(f"Generating grasp poses for '{object_name}'...")
-        grasp_poses = self._generate_grasps_for_pick(object_name, object_id)
+        grasp_poses = self._generate_grasps_for_pick(
+            object_name,
+            object_id,
+            config.grasp_frame_to_tcp,
+        )
         if not grasp_poses:
             return SkillResult.fail(
                 "GRASP_GENERATION_FAILED",
@@ -558,6 +602,14 @@ then refreshes perception obstacles.
 
             # Store pick pose so place_back() can return with same orientation
             self._last_pick_pose = grasp_pose
+
+            if self.config.pick_verification == "observed_lift" and not self._verify_observed_lift(
+                target
+            ):
+                return SkillResult.fail(
+                    "PICK_NOT_VERIFIED",
+                    f"The arm completed the motion, but '{object_name}' did not lift with it.",
+                )
 
             return SkillResult.ok(f"Pick complete — grasped '{object_name}' successfully")
 

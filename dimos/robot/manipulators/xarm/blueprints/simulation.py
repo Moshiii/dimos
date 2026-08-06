@@ -62,6 +62,7 @@ xarm_perception_sim = autoconnect(
     PickAndPlaceModule.blueprint(
         robots=[make_xarm7_sim_robot_config(_simulation.robot_base_pose)],
         planning_timeout=10.0,
+        pick_verification="observed_lift",
         visualization={"backend": "viser"},
     ),
     _simulation.backend,

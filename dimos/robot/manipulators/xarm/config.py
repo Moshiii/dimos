@@ -28,6 +28,7 @@ from dimos.control.components import (
 from dimos.core.global_config import global_config
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
+from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.robot.manipulators._modeling import (
     base_pose,
@@ -70,6 +71,9 @@ XARM_GRIPPER_PARAMS = {
     "max_joint_delta_deg": 50.0,
 }
 XARM7_SIM_HOME = [0.0, -0.247, 0.0, 0.909, 0.0, 1.15644, 0.0]
+# The xArm planning tip is link_tcp. The physical finger contact center is
+# 30 mm behind that frame along the gripper axis.
+XARM_GRASP_FRAME_TO_TCP = Pose(0.0, 0.0, 0.03)
 
 
 def make_xarm7_sim_robot_config(robot_base_pose: PoseStamped) -> RobotModelConfig:
@@ -78,7 +82,8 @@ def make_xarm7_sim_robot_config(robot_base_pose: PoseStamped) -> RobotModelConfi
         add_gripper=True,
         tf_extra_links=["link7"],
         home_joints=XARM7_SIM_HOME,
-        pre_grasp_offset=0.05,
+        pre_grasp_offset=0.10,
+        grasp_frame_to_tcp=XARM_GRASP_FRAME_TO_TCP,
         placement=robot_base_pose,
     )
 
@@ -238,6 +243,7 @@ def make_xarm_model_config(
     tf_extra_links: list[str] | None = None,
     home_joints: list[float] | None = None,
     pre_grasp_offset: float = 0.10,
+    grasp_frame_to_tcp: Pose | None = None,
     placement: PoseStamped | None = None,
 ) -> RobotModelConfig:
     xacro_args = {
@@ -280,6 +286,7 @@ def make_xarm_model_config(
         tf_extra_links=tf_extra_links or [],
         home_joints=home_joints or [0.0] * dof,
         pre_grasp_offset=pre_grasp_offset,
+        grasp_frame_to_tcp=grasp_frame_to_tcp or Pose(),
     )
 
 

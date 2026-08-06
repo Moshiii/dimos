@@ -26,6 +26,7 @@ from dimos.manipulation.planning.groups.identifiers import (
     assert_valid_robot_name,
 )
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
+from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 
@@ -56,6 +57,9 @@ class RobotModelConfig(ModuleConfig):
         joint_name_mapping: Maps coordinator joint names to local model joint names.
             This is retained for current coordinator/monitor integrations while planning
             APIs move toward globally scoped joint names.
+        grasp_frame_to_tcp: Transform from a grasp contact frame to the planning
+            group's TCP frame. Grasp generators define contact poses; planners target
+            the TCP link.
     """
 
     name: str
@@ -84,6 +88,7 @@ class RobotModelConfig(ModuleConfig):
     home_joints: list[float] | None = None
     # Pre-grasp offset distance in meters (along approach direction)
     pre_grasp_offset: float = 0.10
+    grasp_frame_to_tcp: Pose = Field(default_factory=Pose)
 
     def model_post_init(self, __context: object) -> None:
         """Validate delimiter-based naming constraints."""

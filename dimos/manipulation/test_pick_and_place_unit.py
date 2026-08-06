@@ -38,6 +38,8 @@ def _make_det_object(
     object_id: str = "abc12345",
     center: tuple[float, float, float] = (0.5, 0.0, 0.3),
     size: tuple[float, float, float] = (0.05, 0.05, 0.10),
+    identity_status: str | None = None,
+    identity_basis: str | None = None,
 ) -> DetObject:
     """Create a DetObject with the given attributes and sensible defaults."""
     return DetObject(
@@ -53,6 +55,8 @@ def _make_det_object(
         confidence=1.0,
         ts=0.0,
         image=Image(),
+        identity_status=identity_status,
+        identity_basis=identity_basis,
     )
 
 
@@ -150,6 +154,45 @@ class TestGraspHeuristics:
             and abs(q_near.w - q_far.w) < 0.01
         )
 
+    def test_mechanics_truth_grasp_uses_exact_center(self, module):
+        det = _make_det_object(
+            center=(0.5, 0.1, 0.3),
+            size=(0.05, 0.05, 0.10),
+            identity_status="privileged_ground_truth",
+            identity_basis="pimsim_mechanics_diagnostic",
+        )
+        module._detection_snapshot = [det]
+
+        grasps = module._generate_grasps_for_pick("cup")
+
+        assert grasps is not None
+        assert grasps[0].position == det.center
+
+    def test_perception_grasp_keeps_occlusion_correction(self, module):
+        det = _make_det_object(center=(0.5, 0.1, 0.3), size=(0.05, 0.05, 0.10))
+        module._detection_snapshot = [det]
+
+        grasps = module._generate_grasps_for_pick("cup")
+
+        assert grasps is not None
+        assert grasps[0].position != det.center
+
+    def test_grasp_frame_is_transformed_to_tcp(self, module):
+        det = _make_det_object(
+            center=(0.5, 0.1, 0.3),
+            identity_status="privileged_ground_truth",
+            identity_basis="pimsim_mechanics_diagnostic",
+        )
+        module._detection_snapshot = [det]
+
+        grasps = module._generate_grasps_for_pick(
+            "cup",
+            grasp_frame_to_tcp=Pose(0.0, 0.0, 0.03),
+        )
+
+        assert grasps is not None
+        assert grasps[0].position.z == pytest.approx(0.27)
+
     def test_pick_excludes_selected_object_from_collision_world(self, module):
         det = _make_det_object(name="cup", object_id="cup-1")
         module._detection_snapshot = [det]
@@ -159,7 +202,12 @@ class TestGraspHeuristics:
             patch.object(
                 module,
                 "_get_robot",
-                return_value=("arm", "robot-1", SimpleNamespace(pre_grasp_offset=0.05), None),
+                return_value=(
+                    "arm",
+                    "robot-1",
+                    SimpleNamespace(pre_grasp_offset=0.05, grasp_frame_to_tcp=Pose()),
+                    None,
+                ),
             ),
             patch.object(module, "_generate_grasps_for_pick", return_value=[Pose()]),
             patch.object(module, "_lift_if_low", return_value=SkillResult.ok()),

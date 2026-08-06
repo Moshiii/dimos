@@ -44,8 +44,9 @@ _ATTACH_RETRY_POLL_S = 0.2
 class ShmMujocoAdapter:
     """``ManipulatorAdapter`` that proxies to a ``MujocoSimModule`` via SHM.
 
-    Uses ``address`` (the MJCF XML path) as the discovery key. The sim module
-    must be running and have signalled ready before ``connect()`` returns.
+    Uses the provider-supplied ``address`` as the discovery key. The simulator
+    must create that session's buffers and signal ready before ``connect()``
+    returns.
     """
 
     def __init__(
@@ -56,7 +57,7 @@ class ShmMujocoAdapter:
         **_: Any,
     ) -> None:
         if address is None:
-            raise ValueError("address (MJCF XML path) is required for sim_mujoco adapter")
+            raise ValueError("address is required for sim_mujoco adapter")
         self._dof = dof
         self._address = address
         self._hardware_id = hardware_id
