@@ -223,12 +223,6 @@ def ingest(
     cases: int = typer.Option(
         0, "--cases", help="Exact auto-generated case count; 0 scales with recording length"
     ),
-    external: bool = typer.Option(
-        False,
-        "--external",
-        help="Reference the recording in place instead of copying it into data/; "
-        "keeps it out of the LFS flow",
-    ),
     force: bool = typer.Option(False, "--force", help="Overwrite dataset and manifest"),
 ) -> None:
     """Register a recording as a dataset: copy, map, generate cases."""
@@ -238,22 +232,18 @@ def ingest(
     manifest = manifest_path(name)
     if manifest.exists() and not force:
         raise typer.BadParameter(f"{manifest} already exists; pass --force to regenerate")
-    if external:
-        dest = src.resolve()
-    else:
-        dest = get_data_dir() / f"{name}.db"
-        if src.resolve() != dest.resolve():
-            if dest.exists() and not force:
-                raise typer.BadParameter(f"{dest} already exists; pass --force to overwrite")
-            print(f"copying {src} -> {dest}")
-            _copy_recording(src, dest)
+    dest = get_data_dir() / f"{name}.db"
+    if src.resolve() != dest.resolve():
+        if dest.exists() and not force:
+            raise typer.BadParameter(f"{dest} already exists; pass --force to overwrite")
+        print(f"copying {src} -> {dest}")
+        _copy_recording(src, dest)
 
     suite = Suite(
         dataset=name,
         cases=[],
         lidar_stream=lidar_stream,
         odom_stream=odom_stream,
-        db=str(dest) if external else None,
     )
     trajectory = suite.trajectory()
     arcs = trajectory.arc_lengths()

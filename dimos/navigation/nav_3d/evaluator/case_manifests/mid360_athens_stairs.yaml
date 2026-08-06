@@ -1,5 +1,4 @@
 dataset: mid360_athens_stairs
-end_ts: 1783527459453386006
 cases:
 - id: auto_00_down
   start: [1.32, -0.84, 2.72]

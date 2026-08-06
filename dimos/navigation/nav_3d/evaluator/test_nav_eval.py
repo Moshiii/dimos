@@ -533,12 +533,10 @@ def test_save_suite_roundtrip(tmp_path: Path) -> None:
             Case(id="dyn", start=(0.0, 0.0, 0.0), goal=(3.0, 0.0, 0.0), expect_final_fail=True),
         ],
         lidar_stream="other_lidar",
-        db="~/recordings/demo.db",
     )
     loaded = load_suite(save_suite(suite, tmp_path / "demo.yaml"))
     assert loaded.dataset == "demo"
     assert loaded.lidar_stream == "other_lidar"
-    assert loaded.db_path() == Path.home() / "recordings/demo.db"
     assert loaded.cases[0].goal == (1.0, 2.0, 3.0)
     assert loaded.cases[0].tags == ["x"]
     assert loaded.cases[1].expect_fail
@@ -603,7 +601,7 @@ def _write_recording(
             odom.append(Odometry(ts=ts, pose=Pose(x, y, z)), ts=ts)
 
 
-def test_recording_registers_clouds_and_honors_end_ts(tmp_path: Path) -> None:
+def test_recording_registers_clouds(tmp_path: Path) -> None:
     """Clouds arrive sensor-frame and are placed by their aligned odometry."""
     local = np.array([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]], dtype=np.float32)
     db = tmp_path / "rec.db"
@@ -617,13 +615,10 @@ def test_recording_registers_clouds_and_honors_end_ts(tmp_path: Path) -> None:
     # Translated by the odometry position, and the origin is that position.
     assert np.allclose(frames[0].points, local + np.array([10.0, 0.0, 0.5]))
     assert frames[1].origin == (20.0, 0.0, 0.5)
-    # end_ts drops frames at or after it.
-    assert [f.ts for f in iter_world_frames(db, "lidar", "odom", end_ts=2.5)] == [1.0, 2.0]
 
     traj = load_trajectory(db, "odom")
     assert len(traj.positions) == 3
     assert np.allclose(traj.foot(0.5)[:, 2], 0.0)
-    assert load_trajectory(db, "odom", end_ts=2.5).positions.shape[0] == 2
 
 
 def test_recording_rejects_pre_registered_clouds(tmp_path: Path) -> None:
@@ -664,11 +659,9 @@ def test_frame_count_matches_the_replay(tmp_path: Path) -> None:
         [(float(t), pts, "lidar") for t in range(1, 6)],
         [(float(t), (float(t), 0.0, 0.0)) for t in range(1, 6)],
     )
-    suite = Suite(dataset="rec", cases=[], db=str(db), lidar_stream="lidar", odom_stream="odom")
+    suite = Suite(dataset=str(db), cases=[], lidar_stream="lidar", odom_stream="odom")
     assert suite.frame_count() == 5
     assert len(list(suite.world_frames(_cfg().align_tol))) == 5
-    suite.end_ts = int(3.5e9)
-    assert suite.frame_count() == 3
 
 
 def test_apply_overrides_is_the_sweep_interface() -> None:
@@ -772,9 +765,7 @@ def _corridor_recording(path: Path) -> Suite:
         [(ts, pts, "lidar") for ts, pts in slabs],
         [(float(t), (float(t), 0.0, WALK_HEIGHT)) for t in range(1, 11)],
     )
-    return Suite(
-        dataset="corridor", cases=[], db=str(path), lidar_stream="lidar", odom_stream="odom"
-    )
+    return Suite(dataset=str(path), cases=[], lidar_stream="lidar", odom_stream="odom")
 
 
 def test_run_suite_plans_each_case_on_the_map_as_of_its_start_time(tmp_path: Path) -> None:

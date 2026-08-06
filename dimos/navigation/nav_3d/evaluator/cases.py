@@ -59,27 +59,16 @@ class Suite:
     cases: list[Case]
     lidar_stream: str = LIDAR_STREAM
     odom_stream: str = ODOM_STREAM
-    # Recording location override, defaulting to data/<dataset>.db.
-    # Set this to keep a recording outside data/, in case you don't want it to be tracked.
-    db: str | None = None
-    # Discard frames after this timestamp
-    end_ts: int | None = None
     path: Path | None = None
 
     def db_path(self) -> Path:
-        if self.db is not None:
-            return Path(self.db).expanduser()
         return resolve_named_path(self.dataset, ".db")
-
-    def end_ts_seconds(self) -> float | None:
-        """end_ts in the recording's second-based observation timestamps."""
-        return None if self.end_ts is None else self.end_ts / 1e9
 
     def trajectory(self) -> Trajectory:
         """The walked path this suite's cases are scored against."""
         from dimos.navigation.nav_3d.evaluator.recording import load_trajectory
 
-        return load_trajectory(self.db_path(), self.odom_stream, self.end_ts_seconds())
+        return load_trajectory(self.db_path(), self.odom_stream)
 
     def frame_count(self) -> int:
         """Upper bound on the frames world_frames yields, for a progress bar."""
@@ -88,17 +77,13 @@ class Suite:
 
         store = SqliteStore(path=str(self.db_path()))
         with store:
-            stream = store.stream(self.lidar_stream, PointCloud2)
-            end_ts = self.end_ts_seconds()
-            return (stream if end_ts is None else stream.before(end_ts)).count()
+            return store.stream(self.lidar_stream, PointCloud2).count()
 
     def world_frames(self, align_tol: float) -> Iterator[Frame]:
         """Lidar frames registered into the world by their odometry pose."""
         from dimos.navigation.nav_3d.evaluator.recording import iter_world_frames
 
-        return iter_world_frames(
-            self.db_path(), self.lidar_stream, self.odom_stream, align_tol, self.end_ts_seconds()
-        )
+        return iter_world_frames(self.db_path(), self.lidar_stream, self.odom_stream, align_tol)
 
 
 def load_suite(path: Path) -> Suite:
@@ -139,8 +124,6 @@ def load_suite(path: Path) -> Suite:
         cases=cases,
         lidar_stream=str(raw.get("lidar_stream", LIDAR_STREAM)),
         odom_stream=str(raw.get("odom_stream", ODOM_STREAM)),
-        db=str(raw["db"]) if "db" in raw else None,
-        end_ts=int(raw["end_ts"]) if "end_ts" in raw else None,
         path=path,
     )
 
@@ -165,14 +148,10 @@ def save_suite(suite: Suite, path: Path) -> Path:
         )
 
     doc: dict[str, object] = {"dataset": suite.dataset}
-    if suite.db is not None:
-        doc["db"] = suite.db
     if suite.lidar_stream != LIDAR_STREAM:
         doc["lidar_stream"] = suite.lidar_stream
     if suite.odom_stream != ODOM_STREAM:
         doc["odom_stream"] = suite.odom_stream
-    if suite.end_ts is not None:
-        doc["end_ts"] = suite.end_ts
     entries = []
     for case in suite.cases:
         entry: dict[str, object] = {
