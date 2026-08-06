@@ -43,6 +43,7 @@ unitree_go2_autotune = (
             channels={"vx": 1.0, "wz": 1.5},
             odom_type="pose",
             fitter="pose",
+            step_duration_s=6.0,
         ),
     )
     .remappings([(AutotuneDriver, "pose", "go2_odom")])
