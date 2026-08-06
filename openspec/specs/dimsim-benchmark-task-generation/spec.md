@@ -16,7 +16,7 @@ The system SHALL provide an offline compiler that accepts one validated `SceneOr
 - **THEN** generation fails with category-specific diagnostics and does not mark the corpus complete
 
 ### Requirement: Typed task and answer contracts
-Each generated task SHALL have a stable semantic identity, category, versioned controlled utterance, and declared response or completion type. Private records SHALL use discriminated executable contracts and typed expected answers: terminal navigation predicate, finite enum, integer, or entity choice. Expected answers SHALL be computed from the oracle view rather than manually supplied.
+Each generated task SHALL have a stable semantic identity, category, versioned controlled utterance, and declared response or completion type. Private records SHALL use discriminated executable contracts and typed expected answers: terminal navigation predicate, finite enum, integer, or entity choice. A terminal navigation contract SHALL encode every condition required by its controlled language, including metric threshold, stopped-state tolerances, and stationary dwell duration. Expected answers SHALL be computed from the oracle view rather than manually supplied.
 
 #### Scenario: Generate a state question
 - **WHEN** the compiler selects an entity-state predicate for a television with authoritative power state `OFF`
@@ -24,7 +24,7 @@ Each generated task SHALL have a stable semantic identity, category, versioned c
 
 #### Scenario: Generate a destination task
 - **WHEN** the compiler selects the bathtub destination predicate
-- **THEN** it emits a private terminal contract requiring the agent to stop within 1 metre of the bathtub's outer footprint and does not fabricate a textual expected answer
+- **THEN** it emits a private terminal contract requiring the robot footprint to remain within 1 metre of the bathtub's outer footprint and below the declared linear and angular speed tolerances for the declared stationary dwell duration, and it does not fabricate a textual expected answer
 
 ### Requirement: Four-category smoke corpus
 The smoke compiler SHALL emit exactly one retained task for each of four categories from the canonical apartment oracle view:
@@ -45,10 +45,10 @@ It SHALL reject duplicate categories, missing categories, and extra retained smo
 - **THEN** smoke generation fails rather than replacing it with a different or guessed question
 
 ### Requirement: Destination objectivity gates
-A destination candidate SHALL resolve to exactly one target entity, use metric outer-footprint distance, and have at least one collision-free reachable stopping region satisfying the threshold and configured embodiment clearance. Candidates whose feasible stopping region is absent or uncertain SHALL be rejected.
+A destination candidate SHALL resolve to exactly one target entity, use metric robot-footprint-to-target-outer-footprint surface distance, and have at least one collision-free reachable stopping region satisfying the threshold, stopped-state policy, and configured embodiment clearance. Generation-time feasibility and runtime evaluation SHALL use the same versioned distance semantics. Candidates whose feasible stopping region is absent or uncertain SHALL be rejected.
 
 #### Scenario: Bathtub has a reachable stopping region
-- **WHEN** the bathtub resolves uniquely and its one-metre stopping band contains a validated reachable collision-free region
+- **WHEN** the bathtub resolves uniquely and its one-metre robot-footprint stopping band contains a validated reachable collision-free region
 - **THEN** the destination candidate is eligible for retention
 
 #### Scenario: Target is geometrically unreachable
@@ -89,14 +89,14 @@ The closer-object question SHALL resolve exactly one anchor and two distinct can
 - **THEN** the generator rejects the comparison candidate as boundary-sensitive
 
 ### Requirement: Stable identity and provenance
-Task identities SHALL be content-derived from semantic intent rather than expected answer or output ordering. Every private task record SHALL identify the source scene, source oracle-view digest, semantic-schema revision, generator revision, predicate-policy version, and language-template version.
+Task identities SHALL be content-derived from semantic intent rather than expected answer or output ordering. Every private task record SHALL identify the source scene, source oracle-view digest, semantic-schema revision, semantic-profile revision, upstream revision, generator revision, predicate-policy version, and language-template version. Every field affecting executable predicate meaning SHALL participate in semantic identity or a declared policy revision.
 
 #### Scenario: Canonical state answer changes
 - **WHEN** the same television-state task is compiled from a reset in which the authoritative answer changes from `OFF` to `ON`
 - **THEN** the semantic task identity remains stable while the state-bound expected-answer record and source-view digest change
 
 #### Scenario: Predicate meaning changes
-- **WHEN** the executable distance metric or count-class policy changes
+- **WHEN** the executable distance metric, stopped-state policy, or count-class policy changes
 - **THEN** the task identity or declared predicate-policy version changes so incompatible meanings cannot be conflated
 
 ### Requirement: Public and oracle package separation
@@ -111,7 +111,7 @@ The generated corpus SHALL use physically separable public and oracle roots join
 - **THEN** every retained public task joins to exactly one private contract and exactly one compatible expected-answer or terminal-predicate record
 
 ### Requirement: Mandatory generation report
-Generation SHALL produce a deterministic report covering schema validity, required category cardinality, entity-resolution results, answer typing, reachability, distance stability, canonical serialization, stable-reference integrity, and public-oracle leakage. A corpus SHALL be marked complete only when every mandatory check passes.
+Generation SHALL verify schema validity, required category cardinality, entity-resolution results, answer typing, reachability, distance stability, canonical regeneration, stable-reference integrity, source provenance, record-shape compatibility, and public-oracle leakage before recording each corresponding successful check. A corpus SHALL be marked complete only when every mandatory check has actually executed and passed. Full-release loading SHALL reject incomplete or count-mismatched manifests, duplicate task IDs, non-bijective joins, incompatible public/contract/outcome shapes, identity-payload mismatches, and inconsistent source/outcome digests.
 
 #### Scenario: Complete smoke release
 - **WHEN** all four tasks and their private records pass every mandatory validation
@@ -120,6 +120,10 @@ Generation SHALL produce a deterministic report covering schema validity, requir
 #### Scenario: Public answer leakage is detected
 - **WHEN** a public record contains an expected answer or private semantic binding
 - **THEN** validation marks the corpus incomplete and identifies the leaking artifact and field
+
+#### Scenario: Structurally inconsistent release is loaded
+- **WHEN** a release contains duplicate identities, a manifest count mismatch, or incompatible joined record types
+- **THEN** full-release loading rejects it before an evaluator can reset a simulator
 
 ### Requirement: Generation-only scope boundary
 This capability SHALL end after producing and validating frozen benchmark artifacts. It SHALL NOT add DimSim episode execution, Pi-baseline integration, agent submission tools, timeouts, trajectory collection, scoring, or result publication.

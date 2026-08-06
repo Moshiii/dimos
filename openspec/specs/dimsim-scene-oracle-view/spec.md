@@ -7,9 +7,9 @@ Define the private, typed, versioned DimSim scene oracle boundary used to genera
 ### Requirement: Versioned typed scene oracle view
 The DimOS integration SHALL assemble a private, read-only, versioned
 `SceneOracleView` for benchmark generation from one synchronous DimSim runtime
-snapshot and one compatible semantic profile. The view SHALL identify the
-scene, upstream, profile, and semantic-schema revisions and SHALL use strict
-typed records that reject unknown or malformed fields.
+snapshot and one compatible semantic profile. The view SHALL carry explicit
+scene, upstream, profile, and semantic-schema revision fields and SHALL use
+strict typed records that reject unknown or malformed fields.
 
 #### Scenario: Export a supported scene
 - **WHEN** benchmark generation requests the oracle view for a coherently reset
