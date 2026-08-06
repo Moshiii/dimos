@@ -298,6 +298,9 @@ manipulation = [
 openarm-mini-teleop = [
     "ftservo-python-sdk",
     "rich",
+    # The demo viser blueprints load the DAE OpenArm meshes; without this
+    # the mesh conversion fails and viser startup crashes.
+    "pycollada",
 ]
 
 cpu = [

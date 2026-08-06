@@ -1807,6 +1807,7 @@ misc = [
 ]
 openarm-mini-teleop = [
     { name = "ftservo-python-sdk" },
+    { name = "pycollada" },
     { name = "rich" },
 ]
 perception = [
@@ -2166,6 +2167,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pyarrow", marker = "extra == 'learning'" },
     { name = "pycollada", marker = "extra == 'manipulation'" },
+    { name = "pycollada", marker = "extra == 'openarm-mini-teleop'" },
     { name = "pydantic" },
     { name = "pydantic-settings", specifier = ">=2.11.0,<3" },
     { name = "pygame", marker = "extra == 'sim'", specifier = ">=2.6.1" },
