@@ -752,6 +752,25 @@ def test_obstacle_mutation_updates_scene_and_stored_pose(
     assert world.get_obstacles() == []
 
 
+def test_world_obstacles_do_not_collide_with_each_other(
+    fake_roboplan: None,
+    robot_config: RobotModelConfig,
+) -> None:
+    world, _ = _make_world(fake_roboplan, robot_config)
+    first = Obstacle(
+        name="table",
+        obstacle_type=ObstacleType.BOX,
+        pose=PoseStamped(position=Vector3(), orientation=Quaternion()),
+        dimensions=(1.0, 1.0, 0.1),
+    )
+    second = replace(first, name="object", dimensions=(0.1, 0.1, 0.1))
+
+    assert world.add_obstacle(first) == "table"
+    assert world.add_obstacle(second) == "object"
+
+    assert world._scene.collision_settings[("object", "table")] is False
+
+
 def test_obstacle_operations_require_finalization(
     fake_roboplan: None,
     robot_config: RobotModelConfig,
