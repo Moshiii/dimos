@@ -45,18 +45,25 @@ class Frame:
 
 @dataclass
 class Trajectory:
-    """Odometry poses ordered by time. Positions are sensor-level, (T, 3) float32."""
+    """Odometry poses by time, sensor-level (T, 3) float32. Views are memoized."""
 
     ts: NDArray[np.float64]
     positions: NDArray[np.float32]
+    _arcs: NDArray[np.float64] | None = None
+    _foot: tuple[float, NDArray[np.float32]] | None = None
 
     def arc_lengths(self) -> NDArray[np.float64]:
         """Cumulative walked distance at each pose, starting at 0."""
-        return arc_lengths(self.positions)
+        if self._arcs is None:
+            self._arcs = arc_lengths(self.positions)
+        return self._arcs
 
     def foot(self, robot_height: float) -> NDArray[np.float32]:
         """Poses dropped to foot level, the frame cases and paths are given in."""
-        return self.positions - np.array([0.0, 0.0, robot_height], dtype=np.float32)
+        if self._foot is None or self._foot[0] != robot_height:
+            drop = self.positions - np.array([0.0, 0.0, robot_height], dtype=np.float32)
+            self._foot = (robot_height, drop)
+        return self._foot[1]
 
 
 def iter_world_frames(
@@ -66,8 +73,7 @@ def iter_world_frames(
     align_tol: float = 0.05,
     end_ts: float | None = None,
 ) -> Iterator[Frame]:
-    """Yield lidar frames registered into the world by their odometry pose.
-    Clouds must be sensor-frame. Frames at or after end_ts are skipped."""
+    """Lidar frames placed in the world by their pose. Clouds are sensor-frame."""
     store = SqliteStore(path=str(db_path))
     with store:
         lidar = store.stream(lidar_stream, PointCloud2).order_by("ts")

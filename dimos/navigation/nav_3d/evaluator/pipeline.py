@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The unit under evaluation: lidar and odometry in, paths out. A pipeline owns
-whatever mapping it needs, and grading occupancy is built separately."""
+"""The unit under evaluation: lidar and odometry in, paths out."""
 
 from __future__ import annotations
 
@@ -44,8 +43,7 @@ class NavPipeline(Protocol):
 
 @runtime_checkable
 class PipelineIntrospection(Protocol):
-    """Optional graph layers, drawn into the rerun recording when a pipeline
-    offers them. Nothing in scoring depends on these."""
+    """Optional map and graph layers, for the gates and the rerun recording."""
 
     def surface_clearance_map(self) -> NDArray[np.float32]: ...
 
@@ -55,8 +53,7 @@ class PipelineIntrospection(Protocol):
 
 
 class MLSPipeline:
-    """The voxel ray-tracing mapper feeding the MLS planner. The map reaches
-    the planner on the first plan after new frames, which pays for the rebuild."""
+    """Voxel ray-tracing mapper feeding the MLS planner."""
 
     def __init__(self, cfg: EvalConfig) -> None:
         # Lazy: the planner is a native module, only needed by this pipeline.

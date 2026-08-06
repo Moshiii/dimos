@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tags for a case, taken from its endpoints. Shape tags would need an
-occupancy map, and the only map available is the one under test."""
+"""Case tags, taken from its endpoints."""
 
 from __future__ import annotations
 
@@ -38,8 +37,7 @@ GEOMETRIC_TAGS = frozenset({"flat", "up", "down", "stairs", "long"})
 def elevation_tags(
     start: tuple[float, float, float], goal: tuple[float, float, float]
 ) -> list[str]:
-    """Elevation from the case endpoints, not the recovered route: a case's
-    climb is defined by where it starts and ends."""
+    """Elevation from the case endpoints, not the route between them."""
     dz = goal[2] - start[2]
     euclid = float(np.linalg.norm(np.asarray(goal) - np.asarray(start)))
     if abs(dz) < STAIRS_DZ_M:
@@ -51,8 +49,7 @@ def elevation_tags(
 
 
 def retag_suite(suite: Suite) -> dict[str, list[str]]:
-    """New tag lists keyed by case id, for the auto cases. Curated cases are
-    left out, so they keep the tags they have."""
+    """New tag lists keyed by case id, for the auto cases only."""
     out: dict[str, list[str]] = {}
     for case in suite.cases:
         if "auto" not in case.tags:

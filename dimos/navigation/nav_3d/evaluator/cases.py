@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Case manifests, one YAML file per dataset. Endpoints are foot-level world
-coordinates."""
+"""Case manifests, one YAML per dataset. Endpoints are foot-level world coords."""
 
 from __future__ import annotations
 
@@ -83,9 +82,7 @@ class Suite:
         return load_trajectory(self.db_path(), self.odom_stream, self.end_ts_seconds())
 
     def frame_count(self) -> int:
-        """How many frames world_frames will yield, for a progress denominator.
-        An upper bound: a lidar frame with no odometry inside the alignment
-        tolerance is dropped."""
+        """Upper bound on the frames world_frames yields, for a progress bar."""
         from dimos.memory2.store.sqlite import SqliteStore
         from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 

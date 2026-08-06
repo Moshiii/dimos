@@ -26,6 +26,16 @@ class EvalConfig:
     max_range: float = 30.0
     robot_height: float = 0.3
 
+    # Collision-gate body box. Only the ground_margin to body_clearance band
+    # is checked, so the legs and the terrain under them never count.
+    robot_length: float = 0.7
+    robot_width: float = 0.31
+    ground_margin: float = 0.25
+    body_clearance: float = 0.45
+    # Ground-support reach. The radius models straddling small scan holes.
+    support_radius_m: float = 0.35
+    support_depth_m: float = 0.35
+
     goal_tolerance: float = 0.5
     align_tol: float = 0.05
     # How near the walked path an endpoint must be to count as visited, which
@@ -46,6 +56,21 @@ class EvalConfig:
 
     def validate(self) -> None:
         """Called again after --set, which mutates an already-built config."""
-        for name in ("voxel_size", "max_range", "robot_height", "goal_tolerance", "visit_radius_m"):
+        # An inverted band makes check_path admit nothing and pass every path,
+        # which reads as a perfect score rather than a failure.
+        if self.body_clearance <= self.ground_margin:
+            raise ValueError(
+                f"body_clearance ({self.body_clearance}) must exceed "
+                f"ground_margin ({self.ground_margin})"
+            )
+        for name in (
+            "voxel_size",
+            "max_range",
+            "robot_height",
+            "robot_length",
+            "robot_width",
+            "goal_tolerance",
+            "visit_radius_m",
+        ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive, got {getattr(self, name)}")

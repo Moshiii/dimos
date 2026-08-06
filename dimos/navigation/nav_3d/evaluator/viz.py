@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from dimos.navigation.nav_3d.evaluator.metrics import body_box_half_extents
 from dimos.navigation.nav_3d.mls_planner.viz import clearance_colors
 from dimos.utils.logging_config import setup_logger
 
@@ -61,11 +62,14 @@ WALKED_PATH_COLOR = [255, 255, 255]
 START_COLOR = [0, 255, 255]
 GOAL_COLOR = [255, 140, 0]
 STEEP_COLOR = [160, 32, 240]
+COLLISION_COLOR = [255, 0, 0]
+UNSUPPORTED_COLOR = [255, 0, 255]
 NEGATIVE_INTENT_COLOR = [255, 255, 0]
 NEAR_WALL_COLOR = [120, 120, 120]
 
 VALID_PATH_COLOR = [0, 220, 0]
-INVALID_PATH_COLOR = [255, 0, 0]
+# Darker than the violation markers drawn on top of it.
+INVALID_PATH_COLOR = [150, 0, 0]
 UNREACHED_PATH_COLOR = [255, 200, 0]
 
 CLEARANCE_CLAMP_M = 1.0
@@ -147,7 +151,27 @@ def _outcome_color(outcome: PlanOutcome) -> list[int]:
     return UNREACHED_PATH_COLOR
 
 
-def _log_path(entity: str, outcome: PlanOutcome, radius: float) -> None:
+def _log_collisions(entity: str, outcome: PlanOutcome, cfg: EvalConfig) -> None:
+    """The robot body where the path put it into occupancy."""
+    import rerun as rr
+
+    if not outcome.collisions:
+        return
+    half = body_box_half_extents(cfg)
+    rr.log(
+        f"{entity}/collisions",
+        rr.Boxes3D(
+            centers=[box.center for box in outcome.collisions],
+            half_sizes=[half] * len(outcome.collisions),
+            quaternions=[rr.Quaternion(xyzw=box.rotation) for box in outcome.collisions],
+            colors=[COLLISION_COLOR],
+            fill_mode="majorwireframe",
+        ),
+        static=True,
+    )
+
+
+def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig) -> None:
     import rerun as rr
 
     if not outcome.waypoints:
@@ -157,21 +181,22 @@ def _log_path(entity: str, outcome: PlanOutcome, radius: float) -> None:
         rr.LineStrips3D([outcome.waypoints], colors=[_outcome_color(outcome)], radii=radius),
         static=True,
     )
-    if outcome.steep:
+    _log_collisions(entity, outcome, cfg)
+    for name, points, color in (
+        ("steep", outcome.steep, STEEP_COLOR),
+        ("unsupported", outcome.unsupported, UNSUPPORTED_COLOR),
+    ):
+        if not points:
+            continue
         rr.log(
-            f"{entity}/steep",
-            rr.Points3D(
-                outcome.steep,
-                colors=[STEEP_COLOR],
-                radii=radius * VIOLATION_RADIUS_SCALE,
-            ),
+            f"{entity}/{name}",
+            rr.Points3D(points, colors=[color], radii=radius * VIOLATION_RADIUS_SCALE),
             static=True,
         )
 
 
 def _dataset_view(root: str, case_ids: list[str]) -> rrb.Spatial3DView:
-    """One view per dataset. Every case is hidden until toggled on, and the
-    final planner graph edges start off."""
+    """One view per dataset, with every case hidden until toggled on."""
     import rerun.blueprint as rrb
 
     hidden = [f"{root}/planner_final/edges"]
@@ -218,8 +243,8 @@ def _log_case(base: str, case: CaseResult, cfg: EvalConfig) -> None:
         )
     # What the pipeline held at plan time, saved for every case.
     _log_planner(f"{base}/known", case.online_artifacts, cfg)
-    _log_path(f"{base}/online", case.online, ONLINE_PATH_RADIUS)
-    _log_path(f"{base}/final", case.final, FINAL_PATH_RADIUS)
+    _log_path(f"{base}/online", case.online, ONLINE_PATH_RADIUS, cfg)
+    _log_path(f"{base}/final", case.final, FINAL_PATH_RADIUS, cfg)
 
 
 def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -> None:

@@ -90,8 +90,7 @@ _LIGHT_REFERENCE = 4.6
 
 
 def _prelit_albedo(srgb: NDArray[np.uint8]) -> NDArray[np.float64]:
-    """Linear albedo that tone-maps back to the wanted sRGB color when lit,
-    cancelling the viewer's ACES pass."""
+    """Linear albedo that cancels the viewer's ACES pass."""
     c = srgb.astype(np.float64) / 255.0
     lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
     t = np.clip(lin @ np.linalg.inv(_ACES_OUTPUT).T, 0.0, 0.99)
@@ -127,8 +126,7 @@ def pick_along_ray(
     direction: NDArray[np.float64],
     radius: float,
 ) -> NDArray[np.float32] | None:
-    """Nearest cloud point inside a tube of the given radius around the click
-    ray. A cone would widen with distance and pick a far voxel over the near one."""
+    """Nearest cloud point inside a tube around the click ray."""
     rel = points.astype(np.float64) - origin
     t = rel @ direction
     ahead = t > 0.05
@@ -226,8 +224,7 @@ class _PairEntry:
         )
 
     def _mark_saved(self) -> None:
-        """Repaint the pick markers to the standard saved look, so only pairs
-        not yet in the manifest wear the distinct new-pick colors and line."""
+        """Repaint the pick markers to the saved look, leaving new picks distinct."""
         self.markers.start.color = _marker_color(START_COLOR)
         self.markers.goal.color = _marker_color(GOAL_COLOR)
         self.markers.line.line_width = LINE_WIDTH
@@ -237,8 +234,7 @@ class _PairEntry:
         return self.saved_id or f"pair {self._n}"
 
     def _sync_tags(self, tags: list[str]) -> None:
-        """Split a manifest tag list into checkbox and custom-text state, so
-        unsuggested tags stay visible and round-trip verbatim."""
+        """Split a tag list into checkbox and custom-text state."""
         self._checked = {t for t in tags if t in SUGGESTED_TAGS}
         self._custom = ", ".join(t for t in tags if t not in SUGGESTED_TAGS and t != "negative")
 
@@ -565,9 +561,7 @@ def pick_cases(
     occupied: NDArray[np.float32],
     voxel_size: float,
 ) -> None:
-    """Serve the picker until the user exits from the panel or hits ctrl-c.
-    The occupancy is the pipeline's own, so the evaluator never decides where a
-    point may sit."""
+    """Serve the picker until the user exits the panel or hits ctrl-c."""
     # Lazy: viser is an optional extra, only needed by this command.
     import viser
 

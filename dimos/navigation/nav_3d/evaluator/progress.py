@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""One progress bar per stage per dataset. A stage reports steps over a queue,
-so a worker process and the parent report the same way."""
+"""One bar per stage per dataset, fed over a queue from any process."""
 
 from __future__ import annotations
 
@@ -21,17 +20,23 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import multiprocessing
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from contextlib import AbstractContextManager
+    import queue
     from types import TracebackType
+
+    from rich.progress import Progress, TaskID
 
     from dimos.navigation.nav_3d.evaluator.cases import Suite
 
     Tick = Callable[[], None]
     ProgressFactory = Callable[[int, str], AbstractContextManager[Tick]]
+
+# What a stage sends the display: the kind of event, the bar, and a count.
+Message = tuple[str, str, int]
 
 # Ceiling on steps per queue message, so a 12k-frame replay costs a few hundred
 # sends. A short bar batches less, so it still moves about this many times.
@@ -49,7 +54,7 @@ def _noop() -> None:
 class QueueProgress:
     """A ProgressFactory a worker process can pickle."""
 
-    queue: Any
+    queue: queue.Queue[Message]
 
     @contextmanager
     def __call__(self, total: int, label: str) -> Iterator[Tick]:
@@ -74,8 +79,7 @@ class QueueProgress:
 
 
 class RunProgress:
-    """The live display. Hand factory() to evaluate and every stage shows up as
-    its own bar, whichever process it runs in."""
+    """The live display. Hand factory() to evaluate for a bar per stage."""
 
     def __enter__(self) -> RunProgress:
         # Lazy: rich stays off the CLI startup path.
@@ -90,7 +94,7 @@ class RunProgress:
 
         self._manager = multiprocessing.Manager()
         self._queue = self._manager.Queue()
-        self._bars = Progress(
+        self._bars: Progress = Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
@@ -98,7 +102,7 @@ class RunProgress:
             TimeElapsedColumn(),
             refresh_per_second=10,
         )
-        self._tasks: dict[str, Any] = {}
+        self._tasks: dict[str, TaskID] = {}
         self._bars.start()
         self._pump = threading.Thread(target=self._drain, daemon=True)
         self._pump.start()
@@ -145,8 +149,7 @@ def stage_progress(progress: ProgressFactory | None, total: int, label: str) -> 
 
 @contextmanager
 def frame_progress(progress: ProgressFactory | None, suite: Suite, label: str) -> Iterator[Tick]:
-    """A bar over one replay of a suite's recording. The frame count costs a
-    query, so it is only taken when there is a bar to put it in."""
+    """A bar over one replay of a suite's recording."""
     if progress is None:
         yield _noop
         return

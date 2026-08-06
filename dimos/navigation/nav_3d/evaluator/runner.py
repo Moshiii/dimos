@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Replay case suites through a pipeline and score them. Generated cases plan
-twice, online at their start time and again on the whole recording."""
+"""Replay case suites through a pipeline and score them, online then final."""
 
 from __future__ import annotations
 
@@ -29,6 +28,7 @@ from dimos.navigation.nav_3d.evaluator import metrics
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
 from dimos.navigation.nav_3d.evaluator.progress import frame_progress, stage_progress
+from dimos.navigation.nav_3d.evaluator.voxel_keys import voxel_keys
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -43,21 +43,32 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-MAX_COLLISIONS_KEPT = 50
+# Cap on each list of violation points carried into the report.
+MAX_POINTS_KEPT = 50
 
 
 @dataclass
 class PlanOutcome:
     planned: bool
     reached: bool
-    # Reached the goal and climbed no steeper than the robot can, or for an
-    # infeasible case, that the planner refused.
+    # Cleared the body box against the map the pipeline itself built.
+    valid: bool
+    # Stood on mapped ground the whole way. Only judged on the final map, since
+    # a partial map has holes that are not voids.
+    supported: bool
+    # Reached the goal, cleared both gates, and climbed no steeper than the
+    # robot can, or for an infeasible case, that the planner refused.
     success: bool
     length: float
     plan_ms: float
     spl: float
+    # Body-surface distance to the nearest occupied voxel, None without a plan.
+    min_clearance: float | None
     waypoints: list[list[float]]
-    # Where the path climbs past the robot's limit.
+    # Where the path crosses occupancy, floats over nothing, and climbs past
+    # the robot's limit.
+    collisions: list[metrics.BodyBox]
+    unsupported: list[list[float]]
     steep: list[list[float]]
 
 
@@ -92,7 +103,7 @@ class DatasetResult:
     dataset: str
     cases: list[CaseResult]
     # Per-frame cost of feeding the pipeline, which is what map_update_ms
-    # aggregates. The grading mapper's own replay cost is cached and not it.
+    # aggregates.
     add_frame_ms: dict[str, float]
     frames: int
     final_artifacts: PlannerArtifacts | None = None
@@ -138,11 +149,30 @@ class Report:
         return out
 
 
+@dataclass(frozen=True)
+class Occupancy:
+    """The pipeline's own map, packed for the gates to probe."""
+
+    keys: NDArray[np.int64]
+    # Whether the pipeline has been fed the whole recording. A partial map is
+    # missing floor it simply has not driven past yet, so absent ground is not
+    # evidence of a void and the support check is held back until the end.
+    whole_recording: bool
+
+
+def _occupancy(pipeline: NavPipeline, cfg: EvalConfig, whole_recording: bool) -> Occupancy | None:
+    """None from a pipeline that does not expose its map."""
+    if not isinstance(pipeline, PipelineIntrospection):
+        return None
+    return Occupancy(np.unique(voxel_keys(pipeline.occupied(), cfg.voxel_size)), whole_recording)
+
+
 def _run_plan(
     pipeline: NavPipeline,
     case: Case,
     l_ref: float,
     cfg: EvalConfig,
+    occupancy: Occupancy | None = None,
 ) -> PlanOutcome:
     t0 = perf_counter()
     waypoints = pipeline.plan(case.start, case.goal)
@@ -151,18 +181,31 @@ def _run_plan(
         return _no_plan(plan_ms)
 
     reached = metrics.goal_reached(waypoints, case.goal, cfg.goal_tolerance)
+    gate = metrics.check_path(waypoints, occupancy.keys, cfg) if occupancy else None
+    support = (
+        metrics.check_support(waypoints, occupancy.keys, cfg)
+        if occupancy and occupancy.whole_recording
+        else None
+    )
     kinematics = metrics.check_kinematics(waypoints, cfg)
     length = metrics.path_length(waypoints)
-    success = reached and kinematics.valid
+    valid = gate.valid if gate else True
+    supported = support.valid if support else True
+    success = reached and valid and supported and kinematics.valid
     return PlanOutcome(
         planned=True,
         reached=reached,
+        valid=valid,
+        supported=supported,
         success=success,
         length=length,
         plan_ms=plan_ms,
         spl=metrics.spl(success, l_ref, length),
+        min_clearance=gate.min_clearance_m if gate else None,
         waypoints=waypoints.tolist(),
-        steep=kinematics.violation_points[:MAX_COLLISIONS_KEPT].tolist(),
+        collisions=gate.collision_boxes[:MAX_POINTS_KEPT] if gate else [],
+        unsupported=support.unsupported_points[:MAX_POINTS_KEPT].tolist() if support else [],
+        steep=kinematics.violation_points[:MAX_POINTS_KEPT].tolist(),
     )
 
 
@@ -170,25 +213,28 @@ def _no_plan(plan_ms: float) -> PlanOutcome:
     return PlanOutcome(
         planned=False,
         reached=False,
+        valid=False,
+        supported=True,
         success=False,
         length=0.0,
         plan_ms=plan_ms,
         spl=0.0,
+        min_clearance=None,
         waypoints=[],
+        collisions=[],
+        unsupported=[],
         steep=[],
     )
 
 
 def score_negative(raw: PlanOutcome) -> PlanOutcome:
-    """Invert an outcome for a human-certified infeasible case: the planner
-    succeeds by refusing, and any goal-reaching path it returns scores zero."""
+    """Invert an outcome for a certified-infeasible case, which passes by refusing."""
     refused = not (raw.planned and raw.reached)
     return replace(raw, success=refused, spl=1.0 if refused else 0.0)
 
 
 def _snapshot(pipeline: NavPipeline) -> PlannerArtifacts | None:
-    """Graph layers for the rerun recording, or None from a pipeline that keeps
-    its internals to itself."""
+    """Graph layers for the rerun recording, or None when a pipeline hides them."""
     if not isinstance(pipeline, PipelineIntrospection):
         return None
     return PlannerArtifacts(
@@ -199,8 +245,7 @@ def _snapshot(pipeline: NavPipeline) -> PlannerArtifacts | None:
 
 
 def _final_only(case: Case) -> bool:
-    """Whether a case is scored on the final map only. Hand-placed endpoints
-    are not tied to the recording timeline, so they have no incremental map."""
+    """Whether a case skips the online phase, having no place in the timeline."""
     return case.expect_fail or "auto" not in case.tags
 
 
@@ -267,16 +312,18 @@ def _replay_online(
     keep_artifacts: bool,
     progress: ProgressFactory | None,
 ) -> _OnlinePass:
-    """Feed the recording to the pipeline once, planning each case as the frame
-    clock passes its start time, so the pipeline has seen what the robot had."""
+    """Replay once, planning each case as the frame clock passes its start time."""
     out = _OnlinePass({}, [], None)
     # Cases in the order the replay reaches them. Final-only cases carry inf.
     schedule = [ci for ci in np.argsort(start_ts, kind="stable") if np.isfinite(start_ts[ci])]
 
     def plan_at(ci: int, tick: Tick) -> None:
         tick()
+        # Gated against the map as it stands right now, which is what the
+        # planner was working from.
+        occupancy = _occupancy(pipeline, cfg, whole_recording=False)
         out.cases[ci] = _OnlineCase(
-            _run_plan(pipeline, suite.cases[ci], refs[ci].length, cfg),
+            _run_plan(pipeline, suite.cases[ci], refs[ci].length, cfg, occupancy),
             artifacts=_snapshot(pipeline) if keep_artifacts else None,
         )
 
@@ -312,15 +359,16 @@ def _score_final(
     online: _OnlinePass,
     progress: ProgressFactory | None = None,
 ) -> list[CaseResult]:
-    """Plan every case again once the pipeline has the whole recording, and
-    combine both phases."""
+    """Plan every case on the whole recording, and combine both phases."""
     results: list[CaseResult] = []
     label = f"{suite.dataset} final plans"
+    # The map is settled now, so it is packed once for every case to probe.
+    occupancy = _occupancy(pipeline, cfg, whole_recording=True)
     with stage_progress(progress, len(suite.cases), label) as tick:
         for ci, case in enumerate(suite.cases):
             ref = refs[ci]
             tick()
-            final_out = _run_plan(pipeline, case, ref.length, cfg)
+            final_out = _run_plan(pipeline, case, ref.length, cfg, occupancy)
             if case.expect_fail or case.expect_final_fail:
                 # Both labels certify there is no route, so the planner passes
                 # by refusing. Before the split, so a curated case scores.
@@ -377,17 +425,15 @@ def run_suite(
     )
 
 
-def evaluate(
+def _run_datasets(
     suites: list[Suite],
-    cfg: EvalConfig | None = None,
-    workers: int = 1,
-    keep_artifacts: bool = False,
-    progress: ProgressFactory | None = None,
-    on_dataset: Callable[[str], None] | None = None,
-) -> Report:
-    """Score every suite. A dataset is one sequential pass over its recording,
-    so workers only spreads datasets across processes."""
-    cfg = cfg or EvalConfig()
+    cfg: EvalConfig,
+    workers: int,
+    keep_artifacts: bool,
+    progress: ProgressFactory | None,
+    on_dataset: Callable[[str], None] | None,
+) -> list[DatasetResult]:
+    """Replay every suite, in parallel processes when there is more than one."""
     if workers > 1 and len(suites) > 1:
         # Spawn, not fork: the mapper and planner carry a native thread pool, and
         # a forked child inherits its mutexes locked if the parent ever built one.
@@ -406,13 +452,18 @@ def evaluate(
                 landed[pending[future]] = result
                 if on_dataset is not None:
                     on_dataset(result.dataset)
-            datasets = [landed[i] for i in range(len(suites))]
-    else:
-        datasets = []
-        for suite in suites:
-            datasets.append(run_suite(suite, cfg, keep_artifacts=keep_artifacts, progress=progress))
-            if on_dataset is not None:
-                on_dataset(suite.dataset)
+            return [landed[i] for i in range(len(suites))]
+
+    datasets = []
+    for suite in suites:
+        datasets.append(run_suite(suite, cfg, keep_artifacts=keep_artifacts, progress=progress))
+        if on_dataset is not None:
+            on_dataset(suite.dataset)
+    return datasets
+
+
+def _build_report(datasets: list[DatasetResult], cfg: EvalConfig) -> Report:
+    """Aggregate replayed datasets into the headline scores and tag slices."""
     cases = [c for d in datasets for c in d.cases]
     if not cases:
         raise ValueError("no cases to evaluate")
@@ -463,3 +514,17 @@ def evaluate(
         datasets=datasets,
         config=asdict(cfg),
     )
+
+
+def evaluate(
+    suites: list[Suite],
+    cfg: EvalConfig | None = None,
+    workers: int = 1,
+    keep_artifacts: bool = False,
+    progress: ProgressFactory | None = None,
+    on_dataset: Callable[[str], None] | None = None,
+) -> Report:
+    """Score every suite. A dataset is one pass, so workers spreads datasets."""
+    cfg = cfg or EvalConfig()
+    datasets = _run_datasets(suites, cfg, workers, keep_artifacts, progress, on_dataset)
+    return _build_report(datasets, cfg)

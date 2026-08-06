@@ -86,8 +86,15 @@ def _score_cell(outcome: PlanOutcome) -> str:
     return "x" if not outcome.planned and not outcome.success else f"{outcome.spl:.2f}"
 
 
+def _clearance_cell(outcome: PlanOutcome) -> str:
+    return "-" if outcome.min_clearance is None else f"{outcome.min_clearance:.2f}"
+
+
 def _print_report(report: Report) -> None:
-    header = f"{'case':<28} {'dataset':<22} {'inc':>5} {'fin':>5} {'len':>6} {'ref':>6} {'ms':>7}"
+    header = (
+        f"{'case':<28} {'dataset':<22} {'inc':>5} {'fin':>5} "
+        f"{'len':>6} {'ref':>6} {'clr':>6} {'ms':>7}"
+    )
     print(header)
     print("-" * len(header))
     for d in report.datasets:
@@ -98,7 +105,8 @@ def _print_report(report: Report) -> None:
             print(
                 f"{c.id:<28} {c.dataset:<22} "
                 f"{inc:>5} {_score_cell(c.final):>5} "
-                f"{length:>6} {c.l_ref:>6.1f} {c.online.plan_ms:>7.1f}"
+                f"{length:>6} {c.l_ref:>6.1f} "
+                f"{_clearance_cell(c.online):>6} {c.online.plan_ms:>7.1f}"
             )
     print("-" * len(header))
     for d in report.datasets:
@@ -379,9 +387,7 @@ def retag(
 def pick_case(
     dataset: str = typer.Argument(..., help="Dataset whose manifest gets the cases"),
 ) -> None:
-    """Pick and edit cases by shift+clicking the map in a browser viewer.
-    The map is the pipeline's own, so the recording is replayed through it
-    first."""
+    """Pick and edit cases by shift+clicking the pipeline's map in a browser."""
     # Lazy: picker/viz pull in viser and matplotlib, only needed for pick-case.
     from dimos.navigation.nav_3d.evaluator.picker import pick_cases
 

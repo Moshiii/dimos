@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate evaluation cases from a recorded trajectory. Endpoint pairs come off
-the walked path, so both are proven reachable."""
+"""Cases from a recorded trajectory. Endpoints come off the walked path."""
 
 from __future__ import annotations
 
@@ -109,8 +108,7 @@ def _candidates(
     arcs: NDArray[np.float64],
     cfg: EvalConfig,
 ) -> dict[tuple[int, ...], Candidate]:
-    """The best candidate pair per spatial bin, over every ordered waypoint pair
-    the walk demonstrates."""
+    """The best candidate pair per spatial bin, over every ordered waypoint pair."""
     foot = trajectory.foot(cfg.robot_height)
     way_arcs = arcs[idx]
     candidates: dict[tuple[int, ...], Candidate] = {}
@@ -170,9 +168,7 @@ def generate_cases(
     max_cases: int | None = None,
     min_cases: int = MIN_CASES,
 ) -> list[Case]:
-    """Pair up waypoints along the walk and keep a diverse spread of the
-    demonstrated routes. Endpoints are odometry poses, left for the pipeline
-    under test to reconcile with whatever surface it believes in."""
+    """A diverse spread of demonstrated routes, endpoints straight off the odometry."""
     arcs = trajectory.arc_lengths()
     idx = _subsample_indices(trajectory, WAYPOINT_SPACING_M)
     points = trajectory.foot(cfg.robot_height)[idx]
@@ -206,8 +202,7 @@ def _is_duplicate(cand: Candidate, accepted: list[Candidate], radius: float) -> 
 
 
 class _DiverseSelector:
-    """Spread-greedy selection state: availability, sector usage, and distance
-    to the nearest already-selected endpoint."""
+    """Spread-greedy selection state: availability, sector usage, endpoint distance."""
 
     def __init__(self, ranked: list[Candidate], max_cases: int) -> None:
         self.ranked = ranked
@@ -288,8 +283,7 @@ def _distance_to(points: NDArray[np.float32], target: NDArray[np.float32]) -> ND
 def _select_diverse(
     ranked: list[Candidate], max_cases: int, min_cases: int = MIN_CASES
 ) -> list[Candidate]:
-    """Spread-greedy selection under a sector cap and flat quota, with a
-    relaxed pass to reach min_cases."""
+    """Spread-greedy selection under a sector cap and flat quota."""
     if not ranked:
         return []
     selector = _DiverseSelector(ranked, max_cases)

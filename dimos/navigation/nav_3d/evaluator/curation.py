@@ -124,8 +124,7 @@ PROVENANCE_TAGS = ("auto", "manual")
 
 
 def _curated_tags(tags: list[str], expect_fail: bool, provenance: str = "manual") -> list[str]:
-    """Rewrite a case's tags around exactly one provenance tag. An auto case
-    keeps its generated provenance so editing never changes what it measures."""
+    """Rewrite a case's tags around exactly one provenance tag."""
     keep = [t for t in tags if t not in (*PROVENANCE_TAGS, "negative")]
     return [provenance, *(["negative"] if expect_fail else []), *keep]
 

@@ -12,15 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Scoring for the nav-3d evaluator: SPL against the walked route, the climb
-limit, and the demonstrated reference a case is measured against."""
+"""Scoring: SPL, the gates, and the walked reference, all on the pipeline's map."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+from dimos.navigation.nav_3d.evaluator.voxel_keys import (
+    cylinder_offsets,
+    key_centers,
+    keys_contain,
+    offset_deltas,
+    voxel_keys,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -35,7 +42,7 @@ def path_length(waypoints: NDArray[np.float32]) -> float:
     return float(np.linalg.norm(np.diff(waypoints, axis=0), axis=1).sum())
 
 
-def arc_lengths(points: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
+def arc_lengths(points: NDArray[np.float32] | NDArray[np.float64]) -> NDArray[np.float64]:
     """Cumulative 3D arc length at each point, starting at zero."""
     steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
     return np.concatenate([[0.0], np.cumsum(steps)]).astype(np.float64)
@@ -47,8 +54,200 @@ def goal_reached(
     return bool(np.linalg.norm(waypoints[-1] - np.asarray(goal, dtype=np.float32)) <= tolerance)
 
 
+# Clearance margins are only measured out to this horizontal distance from
+# the body surface. Anything farther reports the cap.
+MARGIN_CAP_M = 0.3
+
 # Floor on any length used as a divisor or a direction.
 MIN_LENGTH_M = 1e-6
+
+
+def densify(points: NDArray[np.float32], step: float) -> NDArray[np.float32]:
+    """Resample a polyline so consecutive samples are at most step apart."""
+    if len(points) < 2:
+        return points.astype(np.float32)
+    seg = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    n = np.maximum(np.ceil(seg / step).astype(np.int64), 1)
+    idx = np.repeat(np.arange(len(n)), n)
+    starts = np.concatenate([[0], np.cumsum(n)[:-1]])
+    t = ((np.arange(n.sum()) - starts[idx] + 1) / n[idx])[:, None]
+    body = points[idx] * (1 - t) + points[idx + 1] * t
+    dense: NDArray[np.float32] = np.concatenate([points[:1], body]).astype(np.float32)
+    return dense
+
+
+def chord_directions(samples: NDArray[np.float32], span: float) -> NDArray[np.float64]:
+    """Heading from the foot-to-foot chord, steadier than the local tangent."""
+    if len(samples) < 2:
+        return np.tile(np.array([1.0, 0.0, 0.0]), (len(samples), 1))
+    pts = samples.astype(np.float64)
+    arc = arc_lengths(pts)
+    half = span / 2.0
+    back_arc = np.clip(arc - half, arc[0], arc[-1])
+    front_arc = np.clip(arc + half, arc[0], arc[-1])
+    back = np.column_stack([np.interp(back_arc, arc, pts[:, c]) for c in range(3)])
+    front = np.column_stack([np.interp(front_arc, arc, pts[:, c]) for c in range(3)])
+    fwd = front - back
+    norm = np.linalg.norm(fwd, axis=1, keepdims=True)
+    # A path of zero arc length has no heading, so fall back to a valid frame
+    # rather than handing a singular basis to the caller.
+    fwd = np.where(norm > MIN_LENGTH_M, fwd, np.array([1.0, 0.0, 0.0]))
+    unit: NDArray[np.float64] = fwd / np.maximum(
+        np.linalg.norm(fwd, axis=1, keepdims=True), MIN_LENGTH_M
+    )
+    return unit
+
+
+def body_frames(
+    samples: NDArray[np.float32], robot_length: float
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Per-sample body axes: forward along the chord, lateral flat, up with it."""
+    fwd = chord_directions(samples, robot_length)
+    lateral = np.cross(np.array([0.0, 0.0, 1.0]), fwd)
+    ln = np.linalg.norm(lateral, axis=1, keepdims=True)
+    lateral = np.where(
+        ln > MIN_LENGTH_M, lateral / np.maximum(ln, MIN_LENGTH_M), np.array([0.0, 1.0, 0.0])
+    )
+    up = np.cross(fwd, lateral)
+    return fwd, lateral, up
+
+
+@dataclass
+class BodyBox:
+    """The body box at one path sample, in the pose the gate tested it."""
+
+    center: tuple[float, float, float]
+    # Body axes as a quaternion, xyzw.
+    rotation: tuple[float, float, float, float]
+
+
+def body_box_half_extents(cfg: EvalConfig) -> tuple[float, float, float]:
+    """Half extents of the gate's body box, along forward, lateral and up."""
+    return (
+        cfg.robot_length / 2.0,
+        cfg.robot_width / 2.0,
+        (cfg.body_clearance - cfg.ground_margin) / 2.0,
+    )
+
+
+def _body_boxes(
+    centers: NDArray[np.float64],
+    fwd: NDArray[np.float64],
+    lateral: NDArray[np.float64],
+    up: NDArray[np.float64],
+    idx: NDArray[np.int64],
+) -> list[BodyBox]:
+    """The boxes at the given samples, for drawing where a path hit something."""
+    # Lazy: scipy is a heavy import for a module the runner loads per case.
+    from scipy.spatial.transform import Rotation
+
+    if len(idx) == 0:
+        return []
+    axes = np.stack([fwd[idx], lateral[idx], up[idx]], axis=-1)
+    quats = Rotation.from_matrix(axes).as_quat()
+    return [
+        BodyBox(
+            (float(c[0]), float(c[1]), float(c[2])),
+            (float(q[0]), float(q[1]), float(q[2]), float(q[3])),
+        )
+        for c, q in zip(centers[idx], quats, strict=True)
+    ]
+
+
+@dataclass
+class GateResult:
+    """Collision check of a path against a voxel map key set."""
+
+    valid: bool
+    # Body poses that collided, so a viewer draws the robot where it hit.
+    collision_boxes: list[BodyBox]
+    # Distance from the body surface to the nearest occupied voxel in the band,
+    # minimized along the path. Negative is penetration, capped at MARGIN_CAP_M.
+    min_clearance_m: float
+
+
+def check_path(
+    waypoints: NDArray[np.float32], map_keys: NDArray[np.int64], cfg: EvalConfig
+) -> GateResult:
+    """Sweep the body box along the path. Only the trunk band collides."""
+    voxel_size = cfg.voxel_size
+    samples = densify(waypoints, voxel_size / 2)
+    fwd, lateral, up = body_frames(samples, cfg.robot_length)
+    half_len, half_wid, half_band = body_box_half_extents(cfg)
+    mid_h = (cfg.ground_margin + cfg.body_clearance) / 2.0
+    centers = samples + mid_h * up
+    pad = MARGIN_CAP_M + voxel_size
+    # The candidate cylinder only has to reach the band, so bound it by the
+    # path's own steepest pitch instead of assuming any orientation.
+    sin_p = float(np.abs(fwd[:, 2]).max())
+    cos_p = float(np.sqrt(max(1.0 - sin_p * sin_p, 0.0)))
+    reach_z = (half_len + pad) * sin_p + half_band * cos_p + voxel_size
+    # Union with the level window: a steep segment lowers the pitched window,
+    # which would otherwise let a flat stretch of the same path hide a collision.
+    offsets = cylinder_offsets(
+        float(np.hypot(half_len, half_wid)) + pad + (mid_h + half_band) * sin_p,
+        min(mid_h * cos_p - reach_z, mid_h - half_band - voxel_size),
+        max(mid_h * cos_p + reach_z, mid_h + half_band + voxel_size),
+        voxel_size,
+    )
+    # Samples land two per voxel, so membership runs over the distinct voxels
+    # and is scattered back rather than being paid for twice.
+    base = voxel_keys(samples, voxel_size)
+    deltas = offset_deltas(offsets)
+    unique_base, inverse = np.unique(base, return_inverse=True)
+    hit = keys_contain(map_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
+        len(unique_base), len(deltas)
+    )
+    s_idx, o_idx = np.nonzero(hit[inverse])
+    if len(s_idx) == 0:
+        return GateResult(True, [], MARGIN_CAP_M)
+    delta = key_centers(base[s_idx] + deltas[o_idx], voxel_size) - centers[s_idx]
+    # The band decides membership on its own, so drop the candidates outside it
+    # before paying for the footprint distance.
+    vertical = (delta * up[s_idx]).sum(1)
+    in_band = np.abs(vertical) <= half_band
+    if not in_band.any():
+        return GateResult(True, [], MARGIN_CAP_M)
+    delta, s_idx = delta[in_band], s_idx[in_band]
+    along = (delta * fwd[s_idx]).sum(1)
+    across = (delta * lateral[s_idx]).sum(1)
+    # Signed distance to the oriented footprint rectangle, negative inside.
+    qx = np.abs(along) - half_len
+    qy = np.abs(across) - half_wid
+    sdf = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0)) + np.minimum(np.maximum(qx, qy), 0.0)
+    colliding = np.unique(s_idx[sdf <= 0.0])
+    return GateResult(
+        valid=len(colliding) == 0,
+        collision_boxes=_body_boxes(centers, fwd, lateral, up, colliding),
+        min_clearance_m=min(float(sdf.min()), MARGIN_CAP_M),
+    )
+
+
+@dataclass
+class SupportResult:
+    """Ground check: every path sample must stand on mapped occupancy."""
+
+    valid: bool
+    unsupported_points: NDArray[np.float32]
+
+
+def check_support(
+    waypoints: NDArray[np.float32], support_keys: NDArray[np.int64], cfg: EvalConfig
+) -> SupportResult:
+    """Require mapped ground beneath every path sample."""
+    voxel_size = cfg.voxel_size
+    samples = densify(waypoints, voxel_size)
+    offsets = cylinder_offsets(cfg.support_radius_m, -cfg.support_depth_m, voxel_size, voxel_size)
+    # Samples repeat voxels, so membership runs over the distinct ones and is
+    # scattered back, as in check_path.
+    base = voxel_keys(samples, voxel_size)
+    deltas = offset_deltas(offsets)
+    unique_base, inverse = np.unique(base, return_inverse=True)
+    hit = keys_contain(support_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
+        len(unique_base), len(deltas)
+    )
+    supported = np.asarray(hit.any(axis=1))[inverse]
+    return SupportResult(bool(supported.all()), samples[~supported])
 
 
 @dataclass
@@ -71,8 +270,7 @@ def _resample(waypoints: NDArray[np.float32], spacing: float) -> NDArray[np.floa
 
 
 def check_kinematics(waypoints: NDArray[np.float32], cfg: EvalConfig) -> KinematicsResult:
-    """Reject paths that climb steeper than the robot can. Resampled at
-    window_m of arc so cell quantization does not read as a cliff."""
+    """Reject paths that climb steeper than the robot can."""
     if len(waypoints) < 2:
         return KinematicsResult(True, waypoints[:0])
     profile = _resample(waypoints, cfg.kinematic_window_m)
@@ -101,7 +299,6 @@ class Reference:
 class _Visits:
     """Poses near each endpoint, with the walked length of every pairing."""
 
-    foot: NDArray[np.float32]
     near_s: NDArray[np.int64]
     near_g: NDArray[np.int64]
     totals: NDArray[np.float64]
@@ -113,7 +310,7 @@ def _visits(
     goal: tuple[float, float, float],
     cfg: EvalConfig,
 ) -> _Visits | None:
-    """None when either endpoint is farther than snap_max_m from the trajectory."""
+    """None when either endpoint is farther than visit_radius_m from the trajectory."""
     foot = trajectory.foot(cfg.robot_height)
     ds = np.linalg.norm(foot - np.asarray(start, dtype=np.float32), axis=1)
     dg = np.linalg.norm(foot - np.asarray(goal, dtype=np.float32), axis=1)
@@ -127,7 +324,7 @@ def _visits(
         + ds[near_s][:, None]
         + dg[near_g][None, :]
     )
-    return _Visits(foot, near_s, near_g, totals)
+    return _Visits(near_s, near_g, totals)
 
 
 def reference_length(
@@ -136,9 +333,7 @@ def reference_length(
     goal: tuple[float, float, float],
     cfg: EvalConfig,
 ) -> Reference:
-    """Shortest walked length demonstrated between start and goal, minimized
-    over every visit pairing and preferring causal ones. Falls back to
-    straight-line distance when an endpoint is off the trajectory."""
+    """Shortest walked length between the endpoints, preferring causal pairings."""
     visits = _visits(trajectory, start, goal, cfg)
     if visits is None:
         straight = float(np.linalg.norm(np.asarray(goal) - np.asarray(start)))
@@ -152,25 +347,6 @@ def reference_length(
     i = int(visits.near_s[best[0]])
     start_ts = float(trajectory.ts[i]) if causal else float("inf")
     return Reference(max(float(totals[best]), MIN_LENGTH_M), True, start_ts, causal)
-
-
-def ground_truth_route(
-    trajectory: Trajectory,
-    start: tuple[float, float, float],
-    goal: tuple[float, float, float],
-    cfg: EvalConfig,
-) -> NDArray[np.float32] | None:
-    """Foot-level polyline of the shortest walk between start and goal.
-    Ignores causality: it describes terrain, not what the robot knew."""
-    visits = _visits(trajectory, start, goal, cfg)
-    if visits is None:
-        return None
-    best = np.unravel_index(visits.totals.argmin(), visits.totals.shape)
-    i = int(visits.near_s[best[0]])
-    j = int(visits.near_g[best[1]])
-    # Orient the slice start-to-goal so the route reads in the case's direction.
-    route = visits.foot[i : j + 1] if i <= j else visits.foot[j : i + 1][::-1]
-    return route.astype(np.float32)
 
 
 def spl(success: bool, l_ref: float, p_len: float) -> float:

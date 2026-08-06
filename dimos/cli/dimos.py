@@ -755,6 +755,7 @@ main.add_typer(map_app, name="map")
 map_app.command("global")(_map_main)
 
 
+# Imported here, next to where it mounts, like the other sub-apps below.
 from dimos.navigation.nav_3d.evaluator.cli import app as nav_eval_app
 
 main.add_typer(nav_eval_app, name="nav-eval")
