@@ -166,6 +166,26 @@ class GateResult:
     min_clearance_m: float
 
 
+def _voxel_hits(
+    samples: NDArray[np.float32],
+    voxel_size: float,
+    offsets: NDArray[np.int64],
+    map_keys: NDArray[np.int64],
+) -> tuple[NDArray[np.bool_], NDArray[np.int64], NDArray[np.int64]]:
+    """Per-sample membership against map_keys, over each sample's offset cylinder.
+
+    hit has shape (len(samples), len(offsets)); base_keys[s] + deltas[o]
+    recovers the key behind a True at [s, o].
+    """
+    base = voxel_keys(samples, voxel_size)
+    deltas = offset_deltas(offsets)
+    unique_base, inverse = np.unique(base, return_inverse=True)
+    hit = keys_contain(map_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
+        len(unique_base), len(deltas)
+    )
+    return np.asarray(hit[inverse]), base, deltas
+
+
 def check_path(
     waypoints: NDArray[np.float32], map_keys: NDArray[np.int64], cfg: EvalConfig
 ) -> GateResult:
@@ -190,15 +210,8 @@ def check_path(
         max(mid_h * cos_p + reach_z, mid_h + half_band + voxel_size),
         voxel_size,
     )
-    # Samples land two per voxel, so membership runs over the distinct voxels
-    # and is scattered back rather than being paid for twice.
-    base = voxel_keys(samples, voxel_size)
-    deltas = offset_deltas(offsets)
-    unique_base, inverse = np.unique(base, return_inverse=True)
-    hit = keys_contain(map_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
-        len(unique_base), len(deltas)
-    )
-    s_idx, o_idx = np.nonzero(hit[inverse])
+    hit, base, deltas = _voxel_hits(samples, voxel_size, offsets, map_keys)
+    s_idx, o_idx = np.nonzero(hit)
     if len(s_idx) == 0:
         return GateResult(True, [], MARGIN_CAP_M)
     delta = key_centers(base[s_idx] + deltas[o_idx], voxel_size) - centers[s_idx]
@@ -238,15 +251,8 @@ def check_support(
     voxel_size = cfg.voxel_size
     samples = densify(waypoints, voxel_size)
     offsets = cylinder_offsets(cfg.support_radius_m, -cfg.support_depth_m, voxel_size, voxel_size)
-    # Samples repeat voxels, so membership runs over the distinct ones and is
-    # scattered back, as in check_path.
-    base = voxel_keys(samples, voxel_size)
-    deltas = offset_deltas(offsets)
-    unique_base, inverse = np.unique(base, return_inverse=True)
-    hit = keys_contain(support_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
-        len(unique_base), len(deltas)
-    )
-    supported = np.asarray(hit.any(axis=1))[inverse]
+    hit, _, _ = _voxel_hits(samples, voxel_size, offsets, support_keys)
+    supported = hit.any(axis=1)
     return SupportResult(bool(supported.all()), samples[~supported])
 
 
