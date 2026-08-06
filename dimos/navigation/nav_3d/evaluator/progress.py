@@ -33,8 +33,10 @@ if TYPE_CHECKING:
     Tick = Callable[[], None]
     ProgressFactory = Callable[[int, str], AbstractContextManager[Tick]]
 
-# Steps per queue message, so a 12k-frame replay costs a few hundred sends.
-TICK_BATCH = 25
+# Ceiling on steps per queue message, so a 12k-frame replay costs a few hundred
+# sends. A short bar batches less, so it still moves about this many times.
+MAX_TICK_BATCH = 25
+TARGET_UPDATES = 100
 _STOP = "stop"
 _DRAIN_TIMEOUT_S = 5.0
 
@@ -52,6 +54,7 @@ class QueueProgress:
     @contextmanager
     def __call__(self, total: int, label: str) -> Iterator[Tick]:
         self.queue.put(("open", label, total))
+        batch = max(1, min(MAX_TICK_BATCH, total // TARGET_UPDATES))
         pending = 0
         seen = 0
 
@@ -59,7 +62,7 @@ class QueueProgress:
             nonlocal pending, seen
             pending += 1
             seen += 1
-            if pending >= TICK_BATCH:
+            if pending >= batch:
                 self.queue.put(("step", label, pending))
                 pending = 0
 

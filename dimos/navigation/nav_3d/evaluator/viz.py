@@ -48,13 +48,13 @@ VOXEL_RADIUS = 0.007
 SURFACE_RADIUS_SCALE = 0.25
 ENDPOINT_RADIUS = 0.05
 EDGE_RADIUS = 0.008
-WALKED_RADIUS = 0.015
+WALKED_RADIUS = 0.019
 # The online path is drawn over the final one, so it is the thicker of the two.
-ONLINE_PATH_RADIUS = 0.04
-FINAL_PATH_RADIUS = 0.02
+ONLINE_PATH_RADIUS = 0.05
+FINAL_PATH_RADIUS = 0.025
 # A refusal is reviewed on its own, an unreachable goal only against its path.
-NEGATIVE_INTENT_RADIUS = 0.006
-FAILED_INTENT_RADIUS = 0.003
+NEGATIVE_INTENT_RADIUS = 0.0075
+FAILED_INTENT_RADIUS = 0.00375
 # Gate violations are drawn as points on their path, wide enough to spot.
 VIOLATION_RADIUS_SCALE = 3.0
 WALKED_PATH_COLOR = [255, 255, 255]
