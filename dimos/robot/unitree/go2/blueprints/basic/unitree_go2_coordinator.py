@@ -34,7 +34,7 @@ _go2_joints = make_twist_base_joints("go2")
 
 unitree_go2_coordinator = (
     autoconnect(
-        GO2Connection.blueprint(velocity_api=True),
+        GO2Connection.blueprint(velocity_api=False),
         ControlCoordinator.blueprint(
             hardware=[
                 HardwareComponent(
