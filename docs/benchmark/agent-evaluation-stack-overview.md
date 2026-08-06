@@ -341,11 +341,14 @@ the evaluator samples once more before recording `episode_timeout`.
 ### PiMSim Go2 apartment example
 
 The checked-in case reproduces the apartment go-to-bed system test. PiMSim
-materializes the `dimsim-apartment` scene. Before Pi starts, the evaluator samples
-the fixed public exploration route to populate spatial memory, respawns Go2 at
-`(3.0, 0.0, 0.52)`, and verifies odometry convergence. Pi then receives exactly
+materializes the `dimsim-apartment` scene. Before Pi starts, the evaluator drives
+Go2 through the same fixed public exploration route with `/cmd_vel` to populate
+spatial memory. It then performs the original single respawn at
+`(3.0, 0.0, 0.52)` and verifies odometry convergence. Pi receives exactly
 `Go to the bed`. A private validator queries semantic bed bounds and checks the
-robot's current planar distance periodically.
+robot's current planar distance periodically. The physical exploration can be
+slower or somewhat flaky, but it preserves the observations and dynamics of the
+original end-to-end setup instead of teleporting between route points.
 
 Install the PiMSim core and DimOS integration packages (editable checkouts are
 fine), build `packages/pi-spatial-adapter`, and configure either Codex OAuth in

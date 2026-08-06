@@ -141,15 +141,10 @@ class DimosSimulatorRuntime:
             return {"schema_version": "1.0", "recipe": None, "completed": True}
         if self._explorer is None or self._control is None:
             raise RuntimeError("runtime is not started")
-        for x, y in recipe.exploration_route:
-            self._control.set_agent_position(x, y, recipe.final_start_pose[2])
-            self._explorer.wait_until_position(
-                x,
-                y,
-                tolerance=recipe.start_tolerance_metres,
-                timeout=recipe.step_timeout_seconds,
-            )
-            time.sleep(recipe.observation_dwell_seconds)
+        self._explorer.follow_points(
+            list(recipe.exploration_route),
+            per_waypoint_timeout=recipe.step_timeout_seconds,
+        )
         self._control.set_agent_position(*recipe.final_start_pose)
         self._explorer.wait_until_position(
             recipe.final_start_pose[0],

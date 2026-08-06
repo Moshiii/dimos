@@ -70,3 +70,26 @@ on port 3030 accepted WebSocket upgrade requests. The single attempt finalized
 three visualization modules during normal evaluator cleanup. Its finalized
 path is
 `/tmp/dimos-eval-go-to-bed-rerun-web/attempt_9f9209d4061f4814b2d5ed206d58572b`.
+
+## Physical source-preparation acceptance
+
+Executed the canonical case again after restoring the original exploration
+behavior:
+
+```bash
+uv run dimos --viewer none eval run \
+  dimos/benchmark/realtime_sim/cases/go2-apartment-go-to-bed/case.json \
+  --output=/tmp/dimos-eval-go-to-bed-physical-prep \
+  --quiet
+```
+
+The evaluator drove all 22 route points through `DirectCmdVelExplorer` and
+`/cmd_vel`, then used scene control exactly once to restore the original task
+start pose. It did not teleport between exploration waypoints. The resulting
+attempt finalized `completed`/`passed` with `goal_reached`, four tool calls, a
+216.2-second total duration, and successful cleanup. Its finalized path is
+`/tmp/dimos-eval-go-to-bed-physical-prep/attempt_b6006494d1d1441887660580f42d7a96`.
+
+This acceptance supersedes the earlier teleport-based preparation behavior.
+Physical traversal is intentionally allowed to retain the original test's
+run-to-run timing and stability variation.

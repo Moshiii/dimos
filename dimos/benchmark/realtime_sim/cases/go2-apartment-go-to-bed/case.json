@@ -108,7 +108,6 @@
         0.52
       ],
       "step_timeout_seconds": 60.0,
-      "observation_dwell_seconds": 1.0,
       "odometry_timeout_seconds": 30.0,
       "start_tolerance_metres": 0.25
     }
@@ -133,5 +132,5 @@
     "private_path": "private/goal.json",
     "private_sha256": "e4ecd6c2e9be8a5bcff18867784b3c6374c74ab6124c2f59ef01254e85d987fa"
   },
-  "fingerprint": "031ac2b886691267c918de3785e165a3418d9f25c4eee0fd37637710bc43713f"
+  "fingerprint": "1960cb3e78fae84166126bfd66bb36bb02cac591eb806a257dafc59612c185bf"
 }

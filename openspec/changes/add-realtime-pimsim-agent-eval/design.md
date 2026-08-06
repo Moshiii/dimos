@@ -76,7 +76,7 @@ Alternative considered: let each simulator backend expose `start_evaluation()` a
 
 ### The original source preparation remains explicit
 
-The `gotobed` source selects an apartment spatial-memory preparation recipe. Before the agent and task clock start, the evaluator follows the existing provider-neutral apartment exploration route, waits for the resulting odometry/observations, respawns the robot at `(3.0, 0.0, 0.52)`, and waits for odometry convergence. This preserves the useful starting context of the system test without embedding target-specific private data in public memory.
+The `gotobed` source selects an apartment spatial-memory preparation recipe. Before the agent and task clock start, the evaluator physically follows the existing provider-neutral apartment exploration route through the ordinary `/cmd_vel` path, producing the same moving-camera observations as the original test. It then performs the original single scene-control respawn at `(3.0, 0.0, 0.52)` and waits for odometry convergence. It does not teleport between exploration waypoints. This preserves the useful starting context and dynamics of the system test without embedding target-specific private data in public memory.
 
 Preparation failure is an infrastructure failure and Pi is not started. The route and start pose are source configuration, not validator material.
 
@@ -108,7 +108,7 @@ This permits Rerun Web for an otherwise identical attempt while retaining
 ## Risks / Trade-offs
 
 - **[PiMSim and DimOS provider versions drift]** → Validate the provider and scene-control entry points before reserving the live attempt and fail with an actionable preflight diagnostic.
-- **[The fixed exploration route is slow or flaky]** → Keep it as a named source-preparation recipe with readiness and per-step timeouts, retain partial evidence, and test the recipe independently from Pi.
+- **[The physical exploration route is slow or flaky]** → Accept some run-to-run variability to stay aligned with the original end-to-end behavior; keep it as a named source-preparation recipe with readiness and per-step timeouts, retain partial evidence, and test the command/teleport sequence independently from Pi.
 - **[Agent cancellation cannot immediately stop an in-flight action]** → Stop new Pi work first, invoke DimOS motion cancellation, use bounded cleanup waits, and retain cleanup failures without hiding the primary terminal reason.
 - **[Polling misses a short-lived predicate]** → Use a case-bound poll interval and a final deadline check; the first predicate is stable spatial proximity rather than a transient event.
 - **[Private simulator facts leak through diagnostics]** → Separate public progress from private artifacts and test that target query, bounds, and distance are absent from public case, agent input, CodePolicy results, and compact CLI output.

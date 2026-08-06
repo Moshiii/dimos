@@ -27,7 +27,7 @@ When the source names a preparation recipe, the evaluator SHALL complete that re
 
 #### Scenario: Prepare spatial memory
 - **WHEN** a live source selects the apartment spatial-memory preparation recipe
-- **THEN** the evaluator executes its provider-neutral exploration route, restores the declared task start pose, verifies odometry convergence, and only then starts the evaluated agent
+- **THEN** the evaluator physically drives its provider-neutral exploration route through normal motion control, performs one reset to the declared task start pose, verifies odometry convergence, and only then starts the evaluated agent
 
 #### Scenario: Preparation fails before dispatch
 - **WHEN** the route, respawn, observation, or final-pose readiness cannot complete within its infrastructure limits

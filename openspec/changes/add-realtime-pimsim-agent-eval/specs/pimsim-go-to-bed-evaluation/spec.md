@@ -12,11 +12,11 @@ The repository SHALL contain one authored real-time case whose source selects th
 - **THEN** it contains the ordinary Go2 spatial runtime and no internal LLM agent competing with the external Pi session
 
 ### Requirement: Reproduce the apartment task starting context
-The case's source preparation SHALL populate DimOS spatial memory using the existing provider-neutral apartment exploration route, then place the simulated robot at `(3.0, 0.0, 0.52)` in the canonical DimOS world frame and wait until odometry is within the configured start tolerance before task dispatch.
+The case's source preparation SHALL populate DimOS spatial memory by physically driving the existing provider-neutral apartment exploration route through `/cmd_vel`, without teleporting between its waypoints. It SHALL then perform one scene-control placement of the simulated robot at `(3.0, 0.0, 0.52)` in the canonical DimOS world frame and wait until odometry is within the configured start tolerance before task dispatch.
 
 #### Scenario: Preparation completes
 - **WHEN** PiMSim and the Go2 DimOS runtime are healthy
-- **THEN** the exploration observations are available in live Memory2 and the task begins from the declared start pose
+- **THEN** the moving-camera exploration observations are available in live Memory2 and the task begins from the declared start pose
 
 #### Scenario: Task start cannot be established
 - **WHEN** exploration or start-pose convergence fails

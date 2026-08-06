@@ -40,7 +40,6 @@ class SourcePreparationRef(BaseEvalModel):
     exploration_route: tuple[tuple[float, float], ...] = Field(min_length=1)
     final_start_pose: tuple[float, float, float]
     step_timeout_seconds: PositiveFinite
-    observation_dwell_seconds: PositiveFinite = 1.0
     odometry_timeout_seconds: PositiveFinite
     start_tolerance_metres: PositiveFinite
 

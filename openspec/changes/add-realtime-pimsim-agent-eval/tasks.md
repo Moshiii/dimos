@@ -57,3 +57,9 @@
 - [x] 8.1 Preserve resolved DimOS viewer and Rerun presentation settings when starting the case-bound realtime runtime, including explicit headless mode.
 - [x] 8.2 Add hermetic tests proving realtime runtime configuration does not override viewer selection or change case identity.
 - [x] 8.3 Document the exact Rerun Web and headless commands, then run focused tests and changed-file quality checks.
+
+## 9. Restore original physical source preparation
+
+- [x] 9.1 Replace per-waypoint scene-control teleportation with the original `/cmd_vel` waypoint traversal, retaining only the original final start-pose teleport and odometry check.
+- [x] 9.2 Remove the teleport-only observation dwell contract, update the checked-in case fingerprint, and add a hermetic preparation sequence test.
+- [x] 9.3 Run focused and real PiMSim acceptance, record any expected traversal flakiness, and update the architecture documentation.
