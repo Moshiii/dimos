@@ -87,7 +87,7 @@ class CaseStore:
             raise CurationError(f"case id {case.id!r} already exists in {self.path}")
         self.suite.cases.append(case)
         self.save()
-        kind = "negative (must refuse)" if expect_fail else "positive"
+        kind = "negative (should fail planning)" if expect_fail else "positive"
         logger.info(
             "added case",
             kind=kind,

@@ -49,16 +49,9 @@ WAYPOINT_SPACING_M = 1.0
 DEDUPE_RADIUS_M = 1.5
 # Share of slots reserved for flat cases when the recording has them.
 FLAT_FRACTION = 0.25
-# Coverage sectors: a case earns a slot first by connecting a sector pair
-# no accepted case connects yet.
-SECTOR_SIZE_M = 8.0
-SECTOR_Z_M = 1.5
-# A sector may anchor at most this many selected cases, which prevents a
-# single high-priority spot from becoming the hub of every case.
-ENDPOINT_REUSE_MAX = 2
 # Endpoint spread stops earning score past this distance, and is worth this
 # much next to a candidate's own priority.
-SPREAD_CAP_M = 2.0 * SECTOR_SIZE_M
+SPREAD_CAP_M = 16.0
 SPREAD_WEIGHT = 0.4
 # A waypoint counts as revisited when the walk comes back within this.
 REVISIT_RADIUS_M = 1.0
@@ -202,7 +195,7 @@ def _is_duplicate(cand: Candidate, accepted: list[Candidate], radius: float) -> 
 
 
 class _DiverseSelector:
-    """Spread-greedy selection state: availability, sector usage, endpoint distance."""
+    """Spread-greedy selection state: availability, endpoint distance, flat/stairs quota."""
 
     def __init__(self, ranked: list[Candidate], max_cases: int) -> None:
         self.ranked = ranked
@@ -213,8 +206,6 @@ class _DiverseSelector:
         self.priorities = np.array([c.priority for c in ranked], dtype=np.float32)
         self.is_stairs = np.array([abs(c.dz) >= STAIRS_DZ_M for c in ranked])
         self.alive = np.ones(len(ranked), dtype=bool)
-        self.usage: dict[tuple[int, ...], int] = {}
-        self.sector_capped: list[int] = []
         self.stairs: list[Candidate] = []
         self.flats: list[Candidate] = []
         # Running minima over the selected endpoints. Seeded to infinity so the
@@ -226,18 +217,9 @@ class _DiverseSelector:
     def selected(self) -> list[Candidate]:
         return self.stairs + self.flats
 
-    def _sector(self, p: NDArray[np.float32]) -> tuple[int, ...]:
-        return (
-            int(np.floor(p[0] / SECTOR_SIZE_M)),
-            int(np.floor(p[1] / SECTOR_SIZE_M)),
-            round(float(p[2]) / SECTOR_Z_M),
-        )
-
     def _accept(self, n: int) -> None:
         """Record a selection and fold its endpoints into the running minima."""
         for point in (self.starts[n], self.goals[n]):
-            sector = self._sector(point)
-            self.usage[sector] = self.usage.get(sector, 0) + 1
             np.minimum(self.d_start, _distance_to(self.starts, point), out=self.d_start)
             np.minimum(self.d_goal, _distance_to(self.goals, point), out=self.d_goal)
         bucket = self.stairs if self.is_stairs[n] else self.flats
@@ -259,20 +241,10 @@ class _DiverseSelector:
                 break
             n = int(score.argmax())
             self.alive[n] = False
-            sa, sb = self._sector(self.starts[n]), self._sector(self.goals[n])
-            if not relax and (
-                self.usage.get(sa, 0) >= ENDPOINT_REUSE_MAX
-                or self.usage.get(sb, 0) >= ENDPOINT_REUSE_MAX
-            ):
-                self.sector_capped.append(n)
-                continue
             bucket = self.stairs if self.is_stairs[n] else self.flats
             if _is_duplicate(self.ranked[n], bucket, DEDUPE_RADIUS_M):
                 continue
             self._accept(n)
-
-    def revive_sector_capped(self) -> None:
-        self.alive[self.sector_capped] = True
 
 
 def _distance_to(points: NDArray[np.float32], target: NDArray[np.float32]) -> NDArray[np.float32]:
@@ -283,13 +255,12 @@ def _distance_to(points: NDArray[np.float32], target: NDArray[np.float32]) -> ND
 def _select_diverse(
     ranked: list[Candidate], max_cases: int, min_cases: int = MIN_CASES
 ) -> list[Candidate]:
-    """Spread-greedy selection under a sector cap and flat quota."""
+    """Spread-greedy selection under a flat/stairs quota, relaxed to reach the floor."""
     if not ranked:
         return []
     selector = _DiverseSelector(ranked, max_cases)
     selector.fill(max_cases, relax=False)
     if len(selector.selected) < min(min_cases, max_cases):
-        selector.revive_sector_capped()
         selector.fill(min(min_cases, max_cases), relax=True)
     return selector.selected[:max_cases]
 

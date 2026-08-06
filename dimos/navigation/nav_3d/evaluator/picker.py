@@ -268,9 +268,11 @@ class _PairEntry:
                 self.custom_text = server.gui.add_text(
                     "custom", initial_value=self._custom, hint="comma-separated"
                 )
-            self.negative_box = server.gui.add_checkbox("negative (must refuse)", self._negative)
+            self.negative_box = server.gui.add_checkbox(
+                "negative (should fail planning)", self._negative
+            )
             self.dynamic_box = server.gui.add_checkbox(
-                "dynamic (final map expected to refuse)", self._dynamic
+                "dynamic (final map expected to fail planning)", self._dynamic
             )
             self.message = server.gui.add_markdown(self._status)
             self.button = server.gui.add_button("save / update")
