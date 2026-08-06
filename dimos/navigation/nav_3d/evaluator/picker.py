@@ -428,9 +428,17 @@ def _add_map_scene(
 class _PickerSession:
     """Owns the scene markers and the live pair list for one picker run."""
 
-    def __init__(self, server: viser.ViserServer, store: CaseStore) -> None:
+    def __init__(
+        self,
+        server: viser.ViserServer,
+        store: CaseStore,
+        occupied: NDArray[np.float32],
+        voxel_size: float,
+    ) -> None:
         self.server = server
         self.store = store
+        self.occupied = occupied
+        self.voxel_size = voxel_size
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.pairs: list[_PairEntry] = []
@@ -491,12 +499,11 @@ class _PickerSession:
 
     def on_click(self, event: viser.SceneClickEvent) -> None:
         """Shift+click picks a start, then a goal, then opens the new pair."""
-        final = self.store.final
         point = pick_along_ray(
-            final.occupied,
+            self.occupied,
             np.asarray(event.ray_origin),
             np.asarray(event.ray_direction),
-            final.voxel_size,
+            self.voxel_size,
         )
         if point is None:
             return
@@ -552,22 +559,26 @@ class _PickerSession:
             self.server.stop()
 
 
-def pick_cases(store: CaseStore, walked: NDArray[np.float32]) -> None:
-    """Serve the picker until the user exits from the panel or hits ctrl-c."""
+def pick_cases(
+    store: CaseStore,
+    walked: NDArray[np.float32],
+    occupied: NDArray[np.float32],
+    voxel_size: float,
+) -> None:
+    """Serve the picker until the user exits from the panel or hits ctrl-c.
+    The occupancy is the pipeline's own, so the evaluator never decides where a
+    point may sit."""
     # Lazy: viser is an optional extra, only needed by this command.
     import viser
 
-    final = store.final
     server = viser.ViserServer(
         host=global_config.listen_host,
         label=f"Pair Picker - {store.suite.dataset}",
         verbose=False,
     )
-    _add_map_scene(
-        server, final.occupied, turbo_by_height(final.occupied), final.voxel_size, walked
-    )
+    _add_map_scene(server, occupied, turbo_by_height(occupied), voxel_size, walked)
     server.gui.add_markdown(INSTRUCTIONS)
-    session = _PickerSession(server, store)
+    session = _PickerSession(server, store, occupied, voxel_size)
     session.load_manifest_pairs()
 
     server.scene.on_click(modifier="shift")(session.on_click)

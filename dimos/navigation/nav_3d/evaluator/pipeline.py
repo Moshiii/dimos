@@ -51,6 +51,8 @@ class PipelineIntrospection(Protocol):
 
     def node_edges(self) -> NDArray[np.float32]: ...
 
+    def occupied(self) -> NDArray[np.float32]: ...
+
 
 class MLSPipeline:
     """The voxel ray-tracing mapper feeding the MLS planner. The map reaches
@@ -58,9 +60,10 @@ class MLSPipeline:
 
     def __init__(self, cfg: EvalConfig) -> None:
         # Lazy: the planner is a native module, only needed by this pipeline.
+        from dimos.mapping.ray_tracing.voxel_map import VoxelRayMapper
         from dimos.navigation.nav_3d.mls_planner.mls_planner import MLSPlanner
 
-        self._mapper = cfg.make_mapper()
+        self._mapper = VoxelRayMapper(voxel_size=cfg.voxel_size, max_range=cfg.max_range)
         self._planner = MLSPlanner(
             voxel_size=cfg.voxel_size, robot_height=cfg.robot_height, **cfg.planner
         )
@@ -87,6 +90,9 @@ class MLSPipeline:
 
     def node_edges(self) -> NDArray[np.float32]:
         return self._planner.node_edges()
+
+    def occupied(self) -> NDArray[np.float32]:
+        return self._mapper.global_map()
 
 
 PIPELINES: dict[str, Callable[[EvalConfig], NavPipeline]] = {"mls": MLSPipeline}

@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Scoring for the nav-3d evaluator: SPL, the path validity gate, references."""
+"""Scoring for the nav-3d evaluator: SPL against the walked route, the climb
+limit, and the demonstrated reference a case is measured against."""
 
 from __future__ import annotations
 
@@ -20,14 +21,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-
-from dimos.navigation.nav_3d.evaluator.voxel_keys import (
-    cylinder_offsets,
-    key_centers,
-    keys_contain,
-    offset_deltas,
-    voxel_keys,
-)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -48,184 +41,14 @@ def arc_lengths(points: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
     return np.concatenate([[0.0], np.cumsum(steps)]).astype(np.float64)
 
 
-def densify(points: NDArray[np.float32], step: float) -> NDArray[np.float32]:
-    """Resample a polyline so consecutive samples are at most step apart."""
-    if len(points) < 2:
-        return points.astype(np.float32)
-    seg = np.linalg.norm(np.diff(points, axis=0), axis=1)
-    n = np.maximum(np.ceil(seg / step).astype(np.int64), 1)
-    idx = np.repeat(np.arange(len(n)), n)
-    starts = np.concatenate([[0], np.cumsum(n)[:-1]])
-    t = ((np.arange(n.sum()) - starts[idx] + 1) / n[idx])[:, None]
-    body = points[idx] * (1 - t) + points[idx + 1] * t
-    dense: NDArray[np.float32] = np.concatenate([points[:1], body]).astype(np.float32)
-    return dense
-
-
 def goal_reached(
     waypoints: NDArray[np.float32], goal: tuple[float, float, float], tolerance: float
 ) -> bool:
     return bool(np.linalg.norm(waypoints[-1] - np.asarray(goal, dtype=np.float32)) <= tolerance)
 
 
-# Clearance margins are only measured out to this horizontal distance from
-# the body surface. Anything farther reports the cap.
-MARGIN_CAP_M = 0.3
-
 # Floor on any length used as a divisor or a direction.
 MIN_LENGTH_M = 1e-6
-
-
-@dataclass
-class GateResult:
-    """Collision check of a path against a voxel map key set."""
-
-    valid: bool
-    collision_points: NDArray[np.float32]
-    # Indices of the colliding samples along the densified path, so a viewer
-    # can recover the exact body frames the gate tested.
-    collision_indices: NDArray[np.int64]
-    # Distance from the body surface to the nearest occupied voxel in the band,
-    # minimized along the path. Negative is penetration, capped at MARGIN_CAP_M.
-    min_clearance_m: float
-
-
-def chord_directions(samples: NDArray[np.float32], span: float) -> NDArray[np.float64]:
-    """Heading from the rear-foot to the front-foot chord, span meters apart.
-    Steadier than the local tangent, which flips between tread and riser."""
-    if len(samples) < 2:
-        return np.tile(np.array([1.0, 0.0, 0.0]), (len(samples), 1))
-    pts = samples.astype(np.float64)
-    arc = arc_lengths(pts)
-    half = span / 2.0
-    back_arc = np.clip(arc - half, arc[0], arc[-1])
-    front_arc = np.clip(arc + half, arc[0], arc[-1])
-    back = np.column_stack([np.interp(back_arc, arc, pts[:, c]) for c in range(3)])
-    front = np.column_stack([np.interp(front_arc, arc, pts[:, c]) for c in range(3)])
-    fwd = front - back
-    norm = np.linalg.norm(fwd, axis=1, keepdims=True)
-    # A path of zero arc length has no heading, so fall back to a valid frame
-    # rather than handing a singular basis to the caller.
-    fwd = np.where(norm > MIN_LENGTH_M, fwd, np.array([1.0, 0.0, 0.0]))
-    unit: NDArray[np.float64] = fwd / np.maximum(
-        np.linalg.norm(fwd, axis=1, keepdims=True), MIN_LENGTH_M
-    )
-    return unit
-
-
-def body_frames(
-    samples: NDArray[np.float32], robot_length: float
-) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
-    """Per-sample body axes: forward along the chord, lateral horizontal, up
-    tilted with the slope."""
-    fwd = chord_directions(samples, robot_length)
-    lateral = np.cross(np.array([0.0, 0.0, 1.0]), fwd)
-    ln = np.linalg.norm(lateral, axis=1, keepdims=True)
-    lateral = np.where(
-        ln > MIN_LENGTH_M, lateral / np.maximum(ln, MIN_LENGTH_M), np.array([0.0, 1.0, 0.0])
-    )
-    up = np.cross(fwd, lateral)
-    return fwd, lateral, up
-
-
-def check_path(
-    waypoints: NDArray[np.float32], map_keys: NDArray[np.int64], cfg: EvalConfig
-) -> GateResult:
-    """Sweep the robot body box along foot-level waypoints against the map. The
-    box sits mid-band up the tilted body axis, so legs and ground never count."""
-    voxel_size = cfg.voxel_size
-    samples = densify(waypoints, voxel_size / 2)
-    fwd, lateral, up = body_frames(samples, cfg.robot_length)
-    half_len = cfg.robot_length / 2.0
-    half_wid = cfg.robot_width / 2.0
-    half_band = (cfg.body_clearance - cfg.ground_margin) / 2.0
-    mid_h = (cfg.ground_margin + cfg.body_clearance) / 2.0
-    centers = samples + mid_h * up
-    pad = MARGIN_CAP_M + voxel_size
-    # The candidate cylinder only has to reach the band, so bound it by the
-    # path's own steepest pitch instead of assuming any orientation.
-    sin_p = float(np.abs(fwd[:, 2]).max())
-    cos_p = float(np.sqrt(max(1.0 - sin_p * sin_p, 0.0)))
-    reach_z = (half_len + pad) * sin_p + half_band * cos_p + voxel_size
-    # Union with the level window: a steep segment lowers the pitched window,
-    # which would otherwise let a flat stretch of the same path hide a collision.
-    offsets = cylinder_offsets(
-        float(np.hypot(half_len, half_wid)) + pad + (mid_h + half_band) * sin_p,
-        min(mid_h * cos_p - reach_z, mid_h - half_band - voxel_size),
-        max(mid_h * cos_p + reach_z, mid_h + half_band + voxel_size),
-        voxel_size,
-    )
-    # Samples land two per voxel, so membership runs over the distinct voxels
-    # and is scattered back rather than being paid for twice.
-    base = voxel_keys(samples, voxel_size)
-    deltas = offset_deltas(offsets)
-    unique_base, inverse = np.unique(base, return_inverse=True)
-    hit = keys_contain(map_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
-        len(unique_base), len(deltas)
-    )
-    s_idx, o_idx = np.nonzero(hit[inverse])
-    if len(s_idx) == 0:
-        return GateResult(
-            valid=True,
-            collision_points=samples[:0],
-            collision_indices=np.empty(0, dtype=np.int64),
-            min_clearance_m=MARGIN_CAP_M,
-        )
-    delta = key_centers(base[s_idx] + deltas[o_idx], voxel_size) - centers[s_idx]
-    # The band decides membership on its own, so drop the candidates outside it
-    # before paying for the footprint distance.
-    vertical = (delta * up[s_idx]).sum(1)
-    in_band = np.abs(vertical) <= half_band
-    if not in_band.any():
-        return GateResult(
-            valid=True,
-            collision_points=samples[:0],
-            collision_indices=np.empty(0, dtype=np.int64),
-            min_clearance_m=MARGIN_CAP_M,
-        )
-    delta, s_idx = delta[in_band], s_idx[in_band]
-    along = (delta * fwd[s_idx]).sum(1)
-    across = (delta * lateral[s_idx]).sum(1)
-    # Signed distance to the oriented footprint rectangle, negative inside.
-    qx = np.abs(along) - half_len
-    qy = np.abs(across) - half_wid
-    sdf = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0)) + np.minimum(np.maximum(qx, qy), 0.0)
-    clearance = float(sdf.min())
-    colliding = np.unique(s_idx[sdf <= 0.0])
-    return GateResult(
-        valid=len(colliding) == 0,
-        collision_points=samples[colliding],
-        collision_indices=colliding,
-        min_clearance_m=min(clearance, MARGIN_CAP_M),
-    )
-
-
-@dataclass
-class SupportResult:
-    """Ground check: every path sample must stand on mapped occupancy."""
-
-    valid: bool
-    unsupported_points: NDArray[np.float32]
-
-
-def check_support(
-    waypoints: NDArray[np.float32], support_keys: NDArray[np.int64], cfg: EvalConfig
-) -> SupportResult:
-    """Require occupied voxels beneath every path sample, which is what
-    catches a path fabricated across a void."""
-    voxel_size = cfg.voxel_size
-    samples = densify(waypoints, voxel_size)
-    offsets = cylinder_offsets(cfg.support_radius_m, -cfg.support_depth_m, voxel_size, voxel_size)
-    # Samples repeat voxels, so membership runs over the distinct ones and is
-    # scattered back, as in check_path.
-    base = voxel_keys(samples, voxel_size)
-    deltas = offset_deltas(offsets)
-    unique_base, inverse = np.unique(base, return_inverse=True)
-    hit = keys_contain(support_keys, (unique_base[:, None] + deltas[None, :]).ravel()).reshape(
-        len(unique_base), len(deltas)
-    )
-    supported = np.asarray(hit.any(axis=1))[inverse]
-    return SupportResult(bool(supported.all()), samples[~supported])
 
 
 @dataclass
@@ -294,11 +117,11 @@ def _visits(
     foot = trajectory.foot(cfg.robot_height)
     ds = np.linalg.norm(foot - np.asarray(start, dtype=np.float32), axis=1)
     dg = np.linalg.norm(foot - np.asarray(goal, dtype=np.float32), axis=1)
-    if ds.min() > cfg.snap_max_m or dg.min() > cfg.snap_max_m:
+    if ds.min() > cfg.visit_radius_m or dg.min() > cfg.visit_radius_m:
         return None
     arcs = trajectory.arc_lengths()
-    near_s = np.flatnonzero(ds <= cfg.snap_max_m)
-    near_g = np.flatnonzero(dg <= cfg.snap_max_m)
+    near_s = np.flatnonzero(ds <= cfg.visit_radius_m)
+    near_g = np.flatnonzero(dg <= cfg.visit_radius_m)
     totals = (
         np.abs(arcs[near_s][:, None] - arcs[near_g][None, :])
         + ds[near_s][:, None]
@@ -354,19 +177,6 @@ def spl(success: bool, l_ref: float, p_len: float) -> float:
     if not success:
         return 0.0
     return l_ref / max(p_len, l_ref, MIN_LENGTH_M)
-
-
-def soft_progress(
-    end: NDArray[np.float32] | None,
-    start: tuple[float, float, float],
-    goal: tuple[float, float, float],
-) -> float:
-    """Fraction of the start-goal distance covered by the path endpoint."""
-    d0 = float(np.linalg.norm(np.asarray(goal) - np.asarray(start)))
-    if end is None or d0 < MIN_LENGTH_M:
-        return 0.0
-    d1 = float(np.linalg.norm(np.asarray(goal, dtype=np.float32) - end))
-    return float(np.clip(1.0 - d1 / d0, 0.0, 1.0))
 
 
 def timing_stats(samples_ms: list[float]) -> dict[str, float]:

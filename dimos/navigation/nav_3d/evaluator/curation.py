@@ -20,26 +20,18 @@ from dataclasses import dataclass
 import itertools
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from dimos.navigation.nav_3d.evaluator.cases import (
     Case,
     load_suite,
     manifest_path,
     save_suite,
 )
-from dimos.navigation.nav_3d.evaluator.config import EvalConfig
-from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
-from dimos.navigation.nav_3d.evaluator.generate import snap_to_surface
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from numpy.typing import NDArray
-
     from dimos.navigation.nav_3d.evaluator.cases import Suite
-    from dimos.navigation.nav_3d.evaluator.final_map import FinalMap
 
 logger = setup_logger()
 
@@ -59,31 +51,12 @@ class CaseStore:
     """Mutable view of one dataset's manifest, saved after every change."""
 
     suite: Suite
-    surface: NDArray[np.float32]
-    cfg: EvalConfig
-    final: FinalMap
 
     @property
     def path(self) -> Path:
         """The manifest this store saves to, set when the suite was loaded."""
         assert self.suite.path is not None, "a curated suite is always loaded from a file"
         return self.suite.path
-
-    def _snap(self, label: str, point: Point, *, required: bool = True) -> Point:
-        snapped = snap_to_surface(
-            np.asarray(point, dtype=np.float32), self.surface, self.cfg.snap_max_m
-        )
-        if snapped is None:
-            if required:
-                raise CurationError(
-                    f"{label} {point} is more than {self.cfg.snap_max_m}m from a standable surface"
-                )
-            # An infeasible goal may sit on geometry with no standable surface.
-            logger.warning(
-                "point is off any standable surface, kept as picked", label=label, point=point
-            )
-            return point
-        return (float(snapped[0]), float(snapped[1]), float(snapped[2]))
 
     def _next_id(self, prefix: str) -> str:
         existing = {c.id for c in self.suite.cases}
@@ -101,8 +74,8 @@ class CaseStore:
     ) -> Case:
         case = Case(
             id=case_id or self._next_id("neg" if expect_fail else "manual"),
-            start=self._snap("start", start),
-            goal=self._snap("goal", goal, required=not expect_fail),
+            start=start,
+            goal=goal,
             tags=_curated_tags(tags, expect_fail),
             expect_fail=expect_fail,
         )
@@ -158,11 +131,8 @@ def _curated_tags(tags: list[str], expect_fail: bool, provenance: str = "manual"
 
 
 def load_store(dataset: str) -> CaseStore:
-    """Open a dataset's manifest with the final map and surface it snaps to."""
+    """Open a dataset's manifest for editing."""
     manifest = manifest_path(dataset)
     if not manifest.exists():
         raise CurationError(f"no manifest {manifest}; run ingest first")
-    suite = load_suite(manifest)
-    cfg = EvalConfig()
-    final = load_or_build_final_map(suite, cfg)
-    return CaseStore(suite, final.standable_surface(cfg.robot_height), cfg, final)
+    return CaseStore(load_suite(manifest))

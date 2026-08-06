@@ -22,15 +22,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dimos.navigation.nav_3d.evaluator import metrics
 from dimos.navigation.nav_3d.evaluator.cases import Case
-from dimos.navigation.nav_3d.evaluator.tagging import STAIRS_DZ_M, route_tags
+from dimos.navigation.nav_3d.evaluator.tagging import STAIRS_DZ_M, elevation_tags
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from dimos.navigation.nav_3d.evaluator.config import EvalConfig
-    from dimos.navigation.nav_3d.evaluator.final_map import FinalMap
     from dimos.navigation.nav_3d.evaluator.recording import Trajectory
 
 
@@ -63,10 +61,8 @@ ENDPOINT_REUSE_MAX = 2
 # much next to a candidate's own priority.
 SPREAD_CAP_M = 2.0 * SECTOR_SIZE_M
 SPREAD_WEIGHT = 0.4
-# Snapping prefers a horizontally near cell. A cell further in z is still
-# eligible up to MAX_SNAP_DZ_M, at this much penalty per meter.
-MAX_SNAP_DZ_M = 1.0
-SNAP_Z_PENALTY = 0.5
+# A waypoint counts as revisited when the walk comes back within this.
+REVISIT_RADIUS_M = 1.0
 # Floor on the case count. When strict selection falls short, a relaxed pass
 # ignores the sector caps and the flat quota to reach it.
 MIN_CASES = 10
@@ -100,54 +96,17 @@ class Candidate:
         )
 
 
-def snap_to_surface(
-    point: NDArray[np.float32],
-    surface: NDArray[np.float32],
-    snap_max_m: float,
-) -> NDArray[np.float32] | None:
-    """Nearest standable surface cell, or None when the point is off the map.
-    Horizontal distance dominates so z drift cannot snap onto another floor."""
-    if len(surface) == 0:
-        return None
-    hd = np.linalg.norm(surface[:, :2] - point[:2], axis=1)
-    zd = np.abs(surface[:, 2] - point[2])
-    # Reachability filters the candidates. Scoring first would let an unreachable
-    # cell with no z offset beat a reachable one that carries the z penalty.
-    score = np.where((hd <= snap_max_m) & (zd < MAX_SNAP_DZ_M), hd + zd * SNAP_Z_PENALTY, np.inf)
-    best = int(score.argmin())
-    if not np.isfinite(score[best]):
-        return None
-    return np.asarray(surface[best], dtype=np.float32)
-
-
 def _subsample_indices(trajectory: Trajectory, spacing_m: float) -> NDArray[np.int64]:
     arcs = trajectory.arc_lengths()
     targets = np.arange(0.0, arcs[-1], spacing_m)
     return np.unique(np.searchsorted(arcs, targets))
 
 
-def _waypoint_snaps(
-    trajectory: Trajectory, surface: NDArray[np.float32], cfg: EvalConfig
-) -> tuple[NDArray[np.int64], NDArray[np.float32], NDArray[np.bool_]]:
-    """Trajectory waypoints snapped onto the standable surface, with a mask of
-    the ones that landed."""
-    foot = trajectory.foot(cfg.robot_height)
-    idx = _subsample_indices(trajectory, WAYPOINT_SPACING_M)
-    snaps = np.full((len(idx), 3), np.nan, dtype=np.float32)
-    for n, i in enumerate(idx):
-        hit = snap_to_surface(foot[i], surface, cfg.snap_max_m)
-        if hit is not None:
-            snaps[n] = hit
-    return idx, snaps, np.isfinite(snaps[:, 0])
-
-
 def _candidates(
     trajectory: Trajectory,
     idx: NDArray[np.int64],
-    snaps: NDArray[np.float32],
-    ok: NDArray[np.bool_],
+    points: NDArray[np.float32],
     arcs: NDArray[np.float64],
-    map_keys: NDArray[np.int64],
     cfg: EvalConfig,
 ) -> dict[tuple[int, ...], Candidate]:
     """The best candidate pair per spatial bin, over every ordered waypoint pair
@@ -156,21 +115,18 @@ def _candidates(
     way_arcs = arcs[idx]
     candidates: dict[tuple[int, ...], Candidate] = {}
     for ai in range(len(idx)):
-        if not ok[ai]:
-            continue
-        sa = snaps[ai]
-        near_a = np.linalg.norm(foot - sa, axis=1) <= cfg.snap_max_m
+        sa = points[ai]
+        near_a = np.linalg.norm(foot - sa, axis=1) <= REVISIT_RADIUS_M
         last_visit_a = float(trajectory.ts[near_a].max()) if near_a.any() else -np.inf
         later = np.arange(ai + 1, len(idx))
-        later = later[ok[later]]
         if not len(later):
             continue
         walked = way_arcs[later] - way_arcs[ai]
-        deltas = snaps[later] - sa
+        deltas = points[later] - sa
         euclid = np.linalg.norm(deltas, axis=1)
         keep = (walked >= MIN_SEPARATION_M) & (euclid >= MIN_EUCLID_M)
         for bi, w, e in zip(later[keep], walked[keep], euclid[keep], strict=True):
-            sb = snaps[bi]
+            sb = points[bi]
             dz = float(sb[2] - sa[2])
             detour = float(w / e)
             # Backward in time is always causal. Forward only when the start
@@ -198,13 +154,9 @@ def _candidates(
                 for cand, key in proposed
             ):
                 continue
-            if detour < DETOUR_RATIO_MIN and abs(dz) < STAIRS_DZ_M:
-                # A long near-straight flat pair is trivial. Not worth a sweep.
-                if e > MAX_TRIVIAL_SPAN_M:
-                    continue
-                line = np.stack([sa, sb])
-                if metrics.check_path(line, map_keys, cfg).valid:
-                    continue
+            # A long near-straight flat pair demonstrates nothing.
+            if detour < DETOUR_RATIO_MIN and abs(dz) < STAIRS_DZ_M and e > MAX_TRIVIAL_SPAN_M:
+                continue
             for cand, key in proposed:
                 best = candidates.get(key)
                 if best is None or cand.priority > best.priority:
@@ -214,26 +166,22 @@ def _candidates(
 
 def generate_cases(
     trajectory: Trajectory,
-    final: FinalMap,
-    surface: NDArray[np.float32],
     cfg: EvalConfig,
     max_cases: int | None = None,
     min_cases: int = MIN_CASES,
 ) -> list[Case]:
-    """Snap the walk onto the surface, pair up waypoints, and keep a diverse
-    spread of the demonstrated routes."""
-    map_keys = final.occupied_keys
+    """Pair up waypoints along the walk and keep a diverse spread of the
+    demonstrated routes. Endpoints are odometry poses, left for the pipeline
+    under test to reconcile with whatever surface it believes in."""
     arcs = trajectory.arc_lengths()
-    idx, snaps, ok = _waypoint_snaps(trajectory, surface, cfg)
-    candidates = _candidates(trajectory, idx, snaps, ok, arcs, map_keys, cfg)
+    idx = _subsample_indices(trajectory, WAYPOINT_SPACING_M)
+    points = trajectory.foot(cfg.robot_height)[idx]
+    candidates = _candidates(trajectory, idx, points, arcs, cfg)
     ranked = sorted(candidates.values(), key=lambda c: (-c.priority, c.start, c.goal))
     selected = _select_diverse(ranked, resolve_max_cases(max_cases, float(arcs[-1])), min_cases)
-    cases = []
-    for n, cand in enumerate(selected):
-        route = metrics.ground_truth_route(trajectory, cand.start, cand.goal, cfg)
-        tags = route_tags(cand.start, cand.goal, route, map_keys, cfg)
-        cases.append(_to_case(cand, n, tags))
-    return cases
+    return [
+        _to_case(cand, n, elevation_tags(cand.start, cand.goal)) for n, cand in enumerate(selected)
+    ]
 
 
 def _bin_key(

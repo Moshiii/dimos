@@ -19,10 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
-from dimos.navigation.nav_3d.evaluator import metrics
-from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
 from dimos.navigation.nav_3d.mls_planner.viz import clearance_colors
 from dimos.utils.logging_config import setup_logger
 
@@ -43,12 +40,15 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-# Voxels are drawn well inside their cell so the surface reads as a grid.
-VOXEL_RADIUS_SCALE = 0.25
+# Drawn radius of a map voxel. Small enough that a dense map still reads as
+# surfaces rather than one solid blob.
+VOXEL_RADIUS = 0.007
+# Surface cells stay tied to the cell they represent, so the planner's
+# standable surface still reads as a grid.
+SURFACE_RADIUS_SCALE = 0.25
 ENDPOINT_RADIUS = 0.05
 EDGE_RADIUS = 0.008
 WALKED_RADIUS = 0.015
-BLOCKING_RADIUS = 0.06
 # The online path is drawn over the final one, so it is the thicker of the two.
 ONLINE_PATH_RADIUS = 0.04
 FINAL_PATH_RADIUS = 0.02
@@ -60,9 +60,6 @@ VIOLATION_RADIUS_SCALE = 3.0
 WALKED_PATH_COLOR = [255, 255, 255]
 START_COLOR = [0, 255, 255]
 GOAL_COLOR = [255, 140, 0]
-COLLISION_COLOR = [255, 0, 0]
-COLLISION_FILL_ALPHA = 90
-UNSUPPORTED_COLOR = [255, 0, 255]
 STEEP_COLOR = [160, 32, 240]
 NEGATIVE_INTENT_COLOR = [255, 255, 0]
 NEAR_WALL_COLOR = [120, 120, 120]
@@ -70,7 +67,6 @@ NEAR_WALL_COLOR = [120, 120, 120]
 VALID_PATH_COLOR = [0, 220, 0]
 INVALID_PATH_COLOR = [255, 0, 0]
 UNREACHED_PATH_COLOR = [255, 200, 0]
-DYNAMIC_BLOCK_COLOR = [255, 20, 147]
 
 CLEARANCE_CLAMP_M = 1.0
 # Cells colored gray as too close to a wall. Display threshold only.
@@ -109,6 +105,16 @@ def _log_planner(entity: str, artifacts: PlannerArtifacts | None, cfg: EvalConfi
 
     if artifacts is None:
         return
+    if artifacts.occupied.size:
+        rr.log(
+            f"{entity}/voxels",
+            rr.Points3D(
+                artifacts.occupied,
+                colors=turbo_by_height(artifacts.occupied),
+                radii=VOXEL_RADIUS,
+            ),
+            static=True,
+        )
     surface = artifacts.surface_clearance
     if surface.size:
         rr.log(
@@ -116,7 +122,7 @@ def _log_planner(entity: str, artifacts: PlannerArtifacts | None, cfg: EvalConfi
             rr.Points3D(
                 surface[:, :3],
                 colors=_clearance_colors(surface[:, 3], CLEARANCE_NEAR_WALL_M),
-                radii=cfg.voxel_size * VOXEL_RADIUS_SCALE,
+                radii=cfg.voxel_size * SURFACE_RADIUS_SCALE,
             ),
             static=True,
         )
@@ -136,21 +142,12 @@ def _log_planner(entity: str, artifacts: PlannerArtifacts | None, cfg: EvalConfi
 def _outcome_color(outcome: PlanOutcome) -> list[int]:
     if outcome.success:
         return VALID_PATH_COLOR
-    if outcome.planned and not outcome.valid:
+    if outcome.planned:
         return INVALID_PATH_COLOR
     return UNREACHED_PATH_COLOR
 
 
-def _thin_by_gap(points: NDArray[np.float32], gap: float) -> NDArray[np.int64]:
-    """Indices of points at least gap apart along the sequence."""
-    kept: list[int] = []
-    for i, p in enumerate(points):
-        if not kept or float(np.linalg.norm(p - points[kept[-1]])) >= gap:
-            kept.append(i)
-    return np.asarray(kept, dtype=np.int64)
-
-
-def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig) -> None:
+def _log_path(entity: str, outcome: PlanOutcome, radius: float) -> None:
     import rerun as rr
 
     if not outcome.waypoints:
@@ -160,42 +157,6 @@ def _log_path(entity: str, outcome: PlanOutcome, radius: float, cfg: EvalConfig)
         rr.LineStrips3D([outcome.waypoints], colors=[_outcome_color(outcome)], radii=radius),
         static=True,
     )
-    if outcome.collision_indices:
-        # Rebuilt from the gate's own sample indices, thinned to about a body
-        # length apart so they read as distinct bodies rather than one smear.
-        waypoints = np.asarray(outcome.waypoints, dtype=np.float32)
-        samples = metrics.densify(waypoints, cfg.voxel_size / 2)
-        frames = metrics.body_frames(samples, cfg.robot_length)
-        axes = np.stack(frames, axis=-1)
-        idx = np.asarray(outcome.collision_indices, dtype=np.int64)
-        idx = idx[_thin_by_gap(samples[idx], cfg.robot_length)]
-        mid_h = (cfg.ground_margin + cfg.body_clearance) / 2.0
-        half = [
-            cfg.robot_length / 2.0,
-            cfg.robot_width / 2.0,
-            (cfg.body_clearance - cfg.ground_margin) / 2.0,
-        ]
-        rr.log(
-            f"{entity}/collisions",
-            rr.Boxes3D(
-                half_sizes=np.tile(half, (len(idx), 1)),
-                centers=samples[idx] + mid_h * frames[2][idx],
-                quaternions=Rotation.from_matrix(axes[idx]).as_quat(),
-                colors=[[*COLLISION_COLOR, COLLISION_FILL_ALPHA]],
-                fill_mode=rr.components.FillMode.Solid,
-            ),
-            static=True,
-        )
-    if outcome.unsupported:
-        rr.log(
-            f"{entity}/unsupported",
-            rr.Points3D(
-                outcome.unsupported,
-                colors=[UNSUPPORTED_COLOR],
-                radii=radius * VIOLATION_RADIUS_SCALE,
-            ),
-            static=True,
-        )
     if outcome.steep:
         rr.log(
             f"{entity}/steep",
@@ -223,7 +184,7 @@ def _dataset_view(root: str, case_ids: list[str]) -> rrb.Spatial3DView:
 
 
 def _log_case(base: str, case: CaseResult, cfg: EvalConfig) -> None:
-    """Endpoints, intent line, the map known at plan time, and both paths."""
+    """Endpoints, intent line, what the pipeline held at plan time, both paths."""
     import rerun as rr
 
     rr.log(
@@ -255,26 +216,10 @@ def _log_case(base: str, case: CaseResult, cfg: EvalConfig) -> None:
             ),
             static=True,
         )
-    # The incremental map at plan time, saved for every case.
+    # What the pipeline held at plan time, saved for every case.
     _log_planner(f"{base}/known", case.online_artifacts, cfg)
-    if case.online_occupied is not None and len(case.online_occupied):
-        rr.log(
-            f"{base}/known/voxels",
-            rr.Points3D(
-                case.online_occupied,
-                colors=turbo_by_height(case.online_occupied),
-                radii=cfg.voxel_size * VOXEL_RADIUS_SCALE,
-            ),
-            static=True,
-        )
-    if case.blocking_points:
-        rr.log(
-            f"{base}/new_occupancy",
-            rr.Points3D(case.blocking_points, colors=[DYNAMIC_BLOCK_COLOR], radii=BLOCKING_RADIUS),
-            static=True,
-        )
-    _log_path(f"{base}/online", case.online, radius=ONLINE_PATH_RADIUS, cfg=cfg)
-    _log_path(f"{base}/final", case.final, radius=FINAL_PATH_RADIUS, cfg=cfg)
+    _log_path(f"{base}/online", case.online, ONLINE_PATH_RADIUS)
+    _log_path(f"{base}/final", case.final, FINAL_PATH_RADIUS)
 
 
 def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -> None:
@@ -288,19 +233,9 @@ def write_rrd(report: Report, suites: list[Suite], cfg: EvalConfig, out: Path) -
     suites_by_dataset = {suite.dataset: suite for suite in suites}
     for dataset in report.datasets:
         suite = suites_by_dataset[dataset.dataset]
-        final = load_or_build_final_map(suite, cfg)
         trajectory = suite.trajectory()
         root = dataset.dataset
 
-        rr.log(
-            f"{root}/map/voxels",
-            rr.Points3D(
-                final.occupied,
-                colors=turbo_by_height(final.occupied),
-                radii=cfg.voxel_size * VOXEL_RADIUS_SCALE,
-            ),
-            static=True,
-        )
         foot = trajectory.foot(cfg.robot_height)
         rr.log(
             f"{root}/walked_path",

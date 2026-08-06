@@ -36,7 +36,6 @@ from dimos.navigation.nav_3d.evaluator.cases import (
 )
 from dimos.navigation.nav_3d.evaluator.config import EvalConfig
 from dimos.navigation.nav_3d.evaluator.curation import CurationError, load_store
-from dimos.navigation.nav_3d.evaluator.final_map import load_or_build_final_map
 from dimos.navigation.nav_3d.evaluator.generate import (
     MIN_CASES,
     generate_cases,
@@ -48,6 +47,8 @@ from dimos.navigation.nav_3d.evaluator.tagging import retag_suite
 from dimos.utils.data import get_data_dir
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
     from dimos.navigation.nav_3d.evaluator.curation import CaseStore
     from dimos.navigation.nav_3d.evaluator.runner import PlanOutcome
 
@@ -85,10 +86,7 @@ def _score_cell(outcome: PlanOutcome) -> str:
 
 
 def _print_report(report: Report) -> None:
-    header = (
-        f"{'case':<28} {'dataset':<22} {'inc':>5} {'fin':>5} "
-        f"{'len':>6} {'ref':>6} {'clr':>6} {'vox':>8} {'ms':>7}"
-    )
+    header = f"{'case':<28} {'dataset':<22} {'inc':>5} {'fin':>5} {'len':>6} {'ref':>6} {'ms':>7}"
     print(header)
     print("-" * len(header))
     for d in report.datasets:
@@ -96,29 +94,20 @@ def _print_report(report: Report) -> None:
             inc = "-" if c.final_only else _score_cell(c.online)
             no_path = not c.online.planned and not c.online.success
             length = "x" if no_path else f"{c.online.length:.1f}"
-            clr = (
-                f"{c.online.min_clearance:>6.2f}" if c.online.min_clearance is not None else " " * 6
-            )
             print(
                 f"{c.id:<28} {c.dataset:<22} "
                 f"{inc:>5} {_score_cell(c.final):>5} "
-                f"{length:>6} {c.l_ref:>6.1f} "
-                f"{clr} "
-                f"{c.online_voxels:>8d} {c.online.plan_ms:>7.1f}"
+                f"{length:>6} {c.l_ref:>6.1f} {c.online.plan_ms:>7.1f}"
             )
     print("-" * len(header))
     for d in report.datasets:
-        print(
-            f"{d.dataset}: {d.frames} frames, "
-            f"final {d.final_voxels} voxels, "
-            f"map build {d.map_build_ms / 1000:.1f}s"
-        )
+        print(f"{d.dataset}: {d.frames} frames")
     print(f"\n{'by tag':<12} {'inc':>5} {'fin':>5} {'n':>4}")
     for tag, s in report.by_tag.items():
         inc = f"{s.inc_score:.2f}" if s.n_online else "-"
         print(f"{tag:<12} {inc:>5} {s.fin_score:>5.2f} {s.n:>4}")
     print(
-        f"\nscore {report.score:.3f} | soft {report.score_soft:.3f} | "
+        f"\nscore {report.score:.3f} | "
         f"final {report.final_score:.3f} | "
         f"success inc {report.n_success}/{report.n_online} "
         f"fin {report.n_success_final}/{report.n_cases} | "
@@ -133,14 +122,9 @@ def _print_report(report: Report) -> None:
         if c.online.success and not c.final.success
     ]
     if inc_only:
-        candidates = set(report.dynamic_candidates)
-        others = [x for x in inc_only if x not in candidates]
         print(f"\nincremental-only ({len(inc_only)}) — passed online, failed final:")
-        if report.dynamic_candidates:
-            print(f"  dynamic-obstacle candidates: {', '.join(report.dynamic_candidates)}")
-            print("    review with --rrd, confirm: dimos nav-eval tag <dataset> <id> --final-fail")
-        if others:
-            print(f"  not explained by a new obstacle, inspect final map: {', '.join(others)}")
+        print(f"  {', '.join(inc_only)}")
+        print("  review with --rrd, confirm: dimos nav-eval tag <dataset> <id> --final-fail")
 
 
 @app.command()
@@ -269,12 +253,9 @@ def ingest(
         f"{trajectory.ts[-1] - trajectory.ts[0]:.0f}s, {arcs[-1]:.1f}m walked, "
         f"z [{trajectory.positions[:, 2].min():.2f}, {trajectory.positions[:, 2].max():.2f}]"
     )
-    cfg = EvalConfig()
-    final = load_or_build_final_map(suite, cfg)
     max_cases = cases or None
     min_cases = cases or MIN_CASES
-    surface = final.standable_surface(cfg.robot_height)
-    suite.cases = generate_cases(trajectory, final, surface, cfg, max_cases, min_cases)
+    suite.cases = generate_cases(trajectory, EvalConfig(), max_cases, min_cases)
     if not suite.cases:
         raise typer.Exit(code=1)
     floor = min(min_cases, resolve_max_cases(max_cases, float(arcs[-1])))
@@ -288,6 +269,21 @@ def ingest(
     for case in suite.cases:
         print(f"  {case.id}: [{', '.join(case.tags)}]")
     print(f"\nrun with: dimos nav-eval run --dataset {name}")
+
+
+def _replay_occupancy(suite: Suite, cfg: EvalConfig) -> NDArray[np.float32]:
+    """Feed the whole recording to the pipeline and take the map it built."""
+    from dimos.navigation.nav_3d.evaluator.pipeline import PipelineIntrospection, make_pipeline
+    from dimos.navigation.nav_3d.evaluator.progress import RunProgress, frame_progress
+
+    pipeline = make_pipeline(cfg.pipeline, cfg)
+    with RunProgress() as bars, frame_progress(bars.factory(), suite, "replay") as tick:
+        for frame in suite.world_frames(cfg.align_tol):
+            tick()
+            pipeline.add_frame(frame.points, frame.origin, frame.ts)
+    if not isinstance(pipeline, PipelineIntrospection):
+        raise typer.BadParameter(f"pipeline {cfg.pipeline!r} does not expose its map")
+    return pipeline.occupied()
 
 
 def _open_store(dataset: str) -> CaseStore:
@@ -315,7 +311,7 @@ def add_case(
         False, "--expect-fail", help="Certified-infeasible pair; the planner must refuse"
     ),
 ) -> None:
-    """Append a curated case, with endpoints snapped to the final surface."""
+    """Append a curated case. Endpoints are kept as given."""
     store = _open_store(dataset)
     try:
         store.add(
@@ -362,9 +358,7 @@ def retag(
 ) -> None:
     """Recompute geometric tags for auto cases. Curated cases keep their tags."""
     suite, manifest = _load_manifest(dataset)
-    cfg = EvalConfig()
-    final = load_or_build_final_map(suite, cfg)
-    recomputed = retag_suite(suite, suite.trajectory(), final.occupied_keys, cfg)
+    recomputed = retag_suite(suite)
     changed = 0
     for case in suite.cases:
         new_tags = recomputed.get(case.id)
@@ -384,14 +378,17 @@ def retag(
 def pick_case(
     dataset: str = typer.Argument(..., help="Dataset whose manifest gets the cases"),
 ) -> None:
-    """Pick and edit cases by shift+clicking the map in a browser viewer."""
+    """Pick and edit cases by shift+clicking the map in a browser viewer.
+    The map is the pipeline's own, so the recording is replayed through it
+    first."""
     # Lazy: picker/viz pull in viser and matplotlib, only needed for pick-case.
     from dimos.navigation.nav_3d.evaluator.picker import pick_cases
 
     store = _open_store(dataset)
-    trajectory = store.suite.trajectory()
-    foot = trajectory.foot(store.cfg.robot_height)
-    pick_cases(store, foot)
+    cfg = EvalConfig()
+    occupied = _replay_occupancy(store.suite, cfg)
+    foot = store.suite.trajectory().foot(cfg.robot_height)
+    pick_cases(store, foot, occupied, cfg.voxel_size)
     print(f"\nrun with: dimos nav-eval run --dataset {dataset}")
 
 
