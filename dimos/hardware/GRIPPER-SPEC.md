@@ -221,21 +221,18 @@ it is no longer declared separately.
 
 **R8.** `get_dof()` reports **arm joints only** — its meaning today is unchanged.
 `get_gripper_dof()` reports gripper joints, returning `0` when there are none. A caller
-wanting the total adds them.
+wanting the total adds them. On a `GripperAdapter`, `get_dof()` reports its own joints.
 
-> The rule holds without exception, including for a gripper that is a device in its own
-> right: such an adapter reports `get_dof() == 0` and `get_gripper_dof() == <its joints>`.
-> An earlier draft carved out "on a `GripperAdapter`, `get_dof()` reports its own joints";
-> §7.2 records why that carve-out is unnecessary.
+> §7.2's standalone demonstration used the other convention — `get_dof() == 0` with
+> `get_gripper_dof() == 6` on a plain `ManipulatorAdapter` — and worked. Which convention
+> a standalone gripper adapter uses is a **PR 2 design decision**, open until PR 2 is
+> aligned.
 
 > `get_dof()` is therefore **not** the length of `get_limits()`, `read_joint_positions()`
 > or the `write_joint_positions()` array — those cover all joints (R4, R13). This is the
 > one place in the protocol where two lengths are legitimately different; R13 states it.
 
-**R9.** *Deferred, and probably unnecessary — see §7.2.* A gripper that is its own
-device is a `ManipulatorAdapter` owning zero arm joints; nothing in that protocol assumes
-an arm. A separate `GripperAdapter` ships only if a real device turns out to need
-something `ManipulatorAdapter` cannot express.
+**R9.** *Moved to PR 2 — the `GripperAdapter` protocol. See §7.*
 
 **R10.** A **joint** means an *actuated degree of freedom*, not necessarily a mechanical
 hinge. A pneumatic or suction gripper is one joint with limits `[0, 1]`; a
@@ -521,10 +518,7 @@ sharing its component (`tick_loop.py:386-397`). Priority is uncontested by R17.
 `task_invoke("arm_gripper", ...)` — `set_normalized` for the agent skills (R26), which is
 the scale they already think in. Only the shortcut route dies.
 
-**R24.** *Deferred, and probably unnecessary — see §7.2.* The standalone shape routes
-through the existing manipulator registry with `HardwareType.MANIPULATOR`. A distinct
-type buys discoverability, not capability, and is not required to support a third-party
-gripper.
+**R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry. See §7.*
 
 **R25.** `ConnectedHardware` builds one ordered array from `all_joints` and makes one call.
 Its gripper branches are deleted — in `read_state`, `write_command`, and
@@ -542,6 +536,7 @@ open — the polarity R19 fixes for every scalar API.
 | `get_gripper()` | the gripper entry of `coordinator_joint_state`, **normalized on the way out** | so `set_gripper(get_gripper())` is a no-op |
 | `open_gripper()` | `set_sweep(1.0)` | R19a — see below |
 | `close_gripper()` | `set_sweep(0.0)` | R19a — see below |
+| `get_gripper_limits()` | the cached range, in the adapter's own units | the door for physical targets — see below |
 
 `get_gripper()` still reads the stream the module already subscribes to
 (`manipulation_module.py:171, :326`) — no new port, no per-read RPC. It converts using the
@@ -559,9 +554,11 @@ endpoint value survives above the task** — which is the point of R15.
 >
 > **Normalized, not native, and not in tension with grasp work.** The skills sit above
 > the task, and nothing above the task needs a vendor range (R14). The consumer with a
-> physical target — a grasp policy — uses `set_position` in native units straight at the
-> task, with the range readable via `get_limits()` (R18). Two consumers, two doors; the
-> split is deliberate.
+> physical target — a grasp policy — reads `get_gripper_limits()` and commands the
+> task's `set_position` in native units (R18). Two consumers, two doors; the split is
+> deliberate. *(`get_gripper_limits()` was added during 1.4 and ratified after review —
+> it reads the same cached range `get_gripper()` normalizes by, so it adds no RPC per
+> call and declares nothing the adapter has not already declared.)*
 
 **R27.** The three `@skill` methods keep their synchronous `bool`, reporting **command
 acceptance** — identical to today, where the `bool` means "the SDK accepted it", not "the
@@ -715,7 +712,7 @@ verifiable**: a PR that cannot be proven on hardware we own does not ship.
 |---|---|---|---|
 | **0 — this PR** | The spec. Agreement on the API before anything is written | — | docs only |
 | **1 — this spec** ✅ | The joint model, units, `GripperControlTask`, RPC removal. **Four parts, §7.1** | everything except R9, R24 | **delivered**; verified on xArm6 |
-| **2 — third-party support** | Mostly **already delivered by step 1** — see §7.2. What remains is a standalone blueprint and a test pinning it | R9, R24 *(both likely unnecessary)* | mock; then the H100 |
+| **2 — third-party support** | `GripperAdapter`, `HardwareType.GRIPPER`, gripper registry, the standalone device shape — **design informed by §7.2, to be aligned before build** | R9, R24 | the H100 itself |
 | **3 — H100 integration** | Vendor adapter, driver, protocol | — | may merge with step 2 |
 | **4 — transport layering** | Routing gripper bytes through an arm's bus when mounted | — | mounted H100 |
 
@@ -914,16 +911,25 @@ Demonstrated end to end through the real coordinator with a 6-DOF standalone han
 limits, and both control modes worked — `set_position` per joint, and `set_sweep` onto a
 configured vendor grasp pose.
 
-> **What this changes.** PR 2 was scoped as `GripperAdapter` + `HardwareType.GRIPPER` +
-> a gripper registry, gated on having an H100 to design against. None of that is needed
-> for the standalone shape: such a gripper is a `ManipulatorAdapter` owning zero arm
-> joints, and nothing in that protocol assumes an arm. What remains of PR 2 is a
-> standalone blueprint and a test pinning the degenerate case.
+> **What this changes: it de-risks PR 2; it does not decide it.** The plumbing —
+> model, coordinator, task, wrapper, units — accepts the standalone shape with no new
+> code, so PR 2's design starts from a working path rather than a guess. The decisions
+> PR 2 still owns, informed by this finding:
 >
-> **This was a mock.** It proves the plumbing accepts the shape — model, coordinator,
-> task, wrapper, units. It does not prove any real device fits `ManipulatorAdapter`. If
-> the H100 needs something that protocol cannot express, R9 ships then — designed against
-> a real device, which was the original instinct for deferring it.
+> - **R9** — a full `GripperAdapter` protocol, a base class with gripper defaults over
+>   `ManipulatorAdapter`, or neither. A second protocol re-declares the one array
+>   contract in a second place; a base class supplies only defaults; neither leaves a
+>   vendor implementing 25 methods, 11 of them arm-shaped.
+> - **R8's standalone convention** — `get_dof()` reports its own joints (as R8 states)
+>   or `0` with `get_gripper_dof()` carrying them (as this demonstration did).
+> - **R24** — whether `HardwareType.GRIPPER` and a separate registry buy enough
+>   discoverability to justify a fourth adapter branch.
+> - **R16's routing** — `broadcast` on `gripper_command` is correct with one gripper;
+>   two gripper tasks on one rig (arm jaw + standalone hand) need `by_task_name`.
+>
+> **This was a mock.** It proves the plumbing accepts the shape. It does not prove any
+> real device fits, and the H100 — the first third-party multi-joint gripper — is what
+> PR 2 is designed for.
 
 ### 7.3 Carried forward
 
