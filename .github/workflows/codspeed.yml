@@ -107,6 +107,7 @@ jobs:
           # exist here. No cpuset hooks either, so run unisolated — the job
           # already has the machine to itself.
           CODSPEED_ISOLATION: "false"
+          CODSPEED_PROFILER_ENABLED: "false"
         with:
           mode: walltime
           # -m '' overrides the addopts deselection of self_hosted-marked tests.
