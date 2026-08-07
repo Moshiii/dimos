@@ -45,11 +45,37 @@ D455_FACTORY_BASELINE_M = 0.09486231207847595
 
 # The nix binary runs under the nix loader, whose ld.so.cache does not list the
 # host driver, so dlopen("libcuda.so.1") fails and cudart reports the misleading
-# "driver version is insufficient". NixOS and CUDA containers expose the driver
-# at the path below; elsewhere we hand the loader a directory holding only these
-# libs, because the whole system lib dir would shadow the binary's own libstdc++.
-_NIXOS_DRIVER_LIB_DIR = Path("/run/opengl-driver/lib")
-_HOST_LIB_DIRS = (Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/lib/aarch64-linux-gnu"))
+# "driver version is insufficient for CUDA runtime version" -- with the driver
+# version it printed alongside it being 0.0, because there is no driver loaded to
+# ask.
+#
+# Directories that hold *nothing but* driver libraries can go on LD_LIBRARY_PATH
+# whole. That is required on Jetson (L4T), where libcuda.so.1 is not
+# self-contained: it NEEDs libnvrm_gpu.so and libnvrm_mem.so, which pull in a
+# dozen more siblings, all living beside it. Exposing libcuda.so.1 on its own
+# leaves those unresolvable and the dlopen still fails.
+_DRIVER_ONLY_LIB_DIRS = (
+    # NixOS and CUDA containers.
+    Path("/run/opengl-driver/lib"),
+    # Jetson / L4T. Both names are the same set of files on JetPack 6; which one
+    # exists has varied across releases, so try both.
+    Path("/usr/lib/aarch64-linux-gnu/nvidia"),
+    Path("/usr/lib/aarch64-linux-gnu/tegra"),
+)
+# Directories that hold the driver among the rest of the system's libraries.
+# Exposing one of these whole would shadow the binary's own libstdc++, so a
+# directory of symlinks to just the driver libs stands in for it. That is enough
+# here only because on these systems libcuda.so.1 depends on nothing but libc.
+_HOST_LIB_DIRS = (
+    Path("/usr/lib/x86_64-linux-gnu"),
+    Path("/usr/lib/aarch64-linux-gnu"),
+)
+# nixpkgs tracks a newer CUDA than JetPack ships, and a 12.9 cuSOLVER against a 12.6
+# driver fails at cusolverDnCreate with INTERNAL_ERROR. Where the host has its own
+# matching runtime, it goes first so the versions agree. This directory holds only CUDA
+# runtime libraries, so unlike a full system lib dir it cannot shadow the binary's
+# libstdc++.
+_HOST_CUDA_LIB_DIR = Path("/usr/local/cuda/lib64")
 _DRIVER_LIBS = (
     "libcuda.so.1",
     "libnvidia-ptxjitcompiler.so.1",
@@ -61,8 +87,12 @@ _DRIVER_LINK_DIR = Path.home() / ".cache/dimos/nvidia-driver-libs"
 
 def driver_library_dir() -> Path | None:
     """Directory the loader needs on LD_LIBRARY_PATH to find the NVIDIA driver."""
-    if (_NIXOS_DRIVER_LIB_DIR / "libcuda.so.1").exists():
-        return _NIXOS_DRIVER_LIB_DIR
+    dedicated = next(
+        (d for d in _DRIVER_ONLY_LIB_DIRS if (d / "libcuda.so.1").exists()),
+        None,
+    )
+    if dedicated is not None:
+        return dedicated
     host = next((d for d in _HOST_LIB_DIRS if (d / "libcuda.so.1").exists()), None)
     if host is None:
         return None
@@ -76,17 +106,22 @@ def driver_library_dir() -> Path | None:
 
 
 def _driver_env() -> dict[str, str]:
+    parts = [str(_HOST_CUDA_LIB_DIR)] if _HOST_CUDA_LIB_DIR.is_dir() else []
     driver_dir = driver_library_dir()
-    if driver_dir is None:
+    if driver_dir is not None:
+        parts.append(str(driver_dir))
+    if not parts:
         return {}
     existing = os.environ.get("LD_LIBRARY_PATH", "")
-    return {"LD_LIBRARY_PATH": f"{driver_dir}:{existing}" if existing else str(driver_dir)}
+    if existing:
+        parts.append(existing)
+    return {"LD_LIBRARY_PATH": ":".join(parts)}
 
 
 class CuvslamConfig(NativeModuleConfig):
     cwd: str | None = str(MODULE_DIR)
     executable: str = "result/bin/cuvslam_odometry"
-    build_command: str | None = f"nix build '{_REPO_ROOT}?dir=dimos/mapping/cuvslam_native'"
+    build_command: str | None = f"nix build '{_REPO_ROOT}?dir=dimos/mapping/cuvslam'"
     stdin_config: bool = True
     extra_env: dict[str, str] = Field(default_factory=_driver_env)
 
