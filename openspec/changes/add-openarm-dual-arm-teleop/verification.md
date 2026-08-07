@@ -12,7 +12,8 @@ blueprint wiring without starting physical hardware.
 | One/two active frame targets; bounded one-step execution | `test_pink_ik.py` frame-target step tests and `test_pose_target_ik.py::test_compute_calls_one_pink_step_and_preserves_output_order` |
 | Planning translates group tips; control calls frame targets directly | `test_pink_ik.py` planning-group and multi-target solve tests plus the pose-target compute test |
 | Concrete Pink tuning | `test_pink_ik.py::test_step_frame_targets_builds_both_frame_tasks_with_tuning` and the OpenArm construction assertion |
-| Valid/unsafe/missing-seed output | `test_pose_target_ik.py` ordered-output, unsafe-result, and incomplete-state tests |
+| Valid/unsafe/missing-seed output | `test_pose_target_ik.py` ordered-output, unsafe-result, incomplete-state, and rate-limited feedback-limit tests |
+| Tolerated feedback, inward normalization, command saturation, unbounded joints, and invalid margins | `test_pink_ik.py` streaming limit-policy tests plus `test_openarm_teleop.py::test_openarm_streaming_pink_tolerates_feedback_just_outside_limit` using the reported hardware value |
 | Kinematics-neutral coordinator arbitration | `test_coordinator_routing.py` card-routing and lifecycle tests |
 
 ### Quest arm teleoperation

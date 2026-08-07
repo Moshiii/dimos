@@ -31,7 +31,7 @@ from dimos.control.task import (
     ResourceClaim,
 )
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
+from dimos.manipulation.planning.kinematics.pink_ik import PinkIK, PinkIKFeedbackLimitError
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.logging_config import setup_logger
@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 logger = setup_logger()
+
+_FEEDBACK_LIMIT_WARNING_INTERVAL_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,7 @@ class PoseTargetIKTask(BaseControlTask):
         self._config = config
         self._joint_names = config.joint_names
         self._additional_claimed_joints = additional_joints
+        self._feedback_limit_warning_times: dict[tuple[str, str], float] = {}
         self._ik = ik or PinkIK(config.pink)
         self._ik.validate_frame_targets(
             config.robot_model, config.target_frames, config.joint_names
@@ -131,6 +134,24 @@ class PoseTargetIKTask(BaseControlTask):
                 seed=seed,
                 dt=state.dt,
             )
+        except PinkIKFeedbackLimitError as exc:
+            warning_key = (exc.joint_name, exc.boundary)
+            last_warning = self._feedback_limit_warning_times.get(warning_key)
+            if (
+                last_warning is None
+                or state.t_now - last_warning >= _FEEDBACK_LIMIT_WARNING_INTERVAL_S
+            ):
+                logger.warning(
+                    "Measured joint feedback exceeds Pink limit tolerance",
+                    task=self._name,
+                    joint=exc.joint_name,
+                    value=exc.value,
+                    lower=exc.lower,
+                    upper=exc.upper,
+                    tolerance=exc.tolerance,
+                )
+                self._feedback_limit_warning_times[warning_key] = state.t_now
+            return None
         # Pink/QP failures derive directly from Exception rather than a stable
         # built-in subtype. A failed streaming tick must not stop the coordinator.
         except Exception as exc:

@@ -33,6 +33,7 @@ from dimos.manipulation.planning.kinematics.pink_ik import (
     PinkIK,
     PinkIKConfig,
     PinkIKDependencyError,
+    PinkIKFeedbackLimitError,
     _build_joint_mapping,
     _PinkModules,
     _PinkRobotContext,
@@ -80,6 +81,8 @@ class _FakeModel:
         self.frames = [_FakeFrame("base", 0), _FakeFrame("tool", 3)]
         self._joint_ids = {"joint_b": 1, "joint_a": 2, "joint_c": 3}
         self._frame_ids = {"base": 0, "tool": 1}
+        self.lowerPositionLimit = np.full(3, -1.0)
+        self.upperPositionLimit = np.full(3, 1.0)
 
     def createData(self) -> _FakeData:
         return _FakeData()
@@ -489,6 +492,97 @@ def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
     solve_ik.assert_called_once()
     assert solve_ik.call_args.args[2] == 0.02
     assert result.name == ["joint_a", "joint_b", "joint_c"]
+
+
+def test_step_frame_targets_normalizes_feedback_and_saturates_commands(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = PinkIK(PinkIKConfig(feedback_limit_tolerance=1e-3, command_limit_margin=1e-4))
+    context = _controlled_context("tool", ["joint_a", "joint_b", "joint_c"])
+    mocker.patch.object(ik, "_get_control_context", return_value=context)
+
+    def step_outside_limits(**kwargs: Any) -> None:
+        configuration = kwargs["configuration"]
+        assert configuration.q == pytest.approx([0.0, -0.9999, 0.0])
+        configuration.update(np.array([1.5, -1.5, 0.25]))
+
+    mocker.patch.object(ik, "_step_configuration", side_effect=step_outside_limits)
+
+    result = ik.step_frame_targets(
+        robot_model=_robot_config(),
+        frame_targets={"tool": PoseStamped()},
+        controlled_joints=["joint_a", "joint_b", "joint_c"],
+        seed=JointState(
+            name=["joint_a", "joint_b", "joint_c"],
+            position=[-1.0005, 0.0, 0.0],
+        ),
+    )
+
+    assert result.position == pytest.approx([-0.9999, 0.9999, 0.25])
+
+
+def test_step_frame_targets_rejects_feedback_beyond_tolerance(
+    mocker: MockerFixture,
+) -> None:
+    ik = _pink_ik(mocker)
+    mocker.patch.object(
+        ik,
+        "_get_control_context",
+        return_value=_controlled_context("tool", ["joint_a"]),
+    )
+    step = mocker.patch.object(ik, "_step_configuration")
+
+    with pytest.raises(PinkIKFeedbackLimitError, match="joint_a.*lower limit"):
+        ik.step_frame_targets(
+            robot_model=_robot_config(),
+            frame_targets={"tool": PoseStamped()},
+            controlled_joints=["joint_a"],
+            seed=JointState(name=["joint_a"], position=[-1.0011]),
+        )
+
+    step.assert_not_called()
+
+
+def test_step_frame_targets_leaves_unbounded_joints_unclamped(
+    mocker: MockerFixture,
+) -> None:
+    ik = _pink_ik(mocker)
+    context = _controlled_context("tool", ["joint_b"])
+    context.model.lowerPositionLimit[0] = -np.inf
+    context.model.upperPositionLimit[0] = np.inf
+    mocker.patch.object(ik, "_get_control_context", return_value=context)
+
+    def step_unbounded(**kwargs: Any) -> None:
+        configuration = kwargs["configuration"]
+        assert configuration.q[0] == 5.0
+        configuration.update(np.array([6.0, 0.0, 0.0]))
+
+    mocker.patch.object(ik, "_step_configuration", side_effect=step_unbounded)
+
+    result = ik.step_frame_targets(
+        robot_model=_robot_config(),
+        frame_targets={"tool": PoseStamped()},
+        controlled_joints=["joint_b"],
+        seed=JointState(name=["joint_b"], position=[5.0]),
+    )
+
+    assert result.position == [6.0]
+
+
+def test_validate_frame_targets_rejects_margin_wider_than_joint_range(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = PinkIK(PinkIKConfig(command_limit_margin=1.1))
+    mocker.patch.object(
+        ik,
+        "_get_control_context",
+        return_value=_controlled_context("tool", ["joint_a"]),
+    )
+
+    with pytest.raises(ValueError, match="command limit margin.*joint_a"):
+        ik.validate_frame_targets(_robot_config(), ["tool"], ["joint_a"])
 
 
 def test_step_frame_targets_rejects_unknown_frame(mocker: MockerFixture, tmp_path: Path) -> None:

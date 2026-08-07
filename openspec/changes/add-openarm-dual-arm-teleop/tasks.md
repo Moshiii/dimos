@@ -57,3 +57,10 @@
 - [x] 8.1 Add regression coverage for the canonical all-zero OpenArm model/mock start, bounded bimanual control from zero, and a one-attempt real-Pink one-arm planning solve that holds the unselected arm.
 - [x] 8.2 Remove the OpenArm home-posture workaround, add opt-in inward joint-limit posture tuning shared by OpenArm control/planning, and update locked joints through a writable configuration copy plus Pink's public update API.
 - [x] 8.3 Update the startup/planning documentation and run focused Pink/OpenArm tests, formatting, lint, typing, and OpenSpec validation.
+
+## 9. Harden streaming control at measured joint limits
+
+- [x] 9.1 Record the asymmetric feedback-tolerance and command-margin safety contract in the glossary, ADR, and multi-frame control specification.
+- [x] 9.2 Add regression coverage for tolerated and rejected feedback, inward seed normalization, output saturation, unbounded joints, narrow joint ranges, warning throttling, and the reported OpenArm boundary value.
+- [x] 9.3 Implement configurable streaming-only Pink feedback tolerance and command margin while retaining Pink's safety break and the task's joint-delta guard.
+- [x] 9.4 Run the focused Pink, shared pose-target, Cartesian, Quest, OpenArm, formatting, linting, typing, and OpenSpec verification checks.

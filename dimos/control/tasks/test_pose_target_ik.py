@@ -26,7 +26,7 @@ from dimos.control.tasks.pose_target_ik import (
     PoseTargetIKTask,
     PoseTargetIKTaskConfig,
 )
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
+from dimos.manipulation.planning.kinematics.pink_ik import PinkIK, PinkIKFeedbackLimitError
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -180,6 +180,25 @@ def test_compute_skips_tick_when_pink_solver_raises(mocker: MockerFixture) -> No
     task = _Task(_config(), ik, _snapshot())
 
     assert task.compute(_state()) is None
+
+
+def test_feedback_limit_warnings_are_rate_limited(mocker: MockerFixture) -> None:
+    ik = _ik(mocker)
+    ik.step_frame_targets.side_effect = PinkIKFeedbackLimitError(
+        joint_name="arm/a",
+        value=-1.0011,
+        lower=-1.0,
+        upper=1.0,
+        tolerance=1e-3,
+    )
+    warning = mocker.patch("dimos.control.tasks.pose_target_ik.logger.warning")
+    task = _Task(_config(timeout=0.0), ik, _snapshot())
+
+    assert task.compute(_state(t_now=1.0)) is None
+    assert task.compute(_state(t_now=1.1)) is None
+    assert task.compute(_state(t_now=2.0)) is None
+
+    assert warning.call_count == 2
 
 
 @pytest.mark.parametrize("positions", [[float("nan"), 0.0], [1.0, 0.0]])

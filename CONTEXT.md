@@ -23,3 +23,13 @@ _Avoid_: Mixed-arm setup
 **Bimanual engagement**:
 A two-hand deadman condition in which a bimanual teleoperation task is active only while both operator hands are engaged; releasing either hand disengages the whole task.
 _Avoid_: Partial engagement, independent hand engagement
+
+## Joint-limit safety
+
+**Feedback limit tolerance**:
+The bounded discrepancy beyond a nominal joint limit that is accepted only when interpreting measured hardware state.
+_Avoid_: Command tolerance, expanded joint limit
+
+**Command limit margin**:
+The inward distance from each nominal joint limit within which generated position commands must remain.
+_Avoid_: Feedback tolerance, relaxed joint limit

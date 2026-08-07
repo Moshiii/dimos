@@ -54,6 +54,31 @@ class PinkIKDependencyError(ImportError):
     """Raised when Pink or its QP solver dependencies are unavailable."""
 
 
+class PinkIKFeedbackLimitError(ValueError):
+    """Raised when measured control feedback is outside its allowed limit tolerance."""
+
+    def __init__(
+        self,
+        *,
+        joint_name: str,
+        value: float,
+        lower: float,
+        upper: float,
+        tolerance: float,
+    ) -> None:
+        self.joint_name = joint_name
+        self.value = value
+        self.lower = lower
+        self.upper = upper
+        self.tolerance = tolerance
+        self.boundary = "lower" if value < lower else "upper"
+        limit = lower if self.boundary == "lower" else upper
+        super().__init__(
+            f"Measured joint '{joint_name}' value {value} exceeds {self.boundary} limit "
+            f"{limit} beyond feedback tolerance {tolerance}"
+        )
+
+
 PinkIKConfig = PinkKinematicsConfig
 
 
@@ -142,6 +167,7 @@ class PinkIK:
         robot_context = contexts[0]
         seed_positions = _seed_positions_for_mapping(seed, robot_context.mapping)
         seed_q = self._q_from_dimos_positions(robot_context, seed_positions)
+        seed_q = self._normalize_streaming_seed(robot_context, seed_q)
         configuration, tasks = self._configuration_and_tasks(targets, seed_q)
         self._step_configuration(
             robot_context=robot_context,
@@ -149,10 +175,12 @@ class PinkIK:
             tasks=tasks,
             dt=self.config.dt if dt is None else dt,
         )
+        command_positions = self._q_to_dimos_positions(robot_context, configuration.q)
+        command_positions = self._saturate_streaming_command(robot_context, command_positions)
         return JointState(
             {
                 "name": list(joint_names),
-                "position": self._q_to_dimos_positions(robot_context, configuration.q).tolist(),
+                "position": command_positions.tolist(),
             }
         )
 
@@ -170,7 +198,8 @@ class PinkIK:
         if not joints or len(set(joints)) != len(joints):
             raise ValueError("Pink controlled joint names must be non-empty and unique")
         for frame_name in frames:
-            self._get_control_context(robot_model, frame_name, joints)
+            context = self._get_control_context(robot_model, frame_name, joints)
+            self._validate_streaming_limit_margin(context)
 
     def frame_poses(
         self,
@@ -708,6 +737,54 @@ class PinkIK:
     ) -> NDArray[np.float64]:
         return np.array([q[idx_q] for idx_q in context.mapping.idx_q], dtype=np.float64)
 
+    def _normalize_streaming_seed(
+        self,
+        context: _PinkRobotContext,
+        seed_q: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        normalized = seed_q.copy()
+        tolerance = self.config.feedback_limit_tolerance
+        margin = self.config.command_limit_margin
+        for joint_name, q_index, lower, upper in _bounded_controlled_joint_limits(context):
+            value = float(seed_q[q_index])
+            if value < lower - tolerance or value > upper + tolerance:
+                raise PinkIKFeedbackLimitError(
+                    joint_name=joint_name,
+                    value=value,
+                    lower=lower,
+                    upper=upper,
+                    tolerance=tolerance,
+                )
+            normalized[q_index] = np.clip(value, lower + margin, upper - margin)
+        return normalized
+
+    def _saturate_streaming_command(
+        self,
+        context: _PinkRobotContext,
+        positions: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        saturated = positions.copy()
+        margin = self.config.command_limit_margin
+        controlled_index_by_q = {
+            q_index: controlled_index
+            for controlled_index, q_index in enumerate(context.mapping.idx_q)
+        }
+        for _joint_name, q_index, lower, upper in _bounded_controlled_joint_limits(context):
+            controlled_index = controlled_index_by_q[q_index]
+            saturated[controlled_index] = np.clip(
+                positions[controlled_index], lower + margin, upper - margin
+            )
+        return saturated
+
+    def _validate_streaming_limit_margin(self, context: _PinkRobotContext) -> None:
+        margin = self.config.command_limit_margin
+        for joint_name, _q_index, lower, upper in _bounded_controlled_joint_limits(context):
+            if lower + margin > upper - margin:
+                raise ValueError(
+                    f"Pink command limit margin {margin} leaves no valid range for "
+                    f"controlled joint '{joint_name}' with limits [{lower}, {upper}]"
+                )
+
     def _current_frame_matrix(
         self, context: _PinkRobotContext, q: NDArray[np.float64]
     ) -> NDArray[np.float64]:
@@ -824,6 +901,31 @@ def _inward_joint_limit_posture(configuration: Any, margin: float) -> NDArray[np
         elif value > upper_target:
             target[index] = upper_target
     return target
+
+
+def _bounded_controlled_joint_limits(
+    context: _PinkRobotContext,
+) -> list[tuple[str, int, float, float]]:
+    lower_limits = np.asarray(context.model.lowerPositionLimit, dtype=np.float64)
+    upper_limits = np.asarray(context.model.upperPositionLimit, dtype=np.float64)
+    if lower_limits.shape != (context.model.nq,) or upper_limits.shape != (context.model.nq,):
+        raise ValueError("Pink model position limits do not match its configuration dimension")
+
+    bounded: list[tuple[str, int, float, float]] = []
+    for joint_name, q_index in zip(
+        context.mapping.dimos_joint_names, context.mapping.idx_q, strict=True
+    ):
+        lower = float(lower_limits[q_index])
+        upper = float(upper_limits[q_index])
+        if (
+            np.isfinite(lower)
+            and np.isfinite(upper)
+            and lower > -1e20
+            and upper < 1e20
+            and upper > lower + 1e-10
+        ):
+            bounded.append((joint_name, q_index, lower, upper))
+    return bounded
 
 
 def _get_frame_id(model: Any, frame_name: str) -> int:

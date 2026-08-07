@@ -17,6 +17,7 @@
 from typing import Any, cast
 
 import numpy as np
+import pytest
 from pytest_mock import MockerFixture
 
 from dimos.control.coordinator import ControlCoordinator
@@ -265,3 +266,24 @@ def test_openarm_bimanual_pink_steps_from_canonical_zero_with_bounded_updates() 
     assert seed.position[10] > 0.1
     assert max(errors) < 1e-3
     assert np.rad2deg(max_delta) < 5.0
+
+
+def test_openarm_streaming_pink_tolerates_feedback_just_outside_limit() -> None:
+    model = openarm_bimanual_model_config()
+    frame = "openarm_left_grasp_frame"
+    ik = PinkIK(PinkKinematicsConfig(dt=0.01, posture_cost=0.0))
+    seed_positions = [0.0] * len(OPENARM_ARM_JOINTS)
+    seed_positions[2] = -1.5708010113375805
+    seed = JointState(name=OPENARM_ARM_JOINTS, position=seed_positions)
+    target = ik.frame_poses(model, [frame], OPENARM_ARM_JOINTS, seed)[frame]
+
+    result = ik.step_frame_targets(
+        model,
+        {frame: target},
+        OPENARM_ARM_JOINTS,
+        seed,
+        dt=0.01,
+    )
+
+    result_by_name = dict(zip(result.name, result.position, strict=True))
+    assert result_by_name["left_arm/joint3"] == pytest.approx(-1.5707)

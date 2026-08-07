@@ -60,7 +60,23 @@ The pose-target control core SHALL accept `PinkKinematicsConfig` and SHALL apply
 - **THEN** Pink updates the selected joints while preserving every unselected joint at its seed position through its supported configuration-update API
 
 ### Requirement: Joint command safety and arbitration
-The pose-target control core SHALL warm-start from coordinator joint state, reject non-finite or over-limit joint updates, preserve configured joint ordering, and emit `JointCommandOutput` through normal resource arbitration.
+The pose-target control core SHALL warm-start from coordinator joint state, accept bounded-joint feedback only within the configured tolerance around nominal model limits, normalize accepted feedback to the configured inward command margin, saturate generated bounded-joint commands to that inward margin, reject non-finite or over-delta joint updates, preserve configured joint ordering, and emit `JointCommandOutput` through normal resource arbitration. This feedback policy SHALL apply only to bounded Pink-controlled joints in streaming control and SHALL NOT relax iterative planning limits or alter additional outputs such as grippers.
+
+#### Scenario: Feedback just outside a bounded joint limit
+- **WHEN** measured feedback is outside a nominal bounded-joint limit by no more than the configured feedback tolerance
+- **THEN** the streaming Pink seed is normalized directly to the inward command margin and solving continues with Pink's safety break enabled
+
+#### Scenario: Feedback beyond tolerance
+- **WHEN** measured feedback exceeds a nominal bounded-joint limit by more than the configured feedback tolerance
+- **THEN** the task emits no command for that tick, remains engaged, and rate-limits repeated warnings for the same joint boundary
+
+#### Scenario: Generated command at a bounded joint limit
+- **WHEN** a streaming Pink step produces a finite bounded-joint position outside the configured inward command interval
+- **THEN** the position is saturated into that interval before the existing per-tick joint-delta check
+
+#### Scenario: Unbounded or additional joint
+- **WHEN** a streaming task controls an unbounded IK joint or emits an additional non-IK joint such as a gripper
+- **THEN** the bounded-joint feedback tolerance and command margin do not alter that joint
 
 #### Scenario: Valid IK update
 - **WHEN** Pink returns a finite update within the configured joint-delta limit
