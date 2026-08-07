@@ -76,6 +76,7 @@ executes public manipulation skills, and scores the result from private PimSim
 world truth:
 
 ```bash
+uv run dimos stop
 PIMSIM_TEST_VIEWER=1 \
 uv run pytest -o addopts='' -m self_hosted_large -vv -s --timeout=1500 \
   dimos/e2e_tests/test_pimsim_generated_manipulation.py
@@ -84,6 +85,8 @@ uv run pytest -o addopts='' -m self_hosted_large -vv -s --timeout=1500 \
 On first use, `pimsim_case` resolves `pimsim_libero_non_robot` through
 `get_data()`. DimOS pulls that archive from Git LFS and extracts it under
 `data/`. Set `PIMSIM_ASSET_BUNDLE` only to test a local replacement bundle.
+Stop any active DimOS application first because concurrent local runs use the
+same RPC names.
 
 The case matrix and skill calls are in
 [`test_pimsim_generated_manipulation.py`](/dimos/e2e_tests/test_pimsim_generated_manipulation.py).
