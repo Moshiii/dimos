@@ -5,26 +5,23 @@
 > **`write_joint_positions()` is the API for all joints. A gripper joint is just a robot
 > joint of a special type, unified from the consumer's perspective.**
 
-The API must serve **first-party grippers** (a capability of an arm's SDK) and
-**third-party grippers** (a separate device with its own protocol) equally. A specific
-third-party integration is a follow-up; this spec is the abstraction plus evidence it
-works.
+**This spec is PR 1: the existing gripper path**, so every claim in it is verifiable on
+hardware we already own — xArm, Piper, a1z, a750.
+
+Supporting a **third-party** gripper is the goal that motivated the whole effort, and it is
+PR 2 (§7). It builds directly on this: the joint model, the control task, and the units all
+carry over unchanged. What PR 2 adds is the plumbing to give a gripper its own adapter.
 
 ---
 
 ## 2. At a glance
 
-A gripper comes in two shapes. **Everything above the hardware layer is identical between
-them** — same task, same units, same joint representation, same `write_joint_positions()`.
-Only the adapter and the connection beneath it differ, because that is where the two
-devices genuinely differ.
+One path, end to end. A gripper joint travels the same route as an arm joint and differs
+only in the unit it carries.
 
 ```
   PROPOSED ARCHITECTURE
 
-                  FIRST-PARTY (integrated)      |   THIRD-PARTY (standalone)
-                  xArm . Piper . a1z . a750     |   its own protocol
- -----------------------------------------------------------------------------
   consumer        agent skill . teleop . grasp policy
                   speaks 0-1 or native units; no new ports          [R26 R27]
                             |
@@ -43,25 +40,23 @@ devices genuinely differ.
                             |
                             v
   wrapper         ConnectedHardware - one ordered array, no conversion   [R25]
- ========================= the only divergence ==============================
-  adapter         the arm's own adapter         |   its own GripperAdapter
-                  joints = arm                  |   joints = gripper
-                  gripper_joints = gripper      |   gripper_joints = empty
-                  [R4 R6 R7 R8 R13]             |   [R4 R9 R10 R13 R24]
-                            |                   |
-                            v                   v
-  hardware        one arm connection            |   its own connection
-                  no sharing introduced   [R3]  |   [R1 R3]
+                            |
+                            v
+  adapter         the arm's own adapter                          [R4 R6 R7 R8]
+                  all_joints  = [...arm..., ...gripper...]
+                  gripper_dof = how many trail
+                            |
+                            v
+  hardware        one connection, one vendor SDK                       [R3]
 ```
 
-> A third-party gripper mounted on an arm and wired through that arm's bus is still
-> **standalone**: the arm supplies a *transport*, not the gripper's identity.
+> The standalone gripper shape — its own component, its own adapter — is PR 2 (§7).
 
 ### 2.1 What changes
 
 | | Added | Deleted |
 |---|---|---|
-| **Protocol** | `GripperAdapter`, `HardwareType.GRIPPER`, a gripper registry | `read/write_gripper_position` |
+| **Model** | `gripper_dof` on the component; `arm_joints` / `gripper_joints` derived | the `joints` field; `read/write_gripper_position` |
 | **Control** | `GripperControlTask` — command-driven, sole owner | both gripper RPCs; `claim_with_gripper`, `append_gripper_position` |
 | **Units** | adapter declares its range via `get_limits()`; task converts | `gripper_open/closed_position`; `_normalized_to_physical` |
 
@@ -88,10 +83,15 @@ No task, no arbitration, no priority, no preemption.
 `make_gripper_joints()` returns exactly one name (`components.py:106-115`). A multi-joint
 gripper cannot be expressed.
 
-### 3.3 A third-party gripper cannot be supported at all
+### 3.3 A third-party gripper cannot be supported at all — *the motivation*
 
 Gripper control lives inside each arm's adapter, so a gripper is reachable only through the
-arm that ships with it. A gripper from another vendor mounted on that arm has no path.
+arm that ships with it. A gripper from another vendor has no path.
+
+> This is why the refactor exists, and it is **not fixed by this PR**. It is fixed in PR 2
+> (§7), which needs a real device to verify against. What this PR does is make that possible:
+> a gripper joint stops being a special case everywhere above the adapter, so adding a second
+> kind of adapter is the only remaining step.
 
 ### 3.4 A gripper joint has no single owner
 
@@ -124,51 +124,32 @@ authoritative.
 
 ### 4.1 Two device shapes, one control path
 
-**R1.** A gripper is modelled as **joints**, in one of two shapes:
+**R1.** A gripper is modelled as **joints on the arm's `HardwareComponent`**, reached
+through the arm's adapter — every gripper we have today is a capability of its arm's SDK
+(xArm, Piper, a1z, a750).
 
-| Shape | Example | Component | Adapter |
-|---|---|---|---|
-| **Integrated** | xArm, Piper, a1z, a750 — a capability of the arm's SDK | joints on the arm's `HardwareComponent` | the arm's adapter |
-| **Standalone** | a third-party gripper with its own protocol | own `HardwareComponent`, `HardwareType.GRIPPER` | own `GripperAdapter` |
+> The **standalone** shape — a gripper as its own component with its own adapter — is PR 2
+> (§7). There is no device to verify it against yet.
 
-**R2.** The distinction is confined to the hardware layer. Above it both shapes are
-identical: same task, same units, same joint representation, same `write_joint_positions()`.
+**R2.** Above the hardware layer a gripper joint is treated identically to an arm joint:
+same task, same units, same joint representation, same `write_joint_positions()`.
 
 **R3.** No connection-sharing mechanism is introduced. An integrated gripper is reached
-through the arm's existing adapter because it *is* part of that device. A standalone
-gripper owns its connection.
-
-> A third-party gripper physically mounted on an arm and wired through that arm's bus is
-> still **standalone** — the arm provides a *transport*, not the gripper's identity. The
-> transport layering is a follow-up; this spec only requires that the gripper
-> adapter be independent of the arm adapter, which R1 guarantees.
+through the arm's existing adapter because it *is* part of that device.
 
 ### 4.2 Adapter protocols
 
 **R4.** `write_joint_positions()` and `read_joint_positions()` MUST cover **all** joints
-the adapter owns, in `all_joints` order. Gripper entries occupy the trailing indices on an
-arm adapter, and are the whole list on a gripper adapter.
+the adapter owns, in `all_joints` order, with gripper entries trailing.
 
 ```python
 # PROPOSED
-
-# integrated: arm adapter — arm joints in radians, gripper in the gripper's native unit
-write_joint_positions([0.1, -0.4, 0.0, 0.9, 0.0, 1.2, 0.0,  0.042])
-#                      └──── 7 arm joints, radians ──────┘  └ gripper, native (R12)
-
-# standalone: gripper adapter — every joint is a gripper joint
-write_joint_positions([0.3, 0.3, 0.5, 0.5, 0.2, 0.2])
+write_joint_positions([0.1, -0.4, 0.0, 0.9, 0.0, 1.2,  0.042])
+#                      └──── 6 arm joints, radians ─┘  └ gripper, native (R12)
 ```
 
-> **Which field holds what.** `all_joints` is `joints + gripper_joints`
-> (`components.py:100-103`) — disjoint lists, concatenated; a joint is in exactly one.
->
-> | Component | `joints` | `gripper_joints` |
-> |---|---|---|
-> | Integrated (`MANIPULATOR`) | the arm's | the gripper's |
-> | Standalone (`GRIPPER`) | the gripper's | *empty* — `hardware_type` already says so |
->
-> Populating both on a standalone component duplicates every joint in `all_joints`.
+> `all_joints` is the stored list and *is* the adapter's array; `arm_joints` and
+> `gripper_joints` are derived from it (R28).
 
 **R5.** `read_gripper_position()` and `write_gripper_position()` are **removed** from
 `ManipulatorAdapter` (`manipulators/spec.py:225-231`). They are a single-scalar API, which
@@ -180,10 +161,9 @@ adapter necessarily reaches it through the vendor's own call — but that is an
 implementation detail of one adapter, invisible above the hardware layer, and it places no
 constraint on any other gripper.
 
-> **This does not limit third-party support.** A gripper from another vendor never routes
-> through an arm adapter; it takes the standalone path (R1) with its own `GripperAdapter`
-> and its own protocol. Nothing about how the xArm adapter talks to its own gripper
-> affects it.
+> **This does not limit third-party support.** A gripper from another vendor gets its own
+> adapter in PR 2 (§7); nothing about how the xArm adapter talks to its own gripper
+> constrains it.
 
 <details><summary>Illustrative — one way an integrated adapter might do it</summary>
 
@@ -201,38 +181,14 @@ Non-normative. An adapter may satisfy R4 however its SDK requires.
 
 </details>
 
-**R7.** An arm adapter MUST learn its gripper joint count at construction
-(`gripper_dof: int = 0`). It MUST NOT infer it from array length.
+**R7.** An adapter receives its gripper joint count from the component's `gripper_dof`
+(R28). It MUST NOT infer it from array length, and it is no longer declared separately.
 
 **R8.** `get_dof()` reports **arm joints only** — its meaning today is unchanged.
 `get_gripper_dof()` reports gripper joints, returning `0` when there are none. A caller
 wanting the total adds them. On a `GripperAdapter`, `get_dof()` reports its own joints.
 
-**R9.** `GripperAdapter` is a **narrower** protocol than `ManipulatorAdapter` — the same
-core method names, fewer of them:
-
-```
-PROPOSED — new protocol, does not exist today
-
-MANDATORY
-  connect() / disconnect() / is_connected()
-  get_dof() -> int
-  get_limits() -> JointLimits
-  set_control_mode(mode) -> bool
-  read_joint_positions() -> list[float]
-  write_joint_positions(positions) -> bool
-  write_stop() -> bool
-
-OPTIONAL — defined fallback where unsupported
-  read_joint_velocities() -> zeros
-  read_joint_efforts()    -> zeros        (grasp force, when the hardware has it)
-  activate() / deactivate()
-  write_enable() / read_enabled()
-
-ABSENT — arm-only, no meaning for a gripper
-  read_cartesian_position, write_cartesian_position,
-  read_force_torque, read_state
-```
+**R9.** *Moved to PR 2 — the `GripperAdapter` protocol. See §7.*
 
 **R10.** A **joint** means an *actuated degree of freedom*, not necessarily a mechanical
 hinge. A pneumatic or suction gripper is one joint with limits `[0, 1]`; a
@@ -381,8 +337,7 @@ is maintained.
 
 **R22.** It uses `ControlMode.SERVO_POSITION`, matching `servo_task` and
 `trajectory_task` so that an integrated gripper never disagrees on mode with the arm tasks
-sharing its component (`tick_loop.py:386-397`). On a standalone component it is the only
-task, so the question does not arise.
+sharing its component (`tick_loop.py:386-397`). Priority is uncontested by R17.
 ### 4.5 Coordinator and `ConnectedHardware`
 
 **R23.** `@rpc set_gripper_position` and `get_gripper_position` are **removed**
@@ -390,9 +345,7 @@ task, so the question does not arise.
 `task_invoke("gripper", ...)` — `set_normalized` for the agent skills (R26), which is
 the scale they already think in. Only the shortcut route dies.
 
-**R24.** `HardwareType.GRIPPER` is added, with a gripper adapter registry following the
-existing `LazyAdapterRegistry` pattern used by `drive_trains`, `manipulators`, and
-`whole_body`.
+**R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry. See §7.*
 
 **R25.** `ConnectedHardware` builds one ordered array from `all_joints` and makes one call.
 Its gripper branch is deleted (`hardware_interface.py:125-137, 192-203, 213-221`). It
@@ -415,66 +368,45 @@ replacing them requires grasp detection, which is out of scope here.
 Two changes to how a blueprint declares a gripper — and one thing to deliberately leave
 alone.
 
-**R28. Nothing changes here.** `HardwareComponent.joints`, `gripper_joints`, and
-`all_joints` keep their current fields and meanings. This requirement exists only to
-*prevent* a refactor that looks obvious and is wrong.
+**R28.** A `HardwareComponent` stores **one ordered joint list** plus a count of how many
+trailing entries are the gripper. The two views are **derived, never stored**:
 
 ```python
-# CURRENT — how a1z/xarm/piper declare a gripper today. PROPOSED: identical.
-HardwareComponent(
-    joints         = make_joints("arm", 6),   # ["arm/joint1" … "arm/joint6"]
-    gripper_joints = ["arm/gripper"],
-)
-# all_joints == joints + gripper_joints == all 7
+# PROPOSED
+all_joints:  list[JointName]      # THE stored list — this IS the adapter's array
+gripper_dof: int = 0              # how many trailing entries are the gripper
+
+arm_joints     = all_joints[: len(all_joints) - gripper_dof]     # derived
+gripper_joints = all_joints[len(all_joints) - gripper_dof :]     # derived
 ```
 
-**The tempting change, and why it must not happen.** Given that this spec unifies gripper
-joints with arm joints everywhere else, folding them into a single `joints` list looks like
-the natural cleanup:
+The split MUST be computed as `len(all_joints) - gripper_dof`, **never** by negative
+slicing: `-0 == 0` in Python, so `all_joints[:-gripper_dof]` returns an empty list when
+`gripper_dof == 0`, silently reporting that a gripper-less arm has no arm joints and that
+every joint is a gripper joint.
 
-```python
-# REJECTED — do NOT do this
-HardwareComponent(
-    joints = [*make_joints("arm", 6), "arm/gripper"],   # one list
-)
-```
+*Why a count, not two lists.* The adapter must know where the gripper starts, so the number
+is required either way. Two lists make it exist twice — implicitly as `len(gripper_joints)`,
+explicitly as the adapter's argument (old R7) — and two copies can drift, silently
+mis-splitting the array. One list also makes the ordering a fact rather than a convention.
 
-The split is what keeps them safe: **`joints` / `gripper_joints` are what a human writes;
-`all_joints` is what the runtime reads.**
+**R28a.** The `joints` field is **deleted**, not redefined. Keeping the name while changing
+its meaning would let `hw.joints` still resolve and quietly return more joints than before.
+Deleting it makes every call site raise `AttributeError` until updated deliberately.
 
-**R28a. The two fields carry any joint count**, including a 6-joint dexterous hand. Worked
-examples, all on an **xArm6** so the arm DOF stays constant:
+Twenty sites change, with **three different correct answers**:
 
-```python
-# CURRENT — xArm6 with its first-party gripper (a1z, xarm, piper all look like this)
-HardwareComponent(
-    hardware_id="arm", hardware_type=MANIPULATOR,
-    joints         = make_joints("arm", 6),        # 6 arm joints
-    gripper_joints = ["arm/gripper"],              # 1 gripper joint, on the arm's SDK
-)                                                  # all_joints -> 7
+| Site | Becomes | Why |
+|---|---|---|
+| 13 blueprint claims (`hw.joints`) | `arm_joints` | arm tasks must not claim the gripper (R17) |
+| `common/blueprints.py:79` | `arm_joints` | the shared `trajectory_task()` helper — governs every arm blueprint |
+| `hardware_interface.py:61` | `arm_joints` | `ConnectedHardware`, may have a gripper |
+| `hardware_interface.py:273, 361` | `all_joints` | `ConnectedTwistBase` / `ConnectedWholeBody` — never have grippers |
+| `coordinator.py:289, 301, 313` | **per adapter kind** | manipulator wants arm DOF; base and whole-body want all |
 
-# PROPOSED — the same xArm6, first-party gripper REPLACED by a third-party 6-joint hand.
-#            Two components, two adapters. This is the motivating case.
-HardwareComponent(
-    hardware_id="arm", hardware_type=MANIPULATOR,
-    joints         = make_joints("arm", 6),
-    gripper_joints = [],                           # the arm's own gripper is gone
-)                                                  # all_joints -> 6
-HardwareComponent(
-    hardware_id="hand", hardware_type=GRIPPER,     # <- new type, R24
-    joints         = make_joints("hand", 6),       # all 6 ARE the gripper
-    gripper_joints = [],                           # empty; hardware_type says it
-    adapter_type   = "<vendor>",                   # its own GripperAdapter, R9
-)                                                  # all_joints -> 6
-```
-
-The third-party hand is **standalone even when bolted to the arm and wired through its
-bus** — the arm supplies a transport, not the gripper's identity (R3). The arm adapter
-never learns the hand exists.
-
-A first-party gripper with several joints would also work — `gripper_joints` would simply
-hold more than one name, which is what R29 enables — but no such device exists in-tree
-today, so the two shapes above are the ones that matter.
+> `common/blueprints.py:79` carries a decision, not a rename. If it became `all_joints`,
+> every trajectory task would claim the gripper alongside `GripperControlTask` — two owners
+> on one joint, contradicting R17.
 
 **R29.** `make_gripper_joints()` takes a joint count. It is hardcoded to exactly one name
 today (`components.py:106-115`), which is the single-joint ceiling in §3.2:
@@ -484,17 +416,12 @@ CURRENT   make_gripper_joints("arm")      → ["arm/gripper"]   # hardcoded to o
 PROPOSED  make_gripper_joints("hand", 6)  → ["hand/gripper1" … "hand/gripper6"]
 ```
 
-**R30.** A blueprint exposing gripper control adds a `gripper` task. Which field it claims
-depends on the shape (R4):
+**R30.** A blueprint exposing gripper control adds a `gripper` task claiming
+`hw.gripper_joints`:
 
 ```python
 # PROPOSED
-
-# integrated — the gripper rides on the arm's component
 TaskConfig(name="gripper", type="gripper", joint_names=_arm_hw.gripper_joints)
-
-# standalone — every joint on the component is a gripper joint
-TaskConfig(name="gripper", type="gripper", joint_names=_hand_hw.joints)
 ```
 
 Two things worth knowing about the blueprints as they stand:
@@ -509,8 +436,11 @@ Two things worth knowing about the blueprints as they stand:
 
 ## 5. Untouched
 
-`servo_task`, `trajectory_task`, `ManipulationModule`'s ports, every `pick_and_place` call
-site, and all 13 `joint_names=hw.joints` claim sites.
+`servo_task`, `trajectory_task`, `ManipulationModule`'s ports, and every `pick_and_place`
+call site.
+
+The 20 sites reading `component.joints` **are** modified (R28a) — each raises
+`AttributeError` until updated.
 
 `teleop_task` and `eef_twist_task` **are** modified (R17) — they lose their gripper claims
 and forward intent instead.
@@ -519,29 +449,27 @@ and forward intent instead.
 
 | Area | Files | Nature |
 |---|---|---|
-| **New protocol** | `hardware/grippers/spec.py`, `registry.py` | `GripperAdapter` + registry |
 | **New task** | `control/tasks/gripper_task/` | `GripperControlTask` + `_registry.py` |
-| **New mock** | `hardware/grippers/mock/` | multi-joint gripper, proves the standalone path |
 | Adapter protocol | `manipulators/spec.py` | Delete 2 methods; add `get_gripper_dof()` |
 | Adapters | `xarm`, `piper`, `mock`, `sim`, `openarm`, `galaxea_a1z`, `a750` | Unified array, `gripper_dof`, range via `get_limits()` |
-| Hardware wrapper | `hardware_interface.py` | One array; delete gripper branch + normalization |
-| Components | `components.py` | `HardwareType.GRIPPER`; delete 2 fields; widen `make_gripper_joints` |
+| Hardware wrapper | `hardware_interface.py` | One array; delete gripper branch + normalization; 3 `component.joints` reads |
+| Components | `components.py` | store `all_joints` + `gripper_dof`, delete `joints`, add 2 derived properties; delete 2 endpoint fields; widen `make_gripper_joints` |
 | Tasks | `teleop_task`, `eef_twist_task`, `cartesian_ik_task` | Drop gripper claims + gripper config fields; delete 2 helpers (R17, R17a) |
-| Coordinator | `coordinator.py` | Delete 2 RPCs; gripper adapter branch |
+| Coordinator | `coordinator.py` | Delete 2 RPCs; 3 `component.joints` reads |
 | Manipulation | `manipulation_module.py` | 2 method bodies + 1 docstring |
-| Blueprints | `xarm`, `a1z`, `piper` teleop; gripper-bearing blueprints | Add the gripper task; delete `XARM_GRIPPER_PARAMS` and inline gripper `params` (R17a) |
+| Blueprints | `xarm`, `a1z`, `piper` teleop + 13 claim sites | Add the gripper task; `hw.joints` → `hw.arm_joints`; delete `XARM_GRIPPER_PARAMS` (R17a) |
 | Message docs | `msgs/sensor_msgs/JointState.py` | Note gripper joint units |
 
 ## 7. Delivery plan
 
-**This PR is the spec — documentation only, no code.** What it defines then ships in two
-implementation PRs, followed by the vendor work that motivated all of it.
+**This PR is the spec — documentation only, no code.** Split so each PR is **separately
+verifiable**: a PR that cannot be proven on hardware we own does not ship.
 
 | Step | Delivers | Requirements | Roughly |
 |---|---|---|---|
 | **0 — this PR** | The spec. Agreement on the API before anything is written | — | docs only |
-| **1 — adapter API** | `write_joint_positions()` covers every joint; gripper wrappers deleted; `ConnectedHardware` builds one array; adapters declare their range | R4–R13, R25, R28–R29 | ~12 files, mechanical |
-| **2 — control path** | `GripperControlTask`, `GripperAdapter`, `HardwareType.GRIPPER`, sole ownership, RPC removal, teleop rerouting, mock multi-joint gripper | R1–R3, R14–R24, R26–R27, R30 | ~18 files, behavioural |
-| **3 — vendor integration** | A real third-party gripper: adapter, driver, protocol | — | against a settled API |
-| **4 — transport layering** | Routing that gripper's bytes through an arm's bus, for a gripper mounted on an arm | — | R3 already permits it |
+| **1 — this spec** | The joint model, one adapter method, units, `GripperControlTask`, RPC removal | everything except R9, R24 | **real hardware** — xArm, Piper, a1z |
+| **2 — third-party support** | `GripperAdapter`, `HardwareType.GRIPPER`, gripper registry, the standalone device shape | R9, R24 | the H100 itself |
+| **3 — H100 integration** | Vendor adapter, driver, protocol | — | may merge with step 2 |
+| **4 — transport layering** | Routing gripper bytes through an arm's bus when mounted | — | mounted H100 |
 
