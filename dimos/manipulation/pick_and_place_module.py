@@ -31,7 +31,6 @@ from dimos.agents.skill_result import SkillResult
 from dimos.core.core import rpc
 from dimos.core.stream import In
 from dimos.manipulation.manipulation_module import (
-    _XARM_GRIPPER_OPEN,
     ManipulationModule,
     ManipulationModuleConfig,
 )
@@ -367,7 +366,7 @@ class PickAndPlaceModule(ManipulationModule):
         # Gripper
         gripper_pos = self.get_gripper(robot_name)
         if gripper_pos is not None:
-            lines.append(f"Gripper: {gripper_pos:.3f} (adapter units)")
+            lines.append(f"Gripper: {gripper_pos:.0%} open")
         else:
             lines.append("Gripper: not configured")
 
@@ -516,7 +515,7 @@ then refreshes perception obstacles.
 
             # 3. Open gripper before approach
             logger.info("Opening gripper...")
-            self._set_gripper_position(_XARM_GRIPPER_OPEN, rname)
+            self._gripper_invoke("set_sweep", {"value": 1.0}, rname)
             time.sleep(0.5)
 
             # 4. Execute approach to pre-grasp
@@ -534,7 +533,7 @@ then refreshes perception obstacles.
 
             # 6. Close gripper
             logger.info("Closing gripper...")
-            self._set_gripper_position(0.0, rname)
+            self._gripper_invoke("set_sweep", {"value": 0.0}, rname)
             time.sleep(1.5)  # Wait for gripper to close
 
             # 7. Retract to pre-grasp
@@ -625,7 +624,7 @@ then refreshes perception obstacles.
 
         # 3. Release
         logger.info("Releasing object...")
-        self._set_gripper_position(_XARM_GRIPPER_OPEN, rname)
+        self._gripper_invoke("set_sweep", {"value": 1.0}, rname)
         time.sleep(1.0)
 
         # 4. Retract

@@ -58,14 +58,6 @@ XARM_MODEL_PATH = LfsPath("xarm_description") / "urdf/xarm_device.urdf.xacro"
 XARM_PACKAGE_PATHS: dict[str, Path] = {"xarm_description": LfsPath("xarm_description")}
 XARM6_SIM_PATH = LfsPath("xarm6/scene.xml")
 XARM7_SIM_PATH = LfsPath("xarm7/scene.xml")
-# TRANSITIONAL: native SDK scale (0-850) until the gripper task owns this in
-# part 1.4, which deletes this constant entirely (GRIPPER-SPEC R17a). The old
-# 0.85 was only 850/1000 — an accident of reusing the cartesian mm conversion.
-XARM_GRIPPER_PARAMS = {
-    "gripper_joint": make_gripper_joints("arm")[0],
-    "gripper_open_pos": 850.0,
-    "gripper_closed_pos": 0.0,
-}
 XARM7_SIM_HOME = [0.0, -0.247, 0.0, 0.909, 0.0, 1.15644, 0.0]
 
 

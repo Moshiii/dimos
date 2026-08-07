@@ -72,13 +72,13 @@ coordinator_teleop_a1z = autoconnect(
                 robot_model=_a1z_quest_model,
                 control_ik={"max_velocity": 2.0},
                 priority=20,
-                params={
-                    "gripper_joint": _a1z_quest_hw.gripper_joints[0],
-                    # TRANSITIONAL: native metres until the gripper task owns
-                    # this in 1.4 (GRIPPER-SPEC R17a).
-                    "gripper_open_pos": 0.1,
-                    "gripper_closed_pos": 0.0,
-                },
+            ),
+            TaskConfig(
+                name="arm_gripper",
+                type="gripper",
+                joint_names=_a1z_quest_hw.gripper_joints,
+                priority=20,
+                params={"hand": "left"},
             ),
             trajectory_task(_a1z_quest_hw),
         ],

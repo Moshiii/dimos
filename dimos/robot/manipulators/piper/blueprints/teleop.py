@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from dimos.control.components import make_gripper_joints
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
@@ -98,13 +97,13 @@ coordinator_teleop_piper = autoconnect(
                 hand="left",
                 name="teleop_piper",
                 robot_model=_piper_model,
-                params={
-                    "gripper_joint": make_gripper_joints("arm")[0],
-                    # TRANSITIONAL: native metres until the gripper task owns
-                    # this in 1.4 (GRIPPER-SPEC R17a).
-                    "gripper_open_pos": 0.08,
-                    "gripper_closed_pos": 0.0,
-                },
+            ),
+            TaskConfig(
+                name="arm_gripper",
+                type="gripper",
+                joint_names=_piper_teleop_hw.gripper_joints,
+                priority=20,
+                params={"hand": "left"},
             ),
             trajectory_task(_piper_teleop_hw),
         ],

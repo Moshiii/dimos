@@ -51,14 +51,6 @@ class PinkControlIKOverrides(TypedDict, total=False):
     qpsolver_options: dict[str, float]
 
 
-class GripperTaskOverrides(TypedDict, total=False):
-    """Optional gripper fields shared by teleop and EEF-twist tasks."""
-
-    gripper_joint: str
-    gripper_open_pos: float
-    gripper_closed_pos: float
-
-
 def trajectory_task(
     hardware: HardwareComponent,
     *additional_hardware: HardwareComponent,
@@ -138,7 +130,6 @@ def eef_twist_task(
     max_dt: float = 0.05,
     control_ik: PinkControlIKOverrides | None = None,
     robot_model: RobotModelConfig,
-    params: GripperTaskOverrides | None = None,
 ) -> TaskConfig:
     resolved_control_ik = _resolve_control_ik(hardware, robot_model, control_ik)
     task_params: dict[str, Any] = {
@@ -149,8 +140,6 @@ def eef_twist_task(
         "min_dt": min_dt,
         "max_dt": max_dt,
     }
-    if params:
-        task_params.update(params)
     return TaskConfig(
         name=name,
         type="eef_twist",
@@ -173,7 +162,6 @@ def teleop_ik_task(
     min_dt: float = 1e-4,
     max_dt: float = 0.05,
     control_ik: PinkControlIKOverrides | None = None,
-    params: GripperTaskOverrides | None = None,
 ) -> TaskConfig:
     resolved_control_ik = _resolve_control_ik(hardware, robot_model, control_ik)
     task_params: dict[str, Any] = {
@@ -185,8 +173,6 @@ def teleop_ik_task(
         "min_dt": min_dt,
         "max_dt": max_dt,
     }
-    if params:
-        task_params.update(params)
     return TaskConfig(
         name=name,
         type="teleop_ik",
