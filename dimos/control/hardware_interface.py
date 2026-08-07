@@ -58,7 +58,7 @@ class ConnectedHardware:
     ) -> None:
         self._adapter = adapter
         self._component = component
-        self._arm_joint_names: list[JointName] = list(component.joints)
+        self._arm_joint_names: list[JointName] = list(component.arm_joints)
         self._gripper_joints: list[JointName] = list(component.gripper_joints)
         self._joint_names: list[JointName] = component.all_joints
         self._gripper_open = component.gripper_open_position
@@ -270,7 +270,7 @@ class ConnectedTwistBase(ConnectedHardware):
     ) -> None:
         self._twist_adapter = adapter
         self._component = component
-        self._joint_names = component.joints
+        self._joint_names = component.all_joints
 
         # Twist bases start at zero velocity — no need to read from hardware
         self._last_commanded: dict[str, float] = {name: 0.0 for name in self._joint_names}
@@ -358,7 +358,7 @@ class ConnectedWholeBody(ConnectedHardware):
     ) -> None:
         self._wb_adapter = adapter
         self._component = component
-        self._joint_names = component.joints
+        self._joint_names = component.all_joints
 
         # Resolve per-joint PD gains once at wire-up time.  Gains live on
         # the WB-specific sub-config; fall back to _DEFAULT_KP/_DEFAULT_KD

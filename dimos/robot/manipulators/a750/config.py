@@ -70,15 +70,15 @@ def make_a750_hardware(
     auto_enable: bool = True,
     home_joints: list[float] | None = None,
 ) -> HardwareComponent:
-    joints = make_joints(hw_id, 6)
+    gripper_joints = [f"{hw_id}/finger"] if gripper else []
     return HardwareComponent(
         hardware_id=hw_id,
         hardware_type=HardwareType.MANIPULATOR,
-        joints=joints,
+        all_joints=[*make_joints(hw_id, 6), *gripper_joints],
+        gripper_dof=len(gripper_joints),
         adapter_type=adapter_type,
         address=address,
         auto_enable=auto_enable,
-        gripper_joints=[f"{hw_id}/finger"] if gripper else [],
         adapter_kwargs={"initial_positions": home_joints or A750_HOME_JOINTS},
     )
 

@@ -107,7 +107,7 @@ coordinator_servo_xarm6 = ControlCoordinator.blueprint(
         TaskConfig(
             name="servo_arm",
             type="servo",
-            joint_names=_xarm6_control_hw.joints,
+            joint_names=_xarm6_control_hw.arm_joints,
             priority=10,
         ),
     ],
@@ -119,7 +119,7 @@ coordinator_velocity_xarm6 = ControlCoordinator.blueprint(
         TaskConfig(
             name="velocity_arm",
             type="velocity",
-            joint_names=_xarm6_control_hw.joints,
+            joint_names=_xarm6_control_hw.arm_joints,
             priority=10,
         ),
     ],
@@ -131,13 +131,13 @@ coordinator_combined_xarm6 = ControlCoordinator.blueprint(
         TaskConfig(
             name="servo_arm",
             type="servo",
-            joint_names=_xarm6_control_hw.joints,
+            joint_names=_xarm6_control_hw.arm_joints,
             priority=10,
         ),
         TaskConfig(
             name="velocity_arm",
             type="velocity",
-            joint_names=_xarm6_control_hw.joints,
+            joint_names=_xarm6_control_hw.arm_joints,
             priority=10,
         ),
     ],
@@ -198,7 +198,7 @@ coordinator_teleop_xarm7 = autoconnect(
         robots=[_xarm7_teleop_model],
         visualization={"backend": "viser"},
     ),
-    *mujoco_if_sim(XARM7_SIM_PATH, len(_xarm7_teleop_hw.joints)),
+    *mujoco_if_sim(XARM7_SIM_PATH, len(_xarm7_teleop_hw.arm_joints)),
 )
 
 coordinator_teleop_xarm6 = autoconnect(
@@ -227,5 +227,5 @@ coordinator_teleop_xarm6 = autoconnect(
         robots=[_xarm6_teleop_model],
         visualization={"backend": "viser"},
     ),
-    *mujoco_if_sim(XARM6_SIM_PATH, len(_xarm6_teleop_hw.joints)),
+    *mujoco_if_sim(XARM6_SIM_PATH, len(_xarm6_teleop_hw.arm_joints)),
 )

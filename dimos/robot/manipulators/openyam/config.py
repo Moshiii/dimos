@@ -18,7 +18,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dimos.control.components import HardwareComponent, HardwareType, make_joints
+from dimos.control.components import (
+    HardwareComponent,
+    HardwareType,
+    make_gripper_joints,
+    make_joints,
+)
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.robot.manipulators._modeling import (
@@ -47,11 +52,11 @@ def make_openyam_hardware(
     return HardwareComponent(
         hardware_id=hw_id,
         hardware_type=HardwareType.MANIPULATOR,
-        joints=make_joints(hw_id, OPENYAM_DOF),
+        all_joints=[*make_joints(hw_id, OPENYAM_DOF), *make_gripper_joints(hw_id)],
+        gripper_dof=1,
         adapter_type="mock",
         address=None,
         auto_enable=auto_enable,
-        gripper_joints=[f"{hw_id}/gripper"],
         adapter_kwargs=adapter_kwargs,
     )
 

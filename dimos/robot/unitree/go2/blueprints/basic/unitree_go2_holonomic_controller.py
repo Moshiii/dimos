@@ -88,7 +88,7 @@ unitree_go2_holonomic_controller = (
                 HardwareComponent(
                     hardware_id="go2",
                     hardware_type=HardwareType.BASE,
-                    joints=_go2_joints,
+                    all_joints=_go2_joints,
                     adapter_type="transport_lcm",
                 ),
             ],

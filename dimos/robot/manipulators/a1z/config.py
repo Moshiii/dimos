@@ -20,7 +20,12 @@ from pathlib import Path
 
 import attrs
 
-from dimos.control.components import HardwareComponent, HardwareType, make_joints
+from dimos.control.components import (
+    HardwareComponent,
+    HardwareType,
+    make_gripper_joints,
+    make_joints,
+)
 from dimos.core.global_config import global_config
 from dimos.hardware.manipulators.galaxea_a1z.config import (
     A1ZConfig,
@@ -76,14 +81,15 @@ def a1z_hardware(
             resolved_config = attrs.evolve(resolved_config, urdf_path=dynamics_urdf_path)
         adapter_kwargs["config"] = resolved_config
 
+    gripper_joints = make_gripper_joints(hw_id) if has_gripper else []
     return HardwareComponent(
         hardware_id=hw_id,
         hardware_type=HardwareType.MANIPULATOR,
-        joints=make_joints(hw_id, A1Z_DOF),
+        all_joints=[*make_joints(hw_id, A1Z_DOF), *gripper_joints],
+        gripper_dof=len(gripper_joints),
         adapter_type=adapter_type,
         address=address,
         auto_enable=True,
-        gripper_joints=[f"{hw_id}/gripper"] if has_gripper else [],
         gripper_open_position=0.1 if has_gripper else None,
         gripper_closed_position=0.0 if has_gripper else None,
         adapter_kwargs=adapter_kwargs,

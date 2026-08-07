@@ -114,7 +114,7 @@ coordinator_teleop_piper = autoconnect(
         robots=[_piper_model],
         visualization={"backend": "viser"},
     ),
-    *mujoco_if_sim(PIPER_SIM_PATH, len(_piper_teleop_hw.joints)),
+    *mujoco_if_sim(PIPER_SIM_PATH, len(_piper_teleop_hw.arm_joints)),
 )
 
 _piper_cartesian_hw = make_piper_hardware(

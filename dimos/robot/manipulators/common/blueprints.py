@@ -76,7 +76,7 @@ def trajectory_task(
         ),
         type="trajectory",
         joint_names=[
-            joint_name for component in hardware_components for joint_name in component.joints
+            joint_name for component in hardware_components for joint_name in component.arm_joints
         ],
         priority=priority,
         params={"start_position_tolerance": start_position_tolerance},
@@ -89,7 +89,7 @@ def _resolve_control_ik(
     control_ik: PinkControlIKOverrides | None,
 ) -> dict[str, Any]:
     coordinator_joints = robot_model.get_coordinator_joint_names()
-    if hardware.joints != coordinator_joints:
+    if hardware.arm_joints != coordinator_joints:
         raise ValueError("hardware joints must match RobotModelConfig coordinator joints")
     payload = dict(control_ik or {})
     payload["robot_model"] = robot_model
@@ -113,7 +113,7 @@ def cartesian_ik_task(
     return TaskConfig(
         name=name,
         type="cartesian_ik",
-        joint_names=hardware.joints,
+        joint_names=hardware.arm_joints,
         priority=priority,
         params={
             "control_ik": resolved_control_ik,
@@ -154,7 +154,7 @@ def eef_twist_task(
     return TaskConfig(
         name=name,
         type="eef_twist",
-        joint_names=hardware.joints,
+        joint_names=hardware.arm_joints,
         priority=priority,
         params=task_params,
     )
@@ -190,7 +190,7 @@ def teleop_ik_task(
     return TaskConfig(
         name=name,
         type="teleop_ik",
-        joint_names=hardware.joints,
+        joint_names=hardware.arm_joints,
         priority=priority,
         params=task_params,
     )

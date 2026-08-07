@@ -79,7 +79,7 @@ def connected_hardware(mock_adapter):
     component = HardwareComponent(
         hardware_id="test_arm",
         hardware_type=HardwareType.MANIPULATOR,
-        joints=make_joints("arm", 6),
+        all_joints=make_joints("arm", 6),
     )
     return ConnectedHardware(adapter=mock_adapter, component=component)
 
@@ -191,8 +191,8 @@ class TestConnectedHardware:
         component = HardwareComponent(
             hardware_id="arm",
             hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("arm", 6),
-            gripper_joints=["arm/gripper"],
+            all_joints=[*make_joints("arm", 6), "arm/gripper"],
+            gripper_dof=1,
             gripper_open_position=0.07,
             gripper_closed_position=0.0,
         )
@@ -319,7 +319,7 @@ class TestControlCoordinatorLifecycle:
         component = HardwareComponent(
             hardware_id="base",
             hardware_type=HardwareType.BASE,
-            joints=make_twist_base_joints("base"),
+            all_joints=make_twist_base_joints("base"),
         )
         coordinator._hardware = {"base": ConnectedTwistBase(MagicMock(), component)}
         dispatch = mocker.patch.object(coordinator, "_dispatch")
@@ -392,7 +392,7 @@ class TestControlCoordinatorLifecycle:
         component = HardwareComponent(
             hardware_id="arm",
             hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("arm", 6),
+            all_joints=make_joints("arm", 6),
             adapter_type="lifecycle_test",
         )
         coordinator = ControlCoordinator(publish_joint_state=False, hardware=[component])
@@ -411,7 +411,7 @@ class TestControlCoordinatorLifecycle:
         component = HardwareComponent(
             hardware_id="base",
             hardware_type=HardwareType.BASE,
-            joints=make_twist_base_joints("base"),
+            all_joints=make_twist_base_joints("base"),
             adapter_type="mock_twist_base",
         )
         coordinator = ControlCoordinator(publish_joint_state=False, hardware=[component])
@@ -906,7 +906,7 @@ class TestTickLoop:
         component = HardwareComponent(
             hardware_id="arm",
             hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("arm", 6),
+            all_joints=make_joints("arm", 6),
         )
         hw = ConnectedHardware(mock_adapter, component)
         hardware = {"arm": hw}
@@ -934,7 +934,7 @@ class TestTickLoop:
         component = HardwareComponent(
             hardware_id="arm",
             hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("arm", 6),
+            all_joints=make_joints("arm", 6),
         )
         hw = ConnectedHardware(mock_adapter, component)
         hardware = {"arm": hw}
@@ -976,7 +976,7 @@ class TestIntegration:
         component = HardwareComponent(
             hardware_id="arm",
             hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("arm", 6),
+            all_joints=make_joints("arm", 6),
         )
         hw = ConnectedHardware(mock_adapter, component)
         hardware = {"arm": hw}

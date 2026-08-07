@@ -140,7 +140,7 @@ class ControlCoordinator(Module):
         ...         HardwareComponent(
         ...             hardware_id="arm",
         ...             hardware_type=HardwareType.MANIPULATOR,
-        ...             joints=make_joints("arm", 7),
+        all_...             joints=make_joints("arm", 7),
         ...             adapter_type="xarm",
         ...             address="192.168.1.185",
         ...         ),
@@ -286,7 +286,7 @@ class ControlCoordinator(Module):
 
         return adapter_registry.create(
             component.adapter_type,
-            dof=len(component.joints),
+            dof=len(component.arm_joints),
             address=component.address,
             hardware_id=component.hardware_id,
             **component.adapter_kwargs,
@@ -298,7 +298,7 @@ class ControlCoordinator(Module):
 
         return twist_base_adapter_registry.create(
             component.adapter_type,
-            dof=len(component.joints),
+            dof=len(component.all_joints),
             address=component.address,
             hardware_id=component.hardware_id,
             **component.adapter_kwargs,
@@ -310,7 +310,7 @@ class ControlCoordinator(Module):
 
         return whole_body_adapter_registry.create(
             component.adapter_type,
-            dof=len(component.joints),
+            dof=len(component.all_joints),
             hardware_id=component.hardware_id,
             address=component.address,
             domain_id=component.domain_id,

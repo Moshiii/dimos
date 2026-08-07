@@ -18,7 +18,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dimos.control.components import HardwareComponent, HardwareType, make_joints
+from dimos.control.components import (
+    HardwareComponent,
+    HardwareType,
+    make_gripper_joints,
+    make_joints,
+)
 from dimos.core.global_config import global_config
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
@@ -73,14 +78,15 @@ def make_piper_hardware(
     kwargs = _adapter_kwargs(home_joints)
     if adapter_kwargs:
         kwargs.update(adapter_kwargs)
+    gripper_joints = make_gripper_joints(hw_id) if gripper else []
     return HardwareComponent(
         hardware_id=hw_id,
         hardware_type=HardwareType.MANIPULATOR,
-        joints=make_joints(hw_id, 6),
+        all_joints=[*make_joints(hw_id, 6), *gripper_joints],
+        gripper_dof=len(gripper_joints),
         adapter_type=adapter_type,
         address=address,
         auto_enable=auto_enable,
-        gripper_joints=[f"{hw_id}/gripper"] if gripper else [],
         gripper_open_position=gripper_open_position,
         gripper_closed_position=gripper_closed_position,
         adapter_kwargs=kwargs,

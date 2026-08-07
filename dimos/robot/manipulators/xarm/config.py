@@ -120,14 +120,15 @@ def make_xarm_hardware(
     kwargs = _adapter_kwargs(home_joints)
     if adapter_kwargs:
         kwargs.update(adapter_kwargs)
+    gripper_joints = make_gripper_joints(hw_id) if gripper else []
     return HardwareComponent(
         hardware_id=hw_id,
         hardware_type=HardwareType.MANIPULATOR,
-        joints=make_joints(hw_id, dof),
+        all_joints=[*make_joints(hw_id, dof), *gripper_joints],
+        gripper_dof=len(gripper_joints),
         adapter_type=adapter_type,
         address=address,
         auto_enable=auto_enable,
-        gripper_joints=[f"{hw_id}/gripper"] if gripper else [],
         gripper_open_position=gripper_open_position,
         gripper_closed_position=gripper_closed_position,
         adapter_kwargs=kwargs,

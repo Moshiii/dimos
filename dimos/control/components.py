@@ -56,14 +56,21 @@ class JointState:
 class HardwareComponent:
     """Configuration for a hardware component.
 
+    ``all_joints`` is the one stored joint list and *is* the adapter's array:
+    this order is the order every read and write uses, with gripper joints
+    trailing. ``arm_joints`` and ``gripper_joints`` are derived views, never
+    stored, so the split cannot drift from the array the adapter sees.
+
     Attributes:
         hardware_id: Unique identifier, also used as joint name prefix
         hardware_type: Type of hardware (MANIPULATOR, BASE)
-        joints: List of joint names (e.g., ["arm/joint1", "arm/joint2", ...])
+        all_joints: Every joint name in adapter order, gripper entries last
+            (e.g., ["arm/joint1", ..., "arm/joint6", "arm/gripper"])
+        gripper_dof: How many trailing entries of ``all_joints`` are the
+            gripper. 0 means no gripper.
         adapter_type: Adapter type ("mock", "xarm", "piper")
         address: Connection address - IP for TCP, port for CAN
         auto_enable: Whether to auto-enable servos
-        gripper_joints: Joints that use adapter gripper methods (separate from joints).
         domain_id: DDS domain ID for adapters that use DDS transport
             (e.g. Unitree G1). Real robot uses 0; unitree_mujoco sim
             defaults to 1. Ignored by non-DDS adapters.
@@ -84,11 +91,11 @@ class HardwareComponent:
 
     hardware_id: HardwareId
     hardware_type: HardwareType
-    joints: list[JointName] = field(default_factory=list)
+    all_joints: list[JointName] = field(default_factory=list)
+    gripper_dof: int = 0
     adapter_type: str = "mock"
     address: str | Path | None = None
     auto_enable: bool = True
-    gripper_joints: list[JointName] = field(default_factory=list)
     domain_id: int = 0
     adapter_kwargs: dict[str, Any] = field(default_factory=dict)
     wb_config: WholeBodyConfig | None = None
@@ -97,22 +104,58 @@ class HardwareComponent:
     gripper_open_position: float | None = None
     gripper_closed_position: float | None = None
 
+    def __post_init__(self) -> None:
+        """Reject a gripper count the joint list cannot support."""
+        if self.gripper_dof < 0:
+            raise ValueError(
+                f"HardwareComponent '{self.hardware_id}': gripper_dof must be >= 0, "
+                f"got {self.gripper_dof}"
+            )
+        if self.gripper_dof > len(self.all_joints):
+            raise ValueError(
+                f"HardwareComponent '{self.hardware_id}': gripper_dof {self.gripper_dof} "
+                f"exceeds all_joints length {len(self.all_joints)}"
+            )
+
     @property
-    def all_joints(self) -> list[JointName]:
-        """All joints: arm joints + gripper joints."""
-        return self.joints + self.gripper_joints
+    def _gripper_start(self) -> int:
+        """Index where the gripper begins in ``all_joints``.
+
+        Computed as ``len - gripper_dof``, never by negative slicing: ``-0 == 0``
+        in Python, so ``all_joints[:-gripper_dof]`` would return an empty list
+        whenever ``gripper_dof == 0``, silently reporting that a gripper-less
+        arm has no arm joints and that every joint is a gripper joint.
+        """
+        return len(self.all_joints) - self.gripper_dof
+
+    @property
+    def arm_joints(self) -> list[JointName]:
+        """The non-gripper joints, in adapter order."""
+        return self.all_joints[: self._gripper_start]
+
+    @property
+    def gripper_joints(self) -> list[JointName]:
+        """The trailing gripper joints, in adapter order. Empty without a gripper."""
+        return self.all_joints[self._gripper_start :]
 
 
-def make_gripper_joints(hardware_id: HardwareId) -> list[JointName]:
+def make_gripper_joints(hardware_id: HardwareId, count: int = 1) -> list[JointName]:
     """Create gripper joint names for a hardware device.
 
     Args:
         hardware_id: The hardware identifier (e.g., "arm")
+        count: Number of actuated gripper joints. A jaw is 1; a multi-finger
+            hand declares one name per actuated degree of freedom.
 
     Returns:
-        List of joint names like ["arm/gripper"]
+        ``["arm/gripper"]`` for a single joint, otherwise
+        ``["hand/gripper1", ..., "hand/gripperN"]``
     """
-    return [f"{hardware_id}/gripper"]
+    if count < 1:
+        raise ValueError(f"make_gripper_joints({hardware_id!r}): count must be >= 1, got {count}")
+    if count == 1:
+        return [f"{hardware_id}/gripper"]
+    return [f"{hardware_id}/gripper{i + 1}" for i in range(count)]
 
 
 def make_joints(hardware_id: HardwareId, dof: int) -> list[JointName]:
