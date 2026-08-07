@@ -14,22 +14,29 @@
 
 from collections.abc import Callable, Generator, Iterator, Mapping
 import os
+from pathlib import Path
 import threading
 import time
+from typing import Any, cast
 
 import pytest
 
-from dimos import Dimos
 from dimos.core.transport import pLCMTransport
 from dimos.e2e_tests.conf_types import StartPersonTrack
 from dimos.e2e_tests.dim_sim_client import DimSimClient
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
+from dimos.e2e_tests.pimsim_case import (
+    PimSimCaseRun,
+    PimSimTabletopCase,
+    semantic_role_names,
+)
 from dimos.e2e_tests.scene_control import EpisodeSceneControl, load_episode_scene_control
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 from dimos.msgs.std_msgs.Bool import Bool
+from dimos.porcelain.dimos import Dimos
 from dimos.simulation.mujoco.direct_cmd_vel_explorer import DirectCmdVelExplorer
 from dimos.simulation.mujoco.person_on_track import PersonTrackPublisher
 
@@ -134,6 +141,83 @@ def episode_scene_control() -> Iterator[EpisodeSceneControl]:
     control = load_episode_scene_control(provider)
     yield control
     control.stop()
+
+
+@pytest.fixture
+def pimsim_case(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    start_blueprint: Callable[..., DimosCliCall],
+    connect_dimos_modules: Callable[..., Dimos],
+    episode_scene_control: EpisodeSceneControl,
+) -> PimSimCaseRun:
+    """Materialize and start one explicit PimSim tabletop case."""
+
+    if not isinstance(request.param, PimSimTabletopCase):
+        raise TypeError("pimsim_case must be parameterized with PimSimTabletopCase")
+    case = request.param
+    authoring = pytest.importorskip("pimsim.authoring")
+    asset_bundle = _pimsim_asset_bundle()
+    scenario_request = case.to_scenario_request(authoring)
+    episode = authoring.materialize_xarm_tabletop_case(
+        tmp_path / "episode",
+        asset_bundle=asset_bundle,
+        request=scenario_request,
+        object_count=case.object_count,
+    )
+    show_viewer = os.environ.get("PIMSIM_TEST_VIEWER") == "1"
+    call = start_blueprint(
+        "xarm-perception-sim",
+        simulator="mujoco",
+        global_args=(
+            "--simulation-provider",
+            "pimsim",
+            "--scene-package",
+            str(episode.scene_package),
+            "--transport",
+            "zenoh",
+            "--viewer",
+            "rerun" if show_viewer else "none",
+        ),
+        extra_env={"PIMSIM_MUJOCO_VIEWER": "1" if show_viewer else "0"},
+    )
+    app = connect_dimos_modules(call, ("PickAndPlaceModule", "PimSimEpisodeControl"))
+    episode_scene_control.start()
+    reset = episode_scene_control.reset_scenario(str(episode.scenario))
+    if reset["scenario_id"] != case.case_id:
+        pytest.fail(f"PimSim reset case {reset['scenario_id']!r}; expected {case.case_id!r}")
+    initial_conditions = cast("list[dict[str, Any]]", reset["initial_conditions"])
+    failed_conditions = [condition for condition in initial_conditions if not condition["passed"]]
+    if failed_conditions:
+        pytest.fail(f"PimSim case has invalid initial conditions: {failed_conditions}")
+    return PimSimCaseRun(
+        case=case,
+        scene_package=episode.scene_package,
+        scenario=episode.scenario,
+        reset=reset,
+        pick_and_place=app.get_module("PickAndPlaceModule"),
+        scene_control=episode_scene_control,
+        role_names=semantic_role_names(episode.scene_package, episode.scenario),
+    )
+
+
+def _pimsim_asset_bundle() -> Path:
+    configured = os.environ.get("PIMSIM_ASSET_BUNDLE") or os.environ.get("PIMSIM_LIBERO_BUNDLE")
+    if configured is not None:
+        path = Path(configured).expanduser().resolve()
+        if not path.exists():
+            pytest.fail(f"PimSim asset bundle does not exist: {path}")
+        return path
+
+    from dimos.utils.data import get_data
+
+    try:
+        return get_data("pimsim_libero_non_robot")
+    except (FileNotFoundError, RuntimeError) as error:
+        pytest.skip(
+            "PimSim native assets are not installed; set PIMSIM_ASSET_BUNDLE "
+            f"or install pimsim_libero_non_robot from DimOS LFS ({error})"
+        )
 
 
 @pytest.fixture

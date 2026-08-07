@@ -69,6 +69,26 @@ When writing or debugging a specific self-hosted test, override `-m` yourself to
 pytest -m self_hosted dimos/path/to/test_something.py
 ```
 
+### PimSim native tabletop cases
+
+The native tabletop suite starts the normal `xarm-perception-sim` blueprint,
+executes public manipulation skills, and scores the result from private PimSim
+world truth:
+
+```bash
+PIMSIM_ASSET_BUNDLE=/absolute/path/to/pimsim-libero-non-robot \
+PIMSIM_TEST_VIEWER=1 \
+uv run pytest -o addopts='' -m self_hosted_large -vv -s --timeout=1500 \
+  dimos/e2e_tests/test_pimsim_generated_manipulation.py
+```
+
+The case matrix and skill calls are in
+[`test_pimsim_generated_manipulation.py`](/dimos/e2e_tests/test_pimsim_generated_manipulation.py).
+[`pimsim_case`](../../dimos/e2e_tests/conftest.py) materializes the selected family,
+starts the blueprint, resets the scenario, resolves semantic roles, and exposes
+the private evaluator. Add a `PimSimTabletopCase` row; do not add a test-only
+blueprint or put task actions in the fixture.
+
 ## Testing on a fresh Ubuntu install
 
 CI tests dimos with pre-built images and cached deps, so it can't catch gaps
