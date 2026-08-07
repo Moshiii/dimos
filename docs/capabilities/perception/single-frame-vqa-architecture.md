@@ -32,20 +32,20 @@ flowchart TD
     evidence -->|yes| rule["Fixed intent answer rule"]
     rule --> accepted["Accepted example with private answer and evidence"]
 
-    accepted --> evaluate["evaluate.py: image and question only"]
-    evaluate --> results["Image-only response and pass/fail"]
     accepted --> dataset["dataset.py"]
     rejected --> dataset
-    results --> dataset
-    dataset --> output["Images, JSON records, and batch manifests"]
+    dataset --> output["Images, public/private cases, and manifests"]
+    output --> evaluator["vqa evaluate: LangChain gpt-5.6-luna"]
+    evaluator --> score["Private oracle scoring"]
+    score --> results["Model-specific results and summary"]
 ```
 
 1. `recording.py` loads and rectifies the RGB image, aligns the recording's geometry to that image, and creates a `CalibratedFrame`.
 2. `question_agent.py` sees only the rectified image and proposes object queries. It expands each query into supported `QuestionIntent` values.
-3. `ground_truth_agent.py` receives the full calibrated frame and one intent. It detects the requested object, segments it, projects visible geometry into the image, and derives grounded objects.
-4. The same ground-truth agent applies the deterministic rule for the intent and returns either an answer with evidence or a rejection.
-5. `evaluate.py` asks the evaluated visual model only for an answer to the image and accepted question. It has no point cloud, mask, tool trace, or expected answer.
-6. `dataset.py` persists images, accepted examples, rejections, private evidence, and evaluation results.
+3. `ground_truth_generator.py` receives the full calibrated frame and one intent. It detects the requested object, segments it, projects visible geometry into the image, and derives grounded objects.
+4. The same generator applies the deterministic rule for the intent and returns either an answer with evidence or a rejection.
+5. `dataset.py` persists images, accepted examples, rejections, private evidence, and self-contained public/private evaluator cases.
+6. `evaluation/` asks a LangChain visual model only for an image, question, and allowed answers. It has no point cloud, mask, tool trace, or expected answer; the runner then scores the response against the private oracle.
 
 The evaluation boundary is intentional: `ground_truth.json` must remain private when evaluating an image-only model.
 
@@ -54,20 +54,19 @@ The evaluation boundary is intentional: `ground_truth.json` must remain private 
 | File | Responsibility |
 |---|---|
 | `dimos/cli/vqa.py` | Typer commands. `single-frame` processes one Go2 recording frame; `generate` loops over sampled frames, skips completed frame directories, and rebuilds aggregate manifests. |
-| `dimos/perception/vqa/models.py` | Typed contracts shared across the pipeline: calibrated frames, question intents, grounded objects, tool traces, results, and perception-model protocols. |
-| `dimos/perception/vqa/recording.py` | Go2 recording adapter. Reads color image, LiDAR, and nearest odometry; rectifies the fisheye image and constructs the LiDAR-to-camera transform. |
-| `dimos/perception/vqa/question_agent.py` | Image-only OpenAI question proposer. Validates returned object names or structured intents and expands object names into the supported question types. |
-| `dimos/perception/vqa/ground_truth_agent.py` | Private deterministic executor. Calls detection, box segmentation or point-prompt fallback segmentation, grounds masks, caches per-object grounding, selects evidence, and accepts or rejects each intent. |
-| `dimos/perception/vqa/adapters.py` | Bridges MoonDream and EdgeTAM APIs to the VQA detector, point-localizer, segmenter, and image-only answerer protocols. |
-| `dimos/perception/vqa/geometry.py` | Static calibrated pinhole projection and z-buffer visibility filtering. It returns only the nearest point at each image pixel. |
-| `dimos/perception/vqa/grounding.py` | Intersects projected visible points with each segmentation mask and computes the supported point count, median range, and left/center/right direction. |
-| `dimos/perception/vqa/questions.py` | Deterministic construction of the original presence, direction, and threshold-distance examples from grounded objects. |
-| `dimos/perception/vqa/evaluate.py` | Normalizes an image-only model's response and compares it with the private expected answer. |
-| `dimos/perception/vqa/pipeline.py` | Small reusable helpers for conventional ground-truth generation and image-only evaluation. |
-| `dimos/perception/vqa/dataset.py` | Writes per-frame artifacts and rebuilds `frames.jsonl`, `ground_truth.jsonl`, and `manifest.json` for a batch dataset. |
-| `dimos/perception/vqa/test_agents.py` | Unit tests for proposal, tool traces, fallback grounding, comparison, and rejection behavior. |
-| `dimos/perception/vqa/test_geometry.py` | Unit tests for calibrated projection and z-buffer behavior. |
-| `dimos/perception/vqa/test_single_frame.py` | End-to-end synthetic-frame generation and image-only evaluation test. |
+| `dimos/benchmark/vqa/models.py` | Typed contracts shared by VQA dataset generation and evaluation. |
+| `dimos/benchmark/vqa/generation/recording.py` | Go2 recording adapter. Reads color image, LiDAR, and nearest odometry; rectifies the fisheye image and constructs the LiDAR-to-camera transform. |
+| `dimos/benchmark/vqa/generation/question_agent.py` | Image-only OpenAI question proposer. Validates returned object names or structured intents and expands object names into the supported question types. |
+| `dimos/benchmark/vqa/generation/ground_truth_generator.py` | Private deterministic executor. Calls detection, box segmentation or point-prompt fallback segmentation, grounds masks, caches per-object grounding, selects evidence, and accepts or rejects each intent. |
+| `dimos/benchmark/vqa/generation/adapters.py` | Bridges MoonDream and EdgeTAM APIs to the private grounding interfaces. |
+| `dimos/benchmark/vqa/generation/geometry.py` | Static calibrated pinhole projection and z-buffer visibility filtering. It returns only the nearest point at each image pixel. |
+| `dimos/benchmark/vqa/generation/grounding.py` | Intersects projected visible points with each segmentation mask and computes the supported point count, median range, and left/center/right direction. |
+| `dimos/benchmark/vqa/generation/questions.py` | Deterministic construction of presence, direction, and threshold-distance examples from grounded objects. |
+| `dimos/benchmark/vqa/generation/dataset.py` | Writes per-frame artifacts and rebuilds `frames.jsonl`, `ground_truth.jsonl`, and `manifest.json` for a batch dataset. |
+| `dimos/benchmark/vqa/evaluation/models.py` | Public VQA case, private oracle, LangChain configuration, and result contracts. |
+| `dimos/benchmark/vqa/evaluation/scoring.py` | Normalizes closed image-only responses using public answer choices and compares them with private expected answers. |
+| `dimos/benchmark/vqa/evaluation/langchain.py` | No-tools LangChain `gpt-5.6-luna` vision adapter. |
+| `dimos/benchmark/vqa/evaluation/runner.py` | Loads public case inputs, invokes an answerer, then loads the private oracle and scores the response. |
 
 ## Ground-Truth Execution
 
@@ -88,13 +87,15 @@ For every intent, grounding first tries MoonDream box detection followed by Edge
 
 | Artifact | Contains | Privacy |
 |---|---|---|
-| `image.jpg` | Rectified image used by all visual-model calls | May be provided to the evaluated visual model. |
+| `image.jpg` | Rectified image used by private generation | Copied into each public evaluator case. |
 | `original_image.jpg` | Raw recording image, if available | Audit artifact only. |
 | `grounding_overlay.jpg` | Private masks, MoonDream detector boxes or point prompts, `Q` labels, and an answer/rejection legend | Private audit artifact. |
 | `intents.json` | Proposed or explicit constrained intents | Generation metadata. |
-| `examples.json` | Accepted question and expected-answer records | Keep expected answers private during evaluation. |
+| `examples.json` | Accepted public case summaries | Public metadata. |
 | `ground_truth.json` | Answered and rejected results, grounded-object evidence, and tool traces | Private ground truth. |
-| `evaluations.json` | Image-only model responses and pass/fail comparison | Evaluation result. |
+| `cases/<case-id>/case.json` | Public question, image path, and allowed answers | The only case metadata sent to the model. |
+| `cases/<case-id>/private/` | Expected answer and case-specific grounding result | Private oracle and audit evidence. |
+| `evaluations/<model>/` | Closed-answer responses, pass/fail results, and aggregate summary | Trusted evaluator output. |
 | `frame.json` | Frame identity, source, artifact names, counts, models, and grounding thresholds | Dataset metadata. |
 | `frames.jsonl` | One `frame.json` record per completed batch frame | Batch metadata. |
 | `ground_truth.jsonl` | One private result record per intent across the batch | Private aggregate ground truth. |
@@ -104,4 +105,4 @@ For every intent, grounding first tries MoonDream box detection followed by Edge
 
 To add a recording source, create an adapter that returns `CalibratedFrame` with a rectified image, matching camera intrinsics, and a point cloud or depth-derived point cloud in the camera frame. Then expose it through the CLI without changing the question, grounding, or evaluation privacy boundary.
 
-To add a question type, extend `QuestionKind`, validate it in `question_agent.py`, add its deterministic answer rule in `ground_truth_agent.py`, expose it in explicit CLI query expansion, and add accepted and rejected test cases. The tool trace and grounded evidence should remain sufficient to independently audit the answer.
+To add a question type, extend `QuestionKind`, validate it in `generation/question_agent.py`, add its deterministic answer rule in `generation/ground_truth_generator.py`, expose it in explicit CLI query expansion, and add accepted and rejected test cases. The tool trace and grounded evidence should remain sufficient to independently audit the answer.

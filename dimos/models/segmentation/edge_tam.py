@@ -26,6 +26,7 @@ from omegaconf import OmegaConf
 from PIL import Image as PILImage
 import torch
 
+from dimos.models.base import default_local_model_device
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.perception.detection.detectors.base import Detector
 from dimos.perception.detection.type.detection2d.bbox import Detection2DBBox
@@ -55,8 +56,11 @@ def _build_model() -> "SAM2VideoPredictor":
     if not local_config_path.exists():
         raise FileNotFoundError(f"EdgeTAM config not found at {local_config_path}")
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("EdgeTAM requires a CUDA-capable GPU")
+    if default_local_model_device() != "cuda":
+        raise RuntimeError(
+            "EdgeTAM requires a CUDA GPU architecture supported by the installed PyTorch build; "
+            "install a compatible PyTorch CUDA build or run on supported hardware"
+        )
 
     cfg = OmegaConf.load(local_config_path)
 

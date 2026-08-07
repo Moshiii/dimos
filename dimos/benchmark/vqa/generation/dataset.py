@@ -6,10 +6,15 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 import cv2
 
+from dimos.benchmark.vqa.evaluation.models import (
+    SingleFrameVqaEvaluationCase,
+    SingleFrameVqaOracle,
+)
 from dimos.benchmark.vqa.generation.ground_truth_generator import VqaGroundTruthGenerator
 from dimos.benchmark.vqa.models import (
     CalibratedFrame,
@@ -40,7 +45,7 @@ def write_frame_record(
         raise RuntimeError(f"failed to write {original_image_path}")
     overlay_path = output / "grounding_overlay.jpg"
     ground_truth.write_overlay(frame, str(overlay_path))
-    examples = [result.question for result in results if result.status == "answered"]
+    accepted = [result for result in results if result.status == "answered"]
     frame_meta = {
         "schema_version": "1.0",
         "frame_id": frame.id,
@@ -50,14 +55,15 @@ def write_frame_record(
         "original_image": original_image_path.name if frame.original_image is not None else None,
         "grounding_overlay": overlay_path.name,
         "question_count": len(intents),
-        "accepted_question_count": len(examples),
-        "rejected_question_count": len(results) - len(examples),
+        "accepted_question_count": len(accepted),
+        "rejected_question_count": len(results) - len(accepted),
         **metadata,
     }
     _write_json(output / "frame.json", frame_meta)
     _write_json(output / "intents.json", [asdict(item) for item in intents])
-    _write_json(output / "examples.json", [asdict(item) for item in examples])
+    _write_json(output / "examples.json", [_public_example(result) for result in accepted])
     _write_json(output / "ground_truth.json", [asdict(item) for item in results])
+    _write_evaluation_cases(output, image_path, accepted)
 
 
 def write_dataset_manifest(output: Path) -> dict[str, int]:
@@ -89,3 +95,48 @@ def write_dataset_manifest(output: Path) -> dict[str, int]:
 
 def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def _public_example(result: GroundTruthResult) -> dict[str, Any]:
+    example = result.question
+    return {
+        "case_id": example.id,
+        "question": example.question,
+        "allowed_answers": example.allowed_answers,
+        "answer_type": example.answer_type,
+        "object_ids": example.object_ids,
+    }
+
+
+def _write_evaluation_cases(
+    output: Path, image_path: Path, results: list[GroundTruthResult]
+) -> None:
+    cases_root = output / "cases"
+    cases_root.mkdir()
+    for result in results:
+        example = result.question
+        if not example.allowed_answers or result.answer is None:
+            raise ValueError(
+                f"accepted example {example.id} must define allowed answers and an answer"
+            )
+        case_dir = (cases_root / example.id).resolve()
+        if cases_root.resolve() not in case_dir.parents:
+            raise ValueError(f"example id must be a safe case path: {example.id}")
+        private_dir = case_dir / "private"
+        private_dir.mkdir(parents=True)
+        shutil.copy2(image_path, case_dir / "image.jpg")
+        case = SingleFrameVqaEvaluationCase(
+            case_id=example.id,
+            image_path="image.jpg",
+            question=example.question,
+            allowed_answers=example.allowed_answers,
+        )
+        oracle = SingleFrameVqaOracle(
+            case_id=example.id,
+            validator_revision="v1",
+            expected_answer=result.answer,
+            ground_truth_revision="v1",
+        )
+        _write_json(case_dir / "case.json", case.model_dump(mode="json"))
+        _write_json(private_dir / "oracle.json", oracle.model_dump(mode="json"))
+        _write_json(private_dir / "ground_truth.json", asdict(result))

@@ -4,14 +4,14 @@ title: "Single-Frame VQA"
 
 # Single-Frame Perception VQA
 
-This pipeline generates and evaluates visual question-answering examples from independent calibrated recording frames. It separates question proposal, private ground-truth generation, and visual evaluation so an evaluated model cannot see the answer evidence.
+This pipeline generates and evaluates visual question-answering examples from independent calibrated recording frames. It separates question proposal, private ground-truth generation, and no-tools visual evaluation so an evaluated model cannot see answer evidence.
 
 ## Goals
 
 - Generate questions from the visible image only.
 - Establish answers from private segmentation and 3D geometry.
 - Reject questions without sufficient geometric evidence.
-- Evaluate a visual model using only an image and question.
+- Evaluate a visual model using only an image, question, and public answer choices.
 - Preserve every input, tool trace, threshold, and result needed to audit an example.
 
 ## Model Roles
@@ -20,7 +20,7 @@ This pipeline generates and evaluates visual question-answering examples from in
 |---|---|---|---|
 | Question proposer | Rectified image | OpenAI vision model, default `gpt-4o-mini` | No depth, point cloud, calibration, or answer evidence |
 | Ground-truth perception agent | Calibrated frame and question intent | MoonDream, EdgeTAM, and geometry | Private; not exposed to the evaluated model |
-| Evaluated visual model | Rectified image and accepted question | MoonDream currently | No tools or ground-truth artifacts |
+| Evaluated visual model | Rectified image, accepted question, and allowed answers | LangChain `gpt-5.6-luna` by default | No tools or ground-truth artifacts |
 
 MoonDream is used for private box detection and point localization. EdgeTAM produces masks from MoonDream box prompts or positive point prompts. The OpenAI proposer is intentionally separate from MoonDream so proposal and grounding do not use the same semantic model.
 
@@ -34,7 +34,7 @@ MoonDream is used for private box detection and point localization. EdgeTAM prod
 6. EdgeTAM produces a foreground mask. Small masks are rejected.
 7. The pipeline projects visible geometry into the image and retains foreground points inside the mask. Objects with too few points are rejected.
 8. Accepted objects generate deterministic answers. Rejected intents have no answer and are excluded from evaluation.
-9. The evaluated visual model receives only the rectified image and accepted question. Its response is normalized and compared with the private answer.
+9. `dimos vqa evaluate` gives the LangChain model only the image, accepted question, and allowed answers. The trusted evaluator then compares its response with the private answer.
 
 ## Geometry Sources
 
@@ -68,6 +68,8 @@ Generate one image-proposed frame with `OPENAI_API_KEY=... uv run dimos vqa sing
 
 Generate a sampled, resumable dataset with `OPENAI_API_KEY=... uv run dimos vqa generate --recording go2_hongkong_office --start-index 0 --stop-index 100 --stride 10 --propose-questions`.
 
+Evaluate generated cases with `OPENAI_API_KEY=... uv run dimos vqa evaluate --dataset STATE_DIR/datasets/vqa/go2_hongkong_office-frames`.
+
 The batch command requires a finite `--stop-index` to avoid an accidental unbounded API run. Rerunning a dataset skips every frame directory that already contains `frame.json` and rebuilds aggregate manifests.
 
 ## Output Layout
@@ -79,13 +81,13 @@ Each frame directory contains:
 | Artifact | Purpose |
 |---|---|
 | `original_image.jpg` | Raw recording image before rectification, when available |
-| `image.jpg` | Rectified image used for proposal, grounding, and evaluation |
+| `image.jpg` | Rectified image used for proposal and private grounding |
 | `grounding_overlay.jpg` | Private visual audit image: foreground masks, MoonDream detector boxes or point prompts, `Q` labels, and a side legend with every question and its answer or rejection reason |
 | `frame.json` | Frame identity, source recording, artifact names, counts, model role, and quality thresholds |
 | `intents.json` | Image-only proposed or explicit constrained question intents |
 | `ground_truth.json` | Private answers or rejections, grounded-object evidence, and tool traces |
-| `examples.json` | Accepted image/question/expected-answer records |
-| `evaluations.json` | Image-only model responses and pass/fail results |
+| `examples.json` | Accepted public case summaries: question, answer choices, and object IDs |
+| `cases/<case-id>/` | Self-contained evaluation case with public `case.json` and `image.jpg`, plus private oracle and grounding evidence under `private/` |
 
 ## Verifying A Frame
 
@@ -93,6 +95,8 @@ Review `original_image.jpg`, `image.jpg`, and `grounding_overlay.jpg` together. 
 
 `ground_truth.json` records `detect_objects`, `segment_objects`, `locate_object_point`, `segment_object_point`, `get_foreground_geometry`, and `reuse_grounding` operations. A point-prompt trace means MoonDream did not supply a box, but did localize a positive point that EdgeTAM then segmented.
 
-## Evaluation Integration
+## Evaluation
 
-The generated dataset is independent of the frozen-recording evaluation framework in PR #3378. After that framework merges, its case/task/validator models can be extended to evaluate generated VQA records. The image-only evaluation mode must pass only the image and question to the agent; expected answers and geometry evidence remain private. A separate future tool-use benchmark can intentionally expose perception tools to an agent.
+`dimos vqa evaluate` reads every exported case in a generated dataset. It sends LangChain `gpt-5.6-luna` only public `case.json` fields and `image.jpg`, receives a closed answer, and scores it against `private/oracle.json`. Results are written under `evaluations/<model>/` as `results.json` and `summary.json`.
+
+A separate future tool-use benchmark can intentionally expose perception tools to an agent.

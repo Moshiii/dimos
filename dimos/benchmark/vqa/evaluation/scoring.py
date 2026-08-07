@@ -20,6 +20,11 @@ from dataclasses import dataclass
 import re
 from typing import Protocol
 
+from dimos.benchmark.vqa.evaluation.models import (
+    SingleFrameVqaEvaluationCase,
+    SingleFrameVqaEvaluationResult,
+    SingleFrameVqaOracle,
+)
 from dimos.benchmark.vqa.models import VqaExample
 from dimos.msgs.sensor_msgs.Image import Image
 
@@ -48,7 +53,7 @@ def evaluate_examples(
     evaluations: list[VqaEvaluation] = []
     for example in examples:
         raw_response = answerer.answer(image, example.question)
-        normalized = _normalize_response(raw_response, example.expected_answer)
+        normalized = _normalize_response(raw_response, example.allowed_answers)
         evaluations.append(
             VqaEvaluation(
                 example_id=example.id,
@@ -61,6 +66,45 @@ def evaluate_examples(
     return evaluations
 
 
-def _normalize_response(response: str, expected: str) -> str | None:
+def _normalize_response(response: str, allowed_answers: tuple[str, ...]) -> str | None:
     tokens = re.findall(r"[a-z]+", response.lower())
-    return expected if expected.lower() in tokens else None
+    matches = [answer for answer in allowed_answers if answer.lower() in tokens]
+    return matches[0] if len(matches) == 1 else None
+
+
+def score_vqa_response(
+    case: SingleFrameVqaEvaluationCase,
+    oracle: SingleFrameVqaOracle,
+    response: str,
+    model: str,
+) -> SingleFrameVqaEvaluationResult:
+    """Parse one closed answer using public choices and score it privately."""
+    if oracle.case_id != case.case_id:
+        raise ValueError("oracle case_id must match the public case")
+    expected = _canonical_answer(oracle.expected_answer, case.allowed_answers)
+    if expected is None:
+        raise ValueError("oracle expected_answer must be an allowed public answer")
+    answer = _parse_marked_answer(response, case.answer_marker, case.allowed_answers)
+    return SingleFrameVqaEvaluationResult(
+        case_id=case.case_id,
+        model=model,
+        raw_response=response,
+        normalized_answer=answer,
+        passed=answer == expected,
+        validator_revision=oracle.validator_revision,
+    )
+
+
+def _parse_marked_answer(
+    response: str, marker: str, allowed_answers: tuple[str, ...]
+) -> str | None:
+    lines = [line.strip() for line in response.splitlines() if line.strip()]
+    marked = [line for line in lines if line.startswith(marker)]
+    if len(marked) != 1 or not lines or lines[-1] != marked[0]:
+        return None
+    return _canonical_answer(marked[0].removeprefix(marker), allowed_answers)
+
+
+def _canonical_answer(value: str, allowed_answers: tuple[str, ...]) -> str | None:
+    normalized = value.strip().lower()
+    return next((answer for answer in allowed_answers if answer.lower() == normalized), None)

@@ -83,6 +83,7 @@ class VqaExample:
     expected_answer: str
     answer_type: str
     object_ids: tuple[str, ...]
+    allowed_answers: tuple[str, ...] = ()
 
 
 QuestionKind = Literal[

@@ -18,7 +18,7 @@ from functools import cached_property
 
 import torch
 
-from dimos.models.base import HuggingFaceModel, LocalModel
+from dimos.models.base import HuggingFaceModel, LocalModel, default_local_model_device
 
 
 class ConcreteLocalModel(LocalModel):
@@ -40,8 +40,15 @@ class ConcreteHuggingFaceModel(HuggingFaceModel):
 def test_local_model_device_auto_detection() -> None:
     """Test that device is auto-detected based on CUDA availability."""
     model = ConcreteLocalModel()
-    expected = "cuda" if torch.cuda.is_available() else "cpu"
-    assert model.device == expected
+    assert model.device == default_local_model_device()
+
+
+def test_local_model_falls_back_when_torch_lacks_gpu_architecture(mocker) -> None:
+    mocker.patch("torch.cuda.is_available", return_value=True)
+    mocker.patch("torch.cuda.get_device_capability", return_value=(12, 0))
+    mocker.patch("torch.cuda.get_arch_list", return_value=["sm_90"])
+
+    assert default_local_model_device() == "cpu"
 
 
 def test_local_model_explicit_device() -> None:

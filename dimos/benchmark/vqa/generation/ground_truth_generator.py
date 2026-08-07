@@ -261,6 +261,7 @@ def _compare_nearest_by_side(
         answer,
         "choice",
         (left.id, right.id),
+        ("left", "right"),
     )
     return GroundTruthResult(intent, example, "answered", answer, None, (left, right), trace)
 
