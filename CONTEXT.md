@@ -1,0 +1,25 @@
+# DimOS Robotics
+
+Canonical language for robot capabilities and operator interaction in DimOS.
+
+## Teleoperation
+
+**Quest arm teleoperation**:
+Arm teleoperation in which tracked Quest controllers provide clutched, relative Cartesian pose commands and gripper input.
+_Avoid_: Keyboard teleoperation, leader-follower teleoperation
+
+**Operator hand**:
+The left or right Quest controller as a source of teleoperation intent, independent of the robot arm it controls.
+_Avoid_: Hand, side
+
+**Mixed-arm setup**:
+Two independent manipulators teleoperated through separate control tasks, even when presented in one operator session.
+_Avoid_: Bimanual robot, dual-arm robot
+
+**Bimanual robot**:
+One coupled robot with two manipulator groups represented by a single kinematic model and controlled by one bimanual task.
+_Avoid_: Mixed-arm setup
+
+**Bimanual engagement**:
+A two-hand deadman condition in which a bimanual teleoperation task is active only while both operator hands are engaged; releasing either hand disengages the whole task.
+_Avoid_: Partial engagement, independent hand engagement

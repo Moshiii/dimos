@@ -38,6 +38,8 @@ class RecordingTask(BaseControlTask):
         self._name = name
         self._joints = frozenset(joints)
         self.cartesian_calls: list[tuple[Any, float]] = []
+        self.left_cartesian_calls: list[tuple[Any, float]] = []
+        self.right_cartesian_calls: list[tuple[Any, float]] = []
         self.ee_twist_calls: list[tuple[Any, float]] = []
         self.buttons_calls: list[Any] = []
 
@@ -57,6 +59,14 @@ class RecordingTask(BaseControlTask):
         self.cartesian_calls.append((pose, t_now))
         return True
 
+    def on_left_cartesian_command(self, pose: Any, t_now: float) -> bool:
+        self.left_cartesian_calls.append((pose, t_now))
+        return True
+
+    def on_right_cartesian_command(self, pose: Any, t_now: float) -> bool:
+        self.right_cartesian_calls.append((pose, t_now))
+        return True
+
     def on_ee_twist_command(self, twist: Any, t_now: float) -> bool:
         self.ee_twist_calls.append((twist, t_now))
         return True
@@ -66,5 +76,5 @@ class RecordingTask(BaseControlTask):
         return True
 
     def on_teleop_buttons(self, msg: Any, t_now: float) -> bool:
-        # Mirrors TeleopIKTask: the uniform handler delegates to on_buttons.
+        # Mirrors QuestTeleopIKTask: the uniform handler delegates to on_buttons.
         return self.on_buttons(msg)

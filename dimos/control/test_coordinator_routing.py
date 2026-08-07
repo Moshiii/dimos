@@ -15,7 +15,7 @@
 """Characterization tests for coordinator input-stream routing.
 
 These pin the observable routing behavior of the coordinator's input
-streams (joint_command, coordinator_cartesian_command,
+streams (joint_command, Cartesian and Quest pose commands,
 coordinator_ee_twist_command, twist_command, teleop_buttons) so the
 card-routing refactor can prove it preserves them. They intentionally
 avoid coordinator internals: messages enter through the ports'
@@ -53,6 +53,8 @@ ARM_JOINTS = ["arm/joint1", "arm/joint2"]
 STREAMS = (
     "joint_command",
     "coordinator_cartesian_command",
+    "left_cartesian_command",
+    "right_cartesian_command",
     "coordinator_ee_twist_command",
     "twist_command",
     "teleop_buttons",
@@ -235,6 +237,52 @@ class TestByTaskNameRouting:
         assert coordinator.get_task("cart_b").cartesian_calls == []
 
     @staticmethod
+    def _quest_coordinator(make_coordinator):
+        coordinator, taps = make_coordinator(
+            stub_task_types=True,
+            tasks=[
+                TaskConfig(name="dual", type="quest_teleop_ik", joint_names=ARM_JOINTS),
+                TaskConfig(name="single", type="quest_teleop_ik", joint_names=ARM_JOINTS),
+            ],
+        )
+        coordinator.start()
+        return coordinator, taps
+
+    def test_left_and_right_poses_reach_distinct_handlers_on_one_task(self, make_coordinator):
+        coordinator, taps = self._quest_coordinator(make_coordinator)
+
+        taps["left_cartesian_command"].emit(PoseStamped(frame_id="dual"))
+        taps["right_cartesian_command"].emit(PoseStamped(frame_id="dual"))
+
+        dual = coordinator.get_task("dual")
+        assert len(dual.left_cartesian_calls) == 1
+        assert len(dual.right_cartesian_calls) == 1
+        assert coordinator.get_task("single").left_cartesian_calls == []
+        assert coordinator.get_task("single").right_cartesian_calls == []
+
+    def test_quest_poses_route_to_independent_task_names(self, make_coordinator):
+        coordinator, taps = self._quest_coordinator(make_coordinator)
+
+        taps["left_cartesian_command"].emit(PoseStamped(frame_id="dual"))
+        taps["right_cartesian_command"].emit(PoseStamped(frame_id="single"))
+
+        assert len(coordinator.get_task("dual").left_cartesian_calls) == 1
+        assert coordinator.get_task("dual").right_cartesian_calls == []
+        assert coordinator.get_task("single").left_cartesian_calls == []
+        assert len(coordinator.get_task("single").right_cartesian_calls) == 1
+
+    @pytest.mark.parametrize("stream", ["left_cartesian_command", "right_cartesian_command"])
+    def test_quest_pose_with_unknown_task_name_delivers_nothing(self, make_coordinator, stream):
+        coordinator, taps = self._quest_coordinator(make_coordinator)
+
+        taps[stream].emit(PoseStamped(frame_id="unknown"))
+
+        for name in ("dual", "single"):
+            task = coordinator.get_task(name)
+            assert task.left_cartesian_calls == []
+            assert task.right_cartesian_calls == []
+
+    @staticmethod
     def _ee_twist_coordinator(make_coordinator):
         coordinator, taps = make_coordinator(
             stub_task_types=True,
@@ -272,7 +320,7 @@ class TestButtonsRouting:
     def test_buttons_reach_teleop_task(self, make_coordinator):
         coordinator, taps = make_coordinator(
             stub_task_types=True,
-            tasks=[TaskConfig(name="teleop1", type="teleop_ik", joint_names=ARM_JOINTS)],
+            tasks=[TaskConfig(name="teleop1", type="quest_teleop_ik", joint_names=ARM_JOINTS)],
         )
         coordinator.start()
 
@@ -588,7 +636,7 @@ class TestCardRoutingContract:
     def test_buttons_skip_card_less_tasks(self, make_coordinator):
         coordinator, taps = make_coordinator(
             stub_task_types=True,
-            tasks=[TaskConfig(name="teleop1", type="teleop_ik", joint_names=ARM_JOINTS)],
+            tasks=[TaskConfig(name="teleop1", type="quest_teleop_ik", joint_names=ARM_JOINTS)],
         )
         cardless = RecordingTask("cardless")
         coordinator.add_task(cardless)

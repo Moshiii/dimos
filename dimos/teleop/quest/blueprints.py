@@ -55,7 +55,7 @@ teleop_quest_rerun = autoconnect(
 teleop_quest_xarm7 = autoconnect(
     ArmTeleopModule.blueprint(task_names={"right": "teleop_xarm"}),
     coordinator_teleop_xarm7,
-).remappings([(ArmTeleopModule, "right_controller_output", "coordinator_cartesian_command")])
+).remappings([(ArmTeleopModule, "right_controller_output", "right_cartesian_command")])
 
 
 # XArm7 teleop + camera streaming into the Quest scene as a panel.
@@ -64,9 +64,7 @@ teleop_quest_xarm7_video = (
         VideoArmTeleopModule.blueprint(task_names={"right": "teleop_xarm"}),
         coordinator_teleop_xarm7,
     )
-    .remappings(
-        [(VideoArmTeleopModule, "right_controller_output", "coordinator_cartesian_command")]
-    )
+    .remappings([(VideoArmTeleopModule, "right_controller_output", "right_cartesian_command")])
     .transports(
         {
             ("color_image", Image): LCMTransport("/teleop/color_image", Image),
@@ -79,24 +77,24 @@ teleop_quest_xarm7_video = (
 teleop_quest_piper = autoconnect(
     ArmTeleopModule.blueprint(task_names={"left": "teleop_piper"}),
     coordinator_teleop_piper,
-).remappings([(ArmTeleopModule, "left_controller_output", "coordinator_cartesian_command")])
+).remappings([(ArmTeleopModule, "left_controller_output", "left_cartesian_command")])
 
 
 # XArm6 teleop (sim with --simulation, real otherwise): right controller -> xarm6
 teleop_quest_xarm6 = autoconnect(
     ArmTeleopModule.blueprint(task_names={"right": "teleop_xarm"}),
     coordinator_teleop_xarm6,
-).remappings([(ArmTeleopModule, "right_controller_output", "coordinator_cartesian_command")])
+).remappings([(ArmTeleopModule, "right_controller_output", "right_cartesian_command")])
 
 
-# Dual arm teleop: right -> piper, left -> xarm6 (TeleopIK, real-only)
+# Dual arm teleop: right -> piper, left -> xarm6 (two independent Quest IK tasks)
 teleop_quest_dual = autoconnect(
     ArmTeleopModule.blueprint(task_names={"right": "teleop_piper", "left": "teleop_xarm"}),
     coordinator_teleop_dual,
 ).remappings(
     [
-        (ArmTeleopModule, "right_controller_output", "coordinator_cartesian_command"),
-        (ArmTeleopModule, "left_controller_output", "coordinator_cartesian_command"),
+        (ArmTeleopModule, "right_controller_output", "right_cartesian_command"),
+        (ArmTeleopModule, "left_controller_output", "left_cartesian_command"),
     ]
 )
 

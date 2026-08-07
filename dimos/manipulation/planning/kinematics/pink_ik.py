@@ -42,7 +42,7 @@ from dimos.manipulation.planning.utils.mesh_utils import prepare_urdf_for_drake
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.logging_config import setup_logger
-from dimos.utils.transform_utils import pose_to_matrix
+from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -107,6 +107,98 @@ class PinkIK:
         self.config = PinkKinematicsConfig(**config_values)
         self._modules = _load_optional_dependencies(self.config.solver)
         self._robot_contexts: dict[tuple[str, str], _PinkRobotContext] = {}
+        self._control_contexts: dict[tuple[str, str, tuple[str, ...]], _PinkRobotContext] = {}
+
+    def step_frame_targets(
+        self,
+        robot_model: RobotModelConfig,
+        frame_targets: Mapping[str, PoseStamped],
+        controlled_joints: Sequence[str],
+        seed: JointState,
+        dt: float | None = None,
+    ) -> JointState:
+        """Perform one bounded Pink update for one robot's frame targets.
+
+        This is the control-loop entry point. Unlike the planning methods, it
+        performs no convergence loop, random restart, collision query, or world
+        lookup.
+        """
+        if not frame_targets:
+            raise ValueError("Pink frame-target step requires at least one target")
+        joint_names = tuple(controlled_joints)
+        if not joint_names:
+            raise ValueError("Pink frame-target step requires at least one controlled joint")
+        if len(set(joint_names)) != len(joint_names):
+            raise ValueError("Pink controlled joint names must be unique")
+
+        contexts = [
+            self._get_control_context(robot_model, frame_name, joint_names)
+            for frame_name in frame_targets
+        ]
+        targets = [
+            (context, self._target_in_model_frame(robot_model, frame_targets[context.frame_name]))
+            for context in contexts
+        ]
+        robot_context = contexts[0]
+        seed_positions = _seed_positions_for_mapping(seed, robot_context.mapping)
+        seed_q = self._q_from_dimos_positions(robot_context, seed_positions)
+        configuration, tasks = self._configuration_and_tasks(targets, seed_q)
+        self._step_configuration(
+            robot_context=robot_context,
+            configuration=configuration,
+            tasks=tasks,
+            dt=self.config.dt if dt is None else dt,
+        )
+        return JointState(
+            {
+                "name": list(joint_names),
+                "position": self._q_to_dimos_positions(robot_context, configuration.q).tolist(),
+            }
+        )
+
+    def validate_frame_targets(
+        self,
+        robot_model: RobotModelConfig,
+        frame_names: Sequence[str],
+        controlled_joints: Sequence[str],
+    ) -> None:
+        """Build and validate the model, controlled joints, and target frames."""
+        frames = tuple(frame_names)
+        joints = tuple(controlled_joints)
+        if not frames or len(set(frames)) != len(frames):
+            raise ValueError("Pink target frame names must be non-empty and unique")
+        if not joints or len(set(joints)) != len(joints):
+            raise ValueError("Pink controlled joint names must be non-empty and unique")
+        for frame_name in frames:
+            self._get_control_context(robot_model, frame_name, joints)
+
+    def frame_poses(
+        self,
+        robot_model: RobotModelConfig,
+        frame_names: Sequence[str],
+        controlled_joints: Sequence[str],
+        seed: JointState,
+    ) -> dict[str, PoseStamped]:
+        """Return current world poses for named frames at a joint seed."""
+        if not frame_names:
+            raise ValueError("Pink frame pose query requires at least one frame")
+        joint_names = tuple(controlled_joints)
+        contexts = [
+            self._get_control_context(robot_model, frame_name, joint_names)
+            for frame_name in frame_names
+        ]
+        positions = _seed_positions_for_mapping(seed, contexts[0].mapping)
+        q = self._q_from_dimos_positions(contexts[0], positions)
+        base_world = pose_to_matrix(robot_model.base_pose)
+        poses: dict[str, PoseStamped] = {}
+        for context in contexts:
+            pose = matrix_to_pose(base_world @ self._current_frame_matrix(context, q))
+            poses[context.frame_name] = PoseStamped(
+                frame_id=robot_model.base_link,
+                position=pose.position,
+                orientation=pose.orientation,
+            )
+        return poses
 
     def solve(
         self,
@@ -369,25 +461,28 @@ class PinkIK:
         orientation_tolerance: float,
         locked_joint_positions: Mapping[int, float] | None = None,
     ) -> IKResult:
+        return self._solve_targets(
+            targets=targets,
+            seed_q=seed_q,
+            lower_limits=lower_limits,
+            upper_limits=upper_limits,
+            position_tolerance=position_tolerance,
+            orientation_tolerance=orientation_tolerance,
+            locked_joint_positions=locked_joint_positions,
+        )
+
+    def _solve_targets(
+        self,
+        targets: Sequence[tuple[_PinkRobotContext, NDArray[np.float64]]],
+        seed_q: NDArray[np.float64],
+        lower_limits: NDArray[np.float64],
+        upper_limits: NDArray[np.float64],
+        position_tolerance: float,
+        orientation_tolerance: float,
+        locked_joint_positions: Mapping[int, float] | None = None,
+    ) -> IKResult:
         robot_context = targets[0][0]
-        pink = self._modules.pink
-        pinocchio = self._modules.pinocchio
-        configuration = pink.Configuration(robot_context.model, robot_context.data, seed_q.copy())
-        tasks: list[Any] = []
-        for target_context, target_model in targets:
-            frame_task = pink.tasks.FrameTask(
-                target_context.frame_name,
-                position_cost=self.config.position_cost,
-                orientation_cost=self.config.orientation_cost,
-                lm_damping=self.config.lm_damping,
-                gain=self.config.gain,
-            )
-            frame_task.set_target(_matrix_to_se3(pinocchio, target_model))
-            tasks.append(frame_task)
-        if self.config.posture_cost > 0.0:
-            posture_task = pink.tasks.PostureTask(cost=self.config.posture_cost)
-            posture_task.set_target_from_configuration(configuration)
-            tasks.append(posture_task)
+        configuration, tasks = self._configuration_and_tasks(targets, seed_q)
         final_position_error = float("inf")
         final_orientation_error = float("inf")
         for iteration in range(self.config.max_iterations):
@@ -408,17 +503,13 @@ class PinkIK:
                     final_orientation_error,
                     iteration + 1,
                 )
-            velocity = pink.solve_ik(
-                configuration,
-                tasks,
-                self.config.dt,
-                solver=self.config.solver,
-                damping=self.config.damping,
-                safety_break=self.config.safety_break,
+            self._step_configuration(
+                robot_context=robot_context,
+                configuration=configuration,
+                tasks=tasks,
+                dt=self.config.dt,
+                locked_joint_positions=locked_joint_positions,
             )
-            configuration.integrate_inplace(velocity, self.config.dt)
-            for local_index, value in (locked_joint_positions or {}).items():
-                configuration.q[robot_context.mapping.idx_q[local_index]] = value
             joint_positions = self._q_to_dimos_positions(robot_context, configuration.q)
             if not _within_limits(joint_positions, lower_limits, upper_limits):
                 return IKResult(
@@ -449,78 +540,72 @@ class PinkIK:
         orientation_tolerance: float,
         locked_joint_positions: Mapping[int, float] | None = None,
     ) -> IKResult:
+        return self._solve_targets(
+            targets=[(robot_context, target_model)],
+            seed_q=seed_q,
+            lower_limits=lower_limits,
+            upper_limits=upper_limits,
+            position_tolerance=position_tolerance,
+            orientation_tolerance=orientation_tolerance,
+            locked_joint_positions=locked_joint_positions,
+        )
+
+    def _configuration_and_tasks(
+        self,
+        targets: Sequence[tuple[_PinkRobotContext, NDArray[np.float64]]],
+        seed_q: NDArray[np.float64],
+    ) -> tuple[Any, list[Any]]:
+        robot_context = targets[0][0]
         pink = self._modules.pink
         pinocchio = self._modules.pinocchio
-
         configuration = pink.Configuration(robot_context.model, robot_context.data, seed_q.copy())
-        target_se3 = _matrix_to_se3(pinocchio, target_model)
-
-        frame_task = pink.tasks.FrameTask(
-            robot_context.frame_name,
-            position_cost=self.config.position_cost,
-            orientation_cost=self.config.orientation_cost,
-            lm_damping=self.config.lm_damping,
-            gain=self.config.gain,
-        )
-        frame_task.set_target(target_se3)
-        tasks: list[Any] = [frame_task]
-
+        tasks: list[Any] = []
+        for target_context, target_model in targets:
+            frame_task = pink.tasks.FrameTask(
+                target_context.frame_name,
+                position_cost=self.config.position_cost,
+                orientation_cost=self.config.orientation_cost,
+                lm_damping=self.config.lm_damping,
+                gain=self.config.gain,
+            )
+            frame_task.set_target(_matrix_to_se3(pinocchio, target_model))
+            tasks.append(frame_task)
         if self.config.posture_cost > 0.0:
             posture_task = pink.tasks.PostureTask(cost=self.config.posture_cost)
-            posture_task.set_target_from_configuration(configuration)
+            if self.config.joint_limit_posture_margin > 0.0:
+                posture_task.set_target(
+                    _inward_joint_limit_posture(
+                        configuration,
+                        self.config.joint_limit_posture_margin,
+                    )
+                )
+            else:
+                posture_task.set_target_from_configuration(configuration)
             tasks.append(posture_task)
+        return configuration, tasks
 
-        final_position_error = float("inf")
-        final_orientation_error = float("inf")
-
-        for iteration in range(self.config.max_iterations):
-            current_pose = self._current_frame_matrix(robot_context, configuration.q)
-            final_position_error, final_orientation_error = compute_pose_error(
-                current_pose, target_model
-            )
-            if (
-                final_position_error <= position_tolerance
-                and final_orientation_error <= orientation_tolerance
-            ):
-                return _success(
-                    robot_context.mapping.dimos_joint_names,
-                    self._q_to_dimos_positions(robot_context, configuration.q),
-                    final_position_error,
-                    final_orientation_error,
-                    iteration + 1,
-                )
-
-            velocity = pink.solve_ik(
-                configuration,
-                tasks,
-                self.config.dt,
-                solver=self.config.solver,
-                damping=self.config.damping,
-                safety_break=self.config.safety_break,
-            )
-            configuration.integrate_inplace(velocity, self.config.dt)
-            for local_index, value in (locked_joint_positions or {}).items():
-                configuration.q[robot_context.mapping.idx_q[local_index]] = value
-
-            joint_positions = self._q_to_dimos_positions(robot_context, configuration.q)
-            if not _within_limits(joint_positions, lower_limits, upper_limits):
-                return IKResult(
-                    status=IKStatus.JOINT_LIMITS,
-                    joint_state=None,
-                    position_error=final_position_error,
-                    orientation_error=final_orientation_error,
-                    iterations=iteration + 1,
-                    message="Pink IK candidate violates DimOS joint limits",
-                )
-
-        return IKResult(
-            status=IKStatus.NO_SOLUTION,
-            joint_state=None,
-            position_error=final_position_error,
-            orientation_error=final_orientation_error,
-            iterations=self.config.max_iterations,
-            message="Pink IK did not converge within the iteration budget",
+    def _step_configuration(
+        self,
+        robot_context: _PinkRobotContext,
+        configuration: Any,
+        tasks: Sequence[Any],
+        dt: float,
+        locked_joint_positions: Mapping[int, float] | None = None,
+    ) -> None:
+        velocity = self._modules.pink.solve_ik(
+            configuration,
+            tasks,
+            dt,
+            solver=self.config.solver,
+            damping=self.config.damping,
+            safety_break=self.config.safety_break,
         )
+        configuration.integrate_inplace(velocity, dt)
+        if locked_joint_positions:
+            locked_q = configuration.q.copy()
+            for local_index, value in locked_joint_positions.items():
+                locked_q[robot_context.mapping.idx_q[local_index]] = value
+            configuration.update(locked_q)
 
     def _get_robot_context(
         self,
@@ -535,7 +620,25 @@ class PinkIK:
             )
         return self._robot_contexts[cache_key]
 
-    def _build_robot_context(self, config: RobotModelConfig, frame_name: str) -> _PinkRobotContext:
+    def _get_control_context(
+        self,
+        config: RobotModelConfig,
+        frame_name: str,
+        controlled_joints: Sequence[str],
+    ) -> _PinkRobotContext:
+        cache_key = (str(Path(config.model_path).resolve()), frame_name, tuple(controlled_joints))
+        if cache_key not in self._control_contexts:
+            self._control_contexts[cache_key] = self._build_robot_context(
+                config, frame_name, controlled_joints
+            )
+        return self._control_contexts[cache_key]
+
+    def _build_robot_context(
+        self,
+        config: RobotModelConfig,
+        frame_name: str,
+        controlled_joints: Sequence[str] | None = None,
+    ) -> _PinkRobotContext:
         pinocchio = self._modules.pinocchio
         model_path = Path(config.model_path).resolve()
         if not model_path.exists():
@@ -555,7 +658,7 @@ class PinkIK:
         data = model.createData()
         _assert_base_link_is_model_root(model, config.base_link)
         frame_id = _get_frame_id(model, frame_name)
-        mapping = _build_joint_mapping(model, config)
+        mapping = _build_joint_mapping(model, config, controlled_joints)
         return _PinkRobotContext(
             model=model,
             data=data,
@@ -663,11 +766,16 @@ def _import_required_module(name: str, message: str) -> ModuleType:
         raise PinkIKDependencyError(message) from exc
 
 
-def _build_joint_mapping(model: Any, config: RobotModelConfig) -> _JointMapping:
+def _build_joint_mapping(
+    model: Any,
+    config: RobotModelConfig,
+    controlled_joints: Sequence[str] | None = None,
+) -> _JointMapping:
     idx_q: list[int] = []
     model_joint_names: list[str] = []
+    dimos_joint_names = list(controlled_joints or config.joint_names)
 
-    for dimos_name in config.joint_names:
+    for dimos_name in dimos_joint_names:
         model_joint_name = config.get_urdf_joint_name(dimos_name)
         joint_id = _get_joint_id(model, model_joint_name)
         joint = model.joints[joint_id]
@@ -681,7 +789,7 @@ def _build_joint_mapping(model: Any, config: RobotModelConfig) -> _JointMapping:
         model_joint_names.append(model_joint_name)
 
     return _JointMapping(
-        dimos_joint_names=list(config.joint_names),
+        dimos_joint_names=dimos_joint_names,
         model_joint_names=model_joint_names,
         idx_q=idx_q,
     )
@@ -694,6 +802,28 @@ def _get_joint_id(model: Any, joint_name: str) -> int:
     if joint_id >= len(model.joints):
         raise ValueError(_missing_joint_message(model, joint_name))
     return joint_id
+
+
+def _inward_joint_limit_posture(configuration: Any, margin: float) -> NDArray[np.float64]:
+    """Return the seed posture with near-limit coordinates moved inward."""
+    target: NDArray[np.float64] = np.asarray(
+        configuration.q,
+        dtype=np.float64,
+    ).copy()
+    lower = np.asarray(configuration.model.lowerPositionLimit, dtype=np.float64)
+    upper = np.asarray(configuration.model.upperPositionLimit, dtype=np.float64)
+    for index, (value, lower_limit, upper_limit) in enumerate(
+        zip(target, lower, upper, strict=True)
+    ):
+        lower_target = lower_limit + margin
+        upper_target = upper_limit - margin
+        if lower_target > upper_target:
+            target[index] = 0.5 * lower_limit + 0.5 * upper_limit
+        elif value < lower_target:
+            target[index] = lower_target
+        elif value > upper_target:
+            target[index] = upper_target
+    return target
 
 
 def _get_frame_id(model: Any, frame_name: str) -> int:

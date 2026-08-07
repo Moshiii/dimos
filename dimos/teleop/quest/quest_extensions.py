@@ -130,7 +130,7 @@ class ArmTeleopConfig(QuestTeleopConfig):
     Attributes:
         task_names: Mapping of Hand -> coordinator task name. Used to set
             frame_id on output PoseStamped so the coordinator routes each
-            hand's commands to the correct TeleopIKTask.
+            hand's commands to the correct QuestTeleopIKTask.
     """
 
     task_names: dict[str, str] = Field(default_factory=dict)
@@ -144,7 +144,11 @@ class ArmTeleopModule(QuestTeleopModule):
 
     When task_names is configured, output PoseStamped messages have their
     frame_id set to the task name, enabling the coordinator to route
-    each hand's commands to the correct TeleopIKTask.
+    each hand's commands to the correct QuestTeleopIKTask.
+
+    Unlike the base module, this publishes absolute controller poses. The
+    control task owns controller-to-robot reference capture so one task can
+    establish a coherent reference for both arms.
 
     Outputs:
         - left_controller_output: PoseStamped (inherited)
@@ -168,6 +172,10 @@ class ArmTeleopModule(QuestTeleopModule):
         self._task_names: dict[Hand, str] = {
             Hand[k.upper()]: v for k, v in self.config.task_names.items()
         }
+
+    def _get_output_pose(self, hand: Hand) -> PoseStamped | None:
+        """Return the current absolute controller pose."""
+        return self._current_poses.get(hand)
 
     def _publish_msg(self, hand: Hand, output_msg: PoseStamped) -> None:
         """Stamp frame_id with task name and publish."""

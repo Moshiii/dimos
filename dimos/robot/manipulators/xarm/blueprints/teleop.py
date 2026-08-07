@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from dimos.control.components import make_gripper_joints
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
@@ -24,7 +25,7 @@ from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.common.blueprints import (
     eef_twist_task,
-    teleop_ik_task,
+    quest_teleop_ik_task,
 )
 from dimos.robot.manipulators.common.sim import mujoco_if_sim
 from dimos.robot.manipulators.xarm.config import (
@@ -144,8 +145,10 @@ _xarm7_teleop_hw = xarm7_hardware(
 _xarm6_teleop_hw = xarm6_hardware(
     "arm", gripper=True, gripper_open_position=0.85, gripper_closed_position=0.0
 )
+_xarm6_teleop_model = make_xarm6_model_config("arm")
+_xarm7_teleop_model = make_xarm7_model_config("arm")
 
-# Dual-input arm: VR (teleop_ik) preempts browser keyboard (eef_twist) via
+# Dual-input arm: VR (quest_teleop_ik) preempts browser keyboard (eef_twist) via
 # higher priority; when VR is idle the always-active eef_twist holds/drives.
 # While engaged, VR also owns the gripper joint (trigger), so the browser
 # gripper toggle only takes effect when VR is disengaged.
@@ -161,14 +164,21 @@ coordinator_teleop_xarm7 = autoconnect(
         publish_robot_joint_states=True,
         hardware=[_xarm7_teleop_hw],
         tasks=[
-            teleop_ik_task(
+            quest_teleop_ik_task(
                 _xarm7_teleop_hw,
-                model_path=XARM7_FK_MODEL,
-                ee_joint_id=7,
-                hand="right",
+                robot_model=_xarm7_teleop_model,
+                bindings=[
+                    {
+                        "hand": "right",
+                        "target_frame": "link_tcp",
+                        "gripper_joint": make_gripper_joints("arm")[0],
+                        "gripper_open_position": 0.85,
+                        "gripper_closed_position": 0.0,
+                    }
+                ],
                 name="teleop_xarm",
                 priority=20,
-                params=XARM_GRIPPER_PARAMS,
+                params={"max_joint_delta_deg": XARM_GRIPPER_PARAMS["max_joint_delta_deg"]},
             ),
             eef_twist_task(
                 _xarm7_teleop_hw,
@@ -186,14 +196,21 @@ coordinator_teleop_xarm6 = autoconnect(
     ControlCoordinator.blueprint(
         hardware=[_xarm6_teleop_hw],
         tasks=[
-            teleop_ik_task(
+            quest_teleop_ik_task(
                 _xarm6_teleop_hw,
-                model_path=XARM6_FK_MODEL,
-                ee_joint_id=6,
-                hand="right",
+                robot_model=_xarm6_teleop_model,
+                bindings=[
+                    {
+                        "hand": "right",
+                        "target_frame": "link_tcp",
+                        "gripper_joint": make_gripper_joints("arm")[0],
+                        "gripper_open_position": 0.85,
+                        "gripper_closed_position": 0.0,
+                    }
+                ],
                 name="teleop_xarm",
                 priority=20,
-                params=XARM_GRIPPER_PARAMS,
+                params={"max_joint_delta_deg": XARM_GRIPPER_PARAMS["max_joint_delta_deg"]},
             ),
             eef_twist_task(
                 _xarm6_teleop_hw,

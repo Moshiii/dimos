@@ -26,7 +26,7 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.common.blueprints import (
     cartesian_ik_task,
     eef_twist_task,
-    teleop_ik_task,
+    quest_teleop_ik_task,
     trajectory_task,
 )
 from dimos.robot.manipulators.common.sim import mujoco_if_sim
@@ -81,7 +81,13 @@ _piper_mock_cartesian_hw = make_piper_hardware(
 
 coordinator_cartesian_ik_mock = ControlCoordinator.blueprint(
     hardware=[_piper_mock_cartesian_hw],
-    tasks=[cartesian_ik_task(_piper_mock_cartesian_hw, model_path=PIPER_FK_MODEL, ee_joint_id=6)],
+    tasks=[
+        cartesian_ik_task(
+            _piper_mock_cartesian_hw,
+            robot_model=_piper_model,
+            target_frame="gripper_base",
+        )
+    ],
 )
 
 _piper_teleop_hw = piper_hardware("arm", gripper_open_position=0.07, gripper_closed_position=0.0)
@@ -97,17 +103,19 @@ coordinator_teleop_piper = autoconnect(
         publish_robot_joint_states=True,
         hardware=[_piper_teleop_hw],
         tasks=[
-            teleop_ik_task(
+            quest_teleop_ik_task(
                 _piper_teleop_hw,
-                model_path=PIPER_FK_MODEL,
-                ee_joint_id=6,
-                hand="left",
+                robot_model=_piper_model,
+                bindings=[
+                    {
+                        "hand": "left",
+                        "target_frame": "gripper_base",
+                        "gripper_joint": make_gripper_joints("arm")[0],
+                        "gripper_open_position": 1.0,
+                        "gripper_closed_position": 0.0,
+                    }
+                ],
                 name="teleop_piper",
-                params={
-                    "gripper_joint": make_gripper_joints("arm")[0],
-                    "gripper_open_pos": 1.0,
-                    "gripper_closed_pos": 0.0,
-                },
             ),
             trajectory_task(_piper_teleop_hw),
         ],
@@ -128,5 +136,11 @@ _piper_cartesian_hw = make_piper_hardware(
 
 coordinator_cartesian_ik_piper = ControlCoordinator.blueprint(
     hardware=[_piper_cartesian_hw],
-    tasks=[cartesian_ik_task(_piper_cartesian_hw, model_path=PIPER_FK_MODEL, ee_joint_id=6)],
+    tasks=[
+        cartesian_ik_task(
+            _piper_cartesian_hw,
+            robot_model=_piper_model,
+            target_frame="gripper_base",
+        )
+    ],
 )

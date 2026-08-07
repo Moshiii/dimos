@@ -107,10 +107,14 @@ class _FakeConfiguration:
     def __init__(self, model: _FakeModel, data: _FakeData, q: np.ndarray) -> None:
         self.model = model
         self.data = data
-        self.q = q.copy()
+        self.update(q)
 
     def integrate_inplace(self, velocity: np.ndarray, dt: float) -> None:
-        self.q = self.q + velocity * dt
+        self.update(self.q + velocity * dt)
+
+    def update(self, q: np.ndarray) -> None:
+        self.q = q.copy()
+        self.q.setflags(write=False)
 
 
 class _FakeFrameTask:
@@ -199,6 +203,17 @@ def _context() -> _PinkRobotContext:
         frame_id=1,
         frame_name="tool",
         mapping=mapping,
+    )
+
+
+def _controlled_context(frame_name: str, controlled_joints: list[str]) -> _PinkRobotContext:
+    model = _FakeModel()
+    return _PinkRobotContext(
+        model=model,
+        data=model.createData(),
+        frame_id=model.getFrameId(frame_name),
+        frame_name=frame_name,
+        mapping=_build_joint_mapping(model, _robot_config(), controlled_joints),
     )
 
 
@@ -394,6 +409,104 @@ def test_joint_order_mapping_uses_names_not_positions() -> None:
 
     assert mapping.idx_q == [1, 0, 2]
     assert _seed_positions_for_mapping(seed, mapping).tolist() == [10.0, 20.0, 30.0]
+
+
+def test_step_frame_targets_preserves_controlled_joint_order(
+    mocker: MockerFixture,
+) -> None:
+    ik = _pink_ik(mocker)
+    mocker.patch.object(
+        ik,
+        "_get_control_context",
+        return_value=_controlled_context("tool", ["joint_c", "joint_a"]),
+    )
+
+    result = ik.step_frame_targets(
+        robot_model=_robot_config(),
+        frame_targets={
+            "tool": PoseStamped(
+                position=Vector3(0.1, 0.2, 0.3),
+                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+            )
+        },
+        controlled_joints=["joint_c", "joint_a"],
+        seed=JointState(name=["joint_a", "joint_c"], position=[0.0, 0.0]),
+        dt=0.02,
+    )
+
+    assert result.name == ["joint_c", "joint_a"]
+    assert result.position == pytest.approx([0.3, 0.2])
+
+
+def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
+    mocker: MockerFixture,
+) -> None:
+    config = PinkIKConfig(
+        position_cost=2.0,
+        orientation_cost=3.0,
+        lm_damping=4e-6,
+        gain=0.25,
+        posture_cost=0.0,
+    )
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = PinkIK(config)
+    contexts = {
+        "tool": _controlled_context("tool", ["joint_a", "joint_b", "joint_c"]),
+        "base": _controlled_context("base", ["joint_a", "joint_b", "joint_c"]),
+    }
+    mocker.patch.object(
+        ik,
+        "_get_control_context",
+        side_effect=lambda _model, frame, _joints: contexts[frame],
+    )
+    frame_task = mocker.patch.object(ik._modules.pink.tasks, "FrameTask", wraps=_FakeFrameTask)
+    solve_ik = mocker.spy(ik._modules.pink, "solve_ik")
+
+    result = ik.step_frame_targets(
+        robot_model=_robot_config(),
+        frame_targets={
+            "tool": PoseStamped(
+                position=Vector3(0.1, 0.2, 0.3),
+                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+            ),
+            "base": PoseStamped(
+                position=Vector3(),
+                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+            ),
+        },
+        controlled_joints=["joint_a", "joint_b", "joint_c"],
+        seed=JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        dt=0.02,
+    )
+
+    assert [call.args[0] for call in frame_task.call_args_list] == ["tool", "base"]
+    assert frame_task.call_args_list[0].kwargs == {
+        "position_cost": 2.0,
+        "orientation_cost": 3.0,
+        "lm_damping": 4e-6,
+        "gain": 0.25,
+    }
+    solve_ik.assert_called_once()
+    assert solve_ik.call_args.args[2] == 0.02
+    assert result.name == ["joint_a", "joint_b", "joint_c"]
+
+
+def test_step_frame_targets_rejects_unknown_frame(mocker: MockerFixture, tmp_path: Path) -> None:
+    modules = _fake_modules()
+    modules.pinocchio.buildModelFromUrdf = lambda path: _FakeModel()  # type: ignore[attr-defined]
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=modules)
+    mocker.patch.object(pink_ik, "prepare_urdf_for_drake", return_value=tmp_path / "prepared.urdf")
+    config = _robot_config()
+    config.model_path = tmp_path / "fake.urdf"
+    config.model_path.write_text("<robot/>")
+
+    with pytest.raises(ValueError, match="missing_frame"):
+        PinkIK(PinkIKConfig()).step_frame_targets(
+            robot_model=config,
+            frame_targets={"missing_frame": PoseStamped()},
+            controlled_joints=config.joint_names,
+            seed=JointState(name=config.joint_names, position=[0.0, 0.0, 0.0]),
+        )
 
 
 def test_mapping_failure_for_missing_joint() -> None:

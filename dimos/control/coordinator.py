@@ -168,6 +168,11 @@ class ControlCoordinator(Module):
     # Uses frame_id as task name for routing
     coordinator_cartesian_command: In[PoseStamped]
 
+    # Inputs: Quest controller poses routed independently by task name.
+    # A single bimanual task may consume both streams.
+    left_cartesian_command: In[PoseStamped]
+    right_cartesian_command: In[PoseStamped]
+
     # Input: Routed spatial EEF twist commands for EEFTwistTask.
     # Uses frame_id as task name for routing.
     coordinator_ee_twist_command: In[TwistStamped]

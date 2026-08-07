@@ -13,12 +13,15 @@
 # limitations under the License.
 
 TASK_FACTORIES = {
-    "teleop_ik": "dimos.control.tasks.teleop_task.teleop_task:create_task",
+    "quest_teleop_ik": (
+        "dimos.control.tasks.quest_teleop_ik_task.quest_teleop_ik_task:create_task"
+    ),
 }
 
 TASK_CONSUMES = {
-    "teleop_ik": {
-        "coordinator_cartesian_command": ("on_cartesian_command", "by_task_name"),
+    "quest_teleop_ik": {
+        "left_cartesian_command": ("on_left_cartesian_command", "by_task_name"),
+        "right_cartesian_command": ("on_right_cartesian_command", "by_task_name"),
         "teleop_buttons": ("on_teleop_buttons", "broadcast"),
     },
 }

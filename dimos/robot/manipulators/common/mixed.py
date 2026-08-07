@@ -18,8 +18,15 @@ from __future__ import annotations
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.global_config import global_config
-from dimos.robot.manipulators.piper.config import PIPER_FK_MODEL, make_piper_hardware
-from dimos.robot.manipulators.xarm.config import XARM6_FK_MODEL, make_xarm_hardware
+from dimos.robot.manipulators.common.blueprints import quest_teleop_ik_task
+from dimos.robot.manipulators.piper.config import (
+    make_piper_hardware,
+    make_piper_model_config,
+)
+from dimos.robot.manipulators.xarm.config import (
+    make_xarm6_model_config,
+    make_xarm_hardware,
+)
 
 _xarm6_dual = make_xarm_hardware(
     "xarm_arm",
@@ -63,19 +70,19 @@ _piper_teleop_hw = make_piper_hardware(
 coordinator_teleop_dual = ControlCoordinator.blueprint(
     hardware=[_xarm6_teleop_hw, _piper_teleop_hw],
     tasks=[
-        TaskConfig(
+        quest_teleop_ik_task(
+            _xarm6_teleop_hw,
             name="teleop_xarm",
-            type="teleop_ik",
-            joint_names=_xarm6_teleop_hw.joints,
+            robot_model=make_xarm6_model_config("xarm_arm"),
+            bindings=[{"hand": "left", "target_frame": "link_tcp"}],
             priority=10,
-            params={"model_path": XARM6_FK_MODEL, "ee_joint_id": 6, "hand": "left"},
         ),
-        TaskConfig(
+        quest_teleop_ik_task(
+            _piper_teleop_hw,
             name="teleop_piper",
-            type="teleop_ik",
-            joint_names=_piper_teleop_hw.joints,
+            robot_model=make_piper_model_config("piper_arm"),
+            bindings=[{"hand": "right", "target_frame": "gripper_base"}],
             priority=10,
-            params={"model_path": PIPER_FK_MODEL, "ee_joint_id": 6, "hand": "right"},
         ),
     ],
 )

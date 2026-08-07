@@ -37,6 +37,7 @@ OPENARM_RIGHT_ARM_JOINTS = [f"right_arm/joint{i}" for i in range(1, OPENARM_DOF 
 OPENARM_ARM_JOINTS = [*OPENARM_LEFT_ARM_JOINTS, *OPENARM_RIGHT_ARM_JOINTS]
 OPENARM_GRIPPER_JOINTS = ["left_arm/gripper", "right_arm/gripper"]
 OPENARM_JOINTS = [*OPENARM_ARM_JOINTS, *OPENARM_GRIPPER_JOINTS]
+OPENARM_HOME_JOINTS = [0.0] * len(OPENARM_ARM_JOINTS)
 
 OPENARM_PKG = LfsPath("openarm_description")
 OPENARM_LEFT_MODEL = OPENARM_PKG / "urdf/robot/openarm_v20_left.urdf"
@@ -73,6 +74,20 @@ def openarm_hardware() -> HardwareComponent:
     adapter_kwargs: dict[str, object] = {}
     if not global_config.simulation:
         adapter_kwargs["runtime_config"] = DamiaoRuntimeConfig(gravity_comp=True)
+    return _openarm_hardware_component(adapter_type, adapter_kwargs)
+
+
+def openarm_mock_hardware() -> HardwareComponent:
+    """Build an OpenArm component that is unconditionally safe and in-memory."""
+    return _openarm_hardware_component(
+        "mock_whole_body",
+        {"initial_positions": [*OPENARM_HOME_JOINTS, 0.0, 0.0]},
+    )
+
+
+def _openarm_hardware_component(
+    adapter_type: str, adapter_kwargs: dict[str, object]
+) -> HardwareComponent:
     return HardwareComponent(
         hardware_id=OPENARM_HARDWARE_ID,
         hardware_type=HardwareType.WHOLE_BODY,
@@ -124,5 +139,5 @@ def openarm_bimanual_model_config(name: str = OPENARM_HARDWARE_ID) -> RobotModel
                 openarm_arm_joints(side), openarm_urdf_joints(side), strict=True
             )
         },
-        home_joints=[0.0] * (2 * OPENARM_DOF),
+        home_joints=list(OPENARM_HOME_JOINTS),
     )

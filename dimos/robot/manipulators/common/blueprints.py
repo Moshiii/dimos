@@ -61,8 +61,8 @@ def trajectory_task(
 def cartesian_ik_task(
     hardware: HardwareComponent,
     *,
-    model_path: Path,
-    ee_joint_id: int,
+    robot_model: RobotModelConfig,
+    target_frame: str,
     name: str = CARTESIAN_IK_TASK_NAME,
     priority: int = 10,
 ) -> TaskConfig:
@@ -71,7 +71,7 @@ def cartesian_ik_task(
         type="cartesian_ik",
         joint_names=hardware.joints,
         priority=priority,
-        params={"model_path": model_path, "ee_joint_id": ee_joint_id},
+        params={"robot_model": robot_model, "target_frame": target_frame},
     )
 
 
@@ -96,27 +96,26 @@ def eef_twist_task(
     )
 
 
-def teleop_ik_task(
+def quest_teleop_ik_task(
     hardware: HardwareComponent,
     *,
-    model_path: Path,
-    ee_joint_id: int,
-    hand: str,
+    robot_model: RobotModelConfig,
+    bindings: Sequence[dict[str, Any]],
     name: str,
+    joint_names: Sequence[str] | None = None,
     priority: int = 10,
     params: dict[str, Any] | None = None,
 ) -> TaskConfig:
     task_params: dict[str, Any] = {
-        "model_path": model_path,
-        "ee_joint_id": ee_joint_id,
-        "hand": hand,
+        "robot_model": robot_model,
+        "bindings": list(bindings),
     }
     if params:
         task_params.update(params)
     return TaskConfig(
         name=name,
-        type="teleop_ik",
-        joint_names=hardware.joints,
+        type="quest_teleop_ik",
+        joint_names=list(joint_names) if joint_names is not None else hardware.joints,
         priority=priority,
         params=task_params,
     )
