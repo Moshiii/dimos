@@ -45,7 +45,7 @@ import numpy as np
 K_ABS_MAX = 5.0
 # Defaults tuned for a slow-odom legged base; override per robot.
 DEFAULT_TAU_BOUNDS = (0.03, 0.6)
-DEFAULT_L_BOUNDS = (0.05, 0.30)
+DEFAULT_L_BOUNDS = (0.05, 1.0)
 
 
 @dataclass
