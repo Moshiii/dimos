@@ -221,13 +221,21 @@ it is no longer declared separately.
 
 **R8.** `get_dof()` reports **arm joints only** — its meaning today is unchanged.
 `get_gripper_dof()` reports gripper joints, returning `0` when there are none. A caller
-wanting the total adds them. On a `GripperAdapter`, `get_dof()` reports its own joints.
+wanting the total adds them.
+
+> The rule holds without exception, including for a gripper that is a device in its own
+> right: such an adapter reports `get_dof() == 0` and `get_gripper_dof() == <its joints>`.
+> An earlier draft carved out "on a `GripperAdapter`, `get_dof()` reports its own joints";
+> §7.2 records why that carve-out is unnecessary.
 
 > `get_dof()` is therefore **not** the length of `get_limits()`, `read_joint_positions()`
 > or the `write_joint_positions()` array — those cover all joints (R4, R13). This is the
 > one place in the protocol where two lengths are legitimately different; R13 states it.
 
-**R9.** *Moved to PR 2 — the `GripperAdapter` protocol. See §7.*
+**R9.** *Deferred, and probably unnecessary — see §7.2.* A gripper that is its own
+device is a `ManipulatorAdapter` owning zero arm joints; nothing in that protocol assumes
+an arm. A separate `GripperAdapter` ships only if a real device turns out to need
+something `ManipulatorAdapter` cannot express.
 
 **R10.** A **joint** means an *actuated degree of freedom*, not necessarily a mechanical
 hinge. A pneumatic or suction gripper is one joint with limits `[0, 1]`; a
@@ -513,7 +521,10 @@ sharing its component (`tick_loop.py:386-397`). Priority is uncontested by R17.
 `task_invoke("arm_gripper", ...)` — `set_normalized` for the agent skills (R26), which is
 the scale they already think in. Only the shortcut route dies.
 
-**R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry. See §7.*
+**R24.** *Deferred, and probably unnecessary — see §7.2.* The standalone shape routes
+through the existing manipulator registry with `HardwareType.MANIPULATOR`. A distinct
+type buys discoverability, not capability, and is not required to support a third-party
+gripper.
 
 **R25.** `ConnectedHardware` builds one ordered array from `all_joints` and makes one call.
 Its gripper branches are deleted — in `read_state`, `write_command`, and
@@ -703,8 +714,8 @@ verifiable**: a PR that cannot be proven on hardware we own does not ship.
 | Step | Delivers | Requirements | Roughly |
 |---|---|---|---|
 | **0 — this PR** | The spec. Agreement on the API before anything is written | — | docs only |
-| **1 — this spec** | The joint model, units, `GripperControlTask`, RPC removal. **Four parts, §7.1** | everything except R9, R24 | **real hardware** — xArm, Piper, a1z |
-| **2 — third-party support** | `GripperAdapter`, `HardwareType.GRIPPER`, gripper registry, the standalone device shape | R9, R24 | the H100 itself |
+| **1 — this spec** ✅ | The joint model, units, `GripperControlTask`, RPC removal. **Four parts, §7.1** | everything except R9, R24 | **delivered**; verified on xArm6 |
+| **2 — third-party support** | Mostly **already delivered by step 1** — see §7.2. What remains is a standalone blueprint and a test pinning it | R9, R24 *(both likely unnecessary)* | mock; then the H100 |
 | **3 — H100 integration** | Vendor adapter, driver, protocol | — | may merge with step 2 |
 | **4 — transport layering** | Routing gripper bytes through an arm's bus when mounted | — | mounted H100 |
 
@@ -750,6 +761,12 @@ loses its 15%.
   provably untouched (grep);
 - `mypy` is clean.
 
+*Delivered.* 411 passed / 1 skipped, identical to the pre-change baseline; no diff line
+touches the gripper or conversion path; mypy error count unchanged. The §3.5 chain was
+re-measured and still produced **722.5** — which is the point: a part claiming to change
+nothing must leave the bug exactly where it was. 28 files, of which 24 averaged three
+lines each: wide and shallow, as intended.
+
 ---
 
 #### 1.2 — One array, one unit
@@ -774,7 +791,14 @@ endpoints become native.
 - a conformance test over every registered adapter checks the R4/R4a/R13 lengths;
 - sim: the `grp[2:4]` range round-trips over SHM (R13a).
 
-*Proven on hardware:* the bench measurements — xArm `850.0`, Piper `0.08` m, a1z `0.1` m.
+*Delivered.* 435 passed. **Measured on a real xArm6:** commanded `850`, gripper reached
+`842` — 0.9% short, the mechanical hard stop — against the 15% the double conversion
+caused. The read is the cleaner evidence: the gripper surfaced as `837.0` before any
+command was issued, where the old path would have reported `0.837`.
+
+*Not measured:* Piper and a1z. Both encode metres into vendor units inside the adapter
+(Piper ×1e6 into stroke units, a1z into a 0–1 fraction), which the xArm's dimensionless
+passthrough never exercises. **Piper's 12.5% recovery (§7.2) is unverified.**
 
 *Transitional cost (~9 lines, all deleted in 1.4):* the two gripper RPCs are rewired
 through the array rather than deleted, because nothing replaces them until 1.4; the
@@ -823,8 +847,12 @@ grippers, and the RPCs still exist.
   `type="servo"` task claims a gripper joint anywhere, and `[` / `]` drive the mock
   adapter end-to-end through the coordinator.
 
-*Proven on hardware:* driving the a1z and Piper grippers from the keyboard;
-`get_position` agrees with `coordinator_joint_state` on both.
+*Delivered.* 484 passed; 41 new tests. **Proven on a real xArm6** rather than on the two
+blueprints named above, whose devices were unavailable: the bench script gained a
+`--via-task` mode that builds the real task against a live adapter. It resolved
+`(0.0, 850.0)` from the adapter unprompted, and `task.get_position()` matched the measured
+joint state exactly at both ends of the stroke — `842` and `-1` — which is R16's
+one-snapshot guarantee holding on hardware.
 
 ---
 
@@ -845,11 +873,68 @@ removed.
 - skill round-trip on mock: `set_gripper(x)` then `get_gripper()` ≈ `x`;
   `open_gripper()` / `close_gripper()` land on the sweep endpoints with R19 polarity.
 
-*Proven on hardware:* VR teleop on xArm7 — the trigger drives the gripper, arm tasks no
-longer claim it, and preempting the arm no longer disturbs the grasp.
+*Delivered.* 1253 passed; runtime ownership confirmed across all six gripper-bearing
+blueprints — one owner each, always the gripper task.
 
----
+**Proven on a real xArm6** via `keyboard-teleop-xarm6`: the arm jogs and `[` / `]` operate
+the gripper. Since the RPC shortcut no longer exists, the gripper cannot have moved any
+other way. The audit itself was tested by reintroducing a runtime-widened claim: it caught
+it, and the static half did not.
 
-Nothing in step 1 is waiting on a decision: every question raised against this spec has
-been resolved into the requirements above (R4a, R13, R13a, R14a, R16, R17, R21a, R26,
-R28, R30).
+*Not measured:* the VR trigger and its engagement gate (needs a Quest), and preemption
+during a grasp.
+
+### 7.2 What step 1 found that this plan did not anticipate
+
+**1. The single-owner audit has to instantiate tasks.** `claim_with_gripper` widened the
+claim inside `claim()`, at runtime. A scan of `TaskConfig.joint_names` — the obvious
+check, and the one first written — saw an arm task claiming only arm joints while the tick
+loop saw it claiming the gripper too. **The double ownership §3.4 describes was invisible
+to static inspection**, and the audit only bites because it builds each task and reads its
+claim. Where a task cannot be built (its model assets are absent), the audit instead
+proves that task structurally incapable of owning a gripper: it declares none of those
+joints and does not override `claim()` at all.
+
+**2. §3.5 had a second instance, in Piper.** The blueprints declared
+`gripper_open_position=0.07` while the adapter's real stroke is `0.08` — the same disease
+as the xArm's, an endpoint written down somewhere that could disagree with the device,
+costing **12.5% of travel**. It was not visible from the xArm measurement because the two
+adapters fail differently: xArm's was a multiplication applied twice, Piper's was a
+smaller number declared in the wrong place. R13 removes both by making the adapter the
+only thing that declares a range. **Unverified on hardware.**
+
+**3. The standalone gripper shape already works — R9 and R24 may be unnecessary.**
+R28's split is `len(all_joints) - gripper_dof`; a gripper that is its own device sets
+`gripper_dof == len(all_joints)`, so the split lands at `0`, `arm_joints` is empty, and
+every joint is a gripper joint. The same arithmetic, different numbers.
+
+Demonstrated end to end through the real coordinator with a 6-DOF standalone hand and
+**no new code**: the manipulator registry built its adapter with `dof=0` and
+`gripper_dof=6`, `add_hardware` routed all six joints, the gripper task resolved its own
+limits, and both control modes worked — `set_position` per joint, and `set_sweep` onto a
+configured vendor grasp pose.
+
+> **What this changes.** PR 2 was scoped as `GripperAdapter` + `HardwareType.GRIPPER` +
+> a gripper registry, gated on having an H100 to design against. None of that is needed
+> for the standalone shape: such a gripper is a `ManipulatorAdapter` owning zero arm
+> joints, and nothing in that protocol assumes an arm. What remains of PR 2 is a
+> standalone blueprint and a test pinning the degenerate case.
+>
+> **This was a mock.** It proves the plumbing accepts the shape — model, coordinator,
+> task, wrapper, units. It does not prove any real device fits `ManipulatorAdapter`. If
+> the H100 needs something that protocol cannot express, R9 ships then — designed against
+> a real device, which was the original instinct for deferring it.
+
+### 7.3 Carried forward
+
+| | |
+|---|---|
+| Piper and a1z bench runs | 1.2's unit claim on metric adapters; Piper's 12.5% recovery |
+| VR trigger on hardware | 1.4's engagement gate and trigger polarity |
+| Preemption during a grasp | 1.4's arbitration claim |
+| a750 | converted blind; no device to verify against (R13) |
+| `keyboard_teleop_a750`, `coordinator_teleop_dual` | pre-existing: grippers unreachable, surfaced not caused by this work (R13, R30) |
+
+Nothing in step 1 is waiting on a decision: every question raised against this spec was
+resolved into the requirements above (R4a, R13, R13a, R14a, R16, R17, R21a, R26, R28,
+R30).
