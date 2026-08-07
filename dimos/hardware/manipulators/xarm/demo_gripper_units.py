@@ -107,6 +107,13 @@ def main() -> int:
     ap.add_argument("--dof", type=int, default=7, choices=[6, 7], help="6 for xArm6, 7 for xArm7")
     ap.add_argument("--move", action="store_true", help="actually command the gripper")
     ap.add_argument("--fake", action="store_true", help="run against a stub SDK, no hardware")
+    ap.add_argument(
+        "--enable-arm",
+        action="store_true",
+        help="clear errors and enable the arm servos so the arm write also succeeds; "
+        "without it the arm reports code=9 and stays put, which still proves the "
+        "gripper claim",
+    )
     ap.add_argument("--settle", type=float, default=2.0, help="seconds to wait after a command")
     args = ap.parse_args()
 
@@ -137,8 +144,18 @@ def main() -> int:
         return 0 if ok_range else 1
 
     # --- 3. the measurement 3.5 is about ---------------------------------
+    if args.enable_arm:
+        # Clears warn/error and enables the servos, WITHOUT moving to home.
+        adapter._prepare_for_position_motion()
+        print("\n   arm servos enabled (errors cleared, no home move)")
+    else:
+        print(
+            "\n   arm servos NOT enabled: set_servo_angle_j will report code=9 and the"
+            "\n   arm will not move. That is expected and does not affect the gripper"
+            "\n   claim below. Pass --enable-arm to exercise the arm path too."
+        )
+
     print("\n3. COMMAND  (the 3.5 claim)")
-    print("     arm joints hold their measured pose; only the gripper moves.")
     results = []
     for label, target in (("FULLY OPEN", hi), ("FULLY CLOSED", lo)):
         hardware.write_command({"arm/gripper": target}, ControlMode.SERVO_POSITION)
@@ -152,14 +169,22 @@ def main() -> int:
         results.append((label, target, measured))
 
     open_target, open_measured = results[0][1], results[0][2]
-    print("\n     WHAT TO LOOK FOR")
-    print(f"       measured near {open_target:.0f} on open  -> fixed")
-    print(f"       measured near {_LEGACY_BUG_VALUE:.0f} on open  -> the double conversion is back")
     drift = abs(open_measured - open_target) / open_target * 100 if open_target else 0.0
-    print(f"       actual deviation: {drift:.1f}% of travel\n")
+    bug_drift = abs(_LEGACY_BUG_VALUE - open_target) / open_target * 100
+
+    print("\n     VERDICT")
+    print(
+        f"       commanded {open_target:.0f}, gripper reached {open_measured:.0f}"
+        f"  ({drift:.1f}% short)"
+    )
+    print(f"       the bug would have reached ~{_LEGACY_BUG_VALUE:.0f}  ({bug_drift:.1f}% short)")
+    # A surviving double conversion is multiplicative and large; a few units of
+    # mechanical shortfall at the hard stop is not.
+    fixed = drift < 5.0
+    print(f"       -> {'FIXED — no second conversion' if fixed else 'STILL CONVERTING TWICE'}\n")
 
     adapter.disconnect()
-    return 0 if ok_range else 1
+    return 0 if (ok_range and fixed) else 1
 
 
 if __name__ == "__main__":
