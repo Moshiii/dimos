@@ -12,17 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Mapping
+import os
 import threading
 import time
 
 import pytest
 
+from dimos import Dimos
 from dimos.core.transport import pLCMTransport
 from dimos.e2e_tests.conf_types import StartPersonTrack
 from dimos.e2e_tests.dim_sim_client import DimSimClient
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.e2e_tests.lcm_spy import LcmSpy
+from dimos.e2e_tests.scene_control import EpisodeSceneControl, load_episode_scene_control
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
@@ -74,16 +77,63 @@ def start_blueprint(mcp_port: int) -> Iterator[Callable[..., DimosCliCall]]:
     def set_name_and_start(
         *demo_args: str,
         simulator: str | None = None,
+        global_args: tuple[str, ...] = (),
+        extra_env: Mapping[str, str] | None = None,
     ) -> DimosCliCall:
         dimos_robot_call.demo_args = list(demo_args)
         if simulator is not None:
             dimos_robot_call.simulator = simulator
+        dimos_robot_call.global_args = list(global_args)
+        dimos_robot_call.extra_env = dict(extra_env or {})
         dimos_robot_call.start()
         return dimos_robot_call
 
     yield set_name_and_start
 
     dimos_robot_call.stop()
+
+
+@pytest.fixture
+def connect_dimos_modules() -> Iterator[Callable[[DimosCliCall, tuple[str, ...], float], Dimos]]:
+    connections: list[Dimos] = []
+
+    def connect(
+        call: DimosCliCall,
+        required_modules: tuple[str, ...],
+        timeout: float = 120.0,
+    ) -> Dimos:
+        deadline = time.monotonic() + timeout
+        last_error: BaseException | None = None
+        while time.monotonic() < deadline:
+            process = call.process
+            if process is not None and process.poll() is not None:
+                pytest.fail(f"DimOS exited during startup with code {process.returncode}")
+            app: Dimos | None = None
+            try:
+                app = Dimos.connect(timeout=2.0)
+                for module_name in required_modules:
+                    app.get_module(module_name)
+                connections.append(app)
+                return app
+            except Exception as error:
+                last_error = error
+                if app is not None:
+                    app.stop()
+                time.sleep(0.5)
+        pytest.fail(f"DimOS modules were not ready after {timeout:.0f}s: {last_error}")
+
+    yield connect
+
+    for connection in reversed(connections):
+        connection.stop()
+
+
+@pytest.fixture
+def episode_scene_control() -> Iterator[EpisodeSceneControl]:
+    provider = os.environ.get("DIMOS_E2E_SIMULATOR", "pimsim")
+    control = load_episode_scene_control(provider)
+    yield control
+    control.stop()
 
 
 @pytest.fixture

@@ -24,7 +24,7 @@ import pytest
 
 from dimos import Dimos
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
-from dimos.e2e_tests.scene_control import load_episode_scene_control
+from dimos.e2e_tests.scene_control import EpisodeSceneControl, load_episode_scene_control
 
 pimsim_authoring: Any = pytest.importorskip("pimsim.authoring")
 
@@ -147,6 +147,64 @@ def test_native_bundle_place_uses_public_skills_and_private_goal(
         z_offset,
         show_viewer=show_viewer,
     )
+
+
+def test_requested_native_task_resets_exact_case(
+    tmp_path: Path,
+    start_blueprint: Any,
+    connect_dimos_modules: Any,
+    episode_scene_control: EpisodeSceneControl,
+) -> None:
+    request = pimsim_authoring.ScenarioRequest(
+        "alphabet-soup-in-wooden-tray",
+        "object-in-receptacle",
+        scene_seed=296,
+        variation_seed=3,
+        role_constraints={
+            "object": pimsim_authoring.AssetQuery(semantic_classes=("alphabet-soup",)),
+            "target": pimsim_authoring.AssetQuery(semantic_classes=("wooden-tray",)),
+        },
+    )
+    show_viewer = os.environ.get("PIMSIM_TEST_VIEWER") == "1"
+    episode = pimsim_authoring.materialize_xarm_tabletop_case(
+        tmp_path / "episode",
+        asset_bundle=_libero_bundle(),
+        request=request,
+        object_count=2,
+    )
+    call = start_blueprint(
+        "xarm-perception-sim",
+        simulator="mujoco",
+        global_args=(
+            "--simulation-provider",
+            "pimsim",
+            "--scene-package",
+            str(episode.scene_package),
+            "--transport",
+            "zenoh",
+            "--viewer",
+            "rerun" if show_viewer else "none",
+        ),
+        extra_env={"PIMSIM_MUJOCO_VIEWER": "1" if show_viewer else "0"},
+    )
+    app = connect_dimos_modules(
+        call,
+        ("PickAndPlaceModule", "PimSimEpisodeControl"),
+    )
+    episode_scene_control.start()
+    reset = episode_scene_control.reset_scenario(str(episode.scenario))
+    assert reset["scenario_id"] == request.request_id
+    assert all(condition["passed"] for condition in reset["initial_conditions"])
+
+    pick_and_place = app.get_module("PickAndPlaceModule")
+    object_name = _role_semantic_name(episode.scene_package, episode.scenario, "object")
+    target_name = _role_semantic_name(episode.scene_package, episode.scenario, "target")
+    observation = _wait_for_object(pick_and_place, object_name)
+    assert observation.success, observation
+    assert target_name in observation.message, observation
+    evaluation = episode_scene_control.evaluate_goal()
+    assert evaluation["scenario_id"] == request.request_id
+    assert evaluation["passed"] is False
 
 
 def _run_lift_episode(
