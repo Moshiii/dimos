@@ -62,6 +62,7 @@ class QuestTeleopIKTaskConfig:
     priority: int = 10
     timeout: float = 0.5
     max_joint_delta_deg: float = 5.0
+    max_joint_velocity_rad_s: float | None = 1.0
 
 
 @dataclass
@@ -110,6 +111,7 @@ class QuestTeleopIKTask(PoseTargetIKTask):
                 priority=config.priority,
                 timeout=config.timeout,
                 max_joint_delta_deg=config.max_joint_delta_deg,
+                max_joint_velocity_rad_s=config.max_joint_velocity_rad_s,
             ),
             additional_claimed_joints=gripper_joints,
             ik=ik,
@@ -320,8 +322,10 @@ class QuestTeleopIKTaskParams(BaseConfig):
     robot_model: RobotModelConfig
     bindings: list[QuestHandBindingParams]
     pink: PinkKinematicsConfig = Field(default_factory=PinkKinematicsConfig)
+    ik_backend_type: type[PinkIK] = PinkIK
     timeout: float = 0.5
     max_joint_delta_deg: float = 5.0
+    max_joint_velocity_rad_s: float | None = 1.0
 
 
 def create_task(
@@ -350,6 +354,7 @@ def create_task(
     }
     if unknown_grippers:
         raise ValueError(f"Quest task references unknown gripper joints: {unknown_grippers}")
+    ik = params.ik_backend_type(params.pink)
     return QuestTeleopIKTask(
         cfg.name,
         QuestTeleopIKTaskConfig(
@@ -360,5 +365,7 @@ def create_task(
             priority=cfg.priority,
             timeout=params.timeout,
             max_joint_delta_deg=params.max_joint_delta_deg,
+            max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
         ),
+        ik=ik,
     )

@@ -55,6 +55,7 @@ class PoseTargetIKTaskConfig:
     priority: int = 10
     timeout: float = 0.5
     max_joint_delta_deg: float = 5.0
+    max_joint_velocity_rad_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,17 @@ class PoseTargetIKTask(BaseControlTask):
             raise ValueError(f"PoseTargetIKTask '{name}' requires at least one target frame")
         if len(set(config.target_frames)) != len(config.target_frames):
             raise ValueError(f"PoseTargetIKTask '{name}' requires unique target frames")
+        if not np.isfinite(config.max_joint_delta_deg) or config.max_joint_delta_deg <= 0.0:
+            raise ValueError(
+                f"PoseTargetIKTask '{name}' requires a positive finite joint delta limit"
+            )
+        if config.max_joint_velocity_rad_s is not None and (
+            not np.isfinite(config.max_joint_velocity_rad_s)
+            or config.max_joint_velocity_rad_s <= 0.0
+        ):
+            raise ValueError(
+                f"PoseTargetIKTask '{name}' requires a positive finite joint velocity limit"
+            )
 
         additional_joints = tuple(additional_claimed_joints)
         if set(config.joint_names) & set(additional_joints):
@@ -133,6 +145,8 @@ class PoseTargetIKTask(BaseControlTask):
                 controlled_joints=self._joint_names,
                 seed=seed,
                 dt=state.dt,
+                max_joint_delta_rad=float(np.deg2rad(self._config.max_joint_delta_deg)),
+                max_joint_velocity_rad_s=self._config.max_joint_velocity_rad_s,
             )
         except PinkIKFeedbackLimitError as exc:
             warning_key = (exc.joint_name, exc.boundary)

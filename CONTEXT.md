@@ -33,3 +33,13 @@ _Avoid_: Command tolerance, expanded joint limit
 **Command limit margin**:
 The inward distance from each nominal joint limit within which generated position commands must remain.
 _Avoid_: Feedback tolerance, relaxed joint limit
+
+## Inverse kinematics
+
+**Pink task stack**:
+The ordered, named set of kinematic objectives used by Pink to produce a robot command. Its structure is composed once per IK control context; reserved frame objectives ensure every commanded end effector participates, while subclasses may compose or replace named auxiliary objectives.
+_Avoid_: Teleoperation behavior, solver implementation
+
+**IK control context**:
+The persistent inverse-kinematics state owned by one control-task instance for one robot model, controlled-joint selection, and target-frame selection, including its Pink task stack. Stateful Pink tasks are never shared between control-task instances.
+_Avoid_: Planning group, teleoperation session

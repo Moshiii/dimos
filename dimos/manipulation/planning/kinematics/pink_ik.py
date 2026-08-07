@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -96,6 +96,89 @@ class _JointMapping:
     dimos_joint_names: list[str]
     model_joint_names: list[str]
     idx_q: list[int]
+    idx_v: list[int]
+
+
+class _StreamingCommandLimit:
+    """Intersect model velocity bounds with a raw-seed command interval."""
+
+    def __init__(
+        self,
+        *,
+        model: Any,
+        mapping: _JointMapping,
+        raw_q: NDArray[np.float64],
+        max_command_delta: float,
+        max_controlled_velocity: float | None,
+    ) -> None:
+        velocity_limits = np.asarray(model.velocityLimit, dtype=np.float64)
+        if velocity_limits.shape != (model.nv,):
+            raise ValueError("Pink model velocity limits do not match its tangent dimension")
+        if raw_q.shape != (model.nq,):
+            raise ValueError("Pink raw seed does not match its configuration dimension")
+
+        velocity_limited = set(
+            np.flatnonzero(np.logical_and(velocity_limits < 1e20, velocity_limits > 1e-10)).tolist()
+        )
+        controlled_q_by_v = dict(zip(mapping.idx_v, mapping.idx_q, strict=True))
+        self._indices = np.array(
+            sorted(velocity_limited | controlled_q_by_v.keys()),
+            dtype=np.int64,
+        )
+        self._projection = np.eye(model.nv, dtype=np.float64)[self._indices]
+        self._velocity_limits = velocity_limits
+        self._velocity_limited = velocity_limited
+        self._controlled_q_by_v = controlled_q_by_v
+        self._raw_q = raw_q.copy()
+        self._max_command_delta = max_command_delta
+        self._max_controlled_velocity = max_controlled_velocity
+
+    def compute_qp_inequalities(
+        self,
+        configuration: Any,
+        dt: float,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+        if not self._indices.size:
+            return None
+
+        lower_displacements: list[float] = []
+        upper_displacements: list[float] = []
+        for velocity_index in self._indices:
+            index = int(velocity_index)
+            if index in self._velocity_limited:
+                velocity_displacement = dt * float(self._velocity_limits[index])
+                lower = -velocity_displacement
+                upper = velocity_displacement
+            else:
+                lower = -np.inf
+                upper = np.inf
+
+            q_index = self._controlled_q_by_v.get(index)
+            if q_index is not None:
+                if self._max_controlled_velocity is not None:
+                    controlled_velocity_displacement = dt * self._max_controlled_velocity
+                    lower = max(lower, -controlled_velocity_displacement)
+                    upper = min(upper, controlled_velocity_displacement)
+                raw_position = float(self._raw_q[q_index])
+                normalized_position = float(configuration.q[q_index])
+                lower = max(
+                    lower,
+                    raw_position - self._max_command_delta - normalized_position,
+                )
+                upper = min(
+                    upper,
+                    raw_position + self._max_command_delta - normalized_position,
+                )
+            if lower > upper:
+                raise ValueError(
+                    "Pink streaming command and model velocity limits have no feasible interval"
+                )
+            lower_displacements.append(lower)
+            upper_displacements.append(upper)
+
+        matrix = np.vstack([self._projection, -self._projection])
+        vector = np.hstack([upper_displacements, -np.asarray(lower_displacements)])
+        return matrix, vector
 
 
 @dataclass
@@ -105,6 +188,21 @@ class _PinkRobotContext:
     frame_id: int
     frame_name: str
     mapping: _JointMapping
+
+
+@dataclass
+class _PinkControlContext:
+    robot: _PinkRobotContext
+    frames: Mapping[str, _PinkRobotContext]
+    tasks: Mapping[str, Any] | None = None
+
+
+_CURRENT_POSTURE_TASK = "posture/current"
+_STREAMING_COMMAND_HEADROOM = 0.99
+
+
+def _frame_task_key(frame_name: str) -> str:
+    return f"frame/{frame_name}"
 
 
 class PinkIK:
@@ -132,7 +230,9 @@ class PinkIK:
         self.config = PinkKinematicsConfig(**config_values)
         self._modules = _load_optional_dependencies(self.config.solver)
         self._robot_contexts: dict[tuple[str, str], _PinkRobotContext] = {}
-        self._control_contexts: dict[tuple[str, str, tuple[str, ...]], _PinkRobotContext] = {}
+        self._control_contexts: dict[
+            tuple[str, tuple[str, ...], tuple[str, ...]], _PinkControlContext
+        ] = {}
 
     def step_frame_targets(
         self,
@@ -141,6 +241,8 @@ class PinkIK:
         controlled_joints: Sequence[str],
         seed: JointState,
         dt: float | None = None,
+        max_joint_delta_rad: float | None = None,
+        max_joint_velocity_rad_s: float | None = None,
     ) -> JointState:
         """Perform one bounded Pink update for one robot's frame targets.
 
@@ -156,24 +258,40 @@ class PinkIK:
         if len(set(joint_names)) != len(joint_names):
             raise ValueError("Pink controlled joint names must be unique")
 
-        contexts = [
-            self._get_control_context(robot_model, frame_name, joint_names)
-            for frame_name in frame_targets
-        ]
-        targets = [
-            (context, self._target_in_model_frame(robot_model, frame_targets[context.frame_name]))
-            for context in contexts
-        ]
-        robot_context = contexts[0]
+        frame_names = tuple(frame_targets)
+        control_context = self._get_control_context(robot_model, frame_names, joint_names)
+        robot_context = control_context.robot
+        targets = {
+            frame_name: self._target_in_model_frame(robot_model, frame_targets[frame_name])
+            for frame_name in frame_names
+        }
         seed_positions = _seed_positions_for_mapping(seed, robot_context.mapping)
         seed_q = self._q_from_dimos_positions(robot_context, seed_positions)
+        raw_seed_q = seed_q.copy()
         seed_q = self._normalize_streaming_seed(robot_context, seed_q)
-        configuration, tasks = self._configuration_and_tasks(targets, seed_q)
+        configuration = self._modules.pink.Configuration(
+            robot_context.model,
+            robot_context.data,
+            seed_q.copy(),
+        )
+        if control_context.tasks is None:
+            control_context.tasks = self._build_task_stack(configuration, frame_names)
+        tasks = control_context.tasks
+        self._update_frame_task_targets(tasks, targets)
+        self._update_current_posture_target(tasks, configuration)
+        solve_limits = self._streaming_solve_limits(
+            configuration=configuration,
+            mapping=robot_context.mapping,
+            raw_seed_q=raw_seed_q,
+            max_joint_delta_rad=max_joint_delta_rad,
+            max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+        )
         self._step_configuration(
             robot_context=robot_context,
             configuration=configuration,
             tasks=tasks,
             dt=self.config.dt if dt is None else dt,
+            limits=solve_limits,
         )
         command_positions = self._q_to_dimos_positions(robot_context, configuration.q)
         command_positions = self._saturate_streaming_command(robot_context, command_positions)
@@ -197,9 +315,8 @@ class PinkIK:
             raise ValueError("Pink target frame names must be non-empty and unique")
         if not joints or len(set(joints)) != len(joints):
             raise ValueError("Pink controlled joint names must be non-empty and unique")
-        for frame_name in frames:
-            context = self._get_control_context(robot_model, frame_name, joints)
-            self._validate_streaming_limit_margin(context)
+        context = self._get_control_context(robot_model, frames, joints)
+        self._validate_streaming_limit_margin(context.robot)
 
     def frame_poses(
         self,
@@ -212,17 +329,14 @@ class PinkIK:
         if not frame_names:
             raise ValueError("Pink frame pose query requires at least one frame")
         joint_names = tuple(controlled_joints)
-        contexts = [
-            self._get_control_context(robot_model, frame_name, joint_names)
-            for frame_name in frame_names
-        ]
-        positions = _seed_positions_for_mapping(seed, contexts[0].mapping)
-        q = self._q_from_dimos_positions(contexts[0], positions)
+        context = self._get_control_context(robot_model, tuple(frame_names), joint_names)
+        positions = _seed_positions_for_mapping(seed, context.robot.mapping)
+        q = self._q_from_dimos_positions(context.robot, positions)
         base_world = pose_to_matrix(robot_model.base_pose)
         poses: dict[str, PoseStamped] = {}
-        for context in contexts:
-            pose = matrix_to_pose(base_world @ self._current_frame_matrix(context, q))
-            poses[context.frame_name] = PoseStamped(
+        for frame_name, frame_context in context.frames.items():
+            pose = matrix_to_pose(base_world @ self._current_frame_matrix(frame_context, q))
+            poses[frame_name] = PoseStamped(
                 frame_id=robot_model.base_link,
                 position=pose.position,
                 orientation=pose.orientation,
@@ -583,58 +697,173 @@ class PinkIK:
         self,
         targets: Sequence[tuple[_PinkRobotContext, NDArray[np.float64]]],
         seed_q: NDArray[np.float64],
-    ) -> tuple[Any, list[Any]]:
+    ) -> tuple[Any, Mapping[str, Any]]:
         robot_context = targets[0][0]
         pink = self._modules.pink
-        pinocchio = self._modules.pinocchio
         configuration = pink.Configuration(robot_context.model, robot_context.data, seed_q.copy())
-        tasks: list[Any] = []
-        for target_context, target_model in targets:
-            frame_task = pink.tasks.FrameTask(
-                target_context.frame_name,
+        frame_names = tuple(context.frame_name for context, _target in targets)
+        tasks = self._build_task_stack(configuration, frame_names)
+        self._update_frame_task_targets(
+            tasks,
+            {context.frame_name: target for context, target in targets},
+        )
+        self._update_current_posture_target(tasks, configuration)
+        return configuration, tasks
+
+    def _create_tasks(
+        self,
+        configuration: Any,
+        target_frames: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Create the ordered Pink task stack for a solve context.
+
+        Subclasses should call ``super()``, then tune or replace named tasks
+        and add auxiliary entries. The returned structure is validated and
+        frozen before it is used by the solver.
+        """
+        pink = self._modules.pink
+        tasks = {
+            _frame_task_key(frame_name): pink.tasks.FrameTask(
+                frame_name,
                 position_cost=self.config.position_cost,
                 orientation_cost=self.config.orientation_cost,
                 lm_damping=self.config.lm_damping,
                 gain=self.config.gain,
             )
-            frame_task.set_target(_matrix_to_se3(pinocchio, target_model))
-            tasks.append(frame_task)
+            for frame_name in target_frames
+        }
         if self.config.posture_cost > 0.0:
-            posture_task = pink.tasks.PostureTask(cost=self.config.posture_cost)
-            if self.config.joint_limit_posture_margin > 0.0:
-                posture_task.set_target(
-                    _inward_joint_limit_posture(
-                        configuration,
-                        self.config.joint_limit_posture_margin,
-                    )
+            tasks[_CURRENT_POSTURE_TASK] = pink.tasks.PostureTask(cost=self.config.posture_cost)
+        return tasks
+
+    def _before_solve(
+        self,
+        tasks: Mapping[str, Any],
+        configuration: Any,
+        dt: float,
+    ) -> None:
+        """Update dynamic auxiliary task inputs before a Pink solve."""
+
+    def _after_solve(
+        self,
+        tasks: Mapping[str, Any],
+        velocity: NDArray[np.float64],
+        dt: float,
+    ) -> None:
+        """Record successful Pink output for explicitly temporal tasks."""
+
+    def _build_task_stack(
+        self,
+        configuration: Any,
+        target_frames: tuple[str, ...],
+    ) -> Mapping[str, Any]:
+        tasks = self._create_tasks(configuration, target_frames)
+        if not isinstance(tasks, dict):
+            raise TypeError("Pink _create_tasks() must return a dict")
+        for name, task in tasks.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("Pink task names must be non-empty strings")
+            if task is None:
+                raise ValueError(f"Pink task '{name}' cannot be None")
+        for frame_name in target_frames:
+            key = _frame_task_key(frame_name)
+            task = tasks.get(key)
+            if task is None or not callable(getattr(task, "set_target", None)):
+                raise ValueError(f"Pink task stack requires '{key}' to be a frame-target task")
+            task_frame = getattr(task, "frame", None)
+            if task_frame != frame_name:
+                raise ValueError(
+                    f"Pink task '{key}' targets frame '{task_frame}', expected '{frame_name}'"
                 )
-            else:
-                posture_task.set_target_from_configuration(configuration)
-            tasks.append(posture_task)
-        return configuration, tasks
+        return MappingProxyType(dict(tasks))
+
+    def _update_frame_task_targets(
+        self,
+        tasks: Mapping[str, Any],
+        targets: Mapping[str, NDArray[np.float64]],
+    ) -> None:
+        pinocchio = self._modules.pinocchio
+        for frame_name, target_model in targets.items():
+            tasks[_frame_task_key(frame_name)].set_target(_matrix_to_se3(pinocchio, target_model))
+
+    def _update_current_posture_target(
+        self,
+        tasks: Mapping[str, Any],
+        configuration: Any,
+    ) -> None:
+        posture_task = tasks.get(_CURRENT_POSTURE_TASK)
+        if posture_task is None:
+            return
+        if self.config.joint_limit_posture_margin > 0.0:
+            posture_task.set_target(
+                _inward_joint_limit_posture(
+                    configuration,
+                    self.config.joint_limit_posture_margin,
+                )
+            )
+        else:
+            posture_task.set_target_from_configuration(configuration)
 
     def _step_configuration(
         self,
         robot_context: _PinkRobotContext,
         configuration: Any,
-        tasks: Sequence[Any],
+        tasks: Mapping[str, Any],
         dt: float,
         locked_joint_positions: Mapping[int, float] | None = None,
+        limits: Sequence[Any] | None = None,
     ) -> None:
+        self._before_solve(tasks, configuration, dt)
         velocity = self._modules.pink.solve_ik(
             configuration,
-            tasks,
+            list(tasks.values()),
             dt,
             solver=self.config.solver,
             damping=self.config.damping,
+            limits=limits,
             safety_break=self.config.safety_break,
         )
+        self._after_solve(tasks, velocity, dt)
         configuration.integrate_inplace(velocity, dt)
         if locked_joint_positions:
             locked_q = configuration.q.copy()
             for local_index, value in locked_joint_positions.items():
                 locked_q[robot_context.mapping.idx_q[local_index]] = value
             configuration.update(locked_q)
+
+    def _streaming_solve_limits(
+        self,
+        *,
+        configuration: Any,
+        mapping: _JointMapping,
+        raw_seed_q: NDArray[np.float64],
+        max_joint_delta_rad: float | None,
+        max_joint_velocity_rad_s: float | None,
+    ) -> list[Any] | None:
+        if max_joint_delta_rad is None:
+            return None
+        if not np.isfinite(max_joint_delta_rad) or max_joint_delta_rad <= 0.0:
+            raise ValueError("Pink streaming joint delta limit must be positive and finite")
+        if max_joint_velocity_rad_s is not None and (
+            not np.isfinite(max_joint_velocity_rad_s) or max_joint_velocity_rad_s <= 0.0
+        ):
+            raise ValueError("Pink streaming joint velocity limit must be positive and finite")
+
+        model = configuration.model
+        limits: list[Any] = [
+            model.configuration_limit,
+            _StreamingCommandLimit(
+                model=model,
+                mapping=mapping,
+                raw_q=raw_seed_q,
+                max_command_delta=max_joint_delta_rad * _STREAMING_COMMAND_HEADROOM,
+                max_controlled_velocity=max_joint_velocity_rad_s,
+            ),
+        ]
+        floating_base_limit = getattr(model, "floating_base_velocity_limit", None)
+        if floating_base_limit is not None:
+            limits.append(floating_base_limit)
+        return limits
 
     def _get_robot_context(
         self,
@@ -652,13 +881,35 @@ class PinkIK:
     def _get_control_context(
         self,
         config: RobotModelConfig,
-        frame_name: str,
+        frame_names: Sequence[str],
         controlled_joints: Sequence[str],
-    ) -> _PinkRobotContext:
-        cache_key = (str(Path(config.model_path).resolve()), frame_name, tuple(controlled_joints))
+    ) -> _PinkControlContext:
+        frames = tuple(frame_names)
+        if not frames:
+            raise ValueError("Pink control context requires at least one frame")
+        cache_key = (
+            str(Path(config.model_path).resolve()),
+            frames,
+            tuple(controlled_joints),
+        )
         if cache_key not in self._control_contexts:
-            self._control_contexts[cache_key] = self._build_robot_context(
-                config, frame_name, controlled_joints
+            robot_context = self._build_robot_context(
+                config,
+                frames[0],
+                controlled_joints,
+            )
+            contexts = {frames[0]: robot_context}
+            for frame_name in frames[1:]:
+                contexts[frame_name] = _PinkRobotContext(
+                    model=robot_context.model,
+                    data=robot_context.data,
+                    frame_id=_get_frame_id(robot_context.model, frame_name),
+                    frame_name=frame_name,
+                    mapping=robot_context.mapping,
+                )
+            self._control_contexts[cache_key] = _PinkControlContext(
+                robot=robot_context,
+                frames=MappingProxyType(contexts),
             )
         return self._control_contexts[cache_key]
 
@@ -849,6 +1100,7 @@ def _build_joint_mapping(
     controlled_joints: Sequence[str] | None = None,
 ) -> _JointMapping:
     idx_q: list[int] = []
+    idx_v: list[int] = []
     model_joint_names: list[str] = []
     dimos_joint_names = list(controlled_joints or config.joint_names)
 
@@ -862,13 +1114,21 @@ def _build_joint_mapping(
                 f"PinkIK currently supports one-DoF controlled joints; "
                 f"joint '{model_joint_name}' has nq={nq}"
             )
+        nv = int(getattr(joint, "nv", 1))
+        if nv != 1:
+            raise ValueError(
+                f"PinkIK currently supports one-DoF controlled joints; "
+                f"joint '{model_joint_name}' has nv={nv}"
+            )
         idx_q.append(int(joint.idx_q))
+        idx_v.append(int(joint.idx_v))
         model_joint_names.append(model_joint_name)
 
     return _JointMapping(
         dimos_joint_names=dimos_joint_names,
         model_joint_names=model_joint_names,
         idx_q=idx_q,
+        idx_v=idx_v,
     )
 
 

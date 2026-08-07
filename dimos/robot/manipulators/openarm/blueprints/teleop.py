@@ -37,6 +37,7 @@ from dimos.robot.manipulators.openarm.config import (
     openarm_hardware,
     openarm_mock_hardware,
 )
+from dimos.robot.manipulators.openarm.teleop_ik import OpenArmTeleopPinkIK
 from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 
@@ -134,10 +135,11 @@ _openarm_quest_task = quest_teleop_ik_task(
             "gripper_closed_position": 0.0,
         },
     ],
+    ik_backend_type=OpenArmTeleopPinkIK,
     params={
         "pink": _openarm_quest_pink,
         "timeout": 0.5,
-        "max_joint_delta_deg": 5.0,
+        "max_joint_delta_deg": 10.0,
     },
 )
 

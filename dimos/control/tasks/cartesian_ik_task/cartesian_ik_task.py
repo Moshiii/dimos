@@ -112,6 +112,7 @@ class CartesianIKTaskParams(BaseConfig):
     pink: PinkKinematicsConfig = Field(default_factory=PinkKinematicsConfig)
     timeout: float = 0.5
     max_joint_delta_deg: float = 15.0
+    max_joint_velocity_rad_s: float | None = None
 
 
 def create_task(cfg: Any, hardware: Any) -> CartesianIKTask:
@@ -127,5 +128,6 @@ def create_task(cfg: Any, hardware: Any) -> CartesianIKTask:
             priority=cfg.priority,
             timeout=params.timeout,
             max_joint_delta_deg=params.max_joint_delta_deg,
+            max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
         ),
     )

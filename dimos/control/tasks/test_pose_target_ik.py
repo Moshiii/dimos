@@ -17,6 +17,7 @@
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pytest
 from pytest_mock import MockerFixture
 
@@ -74,6 +75,7 @@ def _config(
     target_frames: tuple[str, ...] = ("tool",),
     timeout: float = 0.5,
     max_joint_delta_deg: float = 10.0,
+    max_joint_velocity_rad_s: float | None = None,
 ) -> PoseTargetIKTaskConfig:
     return PoseTargetIKTaskConfig(
         joint_names=joint_names,
@@ -81,6 +83,7 @@ def _config(
         target_frames=target_frames,
         timeout=timeout,
         max_joint_delta_deg=max_joint_delta_deg,
+        max_joint_velocity_rad_s=max_joint_velocity_rad_s,
     )
 
 
@@ -161,7 +164,44 @@ def test_compute_calls_one_pink_step_and_preserves_output_order(
     assert output.positions == [0.02, -0.03, 0.4]
     ik.step_frame_targets.assert_called_once()
     assert ik.step_frame_targets.call_args.kwargs["dt"] == 0.01
+    assert ik.step_frame_targets.call_args.kwargs["max_joint_delta_rad"] == pytest.approx(
+        np.deg2rad(10.0)
+    )
+    assert ik.step_frame_targets.call_args.kwargs["max_joint_velocity_rad_s"] is None
     assert task.claim().joints == frozenset({"arm/a", "arm/b", "arm/gripper"})
+
+
+@pytest.mark.parametrize("max_joint_delta_deg", [0.0, -1.0, float("inf"), float("nan")])
+def test_constructor_rejects_invalid_joint_delta_limit(
+    mocker: MockerFixture, max_joint_delta_deg: float
+) -> None:
+    with pytest.raises(ValueError, match="positive finite joint delta limit"):
+        _Task(
+            _config(max_joint_delta_deg=max_joint_delta_deg),
+            _ik(mocker),
+            _snapshot(),
+        )
+
+
+@pytest.mark.parametrize("max_joint_velocity_rad_s", [0.0, -1.0, float("inf"), float("nan")])
+def test_constructor_rejects_invalid_joint_velocity_limit(
+    mocker: MockerFixture, max_joint_velocity_rad_s: float
+) -> None:
+    with pytest.raises(ValueError, match="positive finite joint velocity limit"):
+        _Task(
+            _config(max_joint_velocity_rad_s=max_joint_velocity_rad_s),
+            _ik(mocker),
+            _snapshot(),
+        )
+
+
+def test_compute_passes_joint_velocity_limit_to_pink(mocker: MockerFixture) -> None:
+    ik = _ik(mocker)
+    task = _Task(_config(max_joint_velocity_rad_s=1.0), ik, _snapshot())
+
+    assert task.compute(_state()) is not None
+
+    assert ik.step_frame_targets.call_args.kwargs["max_joint_velocity_rad_s"] == 1.0
 
 
 def test_compute_without_complete_joint_state_skips_pink(mocker: MockerFixture) -> None:

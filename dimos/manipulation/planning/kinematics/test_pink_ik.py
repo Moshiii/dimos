@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import nullcontext
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
@@ -30,14 +31,18 @@ from dimos.manipulation.planning.groups.models import PlanningGroup, PlanningGro
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 import dimos.manipulation.planning.kinematics.pink_ik as pink_ik
 from dimos.manipulation.planning.kinematics.pink_ik import (
+    _CURRENT_POSTURE_TASK,
     PinkIK,
     PinkIKConfig,
     PinkIKDependencyError,
     PinkIKFeedbackLimitError,
     _build_joint_mapping,
+    _frame_task_key,
+    _PinkControlContext,
     _PinkModules,
     _PinkRobotContext,
     _seed_positions_for_mapping,
+    _StreamingCommandLimit,
 )
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.enums import IKStatus
@@ -51,7 +56,9 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 class _FakeJoint:
     def __init__(self, idx_q: int) -> None:
         self.idx_q = idx_q
+        self.idx_v = idx_q
         self.nq = 1
+        self.nv = 1
 
 
 class _FakeFrame:
@@ -74,6 +81,7 @@ class _FakeData:
 
 class _FakeModel:
     nq = 3
+    nv = 3
 
     def __init__(self) -> None:
         self.names = ["universe", "joint_b", "joint_a", "joint_c"]
@@ -83,6 +91,9 @@ class _FakeModel:
         self._frame_ids = {"base": 0, "tool": 1}
         self.lowerPositionLimit = np.full(3, -1.0)
         self.upperPositionLimit = np.full(3, 1.0)
+        self.velocityLimit = np.array([2.0, 4.0, np.inf])
+        self.configuration_limit = object()
+        self.velocity_limit = object()
 
     def createData(self) -> _FakeData:
         return _FakeData()
@@ -135,6 +146,55 @@ class _FakePostureTask:
 
     def set_target_from_configuration(self, configuration: _FakeConfiguration) -> None:
         self.target = configuration.q.copy()
+
+
+class _AuxiliaryTask:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+
+class _ComposablePinkIK(PinkIK):
+    def _create_tasks(self, configuration: Any, target_frames: tuple[str, ...]) -> dict[str, Any]:
+        tasks = super()._create_tasks(configuration, target_frames)
+        tasks[_frame_task_key(target_frames[0])].customized = True
+        tasks.pop(_CURRENT_POSTURE_TASK, None)
+        tasks["posture/nominal"] = _AuxiliaryTask(1.0)
+        tasks["auxiliary/damping"] = _AuxiliaryTask(2.0)
+        return tasks
+
+
+class _DerivedComposablePinkIK(_ComposablePinkIK):
+    def _create_tasks(self, configuration: Any, target_frames: tuple[str, ...]) -> dict[str, Any]:
+        tasks = super()._create_tasks(configuration, target_frames)
+        tasks["auxiliary/damping"].value = 3.0
+        return tasks
+
+
+class _RecordingPinkIK(PinkIK):
+    def __init__(self, config: PinkIKConfig) -> None:
+        super().__init__(config)
+        self.before_tasks: list[Mapping[str, Any]] = []
+        self.after_velocities: list[np.ndarray] = []
+
+    def _before_solve(self, tasks: Mapping[str, Any], configuration: Any, dt: float) -> None:
+        self.before_tasks.append(tasks)
+
+    def _after_solve(self, tasks: Mapping[str, Any], velocity: np.ndarray, dt: float) -> None:
+        self.after_velocities.append(velocity.copy())
+
+
+class _MissingFramePinkIK(PinkIK):
+    def _create_tasks(self, configuration: Any, target_frames: tuple[str, ...]) -> dict[str, Any]:
+        tasks = super()._create_tasks(configuration, target_frames)
+        tasks.pop(_frame_task_key(target_frames[0]))
+        return tasks
+
+
+class _MismatchedFramePinkIK(PinkIK):
+    def _create_tasks(self, configuration: Any, target_frames: tuple[str, ...]) -> dict[str, Any]:
+        tasks = super()._create_tasks(configuration, target_frames)
+        tasks[_frame_task_key(target_frames[0])] = _FakeFrameTask("base")
+        return tasks
 
 
 def _fake_modules(converge: bool = True) -> _PinkModules:
@@ -218,6 +278,22 @@ def _controlled_context(frame_name: str, controlled_joints: list[str]) -> _PinkR
         frame_name=frame_name,
         mapping=_build_joint_mapping(model, _robot_config(), controlled_joints),
     )
+
+
+def _combined_control_context(
+    frame_names: tuple[str, ...], controlled_joints: list[str]
+) -> _PinkControlContext:
+    robot = _controlled_context(frame_names[0], controlled_joints)
+    frames = {frame_names[0]: robot}
+    for frame_name in frame_names[1:]:
+        frames[frame_name] = _PinkRobotContext(
+            model=robot.model,
+            data=robot.data,
+            frame_id=robot.model.getFrameId(frame_name),
+            frame_name=frame_name,
+            mapping=robot.mapping,
+        )
+    return _PinkControlContext(robot=robot, frames=MappingProxyType(frames))
 
 
 class _FakeWorld:
@@ -411,7 +487,68 @@ def test_joint_order_mapping_uses_names_not_positions() -> None:
     seed = JointState(name=["joint_b", "joint_c", "joint_a"], position=[20.0, 30.0, 10.0])
 
     assert mapping.idx_q == [1, 0, 2]
+    assert mapping.idx_v == [1, 0, 2]
     assert _seed_positions_for_mapping(seed, mapping).tolist() == [10.0, 20.0, 30.0]
+
+
+def test_streaming_command_limit_intersects_model_velocity_and_raw_seed_budget() -> None:
+    model = _FakeModel()
+    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a", "joint_c"])
+    raw_q = np.array([0.0, -1.0005, 0.0])
+    configuration = _FakeConfiguration(model, model.createData(), np.array([0.0, -0.9999, 0.0]))
+    limit = _StreamingCommandLimit(
+        model=model,
+        mapping=mapping,
+        raw_q=raw_q,
+        max_command_delta=0.15,
+        max_controlled_velocity=None,
+    )
+
+    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
+
+    assert inequalities is not None
+    matrix, vector = inequalities
+    assert matrix == pytest.approx(np.vstack([np.eye(3), -np.eye(3)]))
+    assert vector == pytest.approx([0.2, 0.1494, 0.15, 0.2, 0.1506, 0.15])
+
+
+def test_streaming_command_limit_preserves_tighter_model_velocity() -> None:
+    model = _FakeModel()
+    model.velocityLimit[1] = 1.0
+    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a"])
+    configuration = _FakeConfiguration(model, model.createData(), np.zeros(3))
+    limit = _StreamingCommandLimit(
+        model=model,
+        mapping=mapping,
+        raw_q=np.zeros(3),
+        max_command_delta=0.15,
+        max_controlled_velocity=None,
+    )
+
+    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
+
+    assert inequalities is not None
+    _, vector = inequalities
+    assert vector == pytest.approx([0.2, 0.1, 0.2, 0.1])
+
+
+def test_streaming_command_limit_caps_controlled_joint_velocity() -> None:
+    model = _FakeModel()
+    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a", "joint_c"])
+    configuration = _FakeConfiguration(model, model.createData(), np.zeros(3))
+    limit = _StreamingCommandLimit(
+        model=model,
+        mapping=mapping,
+        raw_q=np.zeros(3),
+        max_command_delta=0.15,
+        max_controlled_velocity=0.5,
+    )
+
+    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
+
+    assert inequalities is not None
+    _, vector = inequalities
+    assert vector == pytest.approx([0.2, 0.05, 0.05, 0.2, 0.05, 0.05])
 
 
 def test_step_frame_targets_preserves_controlled_joint_order(
@@ -421,7 +558,7 @@ def test_step_frame_targets_preserves_controlled_joint_order(
     mocker.patch.object(
         ik,
         "_get_control_context",
-        return_value=_controlled_context("tool", ["joint_c", "joint_a"]),
+        return_value=_combined_control_context(("tool",), ["joint_c", "joint_a"]),
     )
 
     result = ik.step_frame_targets(
@@ -453,14 +590,10 @@ def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
     )
     mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
     ik = PinkIK(config)
-    contexts = {
-        "tool": _controlled_context("tool", ["joint_a", "joint_b", "joint_c"]),
-        "base": _controlled_context("base", ["joint_a", "joint_b", "joint_c"]),
-    }
     mocker.patch.object(
         ik,
         "_get_control_context",
-        side_effect=lambda _model, frame, _joints: contexts[frame],
+        return_value=_combined_control_context(("tool", "base"), ["joint_a", "joint_b", "joint_c"]),
     )
     frame_task = mocker.patch.object(ik._modules.pink.tasks, "FrameTask", wraps=_FakeFrameTask)
     solve_ik = mocker.spy(ik._modules.pink, "solve_ik")
@@ -494,12 +627,169 @@ def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
     assert result.name == ["joint_a", "joint_b", "joint_c"]
 
 
+def test_named_task_stack_supports_incremental_subclass_composition(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    context = _combined_control_context(("tool", "base"), ["joint_a", "joint_b", "joint_c"])
+    configuration = _FakeConfiguration(context.robot.model, context.robot.data, np.zeros(3))
+    ik = _DerivedComposablePinkIK(PinkIKConfig())
+
+    tasks = ik._build_task_stack(configuration, ("tool", "base"))
+
+    assert list(tasks) == [
+        "frame/tool",
+        "frame/base",
+        "posture/nominal",
+        "auxiliary/damping",
+    ]
+    assert tasks["frame/tool"].customized is True
+    assert tasks["posture/nominal"].value == 1.0
+    assert tasks["auxiliary/damping"].value == 3.0
+
+
+@pytest.mark.parametrize(
+    ("ik_type", "match"),
+    [
+        (_MissingFramePinkIK, "frame/tool.*frame-target task"),
+        (_MismatchedFramePinkIK, "targets frame 'base'.*expected 'tool'"),
+    ],
+)
+def test_named_task_stack_rejects_invalid_reserved_frame_tasks(
+    mocker: MockerFixture,
+    ik_type: type[PinkIK],
+    match: str,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
+    configuration = _FakeConfiguration(context.robot.model, context.robot.data, np.zeros(3))
+
+    with pytest.raises(ValueError, match=match):
+        ik_type(PinkIKConfig())._build_task_stack(configuration, ("tool",))
+
+
+def test_streaming_reuses_tasks_and_mutates_targets_in_place(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = PinkIK(PinkIKConfig())
+    context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
+    mocker.patch.object(ik, "_get_control_context", return_value=context)
+    create_tasks = mocker.spy(ik, "_create_tasks")
+    first_target = PoseStamped(
+        position=Vector3(0.1, 0.2, 0.3),
+        orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+    )
+    second_target = PoseStamped(
+        position=Vector3(0.3, 0.2, 0.1),
+        orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+    )
+
+    ik.step_frame_targets(
+        _robot_config(),
+        {"tool": first_target},
+        ["joint_a", "joint_b", "joint_c"],
+        JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+    )
+    assert context.tasks is not None
+    frame_task = context.tasks["frame/tool"]
+    posture_task = context.tasks[_CURRENT_POSTURE_TASK]
+    first_frame_task_id = id(frame_task)
+    first_posture_task_id = id(posture_task)
+    assert frame_task.target.translation == pytest.approx([0.1, 0.2, 0.3])
+    assert posture_task.target == pytest.approx([0.0, 0.0, 0.0])
+
+    ik.step_frame_targets(
+        _robot_config(),
+        {"tool": second_target},
+        ["joint_a", "joint_b", "joint_c"],
+        JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.1, 0.2, 0.3]),
+    )
+
+    create_tasks.assert_called_once()
+    assert id(context.tasks["frame/tool"]) == first_frame_task_id
+    assert id(context.tasks[_CURRENT_POSTURE_TASK]) == first_posture_task_id
+    assert frame_task.target.translation == pytest.approx([0.3, 0.2, 0.1])
+    assert posture_task.target == pytest.approx([0.2, 0.1, 0.3])
+
+
+def test_task_hooks_receive_read_only_stack_and_successful_velocity(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = _RecordingPinkIK(PinkIKConfig(posture_cost=0.0))
+    context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
+    mocker.patch.object(ik, "_get_control_context", return_value=context)
+
+    ik.step_frame_targets(
+        _robot_config(),
+        {
+            "tool": PoseStamped(
+                position=Vector3(0.1, 0.2, 0.3),
+                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+            )
+        },
+        ["joint_a", "joint_b", "joint_c"],
+        JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        dt=0.05,
+    )
+
+    assert len(ik.before_tasks) == 1
+    with pytest.raises(TypeError):
+        cast("dict[str, Any]", ik.before_tasks[0])["auxiliary/new"] = _AuxiliaryTask(1.0)
+    assert ik.after_velocities[0] == pytest.approx([2.0, 4.0, 6.0])
+
+
+def test_after_solve_hook_is_not_called_when_solver_raises(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = _RecordingPinkIK(PinkIKConfig(posture_cost=0.0))
+    context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
+    mocker.patch.object(ik, "_get_control_context", return_value=context)
+    mocker.patch.object(ik._modules.pink, "solve_ik", side_effect=RuntimeError("no solution"))
+
+    with pytest.raises(RuntimeError, match="no solution"):
+        ik.step_frame_targets(
+            _robot_config(),
+            {"tool": PoseStamped()},
+            ["joint_a", "joint_b", "joint_c"],
+            JointState(
+                name=["joint_a", "joint_b", "joint_c"],
+                position=[0.0, 0.0, 0.0],
+            ),
+        )
+
+    assert len(ik.before_tasks) == 1
+    assert ik.after_velocities == []
+
+
+def test_separate_backends_do_not_share_task_instances(mocker: MockerFixture) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    first = PinkIK(PinkIKConfig())
+    second = PinkIK(PinkIKConfig())
+    first_context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
+    second_context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
+    first_configuration = _FakeConfiguration(
+        first_context.robot.model, first_context.robot.data, np.zeros(3)
+    )
+    second_configuration = _FakeConfiguration(
+        second_context.robot.model, second_context.robot.data, np.zeros(3)
+    )
+
+    first_tasks = first._build_task_stack(first_configuration, ("tool",))
+    second_tasks = second._build_task_stack(second_configuration, ("tool",))
+
+    assert first_tasks["frame/tool"] is not second_tasks["frame/tool"]
+    assert first_tasks[_CURRENT_POSTURE_TASK] is not second_tasks[_CURRENT_POSTURE_TASK]
+
+
 def test_step_frame_targets_normalizes_feedback_and_saturates_commands(
     mocker: MockerFixture,
 ) -> None:
     mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
     ik = PinkIK(PinkIKConfig(feedback_limit_tolerance=1e-3, command_limit_margin=1e-4))
-    context = _controlled_context("tool", ["joint_a", "joint_b", "joint_c"])
+    context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     mocker.patch.object(ik, "_get_control_context", return_value=context)
 
     def step_outside_limits(**kwargs: Any) -> None:
@@ -529,7 +819,7 @@ def test_step_frame_targets_rejects_feedback_beyond_tolerance(
     mocker.patch.object(
         ik,
         "_get_control_context",
-        return_value=_controlled_context("tool", ["joint_a"]),
+        return_value=_combined_control_context(("tool",), ["joint_a"]),
     )
     step = mocker.patch.object(ik, "_step_configuration")
 
@@ -548,9 +838,9 @@ def test_step_frame_targets_leaves_unbounded_joints_unclamped(
     mocker: MockerFixture,
 ) -> None:
     ik = _pink_ik(mocker)
-    context = _controlled_context("tool", ["joint_b"])
-    context.model.lowerPositionLimit[0] = -np.inf
-    context.model.upperPositionLimit[0] = np.inf
+    context = _combined_control_context(("tool",), ["joint_b"])
+    context.robot.model.lowerPositionLimit[0] = -np.inf
+    context.robot.model.upperPositionLimit[0] = np.inf
     mocker.patch.object(ik, "_get_control_context", return_value=context)
 
     def step_unbounded(**kwargs: Any) -> None:
@@ -578,7 +868,7 @@ def test_validate_frame_targets_rejects_margin_wider_than_joint_range(
     mocker.patch.object(
         ik,
         "_get_control_context",
-        return_value=_controlled_context("tool", ["joint_a"]),
+        return_value=_combined_control_context(("tool",), ["joint_a"]),
     )
 
     with pytest.raises(ValueError, match="command limit margin.*joint_a"):
@@ -630,6 +920,30 @@ def test_solve_single_returns_successful_ik_result(mocker: MockerFixture) -> Non
     assert result.joint_state is not None
     assert result.joint_state.name == ["joint_a", "joint_b", "joint_c"]
     assert result.joint_state.position == pytest.approx([0.2, 0.1, 0.3])
+
+
+def test_planning_uses_named_stack_and_task_lifecycle_hooks(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = _RecordingPinkIK(PinkIKConfig(max_iterations=3))
+    target = np.eye(4)
+    target[:3, 3] = [0.1, 0.2, 0.3]
+
+    result = ik._solve_single(
+        robot_context=_context(),
+        target_model=target,
+        seed_q=np.zeros(3),
+        lower_limits=np.array([-1.0, -1.0, -1.0]),
+        upper_limits=np.array([1.0, 1.0, 1.0]),
+        position_tolerance=0.001,
+        orientation_tolerance=0.01,
+    )
+
+    assert result.status == IKStatus.SUCCESS
+    assert len(ik.before_tasks) == 1
+    assert list(ik.before_tasks[0]) == ["frame/tool", _CURRENT_POSTURE_TASK]
+    assert ik.after_velocities[0] == pytest.approx([2.0, 4.0, 6.0])
 
 
 def test_solve_single_reports_non_convergence(mocker: MockerFixture) -> None:

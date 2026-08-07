@@ -125,6 +125,17 @@ def _pose(x: float) -> PoseStamped:
     )
 
 
+class _CustomPinkIK(PinkIK):
+    instances: list["_CustomPinkIK"] = []
+
+    def __init__(self, config: object) -> None:
+        self.received_config = config
+        self.instances.append(self)
+
+    def validate_frame_targets(self, *args: object, **kwargs: object) -> None:
+        pass
+
+
 @pytest.mark.parametrize(
     ("bindings", "message"),
     [
@@ -305,3 +316,46 @@ def test_factory_rejects_gripper_missing_from_hardware(mocker: MockerFixture) ->
             cfg,
             hardware={"robot": SimpleNamespace(joint_names=["robot/left", "robot/right"])},
         )
+
+
+def test_factory_constructs_plain_pink_backend_by_default(mocker: MockerFixture) -> None:
+    init = mocker.patch.object(PinkIK, "__init__", return_value=None)
+    mocker.patch.object(PinkIK, "validate_frame_targets")
+    cfg = TaskConfig(
+        name="quest",
+        type="quest_teleop_ik",
+        joint_names=["robot/left", "robot/right"],
+        params={
+            "robot_model": _robot_model(),
+            "bindings": [{"hand": "left", "target_frame": "left_tool"}],
+        },
+    )
+
+    task = create_task(cfg, hardware={})
+
+    assert type(task._ik) is PinkIK
+    assert task._config.max_joint_velocity_rad_s == 1.0
+    init.assert_called_once_with(task._config.pink)
+
+
+def test_factory_constructs_fresh_custom_backend_for_each_task() -> None:
+    _CustomPinkIK.instances.clear()
+    cfg = TaskConfig(
+        name="quest",
+        type="quest_teleop_ik",
+        joint_names=["robot/left", "robot/right"],
+        params={
+            "robot_model": _robot_model(),
+            "bindings": [{"hand": "left", "target_frame": "left_tool"}],
+            "ik_backend_type": _CustomPinkIK,
+        },
+    )
+
+    first = create_task(cfg, hardware={})
+    second = create_task(cfg, hardware={})
+
+    assert len(_CustomPinkIK.instances) == 2
+    assert first._ik is _CustomPinkIK.instances[0]
+    assert second._ik is _CustomPinkIK.instances[1]
+    assert first._ik is not second._ik
+    assert _CustomPinkIK.instances[0].received_config == first._config.pink

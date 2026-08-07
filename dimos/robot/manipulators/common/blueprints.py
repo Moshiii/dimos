@@ -24,6 +24,7 @@ from dimos.control.components import HardwareComponent
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.manipulation.manipulation_module import ManipulationModule
+from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.robot.manipulators.common.topics import (
     CARTESIAN_IK_TASK_NAME,
@@ -104,11 +105,13 @@ def quest_teleop_ik_task(
     name: str,
     joint_names: Sequence[str] | None = None,
     priority: int = 10,
+    ik_backend_type: type[PinkIK] = PinkIK,
     params: dict[str, Any] | None = None,
 ) -> TaskConfig:
     task_params: dict[str, Any] = {
         "robot_model": robot_model,
         "bindings": list(bindings),
+        "ik_backend_type": ik_backend_type,
     }
     if params:
         task_params.update(params)
