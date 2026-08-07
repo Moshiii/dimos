@@ -77,7 +77,8 @@ class SegmentRecorder:
         self._t, self._y = [], []
 
     def stop(self) -> Segment:
-        segment = (np.array(self._t), np.array(self._y), self._amplitude)
+        y = np.unwrap(self._y) if self._channel == "wz" else np.array(self._y)
+        segment = (np.array(self._t), y, self._amplitude)
         self._channel = None
         return segment
 
