@@ -56,11 +56,10 @@ keyboard_teleop_piper = autoconnect(
         tasks=[
             eef_twist_task(_piper_keyboard_hw, robot_model=_piper_model),
             TaskConfig(
-                name="servo_gripper",
-                type="servo",
-                joint_names=["arm/gripper"],
+                name="arm_gripper",
+                type="gripper",
+                joint_names=_piper_keyboard_hw.gripper_joints,
                 priority=20,
-                params={"timeout": 0.0, "default_positions": [0.0]},
             ),
             trajectory_task(_piper_keyboard_hw),
         ],

@@ -48,7 +48,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
-from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.Bool import Bool
 from dimos.robot.manipulators.common.topics import EEF_TWIST_TASK_NAME
 from dimos.utils.logging_config import setup_logger
 
@@ -60,11 +60,12 @@ os.environ["SDL_VIDEODRIVER"] = "x11"
 # Default jog speeds
 DEFAULT_LINEAR_SPEED = 0.05  # m/s
 DEFAULT_ANGULAR_SPEED = 0.5  # rad/s
-# Normalized gripper command values.
-GRIPPER_OPEN_POSITION = 1.0
-GRIPPER_CLOSED_POSITION = 0.0
-# TODO: Improve gripper handling.
-GRIPPER_JOINT_NAME = "arm/gripper"
+# The keyboard has a wish, not a joint value: it cannot know a vendor's travel.
+# It used to publish 1.0 as a joint position on joint_command, which on an a1z
+# (0-0.1 m) is ten times over-range and survived only because the adapter
+# clamped. GripperControlTask owns the conversion now (GRIPPER-SPEC R16).
+GRIPPER_OPEN = True
+GRIPPER_CLOSED = False
 
 TwistVector = tuple[float, float, float]
 
@@ -73,7 +74,6 @@ class KeyboardTeleopConfig(ModuleConfig):
     task_name: str = EEF_TWIST_TASK_NAME
     linear_speed: float = DEFAULT_LINEAR_SPEED
     angular_speed: float = DEFAULT_ANGULAR_SPEED
-    gripper_open_position: float = GRIPPER_OPEN_POSITION
 
 
 def _motion_key_codes() -> frozenset[int]:
@@ -113,16 +113,16 @@ class KeyboardTeleopModule(Module):
     config: KeyboardTeleopConfig
 
     coordinator_ee_twist_command: Out[TwistStamped]
-    joint_command: Out[JointState]
+    gripper_command: Out[Bool]
 
     _stop_event: threading.Event
     _thread: threading.Thread | None = None
-    _gripper_position: float | None = None
+    _gripper_closed: bool | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._stop_event = threading.Event()
-        self._gripper_position = None
+        self._gripper_closed = None
 
     @rpc
     def start(self) -> None:
@@ -231,9 +231,9 @@ class KeyboardTeleopModule(Module):
             if event.key in _motion_key_codes():
                 held_motion_keys.add(event.key)
             elif event.key == left_bracket:
-                self._set_gripper_position(self.config.gripper_open_position)
+                self._set_gripper_closed(GRIPPER_OPEN)
             elif event.key == right_bracket:
-                self._set_gripper_position(GRIPPER_CLOSED_POSITION)
+                self._set_gripper_closed(GRIPPER_CLOSED)
         elif event.type == pygame.KEYUP and event.key in _motion_key_codes():
             held_motion_keys.discard(event.key)
             linear, angular = _twist_from_keys(
@@ -255,12 +255,12 @@ class KeyboardTeleopModule(Module):
             TwistStamped(frame_id=task_name, linear=list(linear), angular=list(angular))
         )
 
-    def _set_gripper_position(self, position: float) -> None:
-        """Latch and publish a changed gripper endpoint command."""
-        if self._gripper_position == position:
+    def _set_gripper_closed(self, closed: bool) -> None:
+        """Latch and publish a changed open/closed wish."""
+        if self._gripper_closed == closed:
             return
-        self._gripper_position = position
-        self.joint_command.publish(JointState(name=[GRIPPER_JOINT_NAME], position=[position]))
+        self._gripper_closed = closed
+        self.gripper_command.publish(Bool(data=closed))
 
 
 def _twist_from_keys(

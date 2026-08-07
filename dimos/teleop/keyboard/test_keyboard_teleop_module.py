@@ -22,8 +22,8 @@ from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.robot.manipulators.common.topics import EEF_TWIST_TASK_NAME
 import dimos.teleop.keyboard.keyboard_teleop_module as keyboard_mod
 from dimos.teleop.keyboard.keyboard_teleop_module import (
-    GRIPPER_CLOSED_POSITION,
-    GRIPPER_OPEN_POSITION,
+    GRIPPER_CLOSED,
+    GRIPPER_OPEN,
     KeyboardTeleopModule,
     _twist_from_keys,
 )
@@ -130,19 +130,25 @@ def test_keyup_publishes_directly_without_timeout_wait(
     publish.assert_called_once()
 
 
-def test_set_gripper_position_emits_only_when_position_changes(
+def test_gripper_emits_a_wish_only_when_it_changes(
     module: KeyboardTeleopModule, mocker
 ) -> None:
-    publish = mocker.patch.object(module.joint_command, "publish")
+    """The keyboard publishes open/closed, never a joint value.
 
-    module._set_gripper_position(GRIPPER_OPEN_POSITION)
+    It cannot know a vendor's travel: the old code published 1.0 as a joint
+    position, which on an a1z (0-0.1 m) was ten times over-range and survived
+    only because the adapter clamped (GRIPPER-SPEC R16).
+    """
+    publish = mocker.patch.object(module.gripper_command, "publish")
+
+    module._set_gripper_closed(GRIPPER_OPEN)
     publish.assert_called_once()
-    assert publish.call_args.args[0].position == [GRIPPER_OPEN_POSITION]
+    assert publish.call_args.args[0].data is GRIPPER_OPEN
 
     publish.reset_mock()
-    module._set_gripper_position(GRIPPER_OPEN_POSITION)
+    module._set_gripper_closed(GRIPPER_OPEN)
     publish.assert_not_called()
 
-    module._set_gripper_position(GRIPPER_CLOSED_POSITION)
+    module._set_gripper_closed(GRIPPER_CLOSED)
     publish.assert_called_once()
-    assert publish.call_args.args[0].position == [GRIPPER_CLOSED_POSITION]
+    assert publish.call_args.args[0].data is GRIPPER_CLOSED
