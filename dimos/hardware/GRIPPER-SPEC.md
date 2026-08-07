@@ -5,12 +5,25 @@
 > **`write_joint_positions()` is the API for all joints. A gripper joint is just a robot
 > joint of a special type, unified from the consumer's perspective.**
 
+Read as two clauses, one per layer:
+
+- **Above the task** — `GripperControlTask` owns the gripper. Anything that interfaces
+  with a gripper goes through it. There is no other way in.
+- **Below the task** — one ordered array, one `write_joint_positions()`. A gripper entry
+  differs from an arm entry only in the unit it carries.
+
 **This spec is PR 1: the existing gripper path**, so every claim in it is verifiable on
-hardware we already own — xArm, Piper, a1z, a750.
+hardware we already own — xArm, Piper, a1z, a750. PR 1 ships in **four separately
+verifiable parts** (§7.1); the split changes only the order things arrive in, nothing
+below changes because of it.
 
 Supporting a **third-party** gripper is the goal that motivated the whole effort, and it is
 PR 2 (§7). It builds directly on this: the joint model, the control task, and the units all
 carry over unchanged. What PR 2 adds is the plumbing to give a gripper its own adapter.
+
+> **Baseline.** Every `file:line` reference in this document resolves at commit
+> `e994783d9`. Where a symbol name is given alongside a line, the symbol is
+> authoritative — lines shift as the parts land.
 
 ---
 
@@ -22,16 +35,17 @@ only in the unit it carries.
 ```
   PROPOSED ARCHITECTURE
 
-  consumer        agent skill . teleop . grasp policy
-                  speaks 0-1 or native units; no new ports          [R26 R27]
+  consumer        agent skill (0-1) . teleop . grasp policy (native)
+                  no new ports                                  [R14 R26 R27]
                             |
-                            |  task_invoke("gripper", ...)
+                            |  task_invoke("arm_gripper", ...)      [R23 R26]
+                            |  gripper_command . teleop_buttons     [R16]
                             v
   control task    GripperControlTask - sole owner of gripper joints
-                  command-driven . converts once . two modes    [R14 R16-R22]
+                  converts once . two modes . no other way in   [R14 R16-R22]
                             |
                             v
-  wire            joint_command / coordinator_joint_state
+  wire            coordinator_joint_state
                   vectors, in each joint's declared unit            [R11 R12]
                             |
                             v
@@ -57,7 +71,7 @@ only in the unit it carries.
 | | Added | Deleted |
 |---|---|---|
 | **Model** | `gripper_dof` on the component; `arm_joints` / `gripper_joints` derived | the `joints` field; `read/write_gripper_position` |
-| **Control** | `GripperControlTask` — command-driven, sole owner | both gripper RPCs; `claim_with_gripper`, `append_gripper_position` |
+| **Control** | `GripperControlTask` — sole owner; inherits `gripper_command` and `teleop_buttons` | both gripper RPCs; `claim_with_gripper`, `append_gripper_position`; the arm tasks' gripper config |
 | **Units** | adapter declares its range via `get_limits()`; task converts | `gripper_open/closed_position`; `_normalized_to_physical` |
 
 ---
@@ -151,6 +165,22 @@ write_joint_positions([0.1, -0.4, 0.0, 0.9, 0.0, 1.2,  0.042])
 > `all_joints` is the stored list and *is* the adapter's array; `arm_joints` and
 > `gripper_joints` are derived from it (R28).
 
+**R4a.** The one-array rule covers **positions**, not velocities.
+`write_joint_velocities()` carries **arm joints only**: under R22 the gripper is commanded
+exclusively in `SERVO_POSITION`, so no task in this system ever produces a gripper
+velocity, and offering the slot would only invite a number invented to fill it.
+
+Reads stay symmetric: `read_joint_velocities()` and `read_joint_efforts()` return one
+entry per joint **including** the gripper, because `read_state()` zips positions,
+velocities and efforts by index. An adapter that cannot measure gripper velocity
+reports `0.0`.
+
+> The velocity path is deliberately **read-all, write-arm**. It looks asymmetric on
+> purpose; say so in the protocol docstring so it does not get "fixed". This is live, not
+> hypothetical: `coordinator_velocity_xarm6` runs a velocity task on hardware built
+> `gripper=True`. Should a velocity-commanded gripper ever exist, the write array widens
+> then — with a real value to put in it.
+
 **R5.** `read_gripper_position()` and `write_gripper_position()` are **removed** from
 `ManipulatorAdapter` (`manipulators/spec.py:225-231`). They are a single-scalar API, which
 R11 replaces with vectors.
@@ -173,20 +203,29 @@ def write_joint_positions(self, positions, velocity=1.0):
     arm, grip = positions[: self._arm_dof], positions[self._arm_dof :]
     ok = self._arm.set_servo_angle_j([math.degrees(p) for p in arm], ...) == 0
     if grip:
-        ok = self._arm.set_gripper_position(grip[0] * _XARM_GRIPPER_MAX_SDK, wait=False) == 0 and ok
+        # grip[0] is ALREADY in this adapter's declared unit (R12/R13) — the
+        # 0-850 the xArm SDK takes. No scaling here. Scaling it would be §3.5.
+        ok = self._arm.set_gripper_position(grip[0], wait=False) == 0 and ok
     return ok
 ```
 
-Non-normative. An adapter may satisfy R4 however its SDK requires.
+Non-normative. An adapter may satisfy R4 however its SDK requires — but it may **not**
+convert the gripper entry. The value handed to it is already in the unit it declared
+through `get_limits()`; a second conversion here is precisely the bug §3.5 measures.
 
 </details>
 
 **R7.** An adapter receives its gripper joint count from the component's `gripper_dof`
-(R28). It MUST NOT infer it from array length, and it is no longer declared separately.
+(R28), as a `gripper_dof` constructor kwarg. It MUST NOT infer it from array length, and
+it is no longer declared separately.
 
 **R8.** `get_dof()` reports **arm joints only** — its meaning today is unchanged.
 `get_gripper_dof()` reports gripper joints, returning `0` when there are none. A caller
 wanting the total adds them. On a `GripperAdapter`, `get_dof()` reports its own joints.
+
+> `get_dof()` is therefore **not** the length of `get_limits()`, `read_joint_positions()`
+> or the `write_joint_positions()` array — those cover all joints (R4, R13). This is the
+> one place in the protocol where two lengths are legitimately different; R13 states it.
 
 **R9.** *Moved to PR 2 — the `GripperAdapter` protocol. See §7.*
 
@@ -198,26 +237,85 @@ message type, not a looser version of this one.
 
 ### 4.3 Units — joint-native on the wire, task converts
 
-**R11.** All gripper command and read APIs are **vectors**, never scalars.
+**R11.** Every **per-joint** gripper API is a **vector**, never a scalar — the adapter
+protocol (R4), and the task's `set_position` / `set_normalized` / `set_reference_pose` /
+`get_position`. This is what removes the single-joint ceiling in §3.2.
 
-**R12.** A gripper joint carries **the unit its adapter actually speaks** on
-`joint_command` and `coordinator_joint_state` — metres for a sliding jaw, radians for a
-rotating knuckle, or the vendor's own scale where the SDK is dimensionless. Arm joints are
-unchanged (radians).
+> The **intent** APIs are deliberately one number: `set_sweep(v)` (R18) and the agent
+> skills (R26). They are not exceptions to R11 — they carry a scalar *intent*, which the
+> task expands into a joint vector before anything below it sees a value. A scalar that
+> reaches the protocol is a ceiling; a scalar that stops at the task is an interface.
+
+**R12.** A gripper joint carries **the unit its adapter actually speaks** wherever it
+appears — `coordinator_joint_state`, and every array below the task — metres for a
+sliding jaw, radians for a rotating knuckle, or the vendor's own scale where the SDK is
+dimensionless. Arm joints are unchanged (radians).
+
+> Gripper *commands* do not ride `joint_command`. They reach `GripperControlTask` (R16),
+> which is what makes R17's single owner true: a raw publish that bypassed the owner
+> would be §3.1's shortcut wearing a different hat. `joint_command` stays purely
+> arm-valued — which is also what stops a sender inventing a number it cannot know (see
+> R16's note on the keyboard).
 
 **R13.** The **adapter declares its range** and exposes it via `get_limits()`. A private
 module constant remains the implementation; `get_limits()` makes it readable. Two adapters
-already have the constant — `piper/adapter.py:44-45` (`0.08` m),
-`galaxea_a1z/config.py:45-49` (`0.1` m).
+already have the constant — `piper/adapter.py` `GRIPPER_MAX_OPENING_M = 0.08`,
+`galaxea_a1z/config.py` `max_opening_m = 0.1`.
+
+`get_limits()` follows the **same shape as the adapter's array** (R4): one entry per
+joint, in `all_joints` order, gripper entries trailing. Its length is therefore
+`get_dof() + get_gripper_dof()` — deliberately *not* `get_dof()`, which stays arm-only
+under R8. One ordering convention governs the whole adapter surface. No caller relies on
+today's arm-only length: `get_limits()` currently has zero call sites outside the
+adapters themselves.
+
+What each adapter declares for its gripper:
+
+| Adapter | Gripper range | Verified on |
+|---|---|---|
+| `xarm` | `(0.0, 850.0)` — dimensionless SDK scale, mm conversion dropped | xArm6 / xArm7 |
+| `piper` | `(0.0, 0.08)` m — the existing `GRIPPER_MAX_OPENING_M` | Piper |
+| `galaxea_a1z` | `(0.0, 0.1)` m — the existing `max_opening_m` | a1z |
+| `sim` | the MJCF joint range, over SHM (R13a) | any sim scene |
+| `a750` | `(0.0, 0.06)` m — the existing `GRIPPER_MAX_OPENING_M` | **not verified** |
+| `mock` | `(0.0, 1.0)`, overridable per test | unit tests |
+| `openarm` | none — `get_gripper_dof()` returns `0` | — |
 
 > **The declared unit is what the adapter actually speaks.** Piper (`0.08`) and a1z (`0.1`)
-> are genuinely metres. xArm is not: `MM_TO_M`/`M_TO_MM` belong to cartesian pose
-> (`:347-349, 366-368`) and were reused on the gripper path (`:386, :397`), where the SDK
-> takes a dimensionless `0–850`. Today's `0.85` is just `850/1000`. xArm therefore declares
+> are genuinely metres. xArm is not: `MM_TO_M`/`M_TO_MM` belong to cartesian pose and were
+> reused on the gripper path (`xarm/adapter.py:386, :397`), where the SDK takes a
+> dimensionless `0–850`. Today's `0.85` is just `850/1000`. xArm therefore declares
 > `(0.0, 850.0)` and drops the mm conversion.
 
-**R14.** `GripperControlTask` reads `get_limits()` at construction and exposes **both**
-interfaces:
+> **a750 is converted blind** — §7 lists step-1 hardware as xArm, Piper and a1z, and there
+> is no a750 on the bench. It is converted anyway because the protocol change is global;
+> leaving it behind would make it the one adapter off the protocol, which is the dead code
+> §7.1's rule forbids. Its joint keeps the name `arm/finger`: the task claims whatever
+> `hw.gripper_joints` returns, so the name never routes anything, and renaming is
+> user-visible churn for no gain.
+>
+> Pre-existing and **not fixed here**: `keyboard_teleop_a750` has no gripper task and
+> `KeyboardTeleopModule` hardcodes `"arm/gripper"`, so a750's gripper is unreachable today
+> — same class of defect as `coordinator_teleop_dual` (R30). File both together.
+
+**R13a.** The **sim** adapter learns its range from the MJCF, over SHM. Its native gripper
+unit is genuinely a joint position in the model's own range — the value it writes is
+clamped into `MujocoSimModule._gripper_joint_range` before actuation — and that range
+lives in another process, so the adapter cannot otherwise know it.
+
+The `grp` SHM segment widens from `[position, target]` to
+`[position, target, range_lo, range_hi]`. `MujocoSimModule` writes the range once, where
+it already detects the gripper; `sim/adapter.py` reads it on connect and returns it from
+`get_limits()`.
+
+> The MJCF stays the single declaration — a blueprint-config range would be a second place
+> that can disagree with the model, the exact shape of §3.5. This also discharges R7 for
+> sim, which today infers its gripper by counting (`_has_gripper = num_joints > self._dof`).
+> Scope: adds `simulation/engines/mujoco_shm.py` and `mujoco_sim_module.py` to §6's table,
+> about twelve lines.
+
+**R14.** `GripperControlTask` converts between scales in exactly one place: itself. It
+exposes **both** interfaces:
 
 ```python
 # PROPOSED — GripperControlTask
@@ -227,44 +325,94 @@ set_normalized(values: list[float])   # 0.0–1.0 per joint → lo + (hi-lo)*v
 
 Nothing above the task ever needs a vendor range; anything needing real units can have them.
 
+**R14a.** How the task obtains its range, precisely — this chain is normative because the
+obvious shortcut violates R7:
+
+1. The task factory receives the coordinator's hardware dict —
+   `create_task(cfg, hardware)` with `hardware: {hardware_id: ConnectedHardware}`.
+   `_setup_from_config()` connects hardware before creating tasks, so the adapter is
+   live at construction.
+2. Every name in `cfg.joint_names` MUST resolve (via `split_joint_name`) to **one**
+   hardware id — a gripper task spans exactly one device — and MUST equal that
+   component's `gripper_joints`, in order. Any mismatch raises at construction.
+3. `limits = connected.adapter.get_limits()`; the gripper entries are the trailing
+   slice at `len(component.all_joints) - component.gripper_dof` — the R28 split, taken
+   from the **component's declared count**, never from comparing array lengths (R7).
+4. The per-joint `(lo, hi)` pairs are cached at construction; ranges are static.
+
 **R15.** `HardwareComponent.gripper_open_position` / `gripper_closed_position` are removed
 (`components.py:97-98`), together with `_normalized_to_physical` /
 `_physical_to_normalized` (`hardware_interface.py:232-244`). Conversion happens in exactly
 one place: the task.
 
 > Normalization is `0.0` = fully closed, `1.0` = fully open. This is not a new convention —
-> it is what `hardware_interface.py:237` already implements, what
+> it is what `_normalized_to_physical` already implements, what
 > `galaxea_a1z/adapter.py:479` states in its docstring, and what
 > `keyboard_teleop_module.py:64-65` already uses.
 
 ### 4.4 `GripperControlTask`
 
-**R16.** A new task type `gripper`, **command-driven** rather than stream-driven:
+**R16.** A new task type `gripper`. It is invoked by command, and it consumes exactly the
+two streams that carry **gripper intent**:
 
 ```python
 # PROPOSED — new task type, does not exist today
-TASK_CONSUMES = {"gripper": {}}                       # no input streams
+TASK_CONSUMES = {"gripper": {
+    "gripper_command": ("on_gripper_command", "broadcast"),   # Bool: open / closed
+    "teleop_buttons":  ("on_teleop_buttons",  "broadcast"),   # analog trigger, hand-scoped
+}}
 TASK_EXPOSES  = {"gripper": ["set_position", "set_normalized", "set_sweep",
                              "set_reference_pose", "get_position", "get_state"]}
 ```
 
-This mirrors `trajectory_task` (`trajectory_task/_registry.py:19-25`). It is invoked via
-the existing `task_invoke` RPC (`coordinator.py:803`) — an RPC **into a task**, which then
-flows through arbitration and the tick loop.
+Numeric targets arrive through `TASK_EXPOSES` via the existing `task_invoke` RPC
+(`ControlCoordinator.task_invoke`, `coordinator.py:803`) — an RPC **into a task**, which
+then flows through arbitration and the tick loop.
+
+> **The task consumes these streams itself; nothing forwards.** There is no inter-task
+> mechanism to forward with — a task is constructed with the hardware dict and holds no
+> reference to any other task — and none is added. The arm tasks simply delete their
+> gripper code. Both ports already exist on the coordinator; they move from `eef_twist`
+> and `teleop_ik` to their new owner. **No new ports.**
+>
+> **Both streams carry intent, never a joint value.** A browser toggle says *"closed"*;
+> a trigger says *"squeezed 42%"*. Neither sender knows the gripper's travel, and neither
+> should (R14). `KeyboardTeleopModule`'s `[` / `]` therefore move off `joint_command`
+> and onto `gripper_command`: today they publish `1.0` as a joint value, which on a1z's
+> `0–0.1` m range is ten times over-range and survives only because the adapter clamps.
+> A Bool is what the keyboard actually has.
+>
+> **PR 2 note:** `broadcast` is correct while each blueprint has one gripper. The moment
+> two gripper tasks coexist (arm gripper + standalone H100), `gripper_command` needs
+> `by_task_name` routing, as `coordinator_ee_twist_command` already does.
 
 > **The task owns the gripper completely** — it commands it, and it reports it.
-> `get_position` returns the **measured** position, taken from the `CoordinatorState`
-> snapshot every task receives; `get_state` reports what the task is doing, mirroring
-> `trajectory_task.get_state()`.
+> `get_position` returns the **measured** position from the `CoordinatorState` snapshot;
+> `get_state` reports what the task is doing and carries its limits, so a consumer can
+> normalize without a second RPC (R26) — illustratively:
+> `{"state": "holding"|"idle", "target": [...] | None, "joints": [...], "limits": [(lo, hi), ...]}`.
 >
 > This cannot disagree with `coordinator_joint_state`: `tick_loop.py:180-195` passes the
 > *same* `joint_states` object to `compute()` and to the publisher. The stream and this RPC
 > are one snapshot, offered as a subscription and as a one-shot read.
 
 **R17.** It is the **sole claimant of gripper joints**. `teleop_task` and `eef_twist_task`
-drop `claim_with_gripper` and `append_gripper_position`; the helpers at
-`cartesian_ik_task.py:61-72` are deleted. Both tasks instead forward gripper intent into
-`GripperControlTask`. One joint, one owner.
+drop `claim_with_gripper` and `append_gripper_position`; the helpers
+(`cartesian_ik_task.py:61-72`) are deleted. They forward nothing — their inputs already
+reach the gripper task directly (R16). One joint, one owner.
+
+> **The trigger's polarity inverts, and this must be deliberate.** Today
+> `TeleopIKTask.on_gripper_trigger` maps trigger `0 → open`, `1 → closed`: squeezing
+> closes. On the `0.0` = closed / `1.0` = open scale every API in R19 shares, that is
+> `set_normalized([1.0 - trigger])`. Get it wrong and there is no error — just a gripper
+> that opens when told to close. Pin it with a test.
+>
+> **The VR trigger keeps its engagement gate.** Today the trigger only reaches hardware
+> while the operator is engaged (`TeleopIKTask.is_active()` requires a live pose stream);
+> moving it to its own task would otherwise drop that gate, and a disengaged operator
+> resting a finger would close the gripper. The gripper task reproduces it: accept the
+> trigger only while the configured hand's primary button is held, behind
+> `require_engagement: bool = True`.
 
 **R17a.** Their gripper **configuration** goes with it. `gripper_joint`,
 `gripper_open_pos`, and `gripper_closed_pos` are removed from both task configs
@@ -277,7 +425,7 @@ the inline `params={...}` gripper dicts in the `a1z` and `piper` teleop blueprin
 > blueprint declares an open/closed endpoint any more. This is what removes the duplicated
 > endpoints that caused §3.5 — there is no longer a second place to disagree.
 
-**R18.** Two control modes, per review:
+**R18.** Two control modes:
 
 | Mode | API | Use |
 |---|---|---|
@@ -321,42 +469,88 @@ The protocol itself knows only vectors — postures live in config, never in `Gr
 
 **R20.** **Every** command in `TASK_EXPOSES` MUST return immediately — `set_position`,
 `set_normalized`, `set_sweep`, `set_reference_pose`, `get_position`, `get_state`. The
-setters record the target and reactivate the task; the readers return the latest snapshot.
-None may block, wait, or sleep.
+setters record the target and refresh the hold; the readers return the latest snapshot.
+None may block, wait, or sleep. (Nothing "reactivates" — under R21a the task is always
+active; a setter only changes what `compute()` emits on the next tick.)
 
 > **Hard constraint.** `task_invoke` holds `_task_lock` (`coordinator.py:813`) and the tick
 > loop needs that same lock every tick (`tick_loop.py:268`). Blocking inside a task command
 > would stall the **entire coordinator** — no arbitration, no hardware writes for any
 > joint — not merely the gripper.
 
-**R21.** The task emits its target for a bounded hold duration, then deactivates. It MUST
-NOT deactivate on "measured position reached target": a gripper stalled on a grasped object
+**R21.** The task emits its target for a bounded hold duration, then stops emitting. It MUST
+NOT stop on "measured position reached target": a gripper stalled on a grasped object
 never reaches its commanded position, so that condition would misreport every successful
-grasp. On deactivation `ConnectedHardware` holds the last commanded value, so closing force
-is maintained.
+grasp. Once it stops emitting, `ConnectedHardware` holds the last commanded value in its
+array and keeps re-sending it every tick, so closing force is maintained.
+
+`hold_duration` is configurable and defaults to `0.0`, meaning **hold indefinitely** —
+matching the `servo_gripper` tasks it replaces, which are configured `timeout: 0.0`
+(`a1z/blueprints/teleop.py:50`, `piper/blueprints/teleop.py:65`).
+
+**R21a.** `is_active()` returns **True always**; `compute()` decides what to emit.
+
+> **Why.** The tick loop passes state only to tasks whose `is_active()` is True
+> (`tick_loop.py:270`). A task that went inactive at the end of its hold would stop
+> receiving snapshots, so `get_position` would go stale exactly when the gripper sits
+> idle — which is most of the time. So `compute()` runs every tick: it records the
+> snapshot, returns the command during the hold, and `None` after — which is precisely
+> how a task declines arbitration for a tick (`tick_loop.py:299-301`).
+>
+> **One consequence, accepted deliberately:** `remove_hardware()` refuses to remove
+> hardware whose joints an *active* task claims (`coordinator.py:419-427`), so a
+> registered gripper task blocks it. In practice tasks are removed before hardware —
+> `_setup_from_config`'s rollback already does exactly that.
 
 **R22.** It uses `ControlMode.SERVO_POSITION`, matching `servo_task` and
 `trajectory_task` so that an integrated gripper never disagrees on mode with the arm tasks
 sharing its component (`tick_loop.py:386-397`). Priority is uncontested by R17.
+
 ### 4.5 Coordinator and `ConnectedHardware`
 
 **R23.** `@rpc set_gripper_position` and `get_gripper_position` are **removed**
-(`coordinator.py:901-931`). The capability moves to
-`task_invoke("gripper", ...)` — `set_normalized` for the agent skills (R26), which is
+(`ControlCoordinator`, `coordinator.py:901-931`). The capability moves to
+`task_invoke("arm_gripper", ...)` — `set_normalized` for the agent skills (R26), which is
 the scale they already think in. Only the shortcut route dies.
 
 **R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry. See §7.*
 
 **R25.** `ConnectedHardware` builds one ordered array from `all_joints` and makes one call.
-Its gripper branch is deleted (`hardware_interface.py:125-137, 192-203, 213-221`). It
+Its gripper branches are deleted — in `read_state`, `write_command`, and
+`_initialize_last_commanded` (`hardware_interface.py:125-137, 192-203, 213-221`). It
 performs **no** unit conversion, and wraps either adapter kind unchanged.
 
 ### 4.6 `ManipulationModule`
 
-**R26.** **No new ports.** `_set_gripper_position()` calls
-`task_invoke("gripper", "set_normalized", {...})`; `get_gripper()` reads the gripper entry
-from `coordinator_joint_state`, which the module already subscribes to (`:171`, `:326`).
-Its docstring MUST be corrected — it claims metres while returning `0.85` today.
+**R26.** **No new ports.** The skill surface speaks **one scale, `0.0`–`1.0`**, closed to
+open — the polarity R19 fixes for every scalar API.
+
+| Skill | Becomes | Why |
+|---|---|---|
+| `set_gripper(position)` | `task_invoke("arm_gripper", "set_normalized", {"values": [position]})` | `0.0`–`1.0`, not metres |
+| `get_gripper()` | the gripper entry of `coordinator_joint_state`, **normalized on the way out** | so `set_gripper(get_gripper())` is a no-op |
+| `open_gripper()` | `set_sweep(1.0)` | R19a — see below |
+| `close_gripper()` | `set_sweep(0.0)` | R19a — see below |
+
+`get_gripper()` still reads the stream the module already subscribes to
+(`manipulation_module.py:171, :326`) — no new port, no per-read RPC. It converts using the
+range from one cached `get_state` call (R16). Its docstring MUST be corrected: it claims
+metres today while returning `0.85`, and both halves of that are wrong.
+
+All four hard-coded `0.85` (`manipulation_module.py:1686, 1914`;
+`pick_and_place_module.py:518, 627`) and the `0.0` closes become sweep calls, so **no
+endpoint value survives above the task** — which is the point of R15.
+
+> **`open`/`close` use `set_sweep`, not `set_normalized`.** On a single jaw the two are
+> identical. On a multi-joint hand they are not: `set_normalized([0,0,0,…])` drives every
+> joint to its limit — R19a's fist — while `set_sweep(0.0)` goes to the vendor's grasp
+> pose. Nothing changes today; it is correct when the H100 arrives.
+>
+> **Normalized, not native, and not in tension with grasp work.** The skills sit above
+> the task, and nothing above the task needs a vendor range (R14). The consumer with a
+> physical target — a grasp policy — uses `set_position` in native units straight at the
+> task, with the range readable via `get_limits()` (R18). Two consumers, two doors; the
+> split is deliberate.
 
 **R27.** The three `@skill` methods keep their synchronous `bool`, reporting **command
 acceptance** — identical to today, where the `bool` means "the SDK accepted it", not "the
@@ -387,14 +581,21 @@ every joint is a gripper joint.
 
 *Why a count, not two lists.* The adapter must know where the gripper starts, so the number
 is required either way. Two lists make it exist twice — implicitly as `len(gripper_joints)`,
-explicitly as the adapter's argument (old R7) — and two copies can drift, silently
-mis-splitting the array. One list also makes the ordering a fact rather than a convention.
+explicitly as the adapter's argument — and two copies can drift, silently mis-splitting the
+array. One list also makes the ordering a fact rather than a convention.
+
+> **The model already contains PR 2's shape.** A standalone gripper is
+> `gripper_dof == len(all_joints)`: the split lands at `0`, `arm_joints` is empty, and
+> `gripper_joints` is everything. Integrated and standalone are the same arithmetic with
+> different numbers — no special case anywhere above the adapter.
 
 **R28a.** The `joints` field is **deleted**, not redefined. Keeping the name while changing
 its meaning would let `hw.joints` still resolve and quietly return more joints than before.
 Deleting it makes every call site raise `AttributeError` until updated deliberately.
 
-Twenty sites change, with **three different correct answers**:
+The sites group into **three different correct answers** (the mechanical remainder —
+`openyam`, `openarm` and `a750` configs, six `unitree` blueprints,
+`control/blueprints/mobile.py` — takes the same answer as its group; §6 lists them):
 
 | Site | Becomes | Why |
 |---|---|---|
@@ -420,30 +621,61 @@ PROPOSED  make_gripper_joints("hand", 6)  → ["hand/gripper1" … "hand/gripper
 `hw.gripper_joints`:
 
 ```python
-# PROPOSED
-TaskConfig(name="gripper", type="gripper", joint_names=_arm_hw.gripper_joints)
+# PROPOSED — single-joint jaw: reference pose derives from the closed limit (R19a)
+TaskConfig(name="arm_gripper", type="gripper", joint_names=_arm_hw.gripper_joints)
+
+# PROPOSED — multi-joint hand: reference pose is MANDATORY (R19a/R19b), from the
+# vendor's documented grasps; `hand` scopes the VR trigger (R16/R17)
+TaskConfig(
+    name="hand_gripper",
+    type="gripper",
+    joint_names=_hand_hw.gripper_joints,
+    params={
+        "reference_pose": H100_GRASPS["two_finger_pinch"],   # joint vector, native units
+        "hand": "right",                                     # which trigger, if any
+    },
+)
 ```
+
+The name is **`{hardware_id}_gripper`**, defaulting to `arm_gripper`. It is not cosmetic:
+it is what `task_invoke("arm_gripper", …)` addresses (R23, R26), and it must be unique per
+arm on a multi-arm rig.
+
+> **Why hardware-id first, unlike `traj_arm` / `eef_twist_arm`.** `gripper_arm` parses as
+> a noun phrase — "a gripper arm" — which `traj_arm` cannot, and it degrades on real
+> hardware ids (`gripper_xarm_arm`). `arm_gripper` mirrors the joint it claims:
+> `xarm_arm_gripper` claims `xarm_arm/gripper`, immediately. Nothing hardcodes the
+> string — `ManipulationModule` already resolves the hardware id
+> (`_get_gripper_hardware_id()`), so it derives `f"{hw_id}_gripper"`, and a multi-arm rig
+> addresses the right task with no extra config.
 
 Two things worth knowing about the blueprints as they stand:
 
-- **`keyboard_teleop_a1z` already ships this pattern**, hand-rolled as a servo task
-  (`a1z/blueprints/teleop.py:46-51`) — a dedicated task claiming only `["arm/gripper"]`.
-  R30 replaces it with the `gripper` task type.
+- **`keyboard_teleop_a1z` and `keyboard_teleop_piper` already ship this pattern**,
+  hand-rolled as servo tasks claiming only `["arm/gripper"]`
+  (`a1z/blueprints/teleop.py:45-51`, `piper/blueprints/teleop.py:60-66`). R30 replaces
+  both with the `gripper` task type; they migrate together, because the keyboard's move
+  to `gripper_command` removes the publisher both currently read.
 - **`coordinator_teleop_dual` has no gripper path at all** (`common/mixed.py:75-88`):
   `gripper=True` on both arms, but neither `teleop_ik_task` is given gripper config and no
   gripper task exists. Its grippers are unreachable today — a pre-existing defect this
-  refactor surfaces, worth filing separately.
+  refactor surfaces, worth filing separately (with `keyboard_teleop_a750`, R13).
 
 ## 5. Untouched
 
-`servo_task`, `trajectory_task`, `ManipulationModule`'s ports, and every `pick_and_place`
-call site.
+`servo_task`, `trajectory_task`, and `ManipulationModule`'s ports.
 
-The 20 sites reading `component.joints` **are** modified (R28a) — each raises
-`AttributeError` until updated.
+`pick_and_place`'s **skill signatures** are untouched, so every caller of it keeps
+working. Two lines *inside* it are not: its hard-coded `0.85` open and `0.0` close become
+sweep calls (R26), because no endpoint value may survive above the task.
+
+Every site reading `component.joints` **is** modified (R28a) — each raises
+`AttributeError` until updated. That is deliberate: it is what makes the rename
+impossible to half-finish.
 
 `teleop_task` and `eef_twist_task` **are** modified (R17) — they lose their gripper claims
-and forward intent instead.
+and their gripper config. They forward nothing; their inputs reach the gripper task
+directly (R16).
 
 ## 6. Blast radius
 
@@ -454,10 +686,13 @@ and forward intent instead.
 | Adapters | `xarm`, `piper`, `mock`, `sim`, `openarm`, `galaxea_a1z`, `a750` | Unified array, `gripper_dof`, range via `get_limits()` |
 | Hardware wrapper | `hardware_interface.py` | One array; delete gripper branch + normalization; 3 `component.joints` reads |
 | Components | `components.py` | store `all_joints` + `gripper_dof`, delete `joints`, add 2 derived properties; delete 2 endpoint fields; widen `make_gripper_joints` |
-| Tasks | `teleop_task`, `eef_twist_task`, `cartesian_ik_task` | Drop gripper claims + gripper config fields; delete 2 helpers (R17, R17a) |
+| Tasks | `teleop_task`, `eef_twist_task`, `cartesian_ik_task` | Drop gripper claims + gripper config fields; delete 2 helpers (R17, R17a); `eef_twist/_registry.py` drops its `gripper_command` binding |
 | Coordinator | `coordinator.py` | Delete 2 RPCs; 3 `component.joints` reads |
-| Manipulation | `manipulation_module.py` | 2 method bodies + 1 docstring |
+| Manipulation | `manipulation_module.py`, `pick_and_place_module.py` | 4 method bodies, 1 docstring, and the status lines that claim metres (R26) |
+| Teleop | `teleop/keyboard/keyboard_teleop_module.py` | `[` / `]` publish `gripper_command` (Bool) instead of `joint_command` (R16) |
 | Blueprints | `xarm`, `a1z`, `piper` teleop + 13 claim sites | Add the gripper task; `hw.joints` → `hw.arm_joints`; delete `XARM_GRIPPER_PARAMS` (R17a) |
+| Mechanical rename only | `openyam`, `openarm`, `a750` configs; `unitree` g1 ×2, go2 ×4; `control/blueprints/mobile.py` | `joints=` → `all_joints=` (R28a), no behaviour change — all in part 1.1 |
+| Simulation | `simulation/engines/mujoco_shm.py`, `mujoco_sim_module.py` | Publish the MJCF gripper range over SHM (R13a) |
 | Message docs | `msgs/sensor_msgs/JointState.py` | Note gripper joint units |
 
 ## 7. Delivery plan
@@ -468,8 +703,153 @@ verifiable**: a PR that cannot be proven on hardware we own does not ship.
 | Step | Delivers | Requirements | Roughly |
 |---|---|---|---|
 | **0 — this PR** | The spec. Agreement on the API before anything is written | — | docs only |
-| **1 — this spec** | The joint model, one adapter method, units, `GripperControlTask`, RPC removal | everything except R9, R24 | **real hardware** — xArm, Piper, a1z |
+| **1 — this spec** | The joint model, units, `GripperControlTask`, RPC removal. **Four parts, §7.1** | everything except R9, R24 | **real hardware** — xArm, Piper, a1z |
 | **2 — third-party support** | `GripperAdapter`, `HardwareType.GRIPPER`, gripper registry, the standalone device shape | R9, R24 | the H100 itself |
 | **3 — H100 integration** | Vendor adapter, driver, protocol | — | may merge with step 2 |
 | **4 — transport layering** | Routing gripper bytes through an arm's bus when mounted | — | mounted H100 |
 
+### 7.1 Step 1 ships in four parts
+
+A single PR here would change five independent layers at once — joint model, adapter
+protocol, wire units, control path, consumer API. Command a gripper on the bench and
+watch it land wrong: five layers could have mangled the value, and there is no way to
+bisect. That is §3.5's failure mode reproduced in the delivery. So step 1 ships as four
+parts, each proving **one claim**, each with a definition of done that needs no bench —
+hardware proves the part; tests gate it.
+
+> **The rule that keeps this from becoming legacy preservation.** A part MAY leave old
+> code standing for one more part. It MUST NOT add new code that the final design
+> deletes. No shims, no `joints_v2`, no compatibility layer, no feature flag. The entire
+> transitional cost is **about nine lines**, named in 1.2, all deleted by 1.4.
+
+| Part | Claim it proves | Requirements |
+|---|---|---|
+| **1.1** — the joint model | *Nothing changed.* | R28, R28a, R29 |
+| **1.2** — one array, one unit | The value the task emits reaches the SDK unchanged | R4, R4a, R5–R8, R11, R12, R13, R13a, R15, R25 |
+| **1.3** — the task exists | One task drives one real gripper, converting once | R14, R14a, R16, R18–R22 |
+| **1.4** — one owner everywhere | No joint has two claimants; the shortcut route is gone | R2, R17, R17a, R23, R26, R27, R30 |
+
+---
+
+#### 1.1 — The joint model
+
+**Claim: nothing changed.**
+
+`HardwareComponent` stores one ordered array plus a count (R28); `arm_joints` and
+`gripper_joints` become derived views; `make_gripper_joints()` takes a count (R29). Every
+construction and read site moves with it — R28a's table plus §6's mechanical-rename row.
+
+**Nothing else is touched.** Adapters, units, tasks, RPCs, blueprint behaviour:
+identical. `ConnectedHardware` still normalizes exactly as it does today; the xArm still
+loses its 15%.
+
+*Done when (no hardware):*
+- the full fast suite passes with **zero behavioural test edits** — only tests that
+  literally assert the `joints` / `gripper_joints` fields change;
+- `read_gripper_position` / `write_gripper_position` / `_normalized_to_physical` are
+  provably untouched (grep);
+- `mypy` is clean.
+
+---
+
+#### 1.2 — One array, one unit
+
+**Claim: the value the task emits is the value that reaches the vendor SDK.**
+
+The adapter protocol collapses to one array (R4, R4a): gripper methods deleted (R5),
+`get_gripper_dof()` added (R8), `get_limits()` covering all joints as the one
+authoritative range declaration (R13, R13a). Units settle in the same part because they
+cannot settle separately: the moment the gripper joins the array, whatever converts it
+must be decided. `ConnectedHardware` loses its gripper branch and both conversion
+helpers (R15, R25); xArm drops the mm conversion and declares `(0.0, 850.0)`; blueprint
+endpoints become native.
+
+*Done when (no hardware):*
+- `ConnectedHardware.write_command` on a 6+1-joint mock issues **exactly one**
+  `write_joint_positions` call carrying 6 arm radians + 1 trailing native gripper value,
+  and `read_state` round-trips the trailing entry unconverted;
+- the **§3.5 regression test**: the xArm adapter against a stubbed SDK receives
+  **850.0** — not 722.5 — for fully open (`piper/test_teleop_gripper_mapping.py` is
+  rewritten to pin the same for Piper's `0.08`);
+- a conformance test over every registered adapter checks the R4/R4a/R13 lengths;
+- sim: the `grp[2:4]` range round-trips over SHM (R13a).
+
+*Proven on hardware:* the bench measurements — xArm `850.0`, Piper `0.08` m, a1z `0.1` m.
+
+*Transitional cost (~9 lines, all deleted in 1.4):* the two gripper RPCs are rewired
+through the array rather than deleted, because nothing replaces them until 1.4; the
+hard-coded skill endpoints become native for the same reason; the teleop/eef-twist
+blueprint endpoint params change value before they disappear.
+
+*Known imprecision, gone in 1.3:* keyboard `[`/`]` still publishes `1.0` on
+`joint_command` and relies on adapter clamping until it moves to `gripper_command`.
+
+---
+
+#### 1.3 — The task exists
+
+**Claim: one task drives one real gripper, and converts exactly once.**
+
+`GripperControlTask` arrives complete — streams and commands (R16), two modes (R18, R19,
+R19a, R19b), non-blocking (R20), hold semantics (R21, R21a), `SERVO_POSITION` (R22),
+limits acquired per R14a.
+
+It proves itself on the **two keyboard blueprints that already ship this pattern**
+hand-rolled as a servo task claiming only `["arm/gripper"]` —
+`keyboard_teleop_a1z` (`a1z/blueprints/teleop.py:45-51`) and `keyboard_teleop_piper`
+(`piper/blueprints/teleop.py:60-66`). Swapping each for the `gripper` type is a 1:1
+replacement on a blueprint with no competing gripper claimant. R30 applies to these two
+only.
+
+> **Both migrate together, and this is forced.** `KeyboardTeleopModule` moves from
+> `joint_command` to `gripper_command` in this part (R16), and *both* servo-gripper tasks
+> read `joint_command`. Migrating one would leave the other's gripper with no publisher
+> for a whole part. Two devices also give the claim two independent hardware witnesses
+> in different units — a1z metres and Piper metres, against xArm's dimensionless scale
+> proven in 1.2.
+
+Everything else keeps working as in 1.2 — the other blueprints' arm tasks still own their
+grippers, and the RPCs still exist.
+
+*Done when (no hardware):*
+- task unit tests pin: every command returns immediately (R20); `is_active()` always
+  True with `get_position` fresh while idle (R21a); the hold emits, then `None`, and
+  never stops on target-reached (R21); `set_normalized([0.0])` lands on the closed
+  limit (R19 polarity); `set_sweep` refuses on multi-joint without a reference pose
+  (R19b); the trigger inverts and respects the engagement gate (R17);
+- R14a validation raises on joint names not matching one component's `gripper_joints`;
+- a blueprint test: `keyboard_teleop_a1z` **and** `keyboard_teleop_piper` each carry a
+  `type="gripper"` task named `arm_gripper` claiming exactly `["arm/gripper"]`, no
+  `type="servo"` task claims a gripper joint anywhere, and `[` / `]` drive the mock
+  adapter end-to-end through the coordinator.
+
+*Proven on hardware:* driving the a1z and Piper grippers from the keyboard;
+`get_position` agrees with `coordinator_joint_state` on both.
+
+---
+
+#### 1.4 — One owner everywhere
+
+**Claim: no gripper joint has two claimants, and the shortcut route is gone.**
+
+`teleop_task` and `eef_twist_task` drop their gripper claims, config and helpers (R17,
+R17a). The two RPCs are deleted (R23). The remaining blueprints get the gripper task
+(R30). `ManipulationModule` is rewired (R26, R27). Every transitional line from 1.2 is
+removed.
+
+*Done when (no hardware):*
+- a single-owner audit test: across every built-in blueprint, gripper joints appear
+  only in the claims of `type="gripper"` tasks;
+- `claim_with_gripper`, `append_gripper_position`, `XARM_GRIPPER_PARAMS`, both RPCs,
+  and every 1.2 transitional line are gone (grep);
+- skill round-trip on mock: `set_gripper(x)` then `get_gripper()` ≈ `x`;
+  `open_gripper()` / `close_gripper()` land on the sweep endpoints with R19 polarity.
+
+*Proven on hardware:* VR teleop on xArm7 — the trigger drives the gripper, arm tasks no
+longer claim it, and preempting the arm no longer disturbs the grasp.
+
+---
+
+Nothing in step 1 is waiting on a decision: every question raised against this spec has
+been resolved into the requirements above (R4a, R13, R13a, R14a, R16, R17, R21a, R26,
+R28, R30).
