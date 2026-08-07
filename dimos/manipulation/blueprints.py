@@ -25,6 +25,7 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
 from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
+from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.picknplace import PickNPlaceModule
 from dimos.manipulation.visualization.rerun import picknplace_rerun_config
@@ -105,7 +106,8 @@ picknplace = autoconnect(
         detector_confidence=0.4,
         object_voxel_downsample=0.001,
     ),
-    PickNPlaceModule.blueprint(instance_name="pnp", align_grasp_yaw=True),
+    PickNPlaceModule.blueprint(instance_name="pnp"),
+    HeuristicGraspModule.blueprint(instance_name="heuristic_grasp"),
     GraspGenXModule.blueprint(
         instance_name="ggx",
         load_on_start=False,

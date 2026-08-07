@@ -25,7 +25,6 @@ from dimos.manipulation.picknplace import (
     PickNPlaceConfig,
     PickNPlaceModule,
     _estimate_table_surface,
-    _table_midpoint_grasp_z,
 )
 from dimos.manipulation.planning.spec.models import IKResult, IKStatus
 from dimos.manipulation.visualization.layers import MeshElement
@@ -58,6 +57,23 @@ def test_picknplace_scans_and_selects_target() -> None:
     obj.camera_transform = None
     obj.image = None
     obj.pose.orientation = Quaternion(0.0, 0.0, 0.0, 1.0)
+    module._heuristic_grasp_generator = MagicMock(
+        propose_grasps=MagicMock(
+            return_value=GraspCandidateArray(
+                Header(1.0, "link_base"),
+                [
+                    GraspCandidate(
+                        Pose(
+                            Vector3(0.1, 0.2, 0.1),
+                            Quaternion.from_euler(Vector3(-math.pi, 0.0, 0.0)),
+                        ),
+                        score=1.0,
+                    )
+                ],
+            )
+        )
+    )
+    module.graspgenx_candidates = MagicMock()
     scene.scan_scene.side_effect = lambda: (module._on_objects([obj]), detections)[1]
 
     with patch("dimos.manipulation.picknplace.to_detection3d_array") as to_detection3d_array:
@@ -98,11 +114,7 @@ def test_picknplace_scans_and_selects_target() -> None:
     module.scan_scene("water bottle")
     scene.set_prompts.assert_called_once_with(["water bottle"])
 
-    module.config = PickNPlaceConfig(align_grasp_yaw=True)
-    yaw_aligned_goal = module.get_goal_pose(1)
-    assert yaw_aligned_goal is not None
-    expected = Quaternion.from_euler(Vector3(-math.pi, 0.0, 0.0))
-    assert yaw_aligned_goal.orientation.angle_to(expected) == pytest.approx(0.0)
+    assert module._heuristic_grasp_generator.propose_grasps.call_count == 2
 
 
 def test_scan_objects_uses_independent_simple_queries() -> None:
@@ -207,14 +219,6 @@ def test_picknplace_graspgenx_uses_xarm_tcp_calibration() -> None:
     )
 
 
-def test_picknplace_yaw_alignment_defaults_to_disabled() -> None:
-    assert not PickNPlaceConfig().align_grasp_yaw
-
-
-def test_parallel_jaw_yaw_uses_the_nearest_equivalent_orientation() -> None:
-    assert PickNPlaceModule._closest_parallel_jaw_yaw(-math.pi + 0.02, 0.0) == pytest.approx(0.02)
-
-
 def test_picknplace_blueprint_accepts_short_backend_and_grasp_options() -> None:
     config = BlueprintConfigParser(picknplace)
 
@@ -238,26 +242,6 @@ def test_table_surface_estimate_ignores_objects_above_the_table() -> None:
     assert estimate["tabletop_z"] == pytest.approx(0.35, abs=0.01)
     assert estimate["width"] >= 0.8
     assert estimate["depth"] >= 1.0
-
-
-def test_table_midpoint_grasp_uses_observed_object_height() -> None:
-    points = np.array(
-        [
-            [0.2, 0.1, 0.117],
-            [0.2, 0.1, 0.119],
-            [0.2, 0.1, 0.120],
-            [0.2, 0.1, 0.121],
-            [0.2, 0.1, 0.120],
-            [0.2, 0.1, 0.119],
-            [0.2, 0.1, 0.120],
-            [0.2, 0.1, 0.119],
-            [0.2, 0.1, 0.120],
-            [0.2, 0.1, 0.120],
-        ]
-    )
-
-    assert _table_midpoint_grasp_z(points, 0.100, 0.120) == pytest.approx(0.110275)
-    assert _table_midpoint_grasp_z(points[:9], 0.100, 0.120) == pytest.approx(0.120)
 
 
 def test_table_surface_estimate_displays_filled_tabletop() -> None:
@@ -448,7 +432,7 @@ def test_picknplace_clears_candidates_when_no_graspgenx_proposal_is_safe() -> No
     assert module.graspgenx_candidates.publish.call_args.args[0].candidates == []
 
 
-def test_picknplace_returns_empty_candidates_for_obb_grasps() -> None:
+def test_picknplace_returns_empty_candidates_before_provider_selection() -> None:
     with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
         module = PickNPlaceModule()
     module.config = PickNPlaceConfig()

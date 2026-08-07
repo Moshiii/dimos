@@ -29,7 +29,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.manipulation.candidate_filter_spec import GraspCandidateFilterSpec
-from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
+from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec, HeuristicGraspSpec
 from dimos.manipulation.obstacle_world_spec import ObstacleWorldSpec
 from dimos.manipulation.pick_execution_spec import PickExecutionSpec
 from dimos.manipulation.visualization.layers import (
@@ -38,15 +38,12 @@ from dimos.manipulation.visualization.layers import (
     PointCloudElement,
     VisualizationLayer,
 )
-from dimos.manipulation.visualization.pose_overlay import draw_pose_axes
 from dimos.manipulation.visualization_spec import ManipulationVisualizationSpec
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.perception.experimental.object import (
     Object as DetObject,
@@ -81,18 +78,6 @@ def _estimate_table_surface(points: np.ndarray) -> dict[str, float] | None:
         "depth": float(max(y_high - y_low + 2 * margin, 0.20)),
         "inlier_count": float(len(inliers)),
     }
-
-
-def _table_midpoint_grasp_z(
-    points: np.ndarray, tabletop_z: float | None, fallback_z: float
-) -> float:
-    """Return the midpoint from the physical table plane to an object's observed top surface."""
-    if tabletop_z is None or points.ndim != 2 or points.shape[1] != 3 or len(points) < 10:
-        return fallback_z
-    top_z = float(np.quantile(points[:, 2], 0.95))
-    if top_z <= tabletop_z:
-        return fallback_z
-    return tabletop_z + (top_z - tabletop_z) / 2.0
 
 
 def _primitive_mesh(
@@ -206,9 +191,8 @@ def _primitive_mesh(
 class PickNPlaceConfig(ModuleConfig):
     """Configuration for PickNPlaceModule."""
 
-    align_grasp_yaw: bool = False
-    grasp: Literal["obb_center", "graspgenx"] = Field(
-        default="obb_center", validation_alias=AliasChoices("grasp", "grasp_strategy")
+    grasp: Literal["heuristic", "graspgenx"] = Field(
+        default="heuristic", validation_alias=AliasChoices("grasp", "grasp_strategy")
     )
     graspgenx_pregrasp_offset: float = 0.10
     graspgenx_ik_filter_limit: int = 10
@@ -222,13 +206,12 @@ class PickNPlaceModule(Module):
     config: PickNPlaceConfig
     _scene: ObjectSceneRegistrationSpec
     _grasp_generator: GraspGenSpec | None
+    _heuristic_grasp_generator: HeuristicGraspSpec
     _grasp_filter: GraspCandidateFilterSpec
     _pick_execution: PickExecutionSpec
     _obstacle_world: ObstacleWorldSpec
     _visualization: ManipulationVisualizationSpec
     objects: In[list[DetObject]]
-    camera_info: In[CameraInfo]
-    basic_grasp_overlay: Out[Image]
     graspgenx_candidates: Out[GraspCandidateArray]
 
     def __init__(self, **kwargs: object) -> None:
@@ -236,7 +219,6 @@ class PickNPlaceModule(Module):
         self._objects_condition = threading.Condition()
         self._latest_objects: tuple[DetObject, ...] = ()
         self._objects_version = 0
-        self._camera_info: CameraInfo | None = None
         self._goal_pose: PoseStamped | None = None
         self._pre_grasp_pose: PoseStamped | None = None
         self._grasp_candidates: GraspCandidateArray | None = None
@@ -250,17 +232,12 @@ class PickNPlaceModule(Module):
     def start(self) -> None:
         super().start()
         self.objects.subscribe(self._on_objects)
-        self.camera_info.subscribe(self._on_camera_info)
 
     def _on_objects(self, objects: list[DetObject]) -> None:
         with self._objects_condition:
             self._latest_objects = tuple(objects)
             self._objects_version += 1
             self._objects_condition.notify_all()
-
-    def _on_camera_info(self, camera_info: CameraInfo) -> None:
-        with self._objects_condition:
-            self._camera_info = camera_info
 
     @rpc
     def scan_scene(
@@ -487,39 +464,22 @@ class PickNPlaceModule(Module):
     @rpc
     def get_goal_pose(self, number: int) -> PoseStamped | None:
         """Select an object and return its downward-facing, floor-clamped grasp goal."""
-        selection = self._basic_grasp(number)
-        if selection is None:
+        obj = self._object_for_number(number)
+        if obj is None:
             return None
-        grasp, obj = selection
         if self.config.grasp == "graspgenx":
             if self._grasp_generator is None:
                 raise RuntimeError("GraspGenX is not configured for this pick-and-place blueprint")
             candidates = self._grasp_generator.propose_grasps(obj.pointcloud)
-            self._selected_object = obj
-            self._grasp_candidates = self._filter_graspgenx_candidates(candidates)
-            if not self._grasp_candidates.candidates:
-                self.graspgenx_candidates.publish(self._grasp_candidates)
-                return None
-            return self._select_graspgenx_candidate(0)
-        yaw = self._grasp_yaw(obj) if self.config.align_grasp_yaw else 0.0
-        pick_execution = getattr(self, "_pick_execution", None)
-        current_pose = pick_execution.get_ee_pose() if pick_execution is not None else None
-        if current_pose is not None:
-            yaw = self._closest_parallel_jaw_yaw(yaw, current_pose.orientation.to_euler().z)
-        self._grasp_candidates = None
+            candidates = self._filter_graspgenx_candidates(candidates)
+        else:
+            candidates = self._heuristic_grasp_generator.propose_grasps(obj.pointcloud)
         self._selected_object = obj
-        self.graspgenx_candidates.publish(GraspCandidateArray())
-        grasp_z = _table_midpoint_grasp_z(
-            obj.pointcloud.points_f32(), self._tabletop_z, grasp.position.z
-        )
-        self._goal_pose = PoseStamped(
-            ts=grasp.ts,
-            frame_id=grasp.frame_id,
-            position=Vector3(grasp.position.x, grasp.position.y, max(grasp_z, 0.100)),
-            orientation=Quaternion.from_euler(Vector3(-math.pi, 0.0, yaw)),
-        )
-        self._pre_grasp_pose = None
-        return self._goal_pose
+        self._grasp_candidates = candidates
+        if not candidates.candidates:
+            self.graspgenx_candidates.publish(candidates)
+            return None
+        return self._select_graspgenx_candidate(0)
 
     @skill
     def select_object(self, number: int) -> SkillResult:
@@ -714,14 +674,10 @@ class PickNPlaceModule(Module):
         """Return the selected goal offset 100 mm opposite its final approach direction."""
         if self._goal_pose is None:
             return None
-        if self.config.grasp == "graspgenx":
-            offset = self._goal_pose.orientation.rotate_vector(
-                # GraspGenX local +Z points in the direction of the final
-                # approach. A pre-grasp retreats along the opposite axis.
-                Vector3(0.0, 0.0, -self.config.graspgenx_pregrasp_offset)
-            )
-        else:
-            offset = Vector3(0.0, 0.0, 0.100)
+        offset = self._goal_pose.orientation.rotate_vector(
+            # Both providers express local +Z as the final approach direction.
+            Vector3(0.0, 0.0, -self.config.graspgenx_pregrasp_offset)
+        )
         self._pre_grasp_pose = PoseStamped(
             ts=self._goal_pose.ts,
             frame_id=self._goal_pose.frame_id,
@@ -872,26 +828,6 @@ class PickNPlaceModule(Module):
             )
         return SkillResult.ok("Table estimated", **estimate)
 
-    def _basic_grasp(self, number: int) -> tuple[PoseStamped, DetObject] | None:
-        """Return the selected cloud's OBB-center grasp frame and object geometry."""
-        with self._objects_condition:
-            if number < 1 or number > len(self._latest_objects):
-                return None
-            obj = self._latest_objects[number - 1]
-            camera_info = self._camera_info
-        grasp = PoseStamped(
-            ts=obj.ts,
-            frame_id=obj.frame_id,
-            position=obj.center,
-            orientation=obj.pose.orientation,
-        )
-        if camera_info is not None and obj.camera_transform is not None and obj.image is not None:
-            if overlay := draw_pose_axes(
-                obj.image, grasp, obj.camera_transform.inverse(), camera_info
-            ):
-                self.basic_grasp_overlay.publish(overlay)
-        return grasp, obj
-
     def _object_for_number(self, number: int) -> DetObject | None:
         with self._objects_condition:
             if number < 1 or number > len(self._latest_objects):
@@ -920,17 +856,3 @@ class PickNPlaceModule(Module):
             self._scene_geometry_ids.add(obstacle_id)
             return True
         return False
-
-    @staticmethod
-    def _grasp_yaw(obj: DetObject) -> float:
-        """Align the gripper's local Y closing axis with the narrowest horizontal OBB axis."""
-        rotation = obj.pose.orientation.to_rotation_matrix()
-        extents = (obj.size.x, obj.size.y, obj.size.z)
-        horizontal_axes = sorted(range(3), key=lambda axis: abs(rotation[2, axis]))[:2]
-        narrow_axis = min(horizontal_axes, key=lambda axis: extents[axis])
-        return math.atan2(rotation[1, narrow_axis], rotation[0, narrow_axis]) - math.pi / 2
-
-    @staticmethod
-    def _closest_parallel_jaw_yaw(target_yaw: float, current_yaw: float) -> float:
-        """Choose the equivalent parallel-jaw yaw requiring the smallest wrist rotation."""
-        return target_yaw + math.pi * round((current_yaw - target_yaw) / math.pi)

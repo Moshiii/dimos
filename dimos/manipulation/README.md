@@ -26,17 +26,17 @@ by the EdgeTAM blueprint.
 
 ## Run
 
-Start the default YOLO-E and OBB-center-grasp pipeline:
+Start the default YOLO-E and deterministic heuristic-grasp pipeline:
 
 ```bash
 uv run --no-sync dimos run picknplace --daemon
 ```
 
-Use text-prompted Moondream detection, EdgeTAM segmentation, and an OBB-center grasp:
+Use text-prompted Moondream detection, EdgeTAM segmentation, and the deterministic heuristic grasp:
 
 ```bash
 uv run --no-sync dimos run picknplace --daemon \
-  -o osr.det=moondream -o osr.seg=edgetam -o pnp.grasp=obb_center
+  -o osr.det=moondream -o osr.seg=edgetam -o pnp.grasp=heuristic
 ```
 
 Use the same perception stack with GraspGenX:
@@ -48,7 +48,8 @@ uv run --no-sync dimos run picknplace --daemon \
 
 `osr.det` accepts `yoloe` or `moondream`; `osr.seg` accepts `yolo` or `edgetam`.
 Moondream requires EdgeTAM because it produces detection boxes rather than masks.
-`pnp.grasp` accepts `obb_center` or `graspgenx`. GraspGenX loads only when selected.
+`pnp.grasp` accepts `heuristic` or `graspgenx`. The heuristic provider derives one top-down
+proposal from the segmented object cloud; GraspGenX loads only when selected.
 
 Then connect the console:
 
@@ -68,11 +69,11 @@ The console intentionally keeps planning and execution separate:
 
 1. Select `1` to scan the current scene.
 2. Select `2` to inspect object number, name, and confidence.
-3. Select `3` and choose an object. The GraspGenX blueprint prints its top
-   proposals and displays the selected grasp. Viser shows the selected object
+3. Select `3` and choose an object. The selected provider returns proposals and displays the selected grasp.
+   Viser shows the selected object
    cloud in amber, the grasp TCP axes in red, and the pre-grasp TCP axes in green.
-   The top ten proposals are filtered through collision-aware xArm IK; after
-   table calibration, candidates intersecting the table are omitted.
+   GraspGenX's top ten proposals are filtered through collision-aware xArm IK; after table calibration,
+   candidates intersecting the table are omitted. The heuristic provider returns one deterministic proposal.
 4. Select `4` to plan and preview the approach. Each Viser preview plays once
    at a slow two-second duration.
 5. Execute the approach only after inspecting the proposal and preview.
@@ -94,14 +95,14 @@ pose, the point-cloud/overlay visualization, and the collision-free preview.
 
 ## Grasp Geometry
 
-`PickNPlaceModule.get_goal_pose()` stores the top ranked GraspGenX candidate as
+`PickNPlaceModule.get_goal_pose()` stores the selected provider candidate as
 the TCP goal in the candidate point cloud's frame. Its pre-grasp is computed as:
 
 ```text
 pre_grasp_position = grasp_position - grasp_orientation * (0, 0, 0.100 m)
 ```
 
-GraspGenX local `+Z` is the final approach direction, so the pre-grasp retreats
+Each provider uses local `+Z` as the final approach direction, so the pre-grasp retreats
 along local `-Z`. It is not a world-Z lift: an angled or side grasp receives an
 equally angled or sideward pre-grasp. Descent and ascent use Cartesian paths
 between the current TCP pose and the selected grasp or pre-grasp target.
@@ -114,12 +115,12 @@ applied by the operator pipeline.
 
 ## Implementation Guide
 
-- `blueprints.py`: robot, camera, OBB, and GraspGenX blueprint composition.
-- `picknplace.py`: scan request, target selection, OBB fallback, learned grasp
-  selection, and tool-axis pre-grasp calculation.
+- `blueprints.py`: robot, camera, heuristic, and GraspGenX blueprint composition.
+- `picknplace.py`: scan request, target selection, provider selection, and tool-axis pre-grasp calculation.
 - `pnpconsole.py`: explicit operator stages and manual gripper/home controls.
 - `grasping/grasp_gen_x.py`: import-safe proposal adapter and candidate contract.
 - `grasping/grasp_gen_x_runtime.py`: in-process checkpoint load and GPU inference.
+- `grasping/heuristic_grasp.py`: deterministic top-down proposal provider.
 - `visualization/pose_overlay.py` and `visualization/rerun.py`: selected-object
   cloud, image, and grasp overlays.
 

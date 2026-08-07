@@ -46,7 +46,6 @@ def _blueprint() -> rrb.Blueprint:
         rrb.Horizontal(
             rrb.Vertical(
                 rrb.Spatial2DView(origin="world/annotated_image", name="Object Segmentation"),
-                rrb.Spatial2DView(origin="world/basic_grasp_overlay", name="Grasp Pose"),
                 rrb.Spatial2DView(origin="world/color_camera/color_image", name="RGB"),
             ),
             rrb.Spatial3DView(origin="world", name="Filtered Objects"),
@@ -61,7 +60,6 @@ def _topic_to_entity(topic: Any) -> str:
         "/camera_info": "world/color_camera",
         "/depth_image": "world/depth_camera/depth_image",
         "/depth_camera_info": "world/depth_camera",
-        "/basic_grasp_overlay": "world/basic_grasp_overlay",
         "/graspgenx_candidates": "world/graspgenx_candidates",
         "/detections_3d": "world/detections_3d",
         "/pointcloud": "world/pointcloud",
