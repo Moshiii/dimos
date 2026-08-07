@@ -45,6 +45,7 @@ from typing import Any, NamedTuple
 from dimos.control.components import HardwareComponent, HardwareType, make_joints
 from dimos.control.hardware_interface import ConnectedHardware
 from dimos.hardware.manipulators.spec import ControlMode
+from dimos.msgs.std_msgs.Bool import Bool as _Bool
 
 
 class _Device(NamedTuple):
@@ -121,6 +122,30 @@ def _make_adapter(name: str, address: str, dof: int, fake: bool) -> Any:
     )
 
 
+def _gripper_task(component: HardwareComponent, hardware: ConnectedHardware) -> Any:
+    """Build the real task against this device, as a blueprint would."""
+    from dimos.control.coordinator import TaskConfig
+    from dimos.control.tasks.gripper_task.gripper_task import create_task
+
+    return create_task(
+        TaskConfig(
+            name=f"{component.hardware_id}_gripper",
+            type="gripper",
+            joint_names=component.gripper_joints,
+            priority=20,
+        ),
+        {component.hardware_id: hardware},
+    )
+
+
+def _snapshot(hardware: ConnectedHardware) -> Any:
+    """One tick's measured state, as the tick loop builds it."""
+    from dimos.control.task import CoordinatorState, JointStateSnapshot
+
+    positions = {n: js.position for n, js in hardware.read_state().items()}
+    return CoordinatorState(joints=JointStateSnapshot(joint_positions=positions), t_now=0.0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("device", nargs="?", default="xarm", choices=sorted(_DEVICES))
@@ -134,6 +159,12 @@ def main() -> int:
         help="clear errors and enable the arm servos so the arm write also succeeds; "
         "without it the arm may report an error and stay put, which still proves "
         "the gripper claim",
+    )
+    ap.add_argument(
+        "--via-task",
+        action="store_true",
+        help="drive through GripperControlTask (part 1.3) instead of commanding the "
+        "wrapper directly: proves the task resolves its own range and converts once",
     )
     ap.add_argument("--settle", type=float, default=2.0, help="seconds to wait after a command")
     args = ap.parse_args()
@@ -190,13 +221,41 @@ def main() -> int:
             "\n   will not move. Expected, and it does not affect the gripper claim."
         )
 
+    task = _gripper_task(component, hardware) if args.via_task else None
+    if task is not None:
+        resolved = task.get_state()["limits"][0]
+        print("\n   driving through GripperControlTask (part 1.3)")
+        print(f"     task resolved its range from the adapter: {resolved}")
+        if resolved != (lo, hi):
+            print("     -> MISMATCH against get_limits(); R14a resolution is wrong")
+
     print("\n3. COMMAND  (the 3.5 claim)")
     results = []
     for label, target in (("FULLY OPEN", hi), ("FULLY CLOSED", lo)):
-        hardware.write_command({"arm/gripper": target}, ControlMode.SERVO_POSITION)
+        if task is not None:
+            # A wish, not a value — exactly what the keyboard sends. The task
+            # converts using the range it read from this adapter.
+            task.on_gripper_command(_Bool(data=(target == lo)), 0.0)
+            out = task.compute(_snapshot(hardware))
+            hardware.write_command(dict(zip(out.joint_names, out.positions, strict=True)), out.mode)
+        else:
+            hardware.write_command({"arm/gripper": target}, ControlMode.SERVO_POSITION)
         time.sleep(args.settle)
         measured = adapter.read_joint_positions()[-1]
-        line = f"     {label:<13} commanded {target:>9.4g}   measured {measured:>9.4g}"
+        if task is not None:
+            # Refresh the task's cache from a post-command snapshot; it only
+            # sees state through compute(), exactly as the tick loop feeds it.
+            task.compute(_snapshot(hardware))
+        if task is not None:
+            reported = task.get_position()
+            line = (
+                f"     {label:<13} commanded {target:>9.4g}   measured {measured:>9.4g}"
+                f"   task.get_position {reported[0]:>9.4g}"
+            )
+            if abs(reported[0] - measured) > 1e-9:
+                line += "  <- DISAGREES with coordinator_joint_state"
+        else:
+            line = f"     {label:<13} commanded {target:>9.4g}   measured {measured:>9.4g}"
         if args.fake:
             line += f"   SDK got {adapter._arm.sent[-1]:>9.4g}"
         print(line)
