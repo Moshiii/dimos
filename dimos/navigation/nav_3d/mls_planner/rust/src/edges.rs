@@ -59,6 +59,9 @@ pub struct PlannerGraph {
     pub wall_state: DijkstraState,
     /// Reusable dense scratch for node placement, shared across region frames.
     pub node_scratch: NodeScratch,
+    /// Index split: nodes[..nms_node_count] are NMS-selected,
+    /// nodes[nms_node_count..] were added by ensure_node_per_component.
+    pub nms_node_count: usize,
 }
 
 impl PlannerGraph {

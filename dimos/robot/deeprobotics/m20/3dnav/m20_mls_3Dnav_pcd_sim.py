@@ -44,11 +44,16 @@ from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.navigation.basic_path_follower.module import BasicPathFollower
 from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.nav_3d.mls_planner.goal_relay import GoalRelay
 from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.robot.deeprobotics.m20.nav.pcd_sim import FakeRobotSim
+import importlib
+
+_3d = importlib.import_module("dimos.robot.deeprobotics.m20.3dnav.fake_robot_sim_3d")
+FakeRobotSim3D = _3d.FakeRobotSim3D
+_ctrl = importlib.import_module("dimos.robot.deeprobotics.m20.3dnav.Rotate_P_controller")
+PControllerFollower = _ctrl.PControllerFollower
 from dimos.robot.deeprobotics.m20.tf import M20TF
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 from dimos.visualization.rerun.websocket_server import RerunWebSocketServer
@@ -203,11 +208,11 @@ def _load_pcd(path: str) -> np.ndarray:
 
 # Set to True for per-layer debug view (danger_cells, edge_cells,
 # nodes_nms / nodes_add).  False = clean view (surface_map only).
-DEBUG_VIZ = False
+DEBUG_VIZ = True
 
 
 def _render_global_map(msg: Any) -> Any:
-    return msg.to_rerun()
+    return msg.to_rerun(colors=[60, 100, 200])  # blue
 
 
 def _render_path(msg: Any) -> Any:
@@ -221,11 +226,27 @@ def _render_node_edges(msg: Any) -> Any:
 
 
 def _render_surface(msg: Any) -> Any:
-    return msg.to_rerun(radii=0.03)
+    return msg.to_rerun(radii=0.03, colors=[60, 100, 200])  # blue
 
 
 def _render_nodes(msg: Any) -> Any:
-    return msg.to_rerun(radii=0.06)
+    return msg.to_rerun(radii=0.06, colors=[75, 200, 75])  # green
+
+
+def _render_danger_cells(msg: Any) -> Any:
+    return msg.to_rerun(radii=0.03, colors=[40, 40, 40])  # dark grey
+
+
+def _render_edge_cells(msg: Any) -> Any:
+    return msg.to_rerun(radii=0.03, colors=[220, 30, 20])  # red
+
+
+def _render_nodes_nms(msg: Any) -> Any:
+    return msg.to_rerun(radii=0.06, colors=[75, 200, 75])  # green
+
+
+def _render_nodes_add(msg: Any) -> Any:
+    return msg.to_rerun(radii=0.06, colors=[255, 100, 50])  # orange-red
 
 
 def _static_scene(rr: Any) -> list[tuple[str, Any]]:
@@ -299,7 +320,7 @@ M20_ROBOT_HEIGHT = 0.6  # body + headroom above surface
 M20_WALL_CLEARANCE = 0.25  # hard clearance from walls (wider than go2)
 M20_WALL_BUFFER = 0.75  # soft standoff zone
 M20_WALL_BUFFER_WEIGHT = 100.0  # strong wall repulsion
-M20_STEP_THRESHOLD = 0.15  # max traversable step
+M20_STEP_THRESHOLD = 0.5  # max traversable step
 M20_STEP_PENALTY = 4.0  # climb penalty (prefer flat routes)
 M20_SURFACE_CLOSING = 0.3  # hole-filling radius
 M20_NODE_SPACING = 1.0  # graph node spacing
@@ -312,8 +333,6 @@ FAKE_ROBOT_START_YAW = 0.0
 
 # Path follower
 FOLLOWER_SPEED = 0.5
-FOLLOWER_HEADING_GAIN = 0.4
-FOLLOWER_MAX_ANGULAR = 0.6
 
 # ---------------------------------------------------------------------------
 # Assemble
@@ -341,6 +360,10 @@ m20_mls_3Dnav_pcd_sim = autoconnect(
         wall_buffer_weight=M20_WALL_BUFFER_WEIGHT,
         step_threshold_m=M20_STEP_THRESHOLD,
         step_penalty_weight=M20_STEP_PENALTY,
+        chord_step_threshold_m=0.0,
+        chord_wall_clearance_m=-1.0,
+        chord_wall_buffer_weight=-1.0,
+        chord_step_penalty_weight=-1.0,
         viz_publish_hz=1.0,
     ).remappings([(MLSPlannerNative, "local_map", "local_map_unused")]),
 
@@ -349,18 +372,16 @@ m20_mls_3Dnav_pcd_sim = autoconnect(
     # ground-projection subtracts robot_height back to the correct surface z.
     GoalRelay.blueprint().remappings([(GoalRelay, "odometry", "planner_odom")]),
 
-    # --- Path following ---
-    BasicPathFollower.blueprint(
+    # --- Rotate-then-drive P-controller path follower ---
+    PControllerFollower.blueprint(
         speed=FOLLOWER_SPEED,
-        heading_gain=FOLLOWER_HEADING_GAIN,
-        max_angular=FOLLOWER_MAX_ANGULAR,
-    ).remappings([(BasicPathFollower, "odometry", "slam_odom")]),
+    ).remappings([(PControllerFollower, "odometry", "slam_odom")]),
 
     # --- Movement manager (muxes nav_cmd_vel + clicked_point -> cmd_vel) ---
     MovementManager.blueprint(),
 
     # --- Fake robot simulation (closed-loop: cmd_vel -> odometry) ---
-    FakeRobotSim.blueprint(
+    FakeRobotSim3D.blueprint(
         initial_x=FAKE_ROBOT_START_X,
         initial_y=FAKE_ROBOT_START_Y,
         initial_yaw=FAKE_ROBOT_START_YAW,

@@ -50,10 +50,10 @@ pub fn place_nodes(
     state: &mut DijkstraState,
     scratch: &mut NodeScratch,
     out_nodes: &mut Vec<NodeData>,
-) {
+) -> usize {
     out_nodes.clear();
     if cells.is_empty() {
-        return;
+        return 0;
     }
 
     let mut wall_seeds: Vec<CellId> = Vec::new();
@@ -75,6 +75,7 @@ pub fn place_nodes(
         node_spacing_m,
         out_nodes,
     );
+    let nms_count = out_nodes.len();
 
     let domain: Vec<CellId> = cells.ids().collect();
     ensure_node_per_component(cells, &state.dist, voxel_size, &domain, scratch, out_nodes);
@@ -87,6 +88,7 @@ pub fn place_nodes(
         wall_buffer_weight,
         step_penalty_weight,
     );
+    nms_count
 }
 
 /// Thin candidates with NMS, clearest-first, against the seed nodes.
@@ -134,7 +136,7 @@ pub fn place_nodes_region(
     wall_state: &mut DijkstraState,
     scratch: &mut NodeScratch,
     nodes: &mut Vec<NodeData>,
-) {
+) -> usize {
     let mut wall_seeds: Vec<CellId> = Vec::new();
     collect_wall_adjacent_in_window(
         cells,
@@ -164,6 +166,7 @@ pub fn place_nodes_region(
         node_spacing_m,
         nodes,
     );
+    let nms_count = nodes.len();
 
     let domain: Vec<CellId> = window
         .iter()
@@ -182,6 +185,7 @@ pub fn place_nodes_region(
         window,
         scratch,
     );
+    nms_count
 }
 
 /// Wall-adjacency over a cell subset, matching collect_wall_adjacent_cells.

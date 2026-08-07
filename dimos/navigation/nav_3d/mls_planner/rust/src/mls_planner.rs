@@ -60,9 +60,23 @@ pub struct Config {
     /// Max traversable vertical step. Taller steps are impassable.
     #[validate(range(min = 0.0))]
     pub step_threshold_m: f32,
+    /// Separate chord-pull step tolerance — raising it creates straighter
+    /// visual paths without altering the cell graph's connectivity.
+    /// Default matches step_threshold_m.
+    #[validate(range(min = 0.0))]
+    pub chord_step_threshold_m: f32,
     /// Soft cost added per meter of vertical climb.
     #[validate(range(min = 0.0))]
     pub step_penalty_weight: f32,
+    /// Chord-pull hard wall clearance. < 0 → use wall_clearance_m.
+    #[validate(range(min = -1.0))]
+    pub chord_wall_clearance_m: f32,
+    /// Chord-pull soft wall buffer weight. < 0 → use wall_buffer_weight.
+    #[validate(range(min = -1.0))]
+    pub chord_wall_buffer_weight: f32,
+    /// Chord-pull climb penalty. < 0 → use step_penalty_weight.
+    #[validate(range(min = -1.0))]
+    pub chord_step_penalty_weight: f32,
     /// Ground-plane distance from goal at which the planner stops replanning.
     #[validate(range(exclusive_min = 0.0))]
     pub goal_tolerance: f32,
@@ -96,6 +110,43 @@ impl Config {
     /// Max traversable vertical step in cells.
     pub fn step_cells(&self) -> i32 {
         (self.step_threshold_m / self.voxel_size).floor() as i32
+    }
+
+    /// Chord-pull step tolerance in cells.  May be looser than step_cells.
+    pub fn chord_step_cells(&self) -> i32 {
+        let t = if self.chord_step_threshold_m <= 0.0 {
+            self.step_threshold_m
+        } else {
+            self.chord_step_threshold_m
+        };
+        (t / self.voxel_size).floor() as i32
+    }
+
+    /// Chord-pull hard wall clearance.  < 0 → falls back to wall_clearance_m.
+    pub fn chord_wall_clearance(&self) -> f32 {
+        if self.chord_wall_clearance_m < 0.0 {
+            self.wall_clearance_m
+        } else {
+            self.chord_wall_clearance_m
+        }
+    }
+
+    /// Chord-pull soft wall buffer weight.  < 0 → falls back to wall_buffer_weight.
+    pub fn chord_buffer_weight(&self) -> f32 {
+        if self.chord_wall_buffer_weight < 0.0 {
+            self.wall_buffer_weight
+        } else {
+            self.chord_wall_buffer_weight
+        }
+    }
+
+    /// Chord-pull climb penalty.  < 0 → falls back to step_penalty_weight.
+    pub fn chord_step_penalty(&self) -> f32 {
+        if self.chord_step_penalty_weight < 0.0 {
+            self.step_penalty_weight
+        } else {
+            self.chord_step_penalty_weight
+        }
     }
 }
 
@@ -242,7 +293,7 @@ impl Planner {
             step,
         );
         let window = self.node_window(&seeds, config);
-        place_nodes_region(
+        self.graph.nms_node_count = place_nodes_region(
             &mut self.graph.cells,
             &self.by_col,
             clearance,
@@ -429,7 +480,7 @@ impl Planner {
     fn rebuild_nodes(&mut self, config: &Config) {
         let clearance = config.headroom_cells();
         let step = config.step_cells();
-        place_nodes(
+        self.graph.nms_node_count = place_nodes(
             &mut self.graph.cells,
             &self.by_col,
             clearance,
@@ -580,6 +631,10 @@ mod region_tests {
             wall_buffer_weight: 1.0,
             step_threshold_m: 0.25,
             step_penalty_weight: 0.0,
+            chord_step_threshold_m: 0.0,
+            chord_wall_clearance_m: -1.0,
+            chord_wall_buffer_weight: -1.0,
+            chord_step_penalty_weight: -1.0,
             goal_tolerance: 0.3,
             viz_publish_hz: 2.0,
         }

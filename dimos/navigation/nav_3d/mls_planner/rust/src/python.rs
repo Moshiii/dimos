@@ -69,6 +69,10 @@ impl MLSPlanner {
         wall_buffer_weight = 100.0,
         step_threshold_m = 0.16,
         step_penalty_weight = 4.0,
+        chord_step_threshold_m = 0.0,
+        chord_wall_clearance_m = -1.0,
+        chord_wall_buffer_weight = -1.0,
+        chord_step_penalty_weight = -1.0,
     ))]
     fn new(
         voxel_size: f32,
@@ -81,6 +85,10 @@ impl MLSPlanner {
         wall_buffer_weight: f32,
         step_threshold_m: f32,
         step_penalty_weight: f32,
+        chord_step_threshold_m: f32,
+        chord_wall_clearance_m: f32,
+        chord_wall_buffer_weight: f32,
+        chord_step_penalty_weight: f32,
     ) -> PyResult<Self> {
         let config = Config {
             world_frame: String::new(),
@@ -94,6 +102,10 @@ impl MLSPlanner {
             wall_buffer_weight,
             step_threshold_m,
             step_penalty_weight,
+            chord_step_threshold_m,
+            chord_wall_clearance_m,
+            chord_wall_buffer_weight,
+            chord_step_penalty_weight,
             // Unused here. Only the binary's replan loop reads goal_tolerance.
             goal_tolerance: 1.0,
             // Unused here. Only the binary's worker publishes viz artifacts.

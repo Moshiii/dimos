@@ -41,6 +41,10 @@ class MLSPlannerNativeConfig(NativeModuleConfig):
     wall_buffer_m: float = 0.75
     wall_buffer_weight: float = 100.0
     step_threshold_m: float = 0.16
+    chord_step_threshold_m: float = 0.0
+    chord_wall_clearance_m: float = -1.0
+    chord_wall_buffer_weight: float = -1.0
+    chord_step_penalty_weight: float = -1.0
     step_penalty_weight: float = 4.0
     goal_tolerance: float = 0.3
     viz_publish_hz: float = 2.0
@@ -63,5 +67,8 @@ class MLSPlannerNative(NativeModule):
 
     path: Out[Path]
     surface_map: Out[PointCloud2]
-    nodes: Out[PointCloud2]
+    danger_cells: Out[PointCloud2]
+    edge_cells: Out[PointCloud2]
+    nodes_nms: Out[PointCloud2]
+    nodes_add: Out[PointCloud2]
     node_edges: Out[LineSegments3D]

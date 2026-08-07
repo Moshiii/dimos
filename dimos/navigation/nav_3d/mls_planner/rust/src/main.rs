@@ -67,7 +67,16 @@ struct MlsPlanner {
     surface_map: Output<PointCloud2>,
 
     #[output(encode = PointCloud2::encode)]
-    nodes: Output<PointCloud2>,
+    danger_cells: Output<PointCloud2>,
+
+    #[output(encode = PointCloud2::encode)]
+    edge_cells: Output<PointCloud2>,
+
+    #[output(encode = PointCloud2::encode)]
+    nodes_nms: Output<PointCloud2>,
+
+    #[output(encode = PointCloud2::encode)]
+    nodes_add: Output<PointCloud2>,
 
     #[output(encode = Path::encode)]
     node_edges: Output<Path>,
@@ -101,7 +110,10 @@ impl MlsPlanner {
             wake: Arc::clone(&self.wake),
             config: self.config.clone(),
             surface_map: self.surface_map.clone(),
-            nodes: self.nodes.clone(),
+            danger_cells: self.danger_cells.clone(),
+            edge_cells: self.edge_cells.clone(),
+            nodes_nms: self.nodes_nms.clone(),
+            nodes_add: self.nodes_add.clone(),
             node_edges: self.node_edges.clone(),
             path: self.path.clone(),
         };
@@ -182,7 +194,10 @@ struct Worker {
     wake: Arc<Notify>,
     config: Config,
     surface_map: Output<PointCloud2>,
-    nodes: Output<PointCloud2>,
+    danger_cells: Output<PointCloud2>,
+    edge_cells: Output<PointCloud2>,
+    nodes_nms: Output<PointCloud2>,
+    nodes_add: Output<PointCloud2>,
     node_edges: Output<Path>,
     path: Output<Path>,
 }
@@ -222,10 +237,13 @@ impl Worker {
             (updated && viz_due).then(|| self.build_graph_messages(planner))
         });
 
-        if let Some((surface, node_cloud, edges)) = messages {
+        if let Some((surface, danger, edges_cloud, nms_cloud, add_cloud, node_edges_path)) = messages {
             publish_cloud(&self.surface_map, &surface).await;
-            publish_cloud(&self.nodes, &node_cloud).await;
-            publish_path(&self.node_edges, &edges).await;
+            publish_cloud(&self.danger_cells, &danger).await;
+            publish_cloud(&self.edge_cells, &edges_cloud).await;
+            publish_cloud(&self.nodes_nms, &nms_cloud).await;
+            publish_cloud(&self.nodes_add, &add_cloud).await;
+            publish_path(&self.node_edges, &node_edges_path).await;
             *last_viz_at = Some(now);
         }
     }
@@ -292,26 +310,40 @@ impl Worker {
         true
     }
 
-    fn build_graph_messages(&self, planner: &Planner) -> (PointCloud2, PointCloud2, Path) {
+    fn build_graph_messages(
+        &self,
+        planner: &Planner,
+    ) -> (PointCloud2, PointCloud2, PointCloud2, PointCloud2, PointCloud2, Path) {
         let voxel_size = self.config.voxel_size;
         let frame = &self.config.world_frame;
         let graph = planner.graph();
+        let danger_threshold = self.config.wall_clearance_m;
 
-        let surface_points: Vec<Xyzi> = planner
-            .surface_clearance()
-            .into_iter()
-            .map(|((ix, iy, iz), clearance)| {
-                let (x, y, z) = surface_point_xyz(ix, iy, iz, voxel_size);
-                (x, y, z, clearance)
-            })
-            .collect();
+        let mut surface_points: Vec<Xyzi> = Vec::new();
+        let mut danger_points: Vec<Xyz> = Vec::new();
+        let mut edge_points: Vec<Xyz> = Vec::new();
+        for ((ix, iy, iz), clearance) in planner.surface_clearance() {
+            let (x, y, z) = surface_point_xyz(ix, iy, iz, voxel_size);
+            if clearance == 0.0 {
+                edge_points.push((x, y, z));
+            } else if clearance < danger_threshold {
+                danger_points.push((x, y, z));
+            } else {
+                surface_points.push((x, y, z, clearance));
+            }
+        }
         let surface = build_pc2_xyzi(&surface_points, frame, now());
+        let danger = build_pc2_xyz(&danger_points, frame, now());
+        let edges_cloud = build_pc2_xyz(&edge_points, frame, now());
 
-        let node_points: Vec<Xyz> = graph.nodes.iter().map(|n| n.pos).collect();
-        let node_cloud = build_pc2_xyz(&node_points, frame, now());
+        let split = graph.nms_node_count.min(graph.nodes.len());
+        let nms_points: Vec<Xyz> = graph.nodes[..split].iter().map(|n| n.pos).collect();
+        let nms_cloud = build_pc2_xyz(&nms_points, frame, now());
+        let add_points: Vec<Xyz> = graph.nodes[split..].iter().map(|n| n.pos).collect();
+        let add_cloud = build_pc2_xyz(&add_points, frame, now());
 
-        let edges = build_segments_path(graph, voxel_size, frame, now());
-        (surface, node_cloud, edges)
+        let node_edges_path = build_segments_path(graph, voxel_size, frame, now());
+        (surface, danger, edges_cloud, nms_cloud, add_cloud, node_edges_path)
     }
 
     /// Gate and publish a replan. The planning itself lives in Planner::plan.

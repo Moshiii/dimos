@@ -909,6 +909,10 @@ mod tests {
             wall_buffer_weight: 4.0,
             step_threshold_m: 0.25,
             step_penalty_weight: 4.0,
+            chord_step_threshold_m: 0.0,
+            chord_wall_clearance_m: -1.0,
+            chord_wall_buffer_weight: -1.0,
+            chord_step_penalty_weight: -1.0,
             goal_tolerance: 0.3,
             viz_publish_hz: 2.0,
         };
@@ -935,6 +939,10 @@ mod tests {
             wall_buffer_weight: 4.0,
             step_threshold_m: 0.25,
             step_penalty_weight: 4.0,
+            chord_step_threshold_m: 0.0,
+            chord_wall_clearance_m: -1.0,
+            chord_wall_buffer_weight: -1.0,
+            chord_step_penalty_weight: -1.0,
             goal_tolerance: 0.3,
             viz_publish_hz: 2.0,
         }
