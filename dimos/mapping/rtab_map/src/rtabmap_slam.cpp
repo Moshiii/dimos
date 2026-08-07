@@ -28,7 +28,10 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <queue>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <opencv2/core/core.hpp>
@@ -52,11 +55,13 @@
 #include <rtabmap/utilite/ULogger.h>
 
 #include "dimos/native.hpp"
+#include "geometry_msgs/TransformStamped.hpp"
 #include "nav_msgs/Odometry.hpp"
 #include "sensor_msgs/CameraInfo.hpp"
 #include "sensor_msgs/Image.hpp"
 #include "sensor_msgs/PointCloud2.hpp"
 #include "sensor_msgs/PointField.hpp"
+#include "tf2_msgs/TFMessage.hpp"
 
 using dimos::native::Builder;
 using dimos::native::Config;
@@ -70,6 +75,9 @@ constexpr std::int64_t kNsPerSec = 1000000000LL;
 constexpr std::int32_t kPointFieldFloat32 = 7;
 /// ~30 s of external odometry at 60 Hz; only poses near the newest frame matter.
 constexpr std::size_t kMaxBufferedPoses = 2000;
+/// Ports are declared statically on both sides, so the number of cameras one
+/// instance can take is fixed at build time rather than by config.
+constexpr std::size_t kMaxCameras = 4;
 
 double stamp_to_sec(const std_msgs::Header& header) {
     return static_cast<double>(header.stamp.sec) +
@@ -82,6 +90,86 @@ cv::Mat borrow_mat(const sensor_msgs::Image& img, int cv_type) {
     return cv::Mat(img.height, img.width, cv_type, const_cast<std::uint8_t*>(img.data.data()),
                    static_cast<std::size_t>(img.step));
 }
+
+/// The latest transform per edge, and a walk between any two frames.
+///
+/// Deliberately not a full tf2 buffer: there is no history and no interpolation,
+/// because the only thing asked of it is where the cameras are bolted. That is a
+/// mount, fixed for the run, and reading the newest edge is both enough and what
+/// keeps this a few dozen lines instead of a reimplementation of tf2.
+class TfTree {
+public:
+    void update(const tf2_msgs::TFMessage& msg) {
+        for (const geometry_msgs::TransformStamped& stamped : msg.transforms) {
+            edges_[stamped.header.frame_id][stamped.child_frame_id] = to_transform(stamped);
+        }
+    }
+
+    /// ``from`` -> ``to``: the pose of ``to`` expressed in ``from``, which for a
+    /// camera's optical frame is exactly rtabmap's localTransform.
+    ///
+    /// Breadth-first, and edges traverse both ways -- a chain like
+    /// base_link -> camera_link -> ..._optical_frame is published parent-to-child,
+    /// but a camera under a different parent still has to be reachable.
+    std::optional<rtabmap::Transform> lookup(const std::string& from,
+                                             const std::string& to) const {
+        if (from == to) {
+            return rtabmap::Transform::getIdentity();
+        }
+        std::queue<std::pair<std::string, rtabmap::Transform>> pending;
+        std::set<std::string> visited{from};
+        pending.emplace(from, rtabmap::Transform::getIdentity());
+
+        while (!pending.empty()) {
+            const auto [frame, accumulated] = pending.front();
+            pending.pop();
+            for (const auto& [neighbour, edge] : neighbours(frame)) {
+                if (!visited.insert(neighbour).second) {
+                    continue;
+                }
+                const rtabmap::Transform composed = accumulated * edge;
+                if (neighbour == to) {
+                    return composed;
+                }
+                pending.emplace(neighbour, composed);
+            }
+        }
+        return std::nullopt;
+    }
+
+private:
+    static rtabmap::Transform to_transform(const geometry_msgs::TransformStamped& stamped) {
+        return rtabmap::Transform(static_cast<float>(stamped.transform.translation.x),
+                                  static_cast<float>(stamped.transform.translation.y),
+                                  static_cast<float>(stamped.transform.translation.z),
+                                  static_cast<float>(stamped.transform.rotation.x),
+                                  static_cast<float>(stamped.transform.rotation.y),
+                                  static_cast<float>(stamped.transform.rotation.z),
+                                  static_cast<float>(stamped.transform.rotation.w));
+    }
+
+    /// Every frame one hop away, each with the transform into it. A parent edge is
+    /// the stored one; a child edge is its inverse.
+    std::vector<std::pair<std::string, rtabmap::Transform>> neighbours(
+        const std::string& frame) const {
+        std::vector<std::pair<std::string, rtabmap::Transform>> out;
+        const auto children = edges_.find(frame);
+        if (children != edges_.end()) {
+            for (const auto& [child, transform] : children->second) {
+                out.emplace_back(child, transform);
+            }
+        }
+        for (const auto& [parent, its_children] : edges_) {
+            const auto edge = its_children.find(frame);
+            if (edge != its_children.end()) {
+                out.emplace_back(parent, edge->second.inverse());
+            }
+        }
+        return out;
+    }
+
+    std::map<std::string, std::map<std::string, rtabmap::Transform>> edges_;
+};
 
 }  // namespace
 
@@ -169,7 +257,21 @@ struct RtabmapConfig {
     std::string map_frame;
     std::string odom_frame;
     std::string base_frame;
-    /// Colour and depth further apart than this are not the same instant.
+    /// One tf frame per camera: the optical frame its images and camera_info are
+    /// stamped in, in the order the ports are numbered (camera 1 is the unsuffixed
+    /// color_image/depth_image/camera_info, camera 2 is *_2, and so on).
+    ///
+    /// Placement is not written down here, only the name -- base_frame -> this frame
+    /// is read off the tf stream, and that transform *is* rtabmap's per-camera
+    /// localTransform. So three cameras facing three directions need three frames
+    /// that a URDF or StaticTfPublisher already places, and nothing about the rig is
+    /// duplicated in this config.
+    ///
+    /// Empty, or a single frame, is the one-camera rig. Multi-camera is rgbd only:
+    /// stereo_ir and mono describe one rig by construction.
+    std::vector<std::string> camera_frames;
+    /// Colour and depth further apart than this are not the same instant. With
+    /// several cameras it also bounds how far each camera may be from camera 1.
     double max_pair_skew_s;
     // Owned by the python half, which turns the pose streams into tf. It crosses the
     // boundary because config for one module lives in one struct; nothing below
@@ -182,13 +284,37 @@ struct RtabmapConfig {
 
     bool stereo() const { return input_mode == "stereo_ir"; }
     bool mono() const { return input_mode == "mono"; }
+    bool rgbd() const { return input_mode == "rgbd"; }
     /// mono has no odometry to correct, so its only job is loop closure.
     bool loop_closure() const { return enable_loop_closure || mono(); }
+    /// Cameras feeding one rtabmap. Every rig has at least one, named or not.
+    std::size_t camera_count() const { return std::max<std::size_t>(camera_frames.size(), 1); }
+    /// Whether placement has to be read off tf. One camera with no frame named is the
+    /// body origin, which needs no lookup and no tf traffic at all.
+    bool uses_tf() const { return !camera_frames.empty(); }
 
     void validate() const {
         if (input_mode != "rgbd" && input_mode != "stereo_ir" && input_mode != "mono") {
             throw std::runtime_error("input_mode must be 'rgbd', 'stereo_ir' or 'mono', got '" +
                                      input_mode + "'");
+        }
+        if (camera_frames.size() > kMaxCameras) {
+            throw std::runtime_error("camera_frames names " + std::to_string(camera_frames.size()) +
+                                     " cameras; this module declares ports for " +
+                                     std::to_string(kMaxCameras));
+        }
+        for (const std::string& frame : camera_frames) {
+            if (frame.empty()) {
+                throw std::runtime_error(
+                    "camera_frames contains an empty frame name; every camera needs the tf "
+                    "frame its images are stamped in, because that is what places it");
+            }
+        }
+        if (camera_count() > 1 && !rgbd()) {
+            throw std::runtime_error(
+                "multi-camera is rgbd only: input_mode='" + input_mode +
+                "' describes a single rig, so naming " + std::to_string(camera_count()) +
+                " cameras has no meaning");
         }
         if (stereo()) {
             // Unset (0) is the common case rather than a typo: the distance is
@@ -250,6 +376,28 @@ public:
             }
         }
 
+        // Cameras 2..N. Their ports are only subscribed when named, so a
+        // single-camera blueprint leaves them unwired and pays nothing for them.
+        extras_.resize(cfg_.camera_count() - 1);
+        for (std::size_t i = 0; i < extras_.size(); ++i) {
+            const std::string suffix = "_" + std::to_string(i + 2);
+            builder.input<sensor_msgs::CameraInfo>(
+                "camera_info" + suffix, dimos::native::lcm_decode<sensor_msgs::CameraInfo>,
+                [this, i](sensor_msgs::CameraInfo info) { on_extra_info(i, info); });
+            builder.input<sensor_msgs::Image>(
+                "color_image" + suffix, dimos::native::lcm_decode<sensor_msgs::Image>,
+                [this, i](sensor_msgs::Image img) { on_extra_color(i, img); });
+            builder.input<sensor_msgs::Image>(
+                "depth_image" + suffix, dimos::native::lcm_decode<sensor_msgs::Image>,
+                [this, i](sensor_msgs::Image img) { on_extra_depth(i, img); });
+        }
+
+        // Only for placing cameras. With none named there is nothing to look up, so
+        // the port stays unsubscribed rather than decoding tf nobody reads.
+        if (cfg_.uses_tf()) {
+            builder.input<tf2_msgs::TFMessage>("tf", &RtabmapSlam::on_tf, this);
+        }
+
         if (cfg_.use_external_odometry) {
             builder.input<nav_msgs::Odometry>("external_odometry",
                                               &RtabmapSlam::on_external_odometry, this);
@@ -295,6 +443,43 @@ private:
         cx_ = info.K[2];
         cy_ = info.K[5];
         have_info_ = fx_ > 0.0 && fy_ > 0.0;
+    }
+
+    /// Camera 2..N, indexed from 0 over the extras. Same rule as camera 1: the rig
+    /// is read once and then fixed, because rtabmap is initialized against it.
+    void on_extra_info(std::size_t index, const sensor_msgs::CameraInfo& info) {
+        if (initialized_) {
+            return;
+        }
+        ExtraCamera& camera = extras_[index];
+        camera.width = info.width;
+        camera.height = info.height;
+        camera.fx = info.K[0];
+        camera.fy = info.K[4];
+        camera.cx = info.K[2];
+        camera.cy = info.K[5];
+        camera.have_info = camera.fx > 0.0 && camera.fy > 0.0;
+    }
+
+    void on_extra_color(std::size_t index, const sensor_msgs::Image& img) {
+        extras_[index].color = img;
+        extras_[index].have_color = true;
+        try_process();
+    }
+
+    void on_extra_depth(std::size_t index, const sensor_msgs::Image& img) {
+        extras_[index].depth = img;
+        extras_[index].have_depth = true;
+        try_process();
+    }
+
+    /// tf is read for one purpose: where each camera is bolted. The lookups happen
+    /// once, in ensure_initialized, so this only keeps the tree current until then.
+    void on_tf(const tf2_msgs::TFMessage& msg) {
+        if (initialized_) {
+            return;
+        }
+        tf_.update(msg);
     }
 
     /// Somebody else's odometry, buffered until a frame with a matching stamp shows
@@ -452,8 +637,55 @@ private:
         if (!have_info_ && !cfg_.mono()) {
             return;
         }
-        model_ = rtabmap::CameraModel(fx_, fy_, cx_, cy_, rtabmap::CameraModel::opticalRotation(),
-                                      0.0, cv::Size(width_, height_));
+        for (const ExtraCamera& camera : extras_) {
+            if (!camera.have_info) {
+                DIMOS_LOG_THROTTLED(logging::Level::Info, logging::from_secs(5),
+                                    "waiting for camera_info from every camera",
+                                    logging::Field("cameras",
+                                                   static_cast<std::int64_t>(cfg_.camera_count())));
+                return;
+            }
+        }
+        // Placement before geometry: with the frames named but not yet on tf there is
+        // nothing to build the models against, and guessing identity would silently
+        // stack every camera on the body origin.
+        std::vector<rtabmap::Transform> placements;
+        if (cfg_.uses_tf()) {
+            for (const std::string& frame : cfg_.camera_frames) {
+                const std::optional<rtabmap::Transform> placement =
+                    tf_.lookup(cfg_.base_frame, frame);
+                if (!placement.has_value()) {
+                    DIMOS_LOG_THROTTLED(logging::Level::Info, logging::from_secs(5),
+                                        "waiting for tf to place a camera",
+                                        logging::Field("base_frame", cfg_.base_frame),
+                                        logging::Field("camera_frame", frame));
+                    return;
+                }
+                placements.push_back(*placement);
+            }
+        } else {
+            // No frame named: one camera *is* the body, which is the convention the
+            // single-camera blueprints were written against.
+            placements.push_back(rtabmap::CameraModel::opticalRotation());
+        }
+
+        model_ = rtabmap::CameraModel(fx_, fy_, cx_, cy_, placements.front(), 0.0,
+                                      cv::Size(width_, height_));
+        // One model per camera, each carrying its own placement. This vector is what
+        // makes the concatenated image a multi-camera rig to rtabmap rather than one
+        // very wide camera.
+        models_.clear();
+        models_.push_back(model_);
+        for (std::size_t i = 0; i < extras_.size(); ++i) {
+            const ExtraCamera& camera = extras_[i];
+            models_.emplace_back(camera.fx, camera.fy, camera.cx, camera.cy, placements[i + 1], 0.0,
+                                 cv::Size(camera.width, camera.height));
+        }
+        if (models_.size() > 1) {
+            logging::info("multi-camera rig",
+                          {logging::Field("cameras", static_cast<std::int64_t>(models_.size())),
+                           logging::Field("base_frame", cfg_.base_frame)});
+        }
         if (cfg_.stereo()) {
             // The infrared pair leaves the D4xx already rectified, which is what lets
             // one pinhole model plus the distance between the imagers describe the rig.
@@ -536,6 +768,73 @@ private:
                                       static_cast<std::int64_t>(cfg_.odom_strategy))});
     }
 
+    /// Whether every other camera holds a colour+depth pair taken at the same instant
+    /// as camera 1's. A camera that has fallen behind is left alone: its next frame
+    /// may still pair, and dropping camera 1 instead would stall the whole rig.
+    bool extras_ready(double t_primary) {
+        for (const ExtraCamera& camera : extras_) {
+            if (!camera.have_color || !camera.have_depth) {
+                return false;
+            }
+            const double t_color = stamp_to_sec(camera.color.header);
+            const double t_depth = stamp_to_sec(camera.depth.header);
+            if (std::fabs(t_color - t_primary) > cfg_.max_pair_skew_s ||
+                std::fabs(t_depth - t_primary) > cfg_.max_pair_skew_s) {
+                DIMOS_LOG_THROTTLED(logging::Level::Warn, logging::from_secs(5),
+                                    "a camera is not on the same instant as camera 1",
+                                    logging::Field("skew_s", t_color - t_primary),
+                                    logging::Field("max_pair_skew_s", cfg_.max_pair_skew_s));
+                return false;
+            }
+            // Side-by-side only works if the strips are the same height.
+            if (camera.color.height != primary_.height ||
+                camera.depth.height != secondary_.height) {
+                DIMOS_ERROR_THROTTLED(
+                    logging::from_secs(5), "cameras of differing height cannot share one rig image",
+                    logging::Field("camera_1_height", static_cast<std::int64_t>(primary_.height)),
+                    logging::Field("other_height", static_cast<std::int64_t>(camera.color.height)));
+                clear_extras();
+                have_primary_ = have_secondary_ = false;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Camera 1 then the rest, left to right, in the order the models were built.
+    cv::Mat concat_color() const {
+        std::vector<cv::Mat> strips;
+        cv::Mat bgr;
+        cv::cvtColor(borrow_mat(primary_, CV_8UC3), bgr, cv::COLOR_RGB2BGR);
+        strips.push_back(bgr);
+        for (const ExtraCamera& camera : extras_) {
+            cv::Mat other;
+            cv::cvtColor(borrow_mat(camera.color, CV_8UC3), other, cv::COLOR_RGB2BGR);
+            strips.push_back(other);
+        }
+        cv::Mat joined;
+        cv::hconcat(strips, joined);
+        return joined;
+    }
+
+    cv::Mat concat_depth() const {
+        std::vector<cv::Mat> strips{borrow_mat(secondary_, CV_16UC1)};
+        for (const ExtraCamera& camera : extras_) {
+            strips.push_back(borrow_mat(camera.depth, CV_16UC1));
+        }
+        // hconcat allocates its output, so the result owns its pixels even though
+        // every input was borrowed from a message.
+        cv::Mat joined;
+        cv::hconcat(strips, joined);
+        return joined;
+    }
+
+    void clear_extras() {
+        for (ExtraCamera& camera : extras_) {
+            camera.have_color = camera.have_depth = false;
+        }
+    }
+
     void try_process() {
         if (!have_primary_ || !have_secondary_) {
             return;
@@ -563,6 +862,11 @@ private:
             have_primary_ = have_secondary_ = false;
             return;
         }
+        // Every camera has to have landed on the same instant, or the rig would be
+        // reconstructed from frames taken while it was somewhere else.
+        if (!extras_ready(t_primary)) {
+            return;
+        }
 
         // Every Mat handed to rtabmap is freshly allocated and never touched again.
         // cv::Mat assignment is a shallow, non-owning share when it was built over
@@ -577,7 +881,7 @@ private:
                                 borrow_mat(secondary_, CV_8UC1).clone(), stereo_model_);
             data.setId(++seq_);
             data.setStamp(t_primary);
-        } else {
+        } else if (extras_.empty()) {
             // rtabmap reads colour as BGR, both for the greyscale it tracks on and
             // for the colours it would put on points. cvtColor allocates its output,
             // so this is already a fresh buffer.
@@ -585,8 +889,14 @@ private:
             cv::cvtColor(borrow_mat(primary_, CV_8UC3), bgr, cv::COLOR_RGB2BGR);
             data = rtabmap::SensorData(bgr, borrow_mat(secondary_, CV_16UC1).clone(), model_,
                                        ++seq_, t_primary);
+        } else {
+            // How rtabmap takes a multi-camera rig: the images sit side by side in one
+            // Mat and the model vector says where each one was taken from. hconcat
+            // allocates, so both are fresh buffers.
+            data = rtabmap::SensorData(concat_color(), concat_depth(), models_, ++seq_, t_primary);
         }
 
+        clear_extras();
         have_primary_ = have_secondary_ = false;
         last_stamp_ = t_primary;
         have_last_stamp_ = true;
@@ -833,6 +1143,20 @@ private:
     bool have_primary_{false}, have_secondary_{false};
     double last_stamp_{0.0};
     bool have_last_stamp_{false};
+
+    /// Cameras 2..N. Camera 1 stays on primary_/secondary_ above, because the stereo
+    /// and mono modes are single-rig and read it directly.
+    struct ExtraCamera {
+        sensor_msgs::Image color{}, depth{};
+        bool have_color{false}, have_depth{false};
+        bool have_info{false};
+        std::int32_t width{0}, height{0};
+        double fx{0.0}, fy{0.0}, cx{0.0}, cy{0.0};
+    };
+    std::vector<ExtraCamera> extras_;
+    /// One per camera, camera 1 first. Only read when there is more than one.
+    std::vector<rtabmap::CameraModel> models_;
+    TfTree tf_;
 
     std::map<double, rtabmap::Transform> external_poses_;
     std::uint64_t external_poses_received_{0};

@@ -25,7 +25,7 @@ from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
-from dimos.core.stream import In, Out
+from dimos.core.stream import IO, In, Out
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -34,6 +34,7 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.pubsub.patterns import Glob
 
 if TYPE_CHECKING:
@@ -170,6 +171,20 @@ class RtabmapConfig(NativeModuleConfig):
     map_frame: str = "map"
     odom_frame: str = "odom"
     base_frame: str = "base_link"
+    # One tf frame per camera: the optical frame that camera's images and camera_info
+    # are stamped in, ordered to match the ports (camera 1 is the unsuffixed
+    # color_image/depth_image/camera_info, camera 2 is ``*_2``, up to 4).
+    #
+    # Only the names live here. ``base_frame`` -> each of them is read off the ``tf``
+    # stream, and that transform is exactly what RTAB-Map wants as the camera's
+    # localTransform -- so three cameras facing three directions are described by
+    # whatever already publishes their frames (a URDF, a StaticTfPublisher), and the
+    # geometry is not written down twice. Mapping waits, saying so, until tf can place
+    # every camera.
+    #
+    # Empty is the single camera at the body origin. Naming several is rgbd only:
+    # stereo_ir and mono are one rig by construction.
+    camera_frames: list[str] = Field(default_factory=list)
     # Only meaningful before the graph has moved: until then map->odom is identity.
     # Turn it off whenever something else in the graph owns that edge -- two
     # publishers of one tf edge fight.
@@ -226,6 +241,17 @@ class RtabmapSlam(NativeModule):
     # rgbd mode reads this pair...
     color_image: In[Image]
     depth_image: In[Image]
+    # Cameras 2..4, subscribed only as far as ``camera_frames`` names them. Ports have
+    # to be declared statically, which is what fixes the ceiling at four.
+    camera_info_2: In[CameraInfo]
+    color_image_2: In[Image]
+    depth_image_2: In[Image]
+    camera_info_3: In[CameraInfo]
+    color_image_3: In[Image]
+    depth_image_3: In[Image]
+    camera_info_4: In[CameraInfo]
+    color_image_4: In[Image]
+    depth_image_4: In[Image]
     # ...and stereo_ir mode reads this one. Only the active pair is subscribed by
     # the native process, so the other may be left unwired.
     image_left: In[Image]
@@ -238,6 +264,9 @@ class RtabmapSlam(NativeModule):
     corrected_odometry: Out[Odometry]
     map_tf: Out[Odometry]
     cloud_map: Out[PointCloud2]
+    # Written from here (odom->base_link, map->odom) and read by the native half,
+    # which places each camera of a multi-camera rig off the tree.
+    tf: IO[TFMessage]
 
     @rpc
     def start(self) -> None:
@@ -271,10 +300,14 @@ class RtabmapSlam(NativeModule):
         # provider owns odom->base_link. Two publishers of one tf edge fight.
         if self.config.use_external_odometry:
             return
-        self.tf.publish(self._transform(message, self.config.odom_frame, self.config.base_frame))
+        self.tf.publish(
+            TFMessage(self._transform(message, self.config.odom_frame, self.config.base_frame))
+        )
 
     def _on_map_tf(self, message: Odometry) -> None:
         """The pose graph's correction, map->odom. Identity until the graph moves."""
         if not self.config.publish_map_to_odom:
             return
-        self.tf.publish(self._transform(message, self.config.map_frame, self.config.odom_frame))
+        self.tf.publish(
+            TFMessage(self._transform(message, self.config.map_frame, self.config.odom_frame))
+        )

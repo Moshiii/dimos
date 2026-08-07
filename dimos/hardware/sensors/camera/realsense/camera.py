@@ -42,6 +42,7 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.spec import perception
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import backpressure
@@ -108,6 +109,7 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
     depth_camera_info: Out[CameraInfo]
     infrared_left_camera_info: Out[CameraInfo]
     infrared_right_camera_info: Out[CameraInfo]
+    tf: Out[TFMessage]
 
     @property
     def _camera_link(self) -> str:
@@ -793,7 +795,7 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
                     ts=ts,
                 )
             )
-        self.tf.publish(*transforms)
+        self.tf.publish(TFMessage(*transforms))
 
     def _generate_pointcloud(self) -> None:
         """Generate and publish pointcloud from latest images (called by rx.interval)."""

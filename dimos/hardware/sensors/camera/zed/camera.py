@@ -41,6 +41,7 @@ from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.spec import perception
 from dimos.utils.reactive import backpressure
 
@@ -90,6 +91,7 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
     # external_odometry, for one -- cannot subscribe to a transform inside a
     # TFMessage. Published only while tracking is enabled and reporting OK.
     odometry: Out[Odometry]
+    tf: Out[TFMessage]
 
     @property
     def _camera_link(self) -> str:
@@ -441,7 +443,7 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
                 )
             )
 
-        self.tf.publish(*transforms)
+        self.tf.publish(TFMessage(*transforms))
 
     def _generate_pointcloud(self) -> None:
         with self._pointcloud_lock:
