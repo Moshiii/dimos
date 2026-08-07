@@ -63,6 +63,7 @@ all_blueprints = {
     "demo-osm": "dimos.mapping.osm.demo_osm:demo_osm",
     "demo-rtabmap": "dimos.mapping.rtab_map.demo_rtabmap:demo_rtabmap",
     "demo-rtabmap-stereo": "dimos.mapping.rtab_map.demo_rtabmap:demo_rtabmap_stereo",
+    "demo-rtabmap-zed": "dimos.mapping.rtab_map.demo_rtabmap_zed:demo_rtabmap_zed",
     "demo-skill": "dimos.agents.skills.demo_skill:demo_skill",
     "demo-virtual-mid360-fastlio": "dimos.hardware.sensors.lidar.virtual_mid360.blueprints:demo_virtual_mid360_fastlio",
     "demo-virtual-mid360-pointlio": "dimos.hardware.sensors.lidar.virtual_mid360.blueprints:demo_virtual_mid360_pointlio",

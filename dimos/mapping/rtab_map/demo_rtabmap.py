@@ -32,6 +32,7 @@ from __future__ import annotations
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
+from dimos.mapping.odometry_path import OdometryPath
 from dimos.mapping.rtab_map.rtabmap import RERUN_CONFIG, RtabmapSlam
 from dimos.visualization.vis_module import vis_module
 
@@ -60,6 +61,9 @@ demo_rtabmap = autoconnect(
         base_transform=None,
     ),
     RtabmapSlam.blueprint(input_mode="rgbd"),
+    # RTAB-Map publishes where the camera is now; this keeps the history so
+    # the viewer can draw where it has been.
+    OdometryPath.blueprint(),
     vis_module(global_config.viewer, rerun_config=RERUN_CONFIG),
 ).global_config(n_workers=4)
 
@@ -80,6 +84,9 @@ demo_rtabmap_stereo = (
             base_transform=None,
         ),
         RtabmapSlam.blueprint(input_mode="stereo_ir", baseline_m=IR_BASELINE_M),
+        # RTAB-Map publishes where the camera is now; this keeps the history so
+        # the viewer can draw where it has been.
+        OdometryPath.blueprint(),
         vis_module(global_config.viewer, rerun_config=RERUN_CONFIG),
     )
     .remappings(

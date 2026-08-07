@@ -33,9 +33,11 @@ from dimos.hardware.sensors.camera.spec import (
     DepthCameraConfig,
     DepthCameraHardware,
 )
+from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -85,6 +87,11 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
     camera_info: Out[CameraInfo]
     depth_camera_info: Out[CameraInfo]
     tf: Out[TFMessage]
+    # The SDK's positional tracking pose, as the standard odometry type rather than
+    # only a tf edge. Consumers that take odometry as a stream -- RtabmapSlam's
+    # external_odometry, for one -- cannot subscribe to a transform inside a
+    # TFMessage. Published only while tracking is enabled and reporting OK.
+    odometry: Out[Odometry]
 
     @property
     def _camera_link(self) -> str:
@@ -424,6 +431,17 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
         tracking_tf = self._tracking_transform(ts)
         if tracking_tf is not None:
             transforms.append(tracking_tf)
+            self.odometry.publish(
+                Odometry(
+                    ts=ts,
+                    frame_id=tracking_tf.frame_id,
+                    child_frame_id=tracking_tf.child_frame_id,
+                    pose=Pose(
+                        position=tracking_tf.translation,
+                        orientation=tracking_tf.rotation,
+                    ),
+                )
+            )
 
         self.tf.publish(TFMessage(*transforms))
 

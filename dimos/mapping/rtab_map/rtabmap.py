@@ -26,12 +26,10 @@ from reactivex.disposable import Disposable
 from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
-from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -40,18 +38,19 @@ from dimos.protocol.pubsub.patterns import Glob
 
 MODULE_DIR = FilePath(__file__).resolve().parent
 
+# The trail comes from OdometryPath, whose output stream is ``path``.
+#
 # Path.to_rerun() lifts the line 0.5 m by default, which suits a ground robot whose path
-# would otherwise z-fight with the floor costmap. These paths are the camera's own
-# trajectory and have to sit where the camera actually went, or they float above the
-# cloud_map they are meant to line up with. Pass as ``vis_module(..., rerun_config=...)``.
+# would otherwise z-fight with a floor costmap. This trail is the camera's own
+# trajectory and has to sit where the camera actually went, or it floats above the
+# cloud_map it is meant to line up with. Pass as ``vis_module(..., rerun_config=...)``.
 #
 # Glob rather than a plain string: the bridge matches a str pattern by exact equality
 # against the whole entity path, so a remapped or namespaced topic would miss silently
-# and the only symptom would be a path floating half a metre off.
+# and the only symptom would be a trail floating half a metre off.
 RERUN_CONFIG: dict[str, object] = {
     "visual_override": {
-        Glob("**odom_path"): lambda path: path.to_rerun(z_offset=0.0, color=(0, 255, 128)),
-        Glob("**map_path"): lambda path: path.to_rerun(z_offset=0.0, color=(255, 160, 0)),
+        Glob("**path"): lambda path: path.to_rerun(z_offset=0.0, color=(0, 255, 128)),
     }
 }
 
@@ -77,6 +76,21 @@ class RtabmapConfig(NativeModuleConfig):
     # no map->odom. The cheapest configuration, and the one to use when something else
     # owns the map. Ignored in mono mode, which *is* the loop closure detector.
     enable_loop_closure: bool = True
+    # Take the pose from the ``external_odometry`` stream instead of running RTAB-Map's
+    # own visual odometry. The split rtabmap_ros uses: somebody else owns
+    # odom->base_link, and RTAB-Map contributes only the graph and the map->odom
+    # correction. Any Odometry publisher works -- a ZED's SDK pose, FastLIO2, cuVSLAM,
+    # wheel odometry.
+    #
+    # It is also the only way to get a rolling-shutter-compensated pose, because
+    # RTAB-Map's own odometry cannot compensate: it has one timestamp per frame and no
+    # per-row model. A ZED's SDK has both, so it can hand over a corrected pose that
+    # this module then maps around.
+    use_external_odometry: bool = False
+    # How far an external pose may sit from a frame's stamp and still be used for it.
+    # Both must share a clock. Frames with nothing close enough are dropped rather than
+    # mapped against a stale pose.
+    external_odometry_timeout_s: float = 0.1
     # Report mean/worst processing time this often, so a run states the rate it could
     # sustain rather than the rate it happened to be fed. 0 disables.
     timing_report_period_s: float = 10.0
@@ -154,12 +168,6 @@ class RtabmapConfig(NativeModuleConfig):
     # stamps may be and still be treated as one instant.
     max_pair_skew_s: float = 0.02
 
-    # Trajectory rendering. Poses are appended by distance rather than per frame,
-    # so a stationary robot does not spend the whole budget standing still.
-    path_max_poses: int = 5000
-    path_publish_period_s: float = 0.5
-    path_min_step_m: float = 0.02
-
     # Raw RTAB-Map parameters, applied last. The escape hatch for the ~600
     # parameters that are not worth a config field each.
     extra_parameters: dict[str, str] = Field(default_factory=dict)
@@ -181,9 +189,11 @@ class RtabmapSlam(NativeModule):
     published rather than accumulated frame by frame, so a loop closure visibly
     pulls the map back together instead of leaving two copies of the same wall.
 
-    ``odom_path`` and ``map_path`` are the two trajectories as ``nav_msgs/Path``,
-    which is what renders as a line in Rerun; the ``Odometry`` streams render only
-    as the current pose.
+    Neither pose stream draws a trail on its own -- a viewer renders ``Odometry`` as
+    the current pose and nothing more. Pair this with ``OdometryPath`` to accumulate
+    ``odometry`` into a ``nav_msgs/Path``, which is what renders as a line. Feed it the
+    continuous ``odometry`` rather than ``corrected_odometry`` and let the ``map`` ->
+    ``odom`` edge carry the correction, or the trail jumps at every loop closure.
 
     The pose is the *colour camera's*, since RTAB-Map is given the camera's optical
     frame as the body origin. On a robot whose camera is not at the body origin,
@@ -201,34 +211,24 @@ class RtabmapSlam(NativeModule):
     # the native process, so the other may be left unwired.
     image_left: In[Image]
     image_right: In[Image]
+    # Only subscribed when use_external_odometry is set; otherwise RTAB-Map computes
+    # its own and this may be left unwired.
+    external_odometry: In[Odometry]
 
     odometry: Out[Odometry]
     corrected_odometry: Out[Odometry]
     map_tf: Out[Odometry]
     cloud_map: Out[PointCloud2]
     tf: Out[TFMessage]
-    odom_path: Out[Path]
-    map_path: Out[Path]
 
     @rpc
     def start(self) -> None:
         super().start()
-        self._odom_poses: list[PoseStamped] = []
-        self._map_poses: list[PoseStamped] = []
-        self._odom_last_publish = 0.0
-        self._map_last_publish = 0.0
         self.register_disposable(
             Disposable(self.odometry.transport.subscribe(self._on_odometry, self.odometry))
         )
         self.register_disposable(
             Disposable(self.map_tf.transport.subscribe(self._on_map_tf, self.map_tf))
-        )
-        self.register_disposable(
-            Disposable(
-                self.corrected_odometry.transport.subscribe(
-                    self._on_corrected_odometry, self.corrected_odometry
-                )
-            )
         )
 
     @staticmethod
@@ -249,13 +249,13 @@ class RtabmapSlam(NativeModule):
         )
 
     def _on_odometry(self, message: Odometry) -> None:
+        # With external odometry the native half publishes nothing here, and its
+        # provider owns odom->base_link. Two publishers of one tf edge fight.
+        if self.config.use_external_odometry:
+            return
         self.tf.publish(
             TFMessage(self._transform(message, self.config.odom_frame, self.config.base_frame))
         )
-        if self._append(self._odom_poses, message, self.config.odom_frame):
-            self._odom_last_publish = self._maybe_publish(
-                self.odom_path, self._odom_poses, self.config.odom_frame, self._odom_last_publish
-            )
 
     def _on_map_tf(self, message: Odometry) -> None:
         """The pose graph's correction, map->odom. Identity until the graph moves."""
@@ -264,42 +264,3 @@ class RtabmapSlam(NativeModule):
         self.tf.publish(
             TFMessage(self._transform(message, self.config.map_frame, self.config.odom_frame))
         )
-
-    def _on_corrected_odometry(self, message: Odometry) -> None:
-        if self._append(self._map_poses, message, self.config.map_frame):
-            self._map_last_publish = self._maybe_publish(
-                self.map_path, self._map_poses, self.config.map_frame, self._map_last_publish
-            )
-
-    def _append(self, poses: list[PoseStamped], message: Odometry, frame_id: str) -> bool:
-        """Append only once the pose has actually moved, and cap the history."""
-        position = message.pose.position
-        if poses:
-            previous = poses[-1].position
-            step = (
-                (position.x - previous.x) ** 2
-                + (position.y - previous.y) ** 2
-                + (position.z - previous.z) ** 2
-            ) ** 0.5
-            if step < self.config.path_min_step_m:
-                return False
-        poses.append(
-            PoseStamped(
-                ts=message.ts or time.time(),
-                frame_id=frame_id,
-                position=position,
-                orientation=message.pose.orientation,
-            )
-        )
-        if len(poses) > self.config.path_max_poses:
-            del poses[0 : len(poses) - self.config.path_max_poses]
-        return True
-
-    def _maybe_publish(
-        self, stream: Out[Path], poses: list[PoseStamped], frame_id: str, last_publish: float
-    ) -> float:
-        now = time.time()
-        if now - last_publish < self.config.path_publish_period_s:
-            return last_publish
-        stream.publish(Path(ts=now, frame_id=frame_id, poses=list(poses)))
-        return now

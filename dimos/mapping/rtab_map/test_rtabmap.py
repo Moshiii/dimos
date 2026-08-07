@@ -41,7 +41,6 @@ import pytest
 from dimos.core.native_module import NativeModule
 from dimos.mapping.rtab_map.rtabmap import RERUN_CONFIG, RtabmapConfig, RtabmapSlam
 from dimos.msgs.nav_msgs.Odometry import Odometry
-from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -71,8 +70,6 @@ def test_declares_the_expected_streams() -> None:
         "map_tf": Odometry,
         "cloud_map": PointCloud2,
         "tf": TFMessage,
-        "odom_path": Path,
-        "map_path": Path,
     }
     for name, payload in expected.items():
         assert name in annotations, f"stream {name} disappeared"
@@ -131,7 +128,7 @@ def test_rerun_path_overrides_match_their_entity_paths() -> None:
 
     matched = {
         entity: [pattern for pattern in overrides if pattern_matches(pattern, entity)]
-        for entity in ("world/odom_path", "world/map_path", "world/d435if/odom_path")
+        for entity in ("world/path", "world/d435if/path")
     }
     for entity, patterns in matched.items():
         assert len(patterns) == 1, f"{entity} matched {len(patterns)} overrides, expected 1"

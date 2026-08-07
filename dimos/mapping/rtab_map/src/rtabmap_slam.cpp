@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,6 +68,8 @@ namespace {
 
 constexpr std::int64_t kNsPerSec = 1000000000LL;
 constexpr std::int32_t kPointFieldFloat32 = 7;
+/// ~30 s of external odometry at 60 Hz; only poses near the newest frame matter.
+constexpr std::size_t kMaxBufferedPoses = 2000;
 
 double stamp_to_sec(const std_msgs::Header& header) {
     return static_cast<double>(header.stamp.sec) +
@@ -95,6 +98,20 @@ struct RtabmapConfig {
     /// map, no map->odom correction. rgbd and stereo_ir only -- mono *is* the loop
     /// closure detector, so turning it off there would leave nothing to run.
     bool enable_loop_closure;
+    /// Take the odometry pose from the external_odometry stream instead of running
+    /// rtabmap's own visual odometry. This is the split rtabmap_ros uses: somebody
+    /// else owns odom->base_link, and rtabmap contributes only the graph and the
+    /// map->odom correction on top.
+    ///
+    /// It is also the only way to get a pose that accounts for a rolling shutter,
+    /// since rtabmap's own odometry cannot: a ZED's SDK, which has the per-row
+    /// timing and the IMU, can hand over a compensated pose that this module then
+    /// builds a map around.
+    bool use_external_odometry;
+    /// How far an external pose may be from a frame's stamp and still be used for
+    /// it. Both must be on the same clock. Frames with nothing close enough are
+    /// dropped rather than mapped against a stale pose.
+    double external_odometry_timeout_s;
     /// Log processing time (mean and worst) every this many seconds, so a run
     /// reports the rate it could sustain rather than the rate it was fed at. 0 is off.
     double timing_report_period_s;
@@ -151,13 +168,10 @@ struct RtabmapConfig {
     std::string base_frame;
     /// Colour and depth further apart than this are not the same instant.
     double max_pair_skew_s;
-    // Owned by the python half, which turns the pose streams into tf and into
-    // nav_msgs/Path for the viewer. They cross the boundary because config for one
-    // module lives in one struct; nothing below reads them.
+    // Owned by the python half, which turns the pose streams into tf. It crosses the
+    // boundary because config for one module lives in one struct; nothing below
+    // reads it. The trail itself is OdometryPath's job, not this module's.
     bool publish_map_to_odom;
-    int path_max_poses;
-    double path_publish_period_s;
-    double path_min_step_m;
     /// Raw rtabmap Parameters (e.g. {"Vis/MinInliers": "15"}), applied last so they
     /// win over everything above. The escape hatch for the ~600 parameters that are
     /// not worth a config field each.
@@ -175,6 +189,23 @@ struct RtabmapConfig {
         }
         if (stereo()) {
             dimos::native::require_positive(baseline_m, "baseline_m");
+        }
+        if (use_external_odometry) {
+            // mono takes no pose at all: Rtabmap::process(image, id) is the
+            // appearance-only overload, so an external pose would be discarded.
+            if (mono()) {
+                throw std::runtime_error(
+                    "use_external_odometry has no meaning with input_mode='mono': "
+                    "appearance-only loop closure does not consume a pose");
+            }
+            if (!enable_loop_closure) {
+                throw std::runtime_error(
+                    "use_external_odometry with enable_loop_closure=false leaves this "
+                    "module nothing to do: it would neither compute odometry nor build "
+                    "a graph");
+            }
+            dimos::native::require_positive(external_odometry_timeout_s,
+                                            "external_odometry_timeout_s");
         }
         dimos::native::require_positive(detection_rate_hz, "detection_rate_hz");
         dimos::native::require_positive(cloud_publish_period_s, "cloud_publish_period_s");
@@ -208,6 +239,11 @@ public:
             }
         }
 
+        if (cfg_.use_external_odometry) {
+            builder.input<nav_msgs::Odometry>("external_odometry",
+                                              &RtabmapSlam::on_external_odometry, this);
+        }
+
         odometry_ = builder.output<nav_msgs::Odometry>("odometry");
         corrected_odometry_ = builder.output<nav_msgs::Odometry>("corrected_odometry");
         map_tf_ = builder.output<nav_msgs::Odometry>("map_tf");
@@ -231,7 +267,9 @@ public:
                        logging::Field("tracked", static_cast<std::int64_t>(tracked_)),
                        logging::Field("nodes", static_cast<std::int64_t>(cloud_cache_.size())),
                        logging::Field("loop_closures", static_cast<std::int64_t>(loop_closures_)),
-                       logging::Field("odom_losses", static_cast<std::int64_t>(odom_losses_))});
+                       logging::Field("odom_losses", static_cast<std::int64_t>(odom_losses_)),
+                       logging::Field("external_poses",
+                                      static_cast<std::int64_t>(external_poses_received_))});
     }
 
 private:
@@ -246,6 +284,62 @@ private:
         cx_ = info.K[2];
         cy_ = info.K[5];
         have_info_ = fx_ > 0.0 && fy_ > 0.0;
+    }
+
+    /// Somebody else's odometry, buffered until a frame with a matching stamp shows
+    /// up. Handlers are serialized by the dispatch loop, so this needs no lock.
+    void on_external_odometry(const nav_msgs::Odometry& msg) {
+        const double stamp = stamp_to_sec(msg.header);
+        external_poses_.emplace(
+            stamp, rtabmap::Transform(
+                       static_cast<float>(msg.pose.pose.position.x),
+                       static_cast<float>(msg.pose.pose.position.y),
+                       static_cast<float>(msg.pose.pose.position.z),
+                       static_cast<float>(msg.pose.pose.orientation.x),
+                       static_cast<float>(msg.pose.pose.orientation.y),
+                       static_cast<float>(msg.pose.pose.orientation.z),
+                       static_cast<float>(msg.pose.pose.orientation.w)));
+        // Bounded history: only poses near the newest frame can still be matched.
+        while (external_poses_.size() > kMaxBufferedPoses) {
+            external_poses_.erase(external_poses_.begin());
+        }
+        ++external_poses_received_;
+    }
+
+    /// The external pose at `stamp`, interpolated between the two poses bracketing
+    /// it. Interpolating rather than taking the nearest matters at speed: at 1 m/s
+    /// with odometry at 30 Hz, "nearest" is up to 17 mm off, and that error goes
+    /// straight into the map.
+    std::optional<rtabmap::Transform> external_pose_at(double stamp) {
+        if (external_poses_.empty()) {
+            return std::nullopt;
+        }
+        auto after = external_poses_.lower_bound(stamp);
+        if (after == external_poses_.end()) {
+            // The frame is newer than any pose: odometry has not caught up yet.
+            const auto newest = std::prev(external_poses_.end());
+            if (stamp - newest->first > cfg_.external_odometry_timeout_s) {
+                return std::nullopt;
+            }
+            return newest->second;
+        }
+        if (after == external_poses_.begin()) {
+            if (after->first - stamp > cfg_.external_odometry_timeout_s) {
+                return std::nullopt;
+            }
+            return after->second;
+        }
+        const auto before = std::prev(after);
+        const double span = after->first - before->first;
+        if (span <= 0.0) {
+            return before->second;
+        }
+        if (stamp - before->first > cfg_.external_odometry_timeout_s &&
+            after->first - stamp > cfg_.external_odometry_timeout_s) {
+            return std::nullopt;  // a gap in the odometry straddles this frame
+        }
+        const auto ratio = static_cast<float>((stamp - before->first) / span);
+        return before->second.interpolate(ratio, after->second);
     }
 
     /// Colour in rgbd and mono modes, left infrared in stereo_ir mode.
@@ -396,7 +490,7 @@ private:
 
         // Odometry gets the same parameter map: it reads the Odom/* and Vis/* keys
         // out of it and ignores the rest. mono has no metric odometry to run.
-        if (!cfg_.mono()) {
+        if (!cfg_.mono() && !cfg_.use_external_odometry) {
             odometry_engine_.reset(rtabmap::Odometry::create(params));
         }
 
@@ -491,19 +585,41 @@ private:
         // mean of it is what caps the rate this module can sustain.
         const auto started = std::chrono::steady_clock::now();
 
-        rtabmap::OdometryInfo info;
-        const rtabmap::Transform pose = odometry_engine_->process(data, &info);
-        if (pose.isNull()) {
-            ++odom_losses_;
-            record_timing(started);
-            DIMOS_LOG_THROTTLED(logging::Level::Warn, logging::from_secs(1), "odometry lost",
-                                 logging::Field("losses",
-                                                static_cast<std::int64_t>(odom_losses_)));
-            return;
+        rtabmap::Transform pose;
+        if (cfg_.use_external_odometry) {
+            const std::optional<rtabmap::Transform> external = external_pose_at(t_primary);
+            if (!external.has_value()) {
+                ++odom_losses_;
+                record_timing(started);
+                DIMOS_LOG_THROTTLED(
+                    logging::Level::Warn, logging::from_secs(1),
+                    "no external odometry near this frame",
+                    logging::Field("frame_stamp", t_primary),
+                    logging::Field("buffered", static_cast<std::int64_t>(external_poses_.size())),
+                    logging::Field("received",
+                                   static_cast<std::int64_t>(external_poses_received_)));
+                return;
+            }
+            pose = *external;
+        } else {
+            rtabmap::OdometryInfo info;
+            pose = odometry_engine_->process(data, &info);
+            if (pose.isNull()) {
+                ++odom_losses_;
+                record_timing(started);
+                DIMOS_LOG_THROTTLED(logging::Level::Warn, logging::from_secs(1), "odometry lost",
+                                     logging::Field("losses",
+                                                    static_cast<std::int64_t>(odom_losses_)));
+                return;
+            }
         }
         ++tracked_;
         odom_pose_ = pose;
-        publish_odometry(pose, t_primary);
+        // With external odometry its publisher owns odom->base_link. Echoing it here
+        // would put two publishers on one tf edge, and they would fight.
+        if (!cfg_.use_external_odometry) {
+            publish_odometry(pose, t_primary);
+        }
 
         if (cfg_.loop_closure() && should_detect(t_primary)) {
             // Returns true when this frame became a node in the graph. The pose graph
@@ -706,6 +822,9 @@ private:
     bool have_primary_{false}, have_secondary_{false};
     double last_stamp_{0.0};
     bool have_last_stamp_{false};
+
+    std::map<double, rtabmap::Transform> external_poses_;
+    std::uint64_t external_poses_received_{0};
 
     std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr> cloud_cache_;
     double last_detection_stamp_{0.0};
