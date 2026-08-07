@@ -12,7 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Regression test for GRIPPER-SPEC 3.5 — the double-conversion bug.
+
+The wrapper used to map a gripper value through blueprint-declared endpoints
+on its way to the adapter, which then converted again. Two conversions, no
+rule about which was authoritative, and 15% of the xArm's travel lost.
+
+The value a task emits must now arrive at the adapter unchanged.
+"""
+
+from __future__ import annotations
+
 from unittest.mock import MagicMock
+
+import pytest
 
 from dimos.control.hardware_interface import ConnectedHardware
 from dimos.control.task import ControlMode
@@ -20,23 +33,61 @@ from dimos.hardware.manipulators.spec import ManipulatorAdapter
 from dimos.robot.manipulators.piper.config import make_piper_hardware
 
 
-def test_connected_piper_hardware_converts_normalized_gripper_to_native_position() -> None:
-    component = make_piper_hardware(
-        gripper_open_position=0.07,
-        gripper_closed_position=0.0,
-    )
+def _connected() -> tuple[ConnectedHardware, MagicMock]:
+    component = make_piper_hardware()
     adapter = MagicMock(spec=ManipulatorAdapter)
-    adapter.read_joint_positions.return_value = [0.0] * 6
-    adapter.read_gripper_position.return_value = 0.0
+    adapter.read_joint_positions.return_value = [0.0] * 7
+    adapter.read_joint_velocities.return_value = [0.0] * 7
+    adapter.read_joint_efforts.return_value = [0.0] * 7
     adapter.set_control_mode.return_value = True
     adapter.write_joint_positions.return_value = True
-    adapter.write_gripper_position.return_value = True
-    hardware = ConnectedHardware(adapter, component)
+    return ConnectedHardware(adapter, component), adapter
 
-    assert hardware.write_command({"arm/gripper": 0.0}, ControlMode.POSITION)
-    assert hardware.write_command({"arm/gripper": 1.0}, ControlMode.POSITION)
 
-    assert adapter.write_gripper_position.call_args_list == [
-        ((0.0,), {}),
-        ((0.07,), {}),
-    ]
+@pytest.mark.parametrize("commanded", [0.0, 0.04, 0.08])
+def test_gripper_value_reaches_the_adapter_unchanged(commanded: float) -> None:
+    """No scaling, no clamping, no endpoint mapping between task and adapter."""
+    hardware, adapter = _connected()
+
+    assert hardware.write_command({"arm/gripper": commanded}, ControlMode.POSITION)
+
+    sent = adapter.write_joint_positions.call_args.args[0]
+    assert sent[-1] == pytest.approx(commanded), (
+        f"wrapper altered the gripper value: emitted {commanded}, adapter got {sent[-1]}"
+    )
+
+
+def test_one_call_carries_arm_and_gripper_together() -> None:
+    """One ordered array, one call — the gripper is not a second channel."""
+    hardware, adapter = _connected()
+    arm = {f"arm/joint{i + 1}": 0.1 * (i + 1) for i in range(6)}
+
+    assert hardware.write_command({**arm, "arm/gripper": 0.06}, ControlMode.POSITION)
+
+    adapter.write_joint_positions.assert_called_once()
+    sent = adapter.write_joint_positions.call_args.args[0]
+    assert sent == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.06])
+    assert (
+        not hasattr(adapter, "write_gripper_position") or not adapter.write_gripper_position.called
+    )
+
+
+def test_read_round_trips_the_gripper_unconverted() -> None:
+    """What the adapter reports is what the coordinator publishes."""
+    hardware, adapter = _connected()
+    adapter.read_joint_positions.return_value = [0.0] * 6 + [0.055]
+
+    assert hardware.read_state()["arm/gripper"].position == pytest.approx(0.055)
+
+
+def test_velocity_writes_stay_arm_only() -> None:
+    """R4a: nothing produces a gripper velocity, so the slot is not offered."""
+    hardware, adapter = _connected()
+    adapter.write_joint_velocities.return_value = True
+
+    assert hardware.write_command(
+        {f"arm/joint{i + 1}": 0.0 for i in range(6)}, ControlMode.VELOCITY
+    )
+
+    sent = adapter.write_joint_velocities.call_args.args[0]
+    assert len(sent) == 6, "a gripper position must never be sent as a velocity"

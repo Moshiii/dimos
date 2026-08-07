@@ -61,14 +61,15 @@ def test_openyam_mock_hardware_has_gripper() -> None:
 
 def test_openyam_mock_adapter_set_get_behavior() -> None:
     positions = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-    adapter = MockAdapter(dof=OPENYAM_DOF, initial_positions=positions)
+    adapter = MockAdapter(dof=OPENYAM_DOF, gripper_dof=1, initial_positions=positions)
 
-    assert adapter.read_joint_positions() == positions
-    updated_positions = [-0.1, -0.2, -0.3, -0.4, -0.5, -0.6]
-    assert adapter.write_joint_positions(updated_positions)
-    assert adapter.read_joint_positions() == updated_positions
-    assert adapter.write_gripper_position(0.25)
-    assert adapter.read_gripper_position() == 0.25
+    # The array covers arm + gripper; an arm-length seed pads the gripper.
+    assert adapter.read_joint_positions() == [*positions, 0.0]
+    updated = [-0.1, -0.2, -0.3, -0.4, -0.5, -0.6, 0.25]
+    assert adapter.write_joint_positions(updated)
+    assert adapter.read_joint_positions() == updated
+    assert adapter.get_dof() == OPENYAM_DOF  # arm only
+    assert adapter.get_gripper_dof() == 1
 
 
 def test_openyam_planner_blueprint_preserves_model_config() -> None:

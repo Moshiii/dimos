@@ -62,7 +62,7 @@ from dimos.core.stream import In, Out
 from dimos.hardware.drive_trains.spec import (
     TwistBaseAdapter,
 )
-from dimos.hardware.manipulators.spec import ManipulatorAdapter
+from dimos.hardware.manipulators.spec import ControlMode, ManipulatorAdapter
 from dimos.hardware.whole_body.spec import WholeBodyAdapter
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -287,6 +287,7 @@ class ControlCoordinator(Module):
         return adapter_registry.create(
             component.adapter_type,
             dof=len(component.arm_joints),
+            gripper_dof=component.gripper_dof,
             address=component.address,
             hardware_id=component.hardware_id,
             **component.adapter_kwargs,
@@ -897,38 +898,51 @@ class ControlCoordinator(Module):
             )
             return {"task": task_name, "commands": commands, "streams": streams}
 
+    def _gripper_joint(self, hardware_id: str) -> tuple[ConnectedHardware, str] | None:
+        """Resolve a device's single gripper joint. Caller holds _hardware_lock."""
+        hw = self._hardware.get(hardware_id)
+        if hw is None or isinstance(hw, ConnectedTwistBase):
+            return None
+        joints = hw.component.gripper_joints
+        return (hw, joints[0]) if joints else None
+
     @rpc
     def set_gripper_position(self, hardware_id: str, position: float) -> bool:
-        """Set gripper position on a specific hardware device.
+        """Set gripper position, in the unit the adapter declares.
+
+        TRANSITIONAL: replaced by task_invoke("<hw>_gripper", ...) once
+        GripperControlTask exists; deleted in part 1.4 (GRIPPER-SPEC R23).
+        It now travels the same array as every other joint rather than
+        bypassing the wrapper.
 
         Args:
             hardware_id: ID of the hardware with the gripper
-            position: Gripper position in meters
+            position: Gripper position in the adapter's declared unit
         """
         with self._hardware_lock:
-            hw = self._hardware.get(hardware_id)
-            if hw is None:
-                logger.warning(f"Hardware '{hardware_id}' not found for gripper command")
+            resolved = self._gripper_joint(hardware_id)
+            if resolved is None:
+                logger.warning(f"Hardware '{hardware_id}' has no gripper joint to command")
                 return False
-            if isinstance(hw, ConnectedTwistBase):
-                logger.warning(f"Hardware '{hardware_id}' is a twist base, no gripper support")
-                return False
-            return hw.adapter.write_gripper_position(position)
+            hw, joint = resolved
+            return hw.write_command({joint: position}, ControlMode.POSITION)
 
     @rpc
     def get_gripper_position(self, hardware_id: str) -> float | None:
-        """Get gripper position from a specific hardware device.
+        """Get gripper position, in the unit the adapter declares.
+
+        TRANSITIONAL: see set_gripper_position; deleted in part 1.4.
 
         Args:
             hardware_id: ID of the hardware with the gripper
         """
         with self._hardware_lock:
-            hw = self._hardware.get(hardware_id)
-            if hw is None:
+            resolved = self._gripper_joint(hardware_id)
+            if resolved is None:
                 return None
-            if isinstance(hw, ConnectedTwistBase):
-                return None
-            return hw.adapter.read_gripper_position()
+            hw, joint = resolved
+            state = hw.read_state().get(joint)
+            return None if state is None else state.position
 
     @rpc
     def start(self) -> None:

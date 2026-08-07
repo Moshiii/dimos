@@ -58,9 +58,12 @@ XARM_MODEL_PATH = LfsPath("xarm_description") / "urdf/xarm_device.urdf.xacro"
 XARM_PACKAGE_PATHS: dict[str, Path] = {"xarm_description": LfsPath("xarm_description")}
 XARM6_SIM_PATH = LfsPath("xarm6/scene.xml")
 XARM7_SIM_PATH = LfsPath("xarm7/scene.xml")
+# TRANSITIONAL: native SDK scale (0-850) until the gripper task owns this in
+# part 1.4, which deletes this constant entirely (GRIPPER-SPEC R17a). The old
+# 0.85 was only 850/1000 — an accident of reusing the cartesian mm conversion.
 XARM_GRIPPER_PARAMS = {
     "gripper_joint": make_gripper_joints("arm")[0],
-    "gripper_open_pos": 0.85,
+    "gripper_open_pos": 850.0,
     "gripper_closed_pos": 0.0,
 }
 XARM7_SIM_HOME = [0.0, -0.247, 0.0, 0.909, 0.0, 1.15644, 0.0]
@@ -111,8 +114,6 @@ def make_xarm_hardware(
     adapter_type: str = "mock",
     address: str | Path | None = None,
     gripper: bool = False,
-    gripper_open_position: float | None = None,
-    gripper_closed_position: float | None = None,
     auto_enable: bool = True,
     adapter_kwargs: dict[str, object] | None = None,
     home_joints: list[float] | None = None,
@@ -129,8 +130,6 @@ def make_xarm_hardware(
         adapter_type=adapter_type,
         address=address,
         auto_enable=auto_enable,
-        gripper_open_position=gripper_open_position,
-        gripper_closed_position=gripper_closed_position,
         adapter_kwargs=kwargs,
     )
 
@@ -139,8 +138,6 @@ def xarm7_hardware(
     hw_id: str = "arm",
     *,
     gripper: bool = False,
-    gripper_open_position: float | None = None,
-    gripper_closed_position: float | None = None,
     mock_without_address: bool = False,
     home_joints: list[float] | None = None,
 ) -> HardwareComponent:
@@ -151,8 +148,6 @@ def xarm7_hardware(
             adapter_type="sim_mujoco",
             address=str(XARM7_SIM_PATH),
             gripper=gripper,
-            gripper_open_position=gripper_open_position,
-            gripper_closed_position=gripper_closed_position,
             home_joints=home_joints,
         )
     address = global_config.xarm7_ip
@@ -161,8 +156,6 @@ def xarm7_hardware(
             hw_id,
             7,
             gripper=gripper,
-            gripper_open_position=gripper_open_position,
-            gripper_closed_position=gripper_closed_position,
             home_joints=home_joints,
         )
     return make_xarm_hardware(
@@ -171,8 +164,6 @@ def xarm7_hardware(
         adapter_type="xarm",
         address=address,
         gripper=gripper,
-        gripper_open_position=gripper_open_position,
-        gripper_closed_position=gripper_closed_position,
         home_joints=home_joints,
     )
 
@@ -181,8 +172,6 @@ def xarm6_hardware(
     hw_id: str = "arm",
     *,
     gripper: bool = False,
-    gripper_open_position: float | None = None,
-    gripper_closed_position: float | None = None,
     mock_without_address: bool = False,
     home_joints: list[float] | None = None,
 ) -> HardwareComponent:
@@ -193,8 +182,6 @@ def xarm6_hardware(
             adapter_type="sim_mujoco",
             address=str(XARM6_SIM_PATH),
             gripper=gripper,
-            gripper_open_position=gripper_open_position,
-            gripper_closed_position=gripper_closed_position,
             home_joints=home_joints,
         )
     address = global_config.xarm6_ip
@@ -203,8 +190,6 @@ def xarm6_hardware(
             hw_id,
             6,
             gripper=gripper,
-            gripper_open_position=gripper_open_position,
-            gripper_closed_position=gripper_closed_position,
             home_joints=home_joints,
         )
     return make_xarm_hardware(
@@ -213,8 +198,6 @@ def xarm6_hardware(
         adapter_type="xarm",
         address=address,
         gripper=gripper,
-        gripper_open_position=gripper_open_position,
-        gripper_closed_position=gripper_closed_position,
         home_joints=home_joints,
     )
 

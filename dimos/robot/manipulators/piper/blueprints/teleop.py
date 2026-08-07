@@ -43,8 +43,6 @@ _piper_keyboard_hw = make_piper_hardware(
     adapter_type="piper" if global_config.can_port else "mock",
     address=global_config.can_port or "can0",
     gripper=True,
-    gripper_open_position=0.07,
-    gripper_closed_position=0.0,
 )
 _piper_model = make_piper_model_config()
 
@@ -83,7 +81,7 @@ coordinator_cartesian_ik_mock = ControlCoordinator.blueprint(
     tasks=[cartesian_ik_task(_piper_mock_cartesian_hw, robot_model=_piper_model)],
 )
 
-_piper_teleop_hw = piper_hardware("arm", gripper_open_position=0.07, gripper_closed_position=0.0)
+_piper_teleop_hw = piper_hardware("arm")
 
 
 class _PiperTeleopCoordinator(ControlCoordinator):
@@ -103,7 +101,9 @@ coordinator_teleop_piper = autoconnect(
                 robot_model=_piper_model,
                 params={
                     "gripper_joint": make_gripper_joints("arm")[0],
-                    "gripper_open_pos": 1.0,
+                    # TRANSITIONAL: native metres until the gripper task owns
+                    # this in 1.4 (GRIPPER-SPEC R17a).
+                    "gripper_open_pos": 0.08,
                     "gripper_closed_pos": 0.0,
                 },
             ),

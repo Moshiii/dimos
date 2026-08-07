@@ -75,7 +75,9 @@ coordinator_teleop_a1z = autoconnect(
                 priority=20,
                 params={
                     "gripper_joint": _a1z_quest_hw.gripper_joints[0],
-                    "gripper_open_pos": 1.0,
+                    # TRANSITIONAL: native metres until the gripper task owns
+                    # this in 1.4 (GRIPPER-SPEC R17a).
+                    "gripper_open_pos": 0.1,
                     "gripper_closed_pos": 0.0,
                 },
             ),

@@ -90,8 +90,6 @@ def a1z_hardware(
         adapter_type=adapter_type,
         address=address,
         auto_enable=True,
-        gripper_open_position=0.1 if has_gripper else None,
-        gripper_closed_position=0.0 if has_gripper else None,
         adapter_kwargs=adapter_kwargs,
     )
 

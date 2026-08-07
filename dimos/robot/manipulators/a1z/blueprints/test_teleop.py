@@ -38,10 +38,11 @@ def test_quest_teleop_uses_mock_a1z_hardware_and_gripper_by_default() -> None:
     assert hardware.adapter_type == "mock"
     assert hardware.address is None
     assert hardware.gripper_joints == ["arm/gripper"]
-    assert hardware.gripper_open_position == pytest.approx(0.1)
-    assert hardware.gripper_closed_position == pytest.approx(0.0)
+    assert hardware.gripper_dof == 1
+    assert hardware.all_joints[-1] == "arm/gripper"
     assert teleop.params["gripper_joint"] == "arm/gripper"
-    assert teleop.params["gripper_open_pos"] == pytest.approx(1.0)
+    # Native metres now — the a1z jaw's declared stroke, not a 0-1 fraction.
+    assert teleop.params["gripper_open_pos"] == pytest.approx(0.1)
     assert teleop.params["gripper_closed_pos"] == pytest.approx(0.0)
 
 

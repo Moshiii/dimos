@@ -34,9 +34,16 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-# Unit conversion constants
+# Unit conversion constants — cartesian pose only. The gripper does NOT use
+# these: its SDK call takes a dimensionless 0-850, which is the unit this
+# adapter declares through get_limits() and receives in its joint array.
 MM_TO_M = 0.001
 M_TO_MM = 1000.0
+
+# The xArm gripper's own scale. Not metres, despite the historical 0.85 —
+# that was only 850/1000, an accident of reusing the cartesian conversion.
+XARM_GRIPPER_MIN = 0.0
+XARM_GRIPPER_MAX = 850.0
 MAX_CARTESIAN_SPEED_MM = 500.0  # Max cartesian speed in mm/s
 _XARM_LIFECYCLE_SPEED_DEG = 20.0
 _XARM_LIFECYCLE_ACCEL_DEG = 500.0
@@ -59,11 +66,14 @@ class XArmAdapter(ManipulatorAdapter):
     No inheritance required - just matching method signatures.
     """
 
-    def __init__(self, address: str, dof: int = 6, **_: object) -> None:
+    def __init__(self, address: str, dof: int = 6, gripper_dof: int = 0, **_: object) -> None:
         if not address:
             raise ValueError("address (IP) is required for XArmAdapter")
+        if gripper_dof not in (0, 1):
+            raise ValueError(f"XArmAdapter supports 0 or 1 gripper joints (got {gripper_dof})")
         self._ip = address
         self._dof = dof
+        self._gripper_dof = gripper_dof
         self._arm: XArmAPI | None = None
         self._control_mode: ControlMode = ControlMode.POSITION
         self._gripper_enabled: bool = False
@@ -107,17 +117,22 @@ class XArmAdapter(ManipulatorAdapter):
         )
 
     def get_dof(self) -> int:
-        """Get degrees of freedom."""
+        """Arm joints only."""
         return self._dof
 
+    def get_gripper_dof(self) -> int:
+        """1 when a gripper is fitted, else 0."""
+        return self._gripper_dof
+
     def get_limits(self) -> JointLimits:
-        """Get joint limits (default XArm limits)."""
+        """Arm limits in radians, then the gripper's own 0-850 scale."""
         # XArm typical joint limits (varies by joint, using conservative values)
         limit = 2 * math.pi
         return JointLimits(
-            position_lower=[-limit] * self._dof,
-            position_upper=[limit] * self._dof,
-            velocity_max=[math.pi] * self._dof,  # ~180 deg/s
+            position_lower=[-limit] * self._dof + [XARM_GRIPPER_MIN] * self._gripper_dof,
+            position_upper=[limit] * self._dof + [XARM_GRIPPER_MAX] * self._gripper_dof,
+            # The SDK exposes no gripper speed limit; 0.0 means "unspecified".
+            velocity_max=[math.pi] * self._dof + [0.0] * self._gripper_dof,
         )
 
     def set_control_mode(self, mode: ControlMode) -> bool:
@@ -161,7 +176,10 @@ class XArmAdapter(ManipulatorAdapter):
         _, angles = self._arm.get_servo_angle()
         if not angles:
             raise RuntimeError("Failed to read joint positions")
-        return [math.radians(a) for a in angles[: self._dof]]
+        positions = [math.radians(a) for a in angles[: self._dof]]
+        if self._gripper_dof:
+            positions.append(self._read_gripper())
+        return positions
 
     def read_joint_velocities(self) -> list[float]:
         """Read joint velocities.
@@ -170,17 +188,18 @@ class XArmAdapter(ManipulatorAdapter):
         Returns zeros. For velocity estimation, use finite differences
         on positions in the driver.
         """
-        return [0.0] * self._dof
+        return [0.0] * (self._dof + self._gripper_dof)
 
     def read_joint_efforts(self) -> list[float]:
-        """Read joint torques in Nm."""
+        """Read joint torques in Nm; the gripper reports 0.0 (no feedback)."""
+        gripper = [0.0] * self._gripper_dof
         if not self._arm:
-            return [0.0] * self._dof
+            return [0.0] * self._dof + gripper
 
         code, torques = self._arm.get_joints_torque()
         if code == 0 and torques:
-            return list(torques[: self._dof])
-        return [0.0] * self._dof
+            return list(torques[: self._dof]) + gripper
+        return [0.0] * self._dof + gripper
 
     def read_state(self) -> dict[str, int]:
         """Read robot state."""
@@ -212,20 +231,30 @@ class XArmAdapter(ManipulatorAdapter):
         Uses set_servo_angle_j() for high-frequency servo control.
         Requires mode 1 (servo mode) to be active.
 
+        The array covers every joint this adapter owns, gripper last. The
+        gripper entry is already in this adapter's declared unit (0-850) and
+        is passed to the SDK unconverted — scaling it here is exactly the
+        double conversion this contract removes.
+
         Args:
-            positions: Target positions in radians
+            positions: Target positions, arm in radians then gripper native
             velocity: Speed as fraction of max (0-1) - not used in servo mode
         """
         if not self._arm:
             return False
 
+        arm, grip = positions[: self._dof], positions[self._dof :]
+
         # Convert radians to degrees
-        angles = [math.degrees(p) for p in positions]
+        angles = [math.degrees(p) for p in arm]
 
         # Use set_servo_angle_j for high-frequency servo control (100Hz+)
         # This only executes the last instruction, suitable for real-time control
         code: int = self._arm.set_servo_angle_j(angles, speed=100, mvacc=500)
-        return code == 0
+        ok = code == 0
+        if grip:
+            ok = self._write_gripper(grip[0]) and ok
+        return ok
 
     def activate(self) -> bool:
         """Enable motion and move the arm to its initial joint pose."""
@@ -374,28 +403,27 @@ class XArmAdapter(ManipulatorAdapter):
         )
         return code == 0
 
-    def read_gripper_position(self) -> float | None:
-        """Read gripper position (mm -> meters)."""
+    def _read_gripper(self) -> float:
+        """Gripper position in the SDK's own 0-850 scale. No conversion."""
         if not self._arm:
-            return None
+            return 0.0
 
         result = self._arm.get_gripper_position()
         code: int = result[0]
         pos: float | None = result[1]
         if code == 0 and pos is not None:
-            return pos * MM_TO_M
-        return None
+            return float(pos)
+        return 0.0
 
-    def write_gripper_position(self, position: float) -> bool:
-        """Write gripper position (meters -> mm)."""
+    def _write_gripper(self, position: float) -> bool:
+        """Command the gripper in the SDK's own 0-850 scale. No conversion."""
         if not self._arm:
             return False
 
         if not self._gripper_enabled:
             self._arm.set_gripper_enable(True)
             self._gripper_enabled = True
-        pos_mm = position * M_TO_MM
-        code: int = self._arm.set_gripper_position(pos_mm, wait=False)
+        code: int = self._arm.set_gripper_position(position, wait=False)
         return code == 0
 
     def read_force_torque(self) -> list[float] | None:

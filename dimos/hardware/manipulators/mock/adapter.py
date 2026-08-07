@@ -43,12 +43,23 @@ class MockAdapter:
     """
 
     def __init__(
-        self, dof: int = 6, initial_positions: list[float] | None = None, **_: object
+        self,
+        dof: int = 6,
+        gripper_dof: int = 0,
+        initial_positions: list[float] | None = None,
+        gripper_limits: tuple[float, float] = (0.0, 1.0),
+        **_: object,
     ) -> None:
         self._dof = dof
-        self._positions = list(initial_positions) if initial_positions is not None else [0.0] * dof
-        self._velocities = [0.0] * dof
-        self._efforts = [0.0] * dof
+        self._gripper_dof = gripper_dof
+        # Tests that need a vendor-like scale override this.
+        self._gripper_limits = gripper_limits
+        n = dof + gripper_dof
+        self._positions = list(initial_positions) if initial_positions is not None else [0.0] * n
+        if len(self._positions) == dof and gripper_dof:
+            self._positions += [0.0] * gripper_dof
+        self._velocities = [0.0] * n
+        self._efforts = [0.0] * n
         self._enabled = False
         self._connected = False
         self._control_mode = ControlMode.POSITION
@@ -60,7 +71,6 @@ class MockAdapter:
             "pitch": 0.0,
             "yaw": 0.0,
         }
-        self._gripper_position: float = 0.0
         self._error_code: int = 0
         self._error_message: str = ""
 
@@ -97,15 +107,20 @@ class MockAdapter:
         )
 
     def get_dof(self) -> int:
-        """Return DOF."""
+        """Arm joints only."""
         return self._dof
 
+    def get_gripper_dof(self) -> int:
+        """How many trailing joints are the gripper."""
+        return self._gripper_dof
+
     def get_limits(self) -> JointLimits:
-        """Return mock joint limits."""
+        """Arm limits in radians, then the configured gripper range."""
+        lo, hi = self._gripper_limits
         return JointLimits(
-            position_lower=[-math.pi] * self._dof,
-            position_upper=[math.pi] * self._dof,
-            velocity_max=[1.0] * self._dof,
+            position_lower=[-math.pi] * self._dof + [lo] * self._gripper_dof,
+            position_upper=[math.pi] * self._dof + [hi] * self._gripper_dof,
+            velocity_max=[1.0] * self._dof + [0.0] * self._gripper_dof,
         )
 
     def set_control_mode(self, mode: ControlMode) -> bool:
@@ -147,22 +162,22 @@ class MockAdapter:
         positions: list[float],
         velocity: float = 1.0,
     ) -> bool:
-        """Set mock joint positions (instant move)."""
-        if len(positions) != self._dof:
+        """Set mock joint positions (instant move), gripper entry included."""
+        if len(positions) != self._dof + self._gripper_dof:
             return False
         self._positions = list(positions)
         return True
 
     def write_joint_velocities(self, velocities: list[float]) -> bool:
-        """Set mock joint velocities."""
+        """Set mock joint velocities — arm joints only (R4a)."""
         if len(velocities) != self._dof:
             return False
-        self._velocities = list(velocities)
+        self._velocities = list(velocities) + [0.0] * self._gripper_dof
         return True
 
     def write_stop(self) -> bool:
         """Stop mock motion."""
-        self._velocities = [0.0] * self._dof
+        self._velocities = [0.0] * (self._dof + self._gripper_dof)
         return True
 
     def write_enable(self, enable: bool) -> bool:
@@ -191,15 +206,6 @@ class MockAdapter:
     ) -> bool:
         """Set mock cartesian position."""
         self._cartesian_position.update(pose)
-        return True
-
-    def read_gripper_position(self) -> float | None:
-        """Return mock gripper position."""
-        return self._gripper_position
-
-    def write_gripper_position(self, position: float) -> bool:
-        """Set mock gripper position."""
-        self._gripper_position = position
         return True
 
     def read_force_torque(self) -> list[float] | None:

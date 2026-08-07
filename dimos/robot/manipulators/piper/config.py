@@ -69,8 +69,6 @@ def make_piper_hardware(
     adapter_type: str = "mock",
     address: str | None = None,
     gripper: bool = True,
-    gripper_open_position: float | None = None,
-    gripper_closed_position: float | None = None,
     auto_enable: bool = True,
     adapter_kwargs: dict[str, object] | None = None,
     home_joints: list[float] | None = None,
@@ -87,8 +85,6 @@ def make_piper_hardware(
         adapter_type=adapter_type,
         address=address,
         auto_enable=auto_enable,
-        gripper_open_position=gripper_open_position,
-        gripper_closed_position=gripper_closed_position,
         adapter_kwargs=kwargs,
     )
 
@@ -97,8 +93,6 @@ def piper_hardware(
     hw_id: str = "arm",
     *,
     gripper: bool = True,
-    gripper_open_position: float | None = None,
-    gripper_closed_position: float | None = None,
     mock_without_address: bool = True,
     home_joints: list[float] | None = None,
 ) -> HardwareComponent:
@@ -108,8 +102,6 @@ def piper_hardware(
             adapter_type="sim_mujoco",
             address=str(PIPER_SIM_PATH),
             gripper=gripper,
-            gripper_open_position=gripper_open_position,
-            gripper_closed_position=gripper_closed_position,
             home_joints=home_joints,
         )
     address = global_config.can_port or "can0"
@@ -117,8 +109,6 @@ def piper_hardware(
         return make_piper_hardware(
             hw_id,
             gripper=gripper,
-            gripper_open_position=gripper_open_position,
-            gripper_closed_position=gripper_closed_position,
             home_joints=home_joints,
         )
     return make_piper_hardware(
@@ -126,8 +116,6 @@ def piper_hardware(
         adapter_type="piper",
         address=address,
         gripper=gripper,
-        gripper_open_position=gripper_open_position,
-        gripper_closed_position=gripper_closed_position,
         home_joints=home_joints,
     )
 

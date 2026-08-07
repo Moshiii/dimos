@@ -56,7 +56,11 @@ class JointState(Timestamped):
             ts: Timestamp in seconds
             frame_id: Frame ID for the message
             name: List of joint names
-            position: List of joint positions (rad or m)
+            position: List of joint positions. Revolute arm joints are radians
+                and prismatic ones metres, but a **gripper** joint carries the
+                unit its adapter declares through get_limits() — metres for a
+                sliding jaw, or the vendor's own scale where the SDK is
+                dimensionless (the xArm's 0-850). Never assume metres.
             velocity: List of joint velocities (rad/s or m/s)
             effort: List of joint efforts (Nm or N)
         """

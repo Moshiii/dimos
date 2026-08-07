@@ -220,6 +220,10 @@ class OpenArmAdapter:
     def get_dof(self) -> int:
         return self._dof
 
+    def get_gripper_dof(self) -> int:
+        """OpenArm ships no gripper."""
+        return 0
+
     def get_limits(self) -> JointLimits:
         if self._side == "left":
             lower, upper = _V10_POS_LOWER_LEFT, _V10_POS_UPPER_LEFT
@@ -418,12 +422,6 @@ class OpenArmAdapter:
         return None
 
     def write_cartesian_position(self, pose: dict[str, float], velocity: float = 1.0) -> bool:
-        return False
-
-    def read_gripper_position(self) -> float | None:
-        return None
-
-    def write_gripper_position(self, position: float) -> bool:
         return False
 
     def read_force_torque(self) -> list[float] | None:

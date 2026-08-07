@@ -66,11 +66,23 @@ class ManipulatorInfo:
 
 @dataclass
 class JointLimits:
-    """Joint position and velocity limits."""
+    """Limits for every joint the adapter owns, gripper entries trailing.
 
-    position_lower: list[float]  # radians
-    position_upper: list[float]  # radians
-    velocity_max: list[float]  # rad/s
+    Entries follow the adapter's array order (see ``write_joint_positions``),
+    so the length is ``get_dof() + get_gripper_dof()`` — deliberately *not*
+    ``get_dof()``, which stays arm-only.
+
+    Arm entries are radians and rad/s. A gripper entry is in whatever unit
+    that gripper's adapter actually speaks: metres for a sliding jaw, radians
+    for a rotating knuckle, or the vendor's own scale where the SDK is
+    dimensionless (the xArm's ``0-850``). This is the single authoritative
+    declaration of a gripper's travel — nothing above the hardware layer may
+    hard-code an endpoint.
+    """
+
+    position_lower: list[float]
+    position_upper: list[float]
+    velocity_max: list[float]
 
 
 def default_base_transform() -> Transform:
@@ -118,11 +130,24 @@ class ManipulatorAdapter(Protocol):
         ...
 
     def get_dof(self) -> int:
-        """Get degrees of freedom."""
+        """Get degrees of freedom — **arm joints only**.
+
+        A caller wanting the total adds ``get_gripper_dof()``. This is
+        therefore not the length of ``get_limits()`` or of the joint arrays,
+        which cover every joint.
+        """
+        ...
+
+    def get_gripper_dof(self) -> int:
+        """How many trailing joints are the gripper. 0 when there is none.
+
+        Supplied at construction from the component's ``gripper_dof``; an
+        adapter never infers it from an array length.
+        """
         ...
 
     def get_limits(self) -> JointLimits:
-        """Get joint limits."""
+        """Limits for every joint this adapter owns, gripper entries last."""
         ...
 
     def set_control_mode(self, mode: ControlMode) -> bool:
@@ -148,15 +173,25 @@ class ManipulatorAdapter(Protocol):
         ...
 
     def read_joint_positions(self) -> list[float]:
-        """Read current joint positions (radians)."""
+        """Read positions for **all** joints, gripper entries last.
+
+        Arm entries are radians; a gripper entry is in this adapter's own
+        gripper unit — the one ``get_limits()`` declares.
+        """
         ...
 
     def read_joint_velocities(self) -> list[float]:
-        """Read current joint velocities (rad/s)."""
+        """Read velocities for all joints (rad/s for arm joints), gripper last.
+
+        Reads are symmetric with positions even though velocity *writes* are
+        not (see ``write_joint_velocities``), because callers zip positions,
+        velocities and efforts by index. An adapter that cannot measure
+        gripper velocity reports ``0.0`` for it.
+        """
         ...
 
     def read_joint_efforts(self) -> list[float]:
-        """Read current joint efforts (Nm)."""
+        """Read efforts for all joints (Nm for arm joints), gripper last."""
         ...
 
     def read_state(self) -> dict[str, int]:
@@ -172,11 +207,33 @@ class ManipulatorAdapter(Protocol):
         positions: list[float],
         velocity: float = 1.0,
     ) -> bool:
-        """Command joint positions (radians). Returns success."""
+        """Command **all** joints this adapter owns, gripper entries last.
+
+        This is the API for every joint. A gripper joint is a robot joint of a
+        special type, not a separate channel::
+
+            write_joint_positions([0.1, -0.4, 0.0, 0.9, 0.0, 1.2,  0.042])
+            #                      |<---- 6 arm joints, radians -->|  gripper
+
+        How an adapter reaches its gripper internally is not specified — an
+        integrated gripper is a capability of the arm's own SDK, so the
+        adapter uses the vendor's own call. But it MUST NOT convert the
+        gripper entry: the value handed in is already in the unit this
+        adapter declared through ``get_limits()``, and converting it a second
+        time is the class of bug this contract exists to remove.
+
+        Returns success.
+        """
         ...
 
     def write_joint_velocities(self, velocities: list[float]) -> bool:
-        """Command joint velocities (rad/s). Returns success."""
+        """Command velocities for **arm joints only** (rad/s). Returns success.
+
+        Deliberately asymmetric with ``read_joint_velocities``, which covers
+        all joints. A gripper is commanded only in ``SERVO_POSITION``, so
+        nothing in this system produces a gripper velocity; offering the slot
+        would only invite a value invented to fill it. Do not "fix" this.
+        """
         ...
 
     def write_stop(self) -> bool:
@@ -220,14 +277,6 @@ class ManipulatorAdapter(Protocol):
         Returns:
             True if command accepted, False if not supported
         """
-        ...
-
-    def read_gripper_position(self) -> float | None:
-        """Read gripper position (meters). None if no gripper."""
-        ...
-
-    def write_gripper_position(self, position: float) -> bool:
-        """Command gripper position. False if no gripper."""
         ...
 
     def read_force_torque(self) -> list[float] | None:

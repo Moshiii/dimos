@@ -186,25 +186,27 @@ class TestJointStateSnapshot:
 
 
 class TestConnectedHardware:
-    def test_normalized_gripper_commands_are_mapped_at_hardware_boundary(self, mock_adapter):
-        mock_adapter.read_gripper_position.return_value = 0.035
+    def test_gripper_rides_the_one_array_without_conversion(self, mock_adapter):
+        """GRIPPER-SPEC R25: the wrapper performs no unit conversion."""
+        mock_adapter.read_joint_positions.return_value = [0.0] * 6 + [0.035]
+        mock_adapter.read_joint_velocities.return_value = [0.0] * 7
+        mock_adapter.read_joint_efforts.return_value = [0.0] * 7
         component = HardwareComponent(
             hardware_id="arm",
             hardware_type=HardwareType.MANIPULATOR,
             all_joints=[*make_joints("arm", 6), "arm/gripper"],
             gripper_dof=1,
-            gripper_open_position=0.07,
-            gripper_closed_position=0.0,
         )
         hardware = ConnectedHardware(mock_adapter, component)
 
-        assert hardware.read_state()["arm/gripper"].position == pytest.approx(0.5)
-        hardware.write_command({"arm/gripper": 0.0}, ControlMode.POSITION)
-        hardware.write_command({"arm/gripper": 1.0}, ControlMode.POSITION)
-        assert mock_adapter.write_gripper_position.call_args_list == [
-            ((0.0,), {}),
-            ((0.07,), {}),
-        ]
+        # Read: the adapter's value, verbatim — not remapped to a fraction.
+        assert hardware.read_state()["arm/gripper"].position == pytest.approx(0.035)
+
+        # Write: one call carrying arm and gripper, gripper value untouched.
+        hardware.write_command({"arm/gripper": 0.07}, ControlMode.POSITION)
+        sent = mock_adapter.write_joint_positions.call_args.args[0]
+        assert len(sent) == 7
+        assert sent[-1] == pytest.approx(0.07)
 
     def test_joint_names_prefixed(self, connected_hardware):
         names = connected_hardware.joint_names

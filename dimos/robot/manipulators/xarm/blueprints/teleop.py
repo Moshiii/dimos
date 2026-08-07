@@ -146,15 +146,11 @@ coordinator_combined_xarm6 = ControlCoordinator.blueprint(
 _xarm7_teleop_hw = xarm7_hardware(
     "arm",
     gripper=True,
-    gripper_open_position=0.85,
-    gripper_closed_position=0.0,
     mock_without_address=True,
 )
 _xarm6_teleop_hw = xarm6_hardware(
     "arm",
     gripper=True,
-    gripper_open_position=0.85,
-    gripper_closed_position=0.0,
     mock_without_address=True,
 )
 _xarm7_teleop_model = make_xarm7_model_config(add_gripper=True)

@@ -52,6 +52,9 @@ _IMU_FLOATS = 10
 
 _joint_array_size = MAX_JOINTS * _FLOAT_BYTES  # float64 array
 
+# Gripper segment slots: position, target, range_lo, range_hi.
+_GRP_SLOTS = 4
+
 # Element counts for control and sequence arrays.
 _NUM_CTRL_FIELDS = 4  # [ready, stop, command_mode, num_joints]
 _NUM_SEQ_COUNTERS = 12  # one per buffer type (manipulator + WB additions)
@@ -65,7 +68,10 @@ _shm_sizes = {
     "eff": _joint_array_size,
     "pos_t": _joint_array_size,
     "vel_t": _joint_array_size,
-    "grp": 2 * _FLOAT_BYTES,  # [gripper_position, gripper_target]
+    # [gripper_position, gripper_target, range_lo, range_hi]. The range is the
+    # gripper joint's MJCF limits: the sim's native gripper unit, written once
+    # at startup so the adapter can declare it through get_limits().
+    "grp": _GRP_SLOTS * _FLOAT_BYTES,
     # Whole-body additions (unused by manipulator path).
     "imu": _IMU_FLOATS * _FLOAT_BYTES,  # [w,x,y,z, gx,gy,gz, ax,ay,az]
     "kp_t": _joint_array_size,  # per-joint position-gain target
@@ -227,9 +233,20 @@ class ManipShmWriter:
         self._increment_seq(SEQ_EFFORTS)
 
     def write_gripper_state(self, position: float) -> None:
-        arr = self._array(self.shm.grp, 2, np.float64)
+        arr = self._array(self.shm.grp, _GRP_SLOTS, np.float64)
         arr[0] = position
         self._increment_seq(SEQ_GRIPPER_STATE)
+
+    def write_gripper_range(self, low: float, high: float) -> None:
+        """Publish the gripper joint's MJCF range. Written once at startup.
+
+        This is the sim's authoritative unit declaration (GRIPPER-SPEC R13a):
+        the adapter reads it on connect and returns it from get_limits(), so
+        the model file stays the only place the range is written down.
+        """
+        arr = self._array(self.shm.grp, _GRP_SLOTS, np.float64)
+        arr[2] = low
+        arr[3] = high
 
     def read_position_command(self, num_joints: int) -> NDArray[np.float64] | None:
         """Return a copy of position targets if a new command arrived since last call."""
@@ -255,7 +272,7 @@ class ManipShmWriter:
         if seq <= self._last_gripper_cmd_seq:
             return None
         self._last_gripper_cmd_seq = seq
-        arr = self._array(self.shm.grp, 2, np.float64)
+        arr = self._array(self.shm.grp, _GRP_SLOTS, np.float64)
         return float(arr[1])
 
     def read_command_mode(self) -> int:
@@ -368,8 +385,19 @@ class ManipShmReader:
         return [float(x) for x in arr[:num_joints]]
 
     def read_gripper_position(self) -> float:
-        arr = np.ndarray((2,), dtype=np.float64, buffer=self.shm.grp.buf)
+        arr = np.ndarray((_GRP_SLOTS,), dtype=np.float64, buffer=self.shm.grp.buf)
         return float(arr[0])
+
+    def read_gripper_range(self) -> tuple[float, float]:
+        """The gripper joint's MJCF range, as published by the sim module.
+
+        Falls back to (0.0, 1.0) when the scene declared no range, which keeps
+        a gripper-less or not-yet-ready scene from returning a degenerate
+        (0.0, 0.0) that would make every normalized command land closed.
+        """
+        arr = np.ndarray((_GRP_SLOTS,), dtype=np.float64, buffer=self.shm.grp.buf)
+        low, high = float(arr[2]), float(arr[3])
+        return (low, high) if high > low else (0.0, 1.0)
 
     def write_position_command(self, positions: list[float]) -> None:
         n = min(len(positions), MAX_JOINTS)
@@ -386,7 +414,7 @@ class ManipShmReader:
         self._increment_seq(SEQ_VELOCITY_CMD)
 
     def write_gripper_command(self, position: float) -> None:
-        arr = np.ndarray((2,), dtype=np.float64, buffer=self.shm.grp.buf)
+        arr = np.ndarray((_GRP_SLOTS,), dtype=np.float64, buffer=self.shm.grp.buf)
         arr[1] = position
         self._increment_seq(SEQ_GRIPPER_CMD)
 

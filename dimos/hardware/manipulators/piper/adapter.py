@@ -76,12 +76,16 @@ class PiperAdapter(ManipulatorAdapter):
         address: str = "can0",
         dof: int = 6,
         gripper_speed: int = DEFAULT_GRIPPER_SPEED,
+        gripper_dof: int = 0,
         **_: object,
     ) -> None:
         if dof != 6:
             raise ValueError(f"PiperAdapter only supports 6 DOF (got {dof})")
+        if gripper_dof not in (0, 1):
+            raise ValueError(f"PiperAdapter supports 0 or 1 gripper joints (got {gripper_dof})")
         self._can_port = address
         self._dof = dof
+        self._gripper_dof = gripper_dof
         self._gripper_speed = gripper_speed
         self._sdk: C_PiperInterface_V2 | None = None
         self._connected: bool = False
@@ -278,20 +282,25 @@ class PiperAdapter(ManipulatorAdapter):
         )
 
     def get_dof(self) -> int:
-        """Get degrees of freedom."""
+        """Arm joints only."""
         return self._dof
 
+    def get_gripper_dof(self) -> int:
+        """1 when a gripper is fitted, else 0."""
+        return self._gripper_dof
+
     def get_limits(self) -> JointLimits:
-        """Get joint limits."""
+        """Arm limits in radians, then the gripper's jaw opening in metres."""
         # Piper joint limits (approximate, in radians)
         lower = [-3.14, -2.35, -2.35, -3.14, -2.35, -3.14]
         upper = [3.14, 2.35, 2.35, 3.14, 2.35, 3.14]
         max_vel = [math.pi] * self._dof  # ~180 deg/s
 
         return JointLimits(
-            position_lower=lower,
-            position_upper=upper,
-            velocity_max=max_vel,
+            position_lower=lower + [0.0] * self._gripper_dof,
+            position_upper=upper + [GRIPPER_MAX_OPENING_M] * self._gripper_dof,
+            # The SDK takes a speed code, not a metric rate; 0.0 is "unspecified".
+            velocity_max=max_vel + [0.0] * self._gripper_dof,
         )
 
     def set_control_mode(self, mode: ControlMode) -> bool:
@@ -332,7 +341,7 @@ class PiperAdapter(ManipulatorAdapter):
             raise RuntimeError("Failed to read joint positions")
 
         js = joint_msgs.joint_state
-        return [
+        positions = [
             js.joint_1 * MILLIDEG_TO_RAD,
             js.joint_2 * MILLIDEG_TO_RAD,
             js.joint_3 * MILLIDEG_TO_RAD,
@@ -340,6 +349,9 @@ class PiperAdapter(ManipulatorAdapter):
             js.joint_5 * MILLIDEG_TO_RAD,
             js.joint_6 * MILLIDEG_TO_RAD,
         ]
+        if self._gripper_dof:
+            positions.append(self._read_gripper())
+        return positions
 
     def read_joint_velocities(self) -> list[float]:
         """Read joint velocities.
@@ -347,14 +359,14 @@ class PiperAdapter(ManipulatorAdapter):
         Note: Piper doesn't provide real-time velocity feedback.
         Returns zeros. For velocity estimation, use finite differences.
         """
-        return [0.0] * self._dof
+        return [0.0] * (self._dof + self._gripper_dof)
 
     def read_joint_efforts(self) -> list[float]:
         """Read joint efforts/torques.
 
         Note: Piper doesn't provide torque feedback by default.
         """
-        return [0.0] * self._dof
+        return [0.0] * (self._dof + self._gripper_dof)
 
     def read_state(self) -> dict[str, int]:
         """Read robot state."""
@@ -413,15 +425,20 @@ class PiperAdapter(ManipulatorAdapter):
     ) -> bool:
         """Write joint positions (radians -> Piper units).
 
+        The array covers every joint this adapter owns, gripper last. The
+        gripper entry is already in metres, the unit get_limits() declares.
+
         Args:
-            positions: Target positions in radians
+            positions: Target positions, arm in radians then gripper in metres
             velocity: Speed as fraction of max (0-1)
         """
         if not self._sdk:
             return False
 
+        arm, grip = positions[: self._dof], positions[self._dof :]
+
         # Convert radians to Piper units (0.001 degrees)
-        piper_joints = [round(rad * RAD_TO_MILLIDEG) for rad in positions]
+        piper_joints = [round(rad * RAD_TO_MILLIDEG) for rad in arm]
 
         # Set speed rate if not full speed
         if velocity < 1.0:
@@ -445,10 +462,10 @@ class PiperAdapter(ManipulatorAdapter):
                 piper_joints[4],
                 piper_joints[5],
             )
-            return True
         except Exception:
             logger.exception("Piper joint control failed")
             return False
+        return self._write_gripper(grip[0]) if grip else True
 
     def write_joint_velocities(self, velocities: list[float]) -> bool:
         """Write joint velocities.
@@ -609,10 +626,10 @@ class PiperAdapter(ManipulatorAdapter):
         # Cartesian control not commonly supported in Piper SDK
         return False
 
-    def read_gripper_position(self) -> float | None:
-        """Read gripper position (percentage -> meters)."""
+    def _read_gripper(self) -> float:
+        """Gripper opening in metres — the unit get_limits() declares."""
         if not self._sdk:
-            return None
+            return 0.0
 
         try:
             gripper_msgs = self._sdk.GetArmGripperMsgs()
@@ -626,10 +643,10 @@ class PiperAdapter(ManipulatorAdapter):
         except Exception:
             pass
 
-        return None
+        return 0.0
 
-    def write_gripper_position(self, position: float) -> bool:
-        """Write gripper position (meters -> 0.001 mm units)."""
+    def _write_gripper(self, position: float) -> bool:
+        """Command the gripper in metres. No conversion beyond SDK encoding."""
         if not self._sdk:
             return False
 

@@ -104,6 +104,12 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+# TRANSITIONAL (GRIPPER-SPEC R26): fully-open in the xArm SDK's own 0-850 scale.
+# The old 0.85 was only 850/1000, an accident of the cartesian mm conversion.
+# Part 1.4 replaces these call sites with set_sweep(1.0), which needs no number,
+# and deletes this constant.
+_XARM_GRIPPER_OPEN = 850.0
+
 # Composite type aliases for readability (using semantic IDs from planning.spec)
 RobotEntry: TypeAlias = tuple[WorldRobotID, RobotModelConfig, JointTrajectoryGenerator]
 """(world_robot_id, config, trajectory_generator)"""
@@ -1643,7 +1649,14 @@ class ManipulationModule(Module):
         return str(config.gripper_hardware_id)
 
     def _set_gripper_position(self, position: float, robot_name: RobotName | None = None) -> bool:
-        """Internal: set gripper position in meters."""
+        """Internal: set gripper position in the adapter's declared unit.
+
+        Not metres universally — metres for Piper (0-0.08) and a1z (0-0.1),
+        the SDK's dimensionless 0-850 for the xArm. The range is readable via
+        the adapter's get_limits().
+        TRANSITIONAL: native units until the gripper task and set_sweep
+        replace this in part 1.4 (GRIPPER-SPEC R26).
+        """
         hw_id = self._get_gripper_hardware_id(robot_name)
         if hw_id is None:
             return False
@@ -1651,7 +1664,8 @@ class ManipulationModule(Module):
 
     @rpc
     def get_gripper(self, robot_name: RobotName | None = None) -> float | None:
-        """Get gripper position in meters.
+        """Get gripper position in the adapter's declared unit (not metres
+        universally — see _set_gripper_position).
 
         Args:
             robot_name: Robot to query (required if multiple robots configured)
@@ -1666,14 +1680,15 @@ class ManipulationModule(Module):
     def set_gripper(
         self, position: float, robot_name: str | None = None
     ) -> SkillResult[ManipulationSkillError]:
-        """Set gripper to a specific opening in meters.
+        """Set gripper to a specific opening, in the adapter's declared unit.
 
         Args:
-            position: Gripper opening in meters (0.0 = closed, 0.85 = fully open).
+            position: Gripper opening in the adapter's own unit — metres for
+                Piper (0-0.08) and a1z (0-0.1), the SDK's 0-850 for the xArm.
             robot_name: Robot to control (only needed for multi-arm setups).
         """
         if self._set_gripper_position(position, robot_name):
-            return SkillResult.ok(f"Gripper set to {position:.3f}m")
+            return SkillResult.ok(f"Gripper set to {position:.3f}")
         return SkillResult.fail("GRIPPER_FAILED", "Failed to set gripper position")
 
     @skill
@@ -1683,7 +1698,7 @@ class ManipulationModule(Module):
         Args:
             robot_name: Robot to control (only needed for multi-arm setups).
         """
-        if self._set_gripper_position(0.85, robot_name):
+        if self._set_gripper_position(_XARM_GRIPPER_OPEN, robot_name):
             return SkillResult.ok("Gripper opened")
         return SkillResult.fail("GRIPPER_FAILED", "Failed to open gripper")
 
@@ -1773,7 +1788,7 @@ class ManipulationModule(Module):
 
         gripper_pos = self.get_gripper(robot_name)
         if gripper_pos is not None:
-            lines.append(f"Gripper: {gripper_pos:.3f}m")
+            lines.append(f"Gripper: {gripper_pos:.3f} (adapter units)")
         else:
             lines.append("Gripper: not configured")
 
@@ -1911,7 +1926,7 @@ class ManipulationModule(Module):
             )
 
         logger.info("Opening gripper...")
-        self._set_gripper_position(0.85, rname)
+        self._set_gripper_position(_XARM_GRIPPER_OPEN, rname)
         time.sleep(0.5)
 
         goal = JointState(name=config.joint_names, position=config.home_joints)

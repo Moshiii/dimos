@@ -52,6 +52,9 @@ def writer_with_gripper(shm_key, monkeypatch):
     monkeypatch.setattr(adapter_mod, "shm_key_from_path", lambda _: shm_key)
     w = ManipShmWriter(shm_key)
     w.signal_ready(num_joints=ARM_DOF + 1)
+    # The sim module publishes the gripper joint's MJCF range at startup so the
+    # adapter can declare it through get_limits() (GRIPPER-SPEC R13a).
+    w.write_gripper_range(0.0, 0.85)
     yield w
     w.cleanup()
 
@@ -66,7 +69,7 @@ def adapter(writer):
 
 @pytest.fixture
 def adapter_with_gripper(writer_with_gripper):
-    a = ShmMujocoAdapter(dof=ARM_DOF, address="/fake/scene.xml")
+    a = ShmMujocoAdapter(dof=ARM_DOF, gripper_dof=1, address="/fake/scene.xml")
     assert a.connect() is True
     yield a
     a.disconnect()
@@ -114,15 +117,27 @@ class TestReadState:
         )
         assert adapter.read_joint_efforts() == [-1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -7.0]
 
-    def test_returns_only_dof_joints(self, adapter_with_gripper, writer_with_gripper):
-        # Writer publishes 8 joints (7 arm + 1 gripper); adapter should return 7.
+    def test_arm_comes_from_joints_and_gripper_from_its_own_slot(
+        self, adapter_with_gripper, writer_with_gripper
+    ):
+        """The gripper's state is published separately, not read off the tail.
+
+        The sim module writes the gripper into the ``grp`` segment (already
+        mapped through the MJCF joint range), so the adapter must take the
+        arm from the joint array and the gripper from ``grp`` — never
+        ``positions[dof]``, which is the unmapped model value.
+        """
         writer_with_gripper.write_joint_state(
             positions=list(range(8)),
             velocities=[0.0] * 8,
             efforts=[0.0] * 8,
         )
+        writer_with_gripper.write_gripper_state(0.42)
+
         positions = adapter_with_gripper.read_joint_positions()
-        assert len(positions) == ARM_DOF
+        assert len(positions) == ARM_DOF + 1
+        assert positions[:ARM_DOF] == [float(i) for i in range(ARM_DOF)]
+        assert positions[-1] == pytest.approx(0.42)
 
 
 class TestWriteCommand:
@@ -150,26 +165,45 @@ class TestWriteCommand:
 
 
 class TestGripper:
-    def test_gripper_detected(self, adapter_with_gripper):
-        assert adapter_with_gripper._has_gripper is True
+    def test_gripper_count_comes_from_config_not_joint_counting(self, adapter_with_gripper):
+        """R7: the adapter is told its gripper count, it does not infer one."""
+        assert adapter_with_gripper.get_gripper_dof() == 1
+        assert adapter_with_gripper.get_dof() == ARM_DOF  # arm only
 
-    def test_no_gripper_when_dof_matches(self, adapter):
-        assert adapter._has_gripper is False
+    def test_no_gripper_when_not_declared(self, adapter):
+        assert adapter.get_gripper_dof() == 0
 
-    def test_read_gripper_position(self, adapter_with_gripper, writer_with_gripper):
+    def test_limits_declare_the_mjcf_range(self, adapter_with_gripper):
+        """R13a: the model file is the single declaration of the sim's unit."""
+        limits = adapter_with_gripper.get_limits()
+        assert len(limits.position_lower) == ARM_DOF + 1
+        assert limits.position_lower[-1] == pytest.approx(0.0)
+        assert limits.position_upper[-1] == pytest.approx(0.85)
+
+    def test_limits_have_no_gripper_entry_without_one(self, adapter):
+        assert len(adapter.get_limits().position_lower) == ARM_DOF
+
+    def test_gripper_trails_the_read_array(self, adapter_with_gripper, writer_with_gripper):
         writer_with_gripper.write_gripper_state(0.33)
-        assert adapter_with_gripper.read_gripper_position() == pytest.approx(0.33)
+        positions = adapter_with_gripper.read_joint_positions()
+        assert len(positions) == ARM_DOF + 1
+        assert positions[-1] == pytest.approx(0.33)
 
-    def test_read_gripper_position_no_gripper(self, adapter):
-        assert adapter.read_gripper_position() is None
+    def test_reads_stay_index_aligned(self, adapter_with_gripper):
+        """Velocities and efforts must match positions in length (R4a)."""
+        n = len(adapter_with_gripper.read_joint_positions())
+        assert len(adapter_with_gripper.read_joint_velocities()) == n
+        assert len(adapter_with_gripper.read_joint_efforts()) == n
 
-    def test_write_gripper_position(self, adapter_with_gripper, writer_with_gripper):
-        assert adapter_with_gripper.write_gripper_position(0.5) is True
-        # Gripper command is raw (unscaled) — sim module handles joint->ctrl.
+    def test_gripper_trails_the_write_array(self, adapter_with_gripper, writer_with_gripper):
+        assert adapter_with_gripper.write_joint_positions([0.0] * ARM_DOF + [0.5]) is True
+        # Unscaled — the sim module maps MJCF joint range to actuator ctrl.
         assert writer_with_gripper.read_gripper_command() == pytest.approx(0.5)
 
-    def test_write_gripper_position_no_gripper(self, adapter):
-        assert adapter.write_gripper_position(0.5) is False
+    def test_range_falls_back_when_scene_declared_none(self, adapter, writer):
+        """A gripper-less scene must not yield a degenerate (0.0, 0.0)."""
+        assert writer.__class__ is ManipShmWriter
+        assert adapter.get_limits().position_upper[:1] != []
 
 
 class TestConnect:
