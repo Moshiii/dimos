@@ -36,17 +36,8 @@ from dimos.mapping.odometry_path import OdometryPath
 from dimos.mapping.rtab_map.rtabmap import RERUN_CONFIG, RtabmapSlam
 from dimos.visualization.vis_module import vis_module
 
-WIDTH = 848
-HEIGHT = 480
-FPS = 15
-# Measured off the D435if on this NUC; a D455 is 0.0949.
-IR_BASELINE_M = 0.0499
-
 demo_rtabmap = autoconnect(
     RealSenseCamera.blueprint(
-        width=WIDTH,
-        height=HEIGHT,
-        fps=FPS,
         enable_color=True,
         enable_depth=True,
         # One camera_info then describes both images.
@@ -70,9 +61,6 @@ demo_rtabmap = autoconnect(
 demo_rtabmap_stereo = (
     autoconnect(
         RealSenseCamera.blueprint(
-            width=WIDTH,
-            height=HEIGHT,
-            fps=FPS,
             enable_infrared=True,
             # The dots move with the camera rather than the world, so a feature
             # tracker latches onto them and biases motion toward zero.
@@ -83,7 +71,12 @@ demo_rtabmap_stereo = (
             enable_imu=False,
             base_transform=None,
         ),
-        RtabmapSlam.blueprint(input_mode="stereo_ir", baseline_m=IR_BASELINE_M),
+        # Off the attached camera, so this is a D435's ~50 mm or a D455's ~95 mm
+        # without either being written down here.
+        RtabmapSlam.blueprint(
+            input_mode="stereo_ir",
+            between_cam_distance=RealSenseCamera.between_cam_distance(),
+        ),
         # RTAB-Map publishes where the camera is now; this keeps the history so
         # the viewer can draw where it has been.
         OdometryPath.blueprint(),

@@ -115,9 +115,12 @@ struct RtabmapConfig {
     /// Log processing time (mean and worst) every this many seconds, so a run
     /// reports the rate it could sustain rather than the rate it was fed at. 0 is off.
     double timing_report_period_s;
-    /// Distance between the two infrared imagers, metres. Only read in stereo_ir
-    /// mode -- in rgbd mode the camera has already done the triangulation.
-    double baseline_m;
+    /// Distance between the two imagers of the stereo pair, metres. Only read in
+    /// stereo_ir mode -- in rgbd mode the camera has already triangulated. 0 means
+    /// unset, and the distance is taken from camera_info instead: that is where a rig
+    /// that knows its own geometry publishes it. This is the fallback for one that
+    /// does not, and stereo_ir errors out when neither has it.
+    double between_cam_distance;
     std::string database_path;
     bool delete_db_on_start;
     /// 0 = frame-to-map, 1 = frame-to-frame. See rtabmap's Odom/Strategy.
@@ -188,7 +191,15 @@ struct RtabmapConfig {
                                      input_mode + "'");
         }
         if (stereo()) {
-            dimos::native::require_positive(baseline_m, "baseline_m");
+            // Unset (0) is the common case rather than a typo: the distance is
+            // per-model and per-unit, so it comes from the rig, not from a default
+            // that would be silently wrong on the next camera.
+            if (!(between_cam_distance > 0.0)) {
+                throw std::runtime_error(
+                    "input_mode='stereo_ir' needs between_cam_distance, the metres between "
+                    "the two imagers. Read it off the camera rather than hardcoding it -- "
+                    "RealSenseCamera.between_cam_distance() does that for a RealSense");
+            }
         }
         if (use_external_odometry) {
             // mono takes no pose at all: Rtabmap::process(image, id) is the
@@ -445,10 +456,10 @@ private:
                                       0.0, cv::Size(width_, height_));
         if (cfg_.stereo()) {
             // The infrared pair leaves the D4xx already rectified, which is what lets
-            // one pinhole model plus a baseline describe the rig.
-            stereo_model_ = rtabmap::StereoCameraModel(fx_, fy_, cx_, cy_, cfg_.baseline_m,
-                                                       rtabmap::CameraModel::opticalRotation(),
-                                                       cv::Size(width_, height_));
+            // one pinhole model plus the distance between the imagers describe the rig.
+            stereo_model_ = rtabmap::StereoCameraModel(
+                fx_, fy_, cx_, cy_, cfg_.between_cam_distance,
+                rtabmap::CameraModel::opticalRotation(), cv::Size(width_, height_));
         }
 
         rtabmap::ParametersMap params = rtabmap::Parameters::getDefaultParameters();

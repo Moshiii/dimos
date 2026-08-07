@@ -42,7 +42,6 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.spec import perception
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import backpressure
@@ -109,7 +108,6 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
     depth_camera_info: Out[CameraInfo]
     infrared_left_camera_info: Out[CameraInfo]
     infrared_right_camera_info: Out[CameraInfo]
-    tf: Out[TFMessage]
 
     @property
     def _camera_link(self) -> str:
@@ -186,6 +184,34 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
         self._latest_color_img: Image | None = None
         self._latest_depth_img: Image | None = None
         self._pointcloud_lock = threading.Lock()
+
+    @staticmethod
+    def between_cam_distance(serial_number: str | None = None) -> float | None:
+        """Metres between the stereo cameras
+        Ex: a D435 is ~50 mm, a D455 ~95 mm
+        """
+        try:
+            import pyrealsense2 as rs
+        except ImportError:
+            return None
+
+        for device in rs.context().query_devices():
+            if serial_number and device.get_info(rs.camera_info.serial_number) != serial_number:
+                continue
+            profiles = [
+                profile
+                for sensor in device.query_sensors()
+                for profile in sensor.get_stream_profiles()
+                if profile.stream_type() == rs.stream.infrared
+            ]
+            # index 1 = left imager, index 2 = right imager
+            left = next((p for p in profiles if p.stream_index() == 1), None)
+            right = next((p for p in profiles if p.stream_index() == 2), None)
+            if left is None or right is None:
+                continue
+            # The pair is rectified, so the whole of their offset is along x.
+            return abs(float(right.get_extrinsics_to(left).translation[0]))
+        return None
 
     @rpc
     def start(self) -> None:
@@ -767,7 +793,7 @@ class RealSenseCamera(DepthCameraHardware, Module, perception.DepthCamera):
                     ts=ts,
                 )
             )
-        self.tf.publish(TFMessage(*transforms))
+        self.tf.publish(*transforms)
 
     def _generate_pointcloud(self) -> None:
         """Generate and publish pointcloud from latest images (called by rx.interval)."""

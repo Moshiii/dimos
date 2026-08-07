@@ -41,7 +41,6 @@ from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.spec import perception
 from dimos.utils.reactive import backpressure
 
@@ -86,7 +85,6 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
     pointcloud: Out[PointCloud2]
     camera_info: Out[CameraInfo]
     depth_camera_info: Out[CameraInfo]
-    tf: Out[TFMessage]
     # The SDK's positional tracking pose, as the standard odometry type rather than
     # only a tf edge. Consumers that take odometry as a stream -- RtabmapSlam's
     # external_odometry, for one -- cannot subscribe to a transform inside a
@@ -443,7 +441,7 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
                 )
             )
 
-        self.tf.publish(TFMessage(*transforms))
+        self.tf.publish(*transforms)
 
     def _generate_pointcloud(self) -> None:
         with self._pointcloud_lock:

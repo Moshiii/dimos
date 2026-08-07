@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path as FilePath
 import time
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field
 from reactivex.disposable import Disposable
@@ -30,13 +30,17 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.pubsub.patterns import Glob
 
+if TYPE_CHECKING:
+    from rerun._baseclasses import Archetype
+
 MODULE_DIR = FilePath(__file__).resolve().parent
+
 
 # The trail comes from OdometryPath, whose output stream is ``path``.
 #
@@ -48,11 +52,14 @@ MODULE_DIR = FilePath(__file__).resolve().parent
 # Glob rather than a plain string: the bridge matches a str pattern by exact equality
 # against the whole entity path, so a remapped or namespaced topic would miss silently
 # and the only symptom would be a trail floating half a metre off.
-RERUN_CONFIG: dict[str, object] = {
-    "visual_override": {
-        Glob("**path"): lambda path: path.to_rerun(z_offset=0.0, color=(0, 255, 128)),
-    }
-}
+#
+# A named function rather than a lambda because the config is pickled to the worker
+# that hosts the bridge, and a lambda has no importable name to pickle by.
+def _path_trail(path: Path) -> Archetype:
+    return path.to_rerun(z_offset=0.0, color=(0, 255, 128))
+
+
+RERUN_CONFIG: dict[str, object] = {"visual_override": {Glob("**path"): _path_trail}}
 
 
 class RtabmapConfig(NativeModuleConfig):
@@ -94,9 +101,13 @@ class RtabmapConfig(NativeModuleConfig):
     # Report mean/worst processing time this often, so a run states the rate it could
     # sustain rather than the rate it happened to be fed. 0 disables.
     timing_report_period_s: float = 10.0
-    # Distance between the infrared imagers. Only read in stereo_ir mode. This is
-    # the D435/D435i factory value; a D455 is 0.0949.
-    baseline_m: float = 0.0499
+    # Distance between the two imagers of the stereo pair, metres. Only read in
+    # stereo_ir mode -- in rgbd mode the camera has already triangulated. It is
+    # per-model and per-unit (a D435 is ~50 mm, a D455 ~95 mm), so there is no default
+    # that is right on the next camera: ask the rig for it, with
+    # ``RealSenseCamera.between_cam_distance()`` for a RealSense. Unset, stereo_ir
+    # refuses to start rather than map at the wrong scale.
+    between_cam_distance: float | None = None
 
     database_path: str = str(FilePath.home() / ".cache/dimos/rtabmap.db")
     # A stale database silently turns a mapping run into a relocalization run
@@ -172,6 +183,14 @@ class RtabmapConfig(NativeModuleConfig):
     # parameters that are not worth a config field each.
     extra_parameters: dict[str, str] = Field(default_factory=dict)
 
+    def to_config_dict(self) -> dict[str, Any]:
+        # The base drops None and the native half requires every field to be present,
+        # so unset travels as the 0 it rejects, with its own error message.
+        return {
+            **super().to_config_dict(),
+            "between_cam_distance": self.between_cam_distance or 0.0,
+        }
+
 
 class RtabmapSlam(NativeModule):
     """RGB-D SLAM: visual odometry plus appearance-based loop closure.
@@ -219,7 +238,6 @@ class RtabmapSlam(NativeModule):
     corrected_odometry: Out[Odometry]
     map_tf: Out[Odometry]
     cloud_map: Out[PointCloud2]
-    tf: Out[TFMessage]
 
     @rpc
     def start(self) -> None:
@@ -253,14 +271,10 @@ class RtabmapSlam(NativeModule):
         # provider owns odom->base_link. Two publishers of one tf edge fight.
         if self.config.use_external_odometry:
             return
-        self.tf.publish(
-            TFMessage(self._transform(message, self.config.odom_frame, self.config.base_frame))
-        )
+        self.tf.publish(self._transform(message, self.config.odom_frame, self.config.base_frame))
 
     def _on_map_tf(self, message: Odometry) -> None:
         """The pose graph's correction, map->odom. Identity until the graph moves."""
         if not self.config.publish_map_to_odom:
             return
-        self.tf.publish(
-            TFMessage(self._transform(message, self.config.map_frame, self.config.odom_frame))
-        )
+        self.tf.publish(self._transform(message, self.config.map_frame, self.config.odom_frame))
