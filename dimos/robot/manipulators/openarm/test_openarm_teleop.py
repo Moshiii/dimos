@@ -37,6 +37,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.openarm.blueprints.teleop import (
     OPENARM_QUEST_TASK_NAME,
+    _openarm_quest_hardware,
     teleop_quest_openarm,
 )
 from dimos.robot.manipulators.openarm.config import (
@@ -60,6 +61,34 @@ def test_openarm_mock_hardware_is_unconditional(mocker: MockerFixture) -> None:
     mocker.patch.object(global_config, "simulation", "")
 
     assert openarm_mock_hardware().adapter_type == "mock_whole_body"
+
+
+def test_openarm_quest_hardware_defaults_to_mock() -> None:
+    hardware = _openarm_quest_hardware(None, None)
+
+    assert hardware.adapter_type == "mock_whole_body"
+
+
+def test_openarm_quest_hardware_uses_explicit_can_ports() -> None:
+    hardware = _openarm_quest_hardware("can8", "can9")
+
+    assert hardware.adapter_type == "openarm_damiao"
+    assert hardware.adapter_kwargs["runtime_config"].bus_addresses == {
+        "left": "can8",
+        "right": "can9",
+    }
+
+
+@pytest.mark.parametrize(
+    ("left_can_port", "right_can_port"),
+    [("can8", None), (None, "can9")],
+)
+def test_openarm_quest_hardware_requires_both_can_ports(
+    left_can_port: str | None,
+    right_can_port: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="requires both left and right CAN ports"):
+        _openarm_quest_hardware(left_can_port, right_can_port)
 
 
 def test_openarm_mock_hardware_and_model_use_canonical_zero_start() -> None:

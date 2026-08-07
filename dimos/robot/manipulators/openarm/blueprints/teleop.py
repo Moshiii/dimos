@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+from dimos.control.components import HardwareComponent
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.global_config import global_config
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.robot.manipulators.common.blueprints import (
@@ -103,7 +105,22 @@ keyboard_teleop_openarm_planner = autoconnect(
 )
 
 
-_openarm_quest_hw = openarm_mock_hardware()
+def _openarm_quest_hardware(
+    left_can_port: str | None,
+    right_can_port: str | None,
+) -> HardwareComponent:
+    if left_can_port is None and right_can_port is None:
+        return openarm_mock_hardware()
+    return openarm_hardware(
+        left_can_port=left_can_port,
+        right_can_port=right_can_port,
+    )
+
+
+_openarm_quest_hw = _openarm_quest_hardware(
+    global_config.left_can_port,
+    global_config.right_can_port,
+)
 _openarm_quest_model = openarm_bimanual_model_config()
 _openarm_quest_pink = PinkKinematicsConfig(
     dt=0.01,
@@ -143,8 +160,8 @@ _openarm_quest_task = quest_teleop_ik_task(
     },
 )
 
-# Safe default: both controllers feed one bimanual task backed by in-memory
-# whole-body hardware. Physical hardware requires a separate explicit blueprint.
+# Safe default: without explicit CAN ports, both controllers feed one bimanual
+# task backed by in-memory hardware. Supplying both CAN ports selects hardware.
 teleop_quest_openarm = autoconnect(
     ArmTeleopModule.blueprint(
         task_names={"left": OPENARM_QUEST_TASK_NAME, "right": OPENARM_QUEST_TASK_NAME}
