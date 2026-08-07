@@ -80,6 +80,30 @@ def _path_at_true_height(path: Path) -> Any:
     return rr.LineStrips3D([points], colors=[_PATH_COLOR_RGB], radii=_PATH_RADIUS_M)
 
 
+def _rerun_blueprint() -> Any:
+    """The stereo pair stacked down one side, the 3D world taking the rest."""
+    import rerun as rr
+    import rerun.blueprint as rrb
+
+    return rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Vertical(
+                rrb.Spatial2DView(origin="world/image_left", name="IR left"),
+                rrb.Spatial2DView(origin="world/image_right", name="IR right"),
+            ),
+            rrb.Spatial3DView(
+                origin="world",
+                name="3D",
+                background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
+                line_grid=rrb.LineGrid3D(plane=rr.components.Plane3D.XY.with_distance(0.5)),
+            ),
+            column_shares=[1, 3],
+        ),
+        rrb.TimePanel(state="hidden"),
+        rrb.SelectionPanel(state="hidden"),
+    )
+
+
 demo_cuvslam = (
     autoconnect(
         RealSenseCamera.blueprint(
@@ -98,8 +122,6 @@ demo_cuvslam = (
             enable_imu=False,
         ),
         CuvslamOdometry.blueprint(
-            enable_imu=False,
-            async_sba=False,
             enable_slam=True,
             base_frame="base_link",
             odom_frame="odom",
@@ -110,7 +132,10 @@ demo_cuvslam = (
         OdometryPath.blueprint(),
         vis_module(
             global_config.viewer,
-            rerun_config={"visual_override": {"world/path": _path_at_true_height}},
+            rerun_config={
+                "blueprint": _rerun_blueprint,
+                "visual_override": {"world/path": _path_at_true_height},
+            },
         ),
     )
     .remappings(
@@ -118,6 +143,9 @@ demo_cuvslam = (
             (RealSenseCamera, "infrared_left", "image_left"),
             (RealSenseCamera, "infrared_right", "image_right"),
             (RealSenseCamera, "infrared_left_camera_info", "camera_info"),
+            # The right one carries the baseline in P[3]; without it there is no
+            # metric scale.
+            (RealSenseCamera, "infrared_right_camera_info", "camera_info_right"),
         ]
     )
     .global_config(n_workers=4)
