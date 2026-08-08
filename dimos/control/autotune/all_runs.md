@@ -6,24 +6,28 @@
 4 runs — 8 for 8. `K` is negative in most fits, which real hardware watching
 confirms is wrong (robot turns the correct direction; the fit doesn't).
 
-| | Run 1 | Run 2 | Run 3 (shaking) | Run 4 (4s) | Run 5 (6s) | Run 6 (8s, no zenoh) | Run 7 (8s, wz unwrapped, no zenoh) | Run 8 (zenoh back, L<=1.0) | **Run 9 (zenoh, L<=1.0)** | Old tool's ground truth |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `vx.K` | 0.072 | 0.071 | −0.017 | −0.524 | +0.572 | +0.779 | — (not run) | — (not characterized) | **+0.275** | 0.80–0.92 |
-| `vx.tau` | 0.600 (edge) | 0.399 | 0.030 (edge) | 0.334 | 0.363 | 0.262 | — | — | **0.061** | 0.30–0.40 |
-| `vx.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | — | — | **0.528** | **0.065–0.15** |
-| `vx.verdict` | marginal | marginal | — | marginal | marginal | pass | — | absent (identity placeholder, caveat) | **marginal** | — |
-| `vx.saturation_fraction` | — | — | — | — | 0.525 | 0.183 | — | — | **0.683** | — |
-| `wz.K` | −0.176 | −0.212 | −0.0067 | −0.038 | +0.319 | +0.044 | +0.779 | +0.775 | **+0.782** | 0.90–2.45 |
-| `wz.tau` | 0.600 (edge) | 0.600 (edge) | 0.030 (edge) | 0.030 (edge) | 0.051 | 0.600 (edge) | 0.300 (in range) | 0.129 | **0.264** | 0.3–0.60 |
-| `wz.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge, old bound) | 0.430 (not pinned) | **0.335 (not pinned)** | **0.05–0.15** |
-| `wz.verdict` | absent | absent | — | — | pass | absent | pass | pass | **pass** | — |
-| `wz.saturation_fraction` | — | — | — | — | — | — | 0.234 | 0.187 | **0.177** | — |
+| | Run 1 | Run 2 | Run 3 (shaking) | Run 4 (4s) | Run 5 (6s) | Run 6 (8s, no zenoh) | Run 7 (8s, wz unwrapped, no zenoh) | Run 8 (zenoh back, L<=1.0) | Run 9 (zenoh, L<=1.0) | Run 10 (no zenoh, vx only) | **Run 11 (2nd robot, zenoh out)** | Old tool's ground truth |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `vx.K` | 0.072 | 0.071 | −0.017 | −0.524 | +0.572 | +0.779 | — (not run) | — (not characterized) | +0.275 | +0.271 | **−0.279** | 0.80–0.92 |
+| `vx.tau` | 0.600 (edge) | 0.399 | 0.030 (edge) | 0.334 | 0.363 | 0.262 | — | — | 0.061 | 0.157 | **0.030 (edge)** | 0.30–0.40 |
+| `vx.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | — | — | 0.528 | 0.421 | **0.538** | **0.065–0.15** |
+| `vx.verdict` | marginal | marginal | — | marginal | marginal | pass | — | absent (identity placeholder, caveat) | marginal | marginal | **marginal/worse** | — |
+| `wz.K` | −0.176 | −0.212 | −0.0067 | −0.038 | +0.319 | +0.044 | +0.779 | +0.775 | +0.782 | — (not run) | **+0.828** | 0.90–2.45 |
+| `wz.tau` | 0.600 (edge) | 0.600 (edge) | 0.030 (edge) | 0.030 (edge) | 0.051 | 0.600 (edge) | 0.300 (in range) | 0.129 | 0.264 | — | **0.045** | 0.3–0.60 |
+| `wz.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge, old bound) | 0.430 (not pinned) | 0.335 (not pinned) | — | **0.545 (not pinned)** | **0.05–0.15** |
+| `wz.verdict` | absent | absent | — | — | pass | absent | pass | pass | pass | — | **pass** | — |
 
-**Run 7 confirms the `np.unwrap()` fix.** `wz.K` jumped from 0.044 to 0.779 -- by far the closest to the reference range of any run, channel, ever. `wz.tau` came fully off its pinned edge for the first time and landed inside the reference band (0.3-0.60). Verdict `pass`, reasonable saturation (23%). This is strong, direct evidence the yaw-wrap corruption was the real problem, not duration -- matching the hypothesis exactly.
+**Run 7 confirms the `np.unwrap()` fix.** `wz.K` jumped from 0.044 to 0.779 -- by far the closest to the reference range of any run, channel, ever. `wz.tau` came fully off its pinned edge for the first time and landed inside the reference band (0.3-0.60). This is strong, direct evidence the yaw-wrap corruption was the real problem, not duration.
 
-**`wz` is now solid and repeatable across three straight runs (7, 8, 9)** -- `K` has landed 0.779 / 0.775 / 0.782, verdict `pass` every time, `L` no longer pinned since the bound widened to 1.0 (0.300(old edge) -> 0.430 -> 0.335, all in a believable range). The unwrap fix plus the wider `L` bound together look like a real, stable solution for `wz`.
+**`wz` is now solid and repeatable across four runs (7, 8, 9, 11), including a second physical robot** -- `K` has landed 0.779 / 0.775 / 0.782 / 0.828, verdict `pass` every time. The unwrap fix plus the wider `L` bound look like a real, stable, generalizing solution for `wz`.
 
-**`vx` has degraded in both runs since zenoh was restored.** Run 8: failed to characterize at all (identity placeholder). Run 9: characterized but `verdict=marginal`, `saturation_fraction=0.683` -- roughly 4x Run 6's 0.183, and Run 6 is the last time `vx` cleanly passed. The one deliberate difference between Run 6 and Runs 8/9 is zenoh being restored; everything else (duration=8s, KeyboardTeleop fix, velocity_api=True) is unchanged. **Not proven causal** -- two data points, and the earlier deep dive found no code path linking zenoh's presence to `vx` behavior -- but it's a real, honest pattern worth debugging rather than dismissing, especially since `wz` shows no equivalent degradation over the same span. Actively being debugged -- see below.
+**`vx` is broken, systematically, not from zenoh or the bounds change.** Two controlled tests ruled those out directly:
+- Run 9 (zenoh) vs Run 10 (zenoh removed, same robot, same duration): nearly identical bad result (`K` 0.275 vs 0.271). Zenoh isn't it.
+- Refit of Run 10's real data back down to the *old* `L<=0.30` bound: `K` stayed at 0.271, didn't recover Run 6's 0.779. The bounds widening isn't an artifact that broke a previously-good fit.
+
+**Run 11 (a second, different physical robot) also fails on `vx`** -- worse, in fact (`K` goes negative, `tau` pins at the opposite/low edge) -- while `wz` stays clean on that same robot. That rules out "just this one robot's mechanical condition" too. Three runs, three different bad `vx` signatures, `wz` clean throughout: this is the same shape of problem `wz`'s yaw-wrap bug had -- one channel structurally broken, reproducing across hardware -- not yet root-caused.
+
+**Leading hypothesis, unconfirmed:** `SegmentRecorder.on_pose` (`autotune_driver.py:95`) reads `vx` as raw world-frame `msg.position.x`, not a body-frame/forward-distance measure. Any real heading drift during a `vx` step would corrupt this channel's step-response shape while leaving `wz` (yaw itself) unaffected. Needs `check_yaw_wrap.py`'s segment range-covered output (or the raw trajectory shape) against a real `vx` run to confirm.
 
 ## `L` pinning: not a bounds bug -- real deadtime is ~0.45s
 
