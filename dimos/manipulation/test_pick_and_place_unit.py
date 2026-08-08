@@ -204,7 +204,7 @@ class TestPlaceBack:
         mocker.patch.object(
             module,
             "_get_robot",
-            return_value=("arm", "robot-id", robot_config, None),
+            return_value=("arm", "robot-id", robot_config),
         )
         mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
         approach = mocker.patch.object(module, "plan_to_pose", return_value=True)
@@ -542,7 +542,7 @@ class TestPickTransaction:
         selected = _FeasibleGrasp(candidate, 1, Pose(0.4, 0.0, 0.3), Pose(0.4, 0.0, 0.3))
         robot_config = SimpleNamespace(pre_grasp_offset=0.1)
         mocker.patch.object(
-            module, "_get_robot", return_value=("arm", "robot-id", robot_config, None)
+            module, "_get_robot", return_value=("arm", "robot-id", robot_config)
         )
         mocker.patch.object(module, "_require_pick_object", return_value=detection)
         mocker.patch.object(module, "_provider_candidates", return_value=[candidate])
@@ -741,7 +741,7 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     module._object_scene = scene
     module._grasp_generator = generator
     robot_config = SimpleNamespace(pre_grasp_offset=0.1)
-    mocker.patch.object(module, "_get_robot", return_value=("arm", "robot-id", robot_config, None))
+    mocker.patch.object(module, "_get_robot", return_value=("arm", "robot-id", robot_config))
     plan_sequence = mocker.patch.object(
         module,
         "_check_connected_pose_sequence",

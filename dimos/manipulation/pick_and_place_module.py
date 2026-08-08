@@ -772,7 +772,7 @@ class PickAndPlaceModule(ManipulationModule):
             robot = self._get_robot(robot_name)
             if robot is None:
                 return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
-            rname, _, _, _ = robot
+            rname, _, _ = robot
             sequence_start = None
             lift_pose = self._safety_lift_pose(rname)
             if lift_pose is not None:
@@ -1064,7 +1064,7 @@ class PickAndPlaceModule(ManipulationModule):
             robot = self._get_robot(robot_name)
             if robot is None:
                 return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
-            rname, _, _, _ = robot
+            rname, _, _ = robot
 
             detection = self._require_pick_object(object_name, object_id)
             transaction.object_id = detection.object_id
@@ -1173,7 +1173,7 @@ class PickAndPlaceModule(ManipulationModule):
         robot = self._get_robot(robot_name)
         if robot is None:
             return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
-        rname, _, config, _ = robot
+        rname, _, config = robot
         pre_place_offset = config.pre_grasp_offset
 
         # Reduce pre-place height for far targets
