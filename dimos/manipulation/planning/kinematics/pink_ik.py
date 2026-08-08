@@ -16,7 +16,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+import contextlib
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
@@ -71,6 +72,7 @@ class _JointMapping:
     dimos_joint_names: list[str]
     model_joint_names: list[str]
     idx_q: list[int]
+    idx_v: list[int]
 
 
 @dataclass
@@ -264,27 +266,30 @@ class PinkIK:
                     )
                 try:
                     q0 = self._q_from_dimos_positions(targets[0][0], current_positions)
-                    if len(targets) == 1:
-                        result = self._solve_single(
-                            robot_context=targets[0][0],
-                            target_model=targets[0][1],
-                            seed_q=q0,
-                            lower_limits=lower_limits,
-                            upper_limits=upper_limits,
-                            position_tolerance=position_tolerance,
-                            orientation_tolerance=orientation_tolerance,
-                            locked_joint_positions=locked_positions,
-                        )
-                    else:
-                        result = self._solve_multi(
-                            targets=targets,
-                            seed_q=q0,
-                            lower_limits=lower_limits,
-                            upper_limits=upper_limits,
-                            position_tolerance=position_tolerance,
-                            orientation_tolerance=orientation_tolerance,
-                            locked_joint_positions=locked_positions,
-                        )
+                    with _velocity_locked_joints(
+                        self._modules.pink, targets[0][0], locked_positions
+                    ):
+                        if len(targets) == 1:
+                            result = self._solve_single(
+                                robot_context=targets[0][0],
+                                target_model=targets[0][1],
+                                seed_q=q0,
+                                lower_limits=lower_limits,
+                                upper_limits=upper_limits,
+                                position_tolerance=position_tolerance,
+                                orientation_tolerance=orientation_tolerance,
+                                locked_joint_positions=locked_positions,
+                            )
+                        else:
+                            result = self._solve_multi(
+                                targets=targets,
+                                seed_q=q0,
+                                lower_limits=lower_limits,
+                                upper_limits=upper_limits,
+                                position_tolerance=position_tolerance,
+                                orientation_tolerance=orientation_tolerance,
+                                locked_joint_positions=locked_positions,
+                            )
                 except ValueError as exc:
                     return _failure(IKStatus.NO_SOLUTION, f"Pink IK mapping failed: {exc}")
                 except Exception as exc:
@@ -417,8 +422,13 @@ class PinkIK:
                 safety_break=self.config.safety_break,
             )
             configuration.integrate_inplace(velocity, self.config.dt)
-            for local_index, value in (locked_joint_positions or {}).items():
-                configuration.q[robot_context.mapping.idx_q[local_index]] = value
+            if locked_joint_positions:
+                # pink stores q read-only; pin via update() so FK data stays
+                # consistent with the pinned values.
+                pinned_q = np.array(configuration.q, dtype=np.float64)
+                for local_index, value in locked_joint_positions.items():
+                    pinned_q[robot_context.mapping.idx_q[local_index]] = value
+                configuration.update(pinned_q)
             joint_positions = self._q_to_dimos_positions(robot_context, configuration.q)
             if not _within_limits(joint_positions, lower_limits, upper_limits):
                 return IKResult(
@@ -499,8 +509,13 @@ class PinkIK:
                 safety_break=self.config.safety_break,
             )
             configuration.integrate_inplace(velocity, self.config.dt)
-            for local_index, value in (locked_joint_positions or {}).items():
-                configuration.q[robot_context.mapping.idx_q[local_index]] = value
+            if locked_joint_positions:
+                # pink stores q read-only; pin via update() so FK data stays
+                # consistent with the pinned values.
+                pinned_q = np.array(configuration.q, dtype=np.float64)
+                for local_index, value in locked_joint_positions.items():
+                    pinned_q[robot_context.mapping.idx_q[local_index]] = value
+                configuration.update(pinned_q)
 
             joint_positions = self._q_to_dimos_positions(robot_context, configuration.q)
             if not _within_limits(joint_positions, lower_limits, upper_limits):
@@ -665,6 +680,7 @@ def _import_required_module(name: str, message: str) -> ModuleType:
 
 def _build_joint_mapping(model: Any, config: RobotModelConfig) -> _JointMapping:
     idx_q: list[int] = []
+    idx_v: list[int] = []
     model_joint_names: list[str] = []
 
     for dimos_name in config.joint_names:
@@ -678,13 +694,53 @@ def _build_joint_mapping(model: Any, config: RobotModelConfig) -> _JointMapping:
                 f"joint '{model_joint_name}' has nq={nq}"
             )
         idx_q.append(int(joint.idx_q))
+        idx_v.append(int(joint.idx_v))
         model_joint_names.append(model_joint_name)
 
     return _JointMapping(
         dimos_joint_names=list(config.joint_names),
         model_joint_names=model_joint_names,
         idx_q=idx_q,
+        idx_v=idx_v,
     )
+
+
+# Pink's VelocityLimit drops joints whose limit is <= 1e-10 from the QP
+# constraint entirely, so locked joints get a tiny positive limit instead
+# of an exact zero.
+_LOCKED_JOINT_VELOCITY_LIMIT = 1e-9
+
+
+@contextlib.contextmanager
+def _velocity_locked_joints(
+    pink_module: ModuleType,
+    context: _PinkRobotContext,
+    locked_joint_positions: Mapping[int, float],
+) -> Iterator[None]:
+    """Constrain locked joints to ~zero velocity so the QP cannot move them.
+
+    Without this the differential IK routes its descent direction through
+    locked joints (pinned back after every integration step) and stalls in
+    a tug-of-war instead of moving the selected group. Pink caches its
+    ``VelocityLimit`` on the Pinocchio model, so it is rebuilt explicitly
+    on entry and exit.
+    """
+    if not locked_joint_positions:
+        yield
+        return
+    velocity_limit_cls = pink_module.limits.VelocityLimit
+    model = context.model
+    saved = np.array(model.velocityLimit, dtype=np.float64)
+    locked = saved.copy()
+    for local_index in locked_joint_positions:
+        locked[context.mapping.idx_v[local_index]] = _LOCKED_JOINT_VELOCITY_LIMIT
+    model.velocityLimit = locked
+    model.velocity_limit = velocity_limit_cls(model)
+    try:
+        yield
+    finally:
+        model.velocityLimit = saved
+        model.velocity_limit = velocity_limit_cls(model)
 
 
 def _get_joint_id(model: Any, joint_name: str) -> int:

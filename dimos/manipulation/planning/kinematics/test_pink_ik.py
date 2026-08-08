@@ -50,6 +50,7 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 class _FakeJoint:
     def __init__(self, idx_q: int) -> None:
         self.idx_q = idx_q
+        self.idx_v = idx_q
         self.nq = 1
 
 
@@ -75,6 +76,7 @@ class _FakeModel:
     nq = 3
 
     def __init__(self) -> None:
+        self.velocityLimit = np.full(3, 10.0)
         self.names = ["universe", "joint_b", "joint_a", "joint_c"]
         self.joints = [SimpleNamespace(idx_q=-1, nq=0), _FakeJoint(0), _FakeJoint(1), _FakeJoint(2)]
         self.frames = [_FakeFrame("base", 0), _FakeFrame("tool", 3)]
@@ -112,6 +114,10 @@ class _FakeConfiguration:
     def integrate_inplace(self, velocity: np.ndarray, dt: float) -> None:
         self.q = self.q + velocity * dt
 
+    def update(self, q: np.ndarray | None = None) -> None:
+        if q is not None:
+            self.q = q.copy()
+
 
 class _FakeFrameTask:
     def __init__(self, frame: str, **_: object) -> None:
@@ -147,6 +153,7 @@ def _fake_modules(converge: bool = True) -> _PinkModules:
     pink = ModuleType("pink")
     pink.Configuration = _FakeConfiguration  # type: ignore[attr-defined]
     pink.tasks = SimpleNamespace(FrameTask=_FakeFrameTask, PostureTask=_FakePostureTask)
+    pink.limits = SimpleNamespace(VelocityLimit=lambda model: SimpleNamespace(model=model))
 
     def solve_ik(
         configuration: _FakeConfiguration,
