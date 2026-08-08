@@ -964,8 +964,8 @@ resolved into the requirements above (R4a, R13, R13a, R14a, R16, R17, R21a, R26,
 R30).
 ## 8. PR 2 proposal — the `GripperAdapter` protocol (R9, R24)
 
-**Status: proposal, awaiting team review.** Implementation starts after approval — the
-sequence agreed in the 2026-08-04 meeting. Nothing in this section is code yet.
+**Status: approved 2026-08-07 after review; implemented on this branch.** Team review
+happens on the PR, where this section and its implementation arrive together.
 
 ### 8.1 The protocol
 
@@ -1012,10 +1012,14 @@ class GripperAdapter(Protocol):
     def write_joint_velocities(self, velocities: list[float]) -> bool: ...
 ```
 
-**14 methods, and every one is exercised by the existing stack**: the lifecycle six by
-the coordinator's setup/teardown, the mode switch and the five joint-array methods by
+**14 methods; 13 are exercised by the existing stack** — the lifecycle five by the
+coordinator's setup/teardown, the mode switch and the five joint-array methods by
 `ConnectedHardware`, `get_limits` by the task's R14a resolution, `get_dof` by the
-registry. Nothing is included "for completeness".
+registry. The exception is **`write_enable`**: the coordinator's fallback
+(`activate() if callable else write_enable(True)`) never fires on a protocol-conforming
+adapter, because `activate` is always present. It is kept for lifecycle symmetry and
+direct driver/test use, and is the one method flagged as a **trim candidate** for team
+review.
 
 Notes, per method group:
 
@@ -1026,10 +1030,19 @@ Notes, per method group:
   H100 declares `(0, 100)` per joint — its firmware's dimensionless scale, exactly
   R12's "vendor's own scale" and the special case named in the meeting (passive joints
   make SI unrepresentable there).
-- **`write_joint_velocities()`** is a documented no-op returning `False`: under
-  R4a/R22 nothing in this system produces a gripper velocity. It exists so
-  `ConnectedHardware`'s VELOCITY branch cannot crash on a gripper device, and so the
-  parity rule below stays a clean subset.
+- **`write_joint_velocities()`** is a documented refusal returning `False` — it does
+  **not** mean grippers support velocity control. Nothing can reach it through a
+  correct adapter: R22 fixes the gripper task in `SERVO_POSITION`, and
+  `ConnectedHardware`'s mode gate runs before its velocity branch, so an adapter that
+  refuses `set_control_mode(VELOCITY)` makes the branch unreachable. It exists because
+  `ConnectedHardware` wraps `ManipulatorAdapter | GripperAdapter` and **mypy checks
+  every branch against that union** — dropping the method would force a cast or
+  `hasattr`, the duck-typing looseness this protocol exists to remove. Its docstring
+  MUST say all of this.
+- **Open-loop devices**: a gripper with no position feedback MUST have
+  `read_joint_positions()` **echo its last commanded target** and say so in its
+  docstring — zeros would make `get_position` lie. This forfeits stall detection,
+  which a feedback-less device never had.
 
 ### 8.2 Deliberately omitted
 
