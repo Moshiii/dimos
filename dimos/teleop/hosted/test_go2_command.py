@@ -24,7 +24,6 @@ allow-list, E-STOP latch + fence, nonce dedup, and the drive guard
 from __future__ import annotations
 
 from collections.abc import Iterator
-import json
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -53,7 +52,6 @@ def module(monkeypatch: pytest.MonkeyPatch) -> Iterator[Go2CommandModule]:
         allow_acrobatics=False,
         max_linear_mps=1.5,
         max_angular_rps=2.0,
-        enable_ui_scaling=False,
     )
     for port in ("cmd_ack", "tele_cmd_vel", "robot_state", "goal_request", "stop_movement"):
         setattr(module, port, MagicMock())
@@ -67,10 +65,6 @@ def _twist(ts: float, *, vx: float = 0.3) -> TwistStamped:
     t = TwistStamped(ts=ts, linear=[0.0, 0.0, 0.0], angular=[0.0, 0.0, 0.0])
     t.linear.x = vx
     return t
-
-
-def _sent_acks(module: Go2CommandModule) -> list[dict[str, Any]]:
-    return [json.loads(call.args[0]) for call in module.cmd_ack.publish.call_args_list]
 
 
 # ─── sport allow-list (RPC to driver) ────────────────────────────────
@@ -157,23 +151,6 @@ def test_drive_forwards_fresh(module: Go2CommandModule) -> None:
     module._on_cmd_vel_in(_twist(ts))
     module.tele_cmd_vel.publish.assert_called_once()
     assert module._last_cmd_ts == ts
-
-
-def test_ui_scale_disabled_is_rejected(module: Go2CommandModule) -> None:
-    module._on_state_json(b'{"type": "teleop_scale", "scale": 0.5, "nonce": 3}')
-
-    assert _sent_acks(module) == [{"type": "cmd_ack", "nonce": 3, "ok": False}]
-
-
-def test_ui_scale_scales_drive_before_clamping(module: Go2CommandModule) -> None:
-    module.config.enable_ui_scaling = True
-    module._on_state_json(b'{"type": "teleop_scale", "scale": 10, "nonce": 4}')
-
-    module._on_cmd_vel_in(_twist(time.time(), vx=0.3))
-
-    assert _sent_acks(module) == [{"type": "cmd_ack", "nonce": 4, "ok": True}]
-    out = module.tele_cmd_vel.publish.call_args.args[0]
-    assert out.linear.x == 1.5
 
 
 def test_drive_suppresses_idle_zero_stream(module: Go2CommandModule) -> None:
