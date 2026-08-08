@@ -190,7 +190,7 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
         coordinator.start()
         task = coordinator._tasks[OPENARM_QUEST_TASK_NAME]
         assert task._teleop_config.robot_model.name == "openarm"
-        assert task._teleop_config.max_joint_velocity_rad_s == 5.0
+        assert task._teleop_config.max_joint_velocity_rad_s == 2.0
         buttons = Buttons()
         buttons.left_primary = True
         buttons.right_primary = True
