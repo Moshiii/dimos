@@ -49,6 +49,9 @@ class PinkKinematicsConfig(BaseConfig):
     lm_damping: float = 1e-6
     gain: float = 0.5
     safety_break: bool = True
+    # Default solve tolerances; callers may still override per call.
+    position_tolerance: float = 0.001
+    orientation_tolerance: float = 0.01
 
 
 ManipulationKinematicsConfig = Annotated[

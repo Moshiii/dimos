@@ -110,18 +110,33 @@ class PinkIK:
         self._modules = _load_optional_dependencies(self.config.solver)
         self._robot_contexts: dict[tuple[str, str], _PinkRobotContext] = {}
 
+    def _resolve_tolerances(
+        self, position_tolerance: float | None, orientation_tolerance: float | None
+    ) -> tuple[float, float]:
+        return (
+            self.config.position_tolerance if position_tolerance is None else position_tolerance,
+            (
+                self.config.orientation_tolerance
+                if orientation_tolerance is None
+                else orientation_tolerance
+            ),
+        )
+
     def solve(
         self,
         world: WorldSpec,
         robot_id: WorldRobotID,
         target_pose: PoseStamped,
         seed: JointState | None = None,
-        position_tolerance: float = 0.001,
-        orientation_tolerance: float = 0.01,
+        position_tolerance: float | None = None,
+        orientation_tolerance: float | None = None,
         check_collision: bool = True,
         max_attempts: int = 10,
     ) -> IKResult:
         """Solve IK with Pink, returning the standard planning ``IKResult``."""
+        position_tolerance, orientation_tolerance = self._resolve_tolerances(
+            position_tolerance, orientation_tolerance
+        )
         if not world.is_finalized:
             return _failure(IKStatus.NO_SOLUTION, "World must be finalized before IK")
 
@@ -161,7 +176,11 @@ class PinkIK:
             except ValueError as exc:
                 return _failure(IKStatus.NO_SOLUTION, f"Pink IK mapping failed: {exc}")
             except Exception as exc:
-                return _failure(IKStatus.NO_SOLUTION, f"Pink IK solver failed: {exc}")
+                if fallback_result is None:
+                    fallback_result = _failure(
+                        IKStatus.NO_SOLUTION, f"Pink IK solver failed: {exc}"
+                    )
+                continue
 
             if not result.is_success() or result.joint_state is None:
                 if fallback_result is None:
@@ -187,12 +206,15 @@ class PinkIK:
         pose_targets: Mapping[PlanningGroup, PoseStamped],
         auxiliary_groups: Sequence[PlanningGroup] = (),
         seed: JointState | None = None,
-        position_tolerance: float = 0.001,
-        orientation_tolerance: float = 0.01,
+        position_tolerance: float | None = None,
+        orientation_tolerance: float | None = None,
         check_collision: bool = True,
         max_attempts: int = 10,
     ) -> IKResult:
         """Solve planning-group-scoped pose targets with Pink IK."""
+        position_tolerance, orientation_tolerance = self._resolve_tolerances(
+            position_tolerance, orientation_tolerance
+        )
         if not world.is_finalized:
             return _failure(IKStatus.NO_SOLUTION, "World must be finalized before IK")
         all_groups = tuple(pose_targets.keys()) + tuple(auxiliary_groups)
@@ -293,7 +315,13 @@ class PinkIK:
                 except ValueError as exc:
                     return _failure(IKStatus.NO_SOLUTION, f"Pink IK mapping failed: {exc}")
                 except Exception as exc:
-                    return _failure(IKStatus.NO_SOLUTION, f"Pink IK solver failed: {exc}")
+                    # A solver blow-up (e.g. QP infeasibility from a bad random
+                    # restart) fails this attempt, not the whole solve.
+                    if fallback_result is None:
+                        fallback_result = _failure(
+                            IKStatus.NO_SOLUTION, f"Pink IK solver failed: {exc}"
+                        )
+                    continue
 
                 if not result.is_success() or result.joint_state is None:
                     if fallback_result is None:
@@ -706,9 +734,11 @@ def _build_joint_mapping(model: Any, config: RobotModelConfig) -> _JointMapping:
 
 
 # Pink's VelocityLimit drops joints whose limit is <= 1e-10 from the QP
-# constraint entirely, so locked joints get a tiny positive limit instead
-# of an exact zero.
-_LOCKED_JOINT_VELOCITY_LIMIT = 1e-9
+# constraint entirely, so exact zero is not usable, and near-zero bounds
+# make proxqp numerically fragile. 1e-3 rad/s keeps the QP well-conditioned
+# while capping locked-joint drift below 1e-4 rad per iteration; the
+# post-integration pin-back removes even that.
+_LOCKED_JOINT_VELOCITY_LIMIT = 1e-3
 
 
 @contextlib.contextmanager
