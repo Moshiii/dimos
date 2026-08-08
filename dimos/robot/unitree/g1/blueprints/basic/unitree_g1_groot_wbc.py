@@ -46,6 +46,7 @@ Overrides (replace the old env-var dance):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -488,55 +489,61 @@ def _viewer() -> Any:
     return vis_module(viewer_backend=global_config.viewer, rerun_config=_rerun_config)
 
 
-_coordinator = _G1GrootCoordinator.blueprint(
-    instance_name="ControlCoordinator",
-    publish_robot_joint_states=True,
-    tick_rate=_tick_rate,
-    hardware=[
-        HardwareComponent(
-            hardware_id="g1",
-            hardware_type=HardwareType.WHOLE_BODY,
-            joints=g1_joints,
-            adapter_type=_adapter_type,
-            address=_adapter_address,
-            wb_config=WholeBodyConfig(kp=tuple(G1_GROOT_KP), kd=tuple(G1_GROOT_KD)),
-        ),
-    ],
-    tasks=[
-        TaskConfig(
-            name="groot_wbc",
-            type="g1_groot_wbc",
-            joint_names=g1_legs_waist,
-            priority=50,
-            auto_start=True,
-            params={
-                "model_path": _GROOT_MODEL_DIR,
-                "hardware_id": "g1",
-                "auto_arm": _auto_arm,
-                "auto_dry_run": _auto_dry_run,
-                "default_ramp_seconds": _default_ramp_seconds,
-                "decimation": _decimation,
-            },
-        ),
-        *([_arm_holder] if _arm_holder is not None else []),
-    ],
-).transports(
-    {
-        ("joint_command", JointState): LCMTransport("/g1/joint_command", JointState),
-        ("g1_joints", JointState): LCMTransport(_G1_JOINTS_TOPIC, JointState),
-        ("cmd_vel", Twist): LCMTransport(_cmd_vel_topic, Twist),
-        # Real-hw only: the transport_lcm adapter speaks to
-        # G1WholeBodyConnection over these topics. autoconnect already
-        # matches by (name, type) so sim doesn't need them -- they're
-        # harmless when the sim engine doesn't expose those ports.
-        ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
-        ("imu", Imu): LCMTransport("/g1/imu", Imu),
-        ("motor_command", MotorCommandArray): LCMTransport("/g1/motor_command", MotorCommandArray),
-    }
-)
+def g1_groot_coordinator(extra_tasks: Sequence[TaskConfig] = ()) -> Any:
+    """GR00T WBC coordinator blueprint; ``extra_tasks`` lets variants add tasks."""
+    return _G1GrootCoordinator.blueprint(
+        instance_name="ControlCoordinator",
+        publish_robot_joint_states=True,
+        tick_rate=_tick_rate,
+        hardware=[
+            HardwareComponent(
+                hardware_id="g1",
+                hardware_type=HardwareType.WHOLE_BODY,
+                joints=g1_joints,
+                adapter_type=_adapter_type,
+                address=_adapter_address,
+                wb_config=WholeBodyConfig(kp=tuple(G1_GROOT_KP), kd=tuple(G1_GROOT_KD)),
+            ),
+        ],
+        tasks=[
+            TaskConfig(
+                name="groot_wbc",
+                type="g1_groot_wbc",
+                joint_names=g1_legs_waist,
+                priority=50,
+                auto_start=True,
+                params={
+                    "model_path": _GROOT_MODEL_DIR,
+                    "hardware_id": "g1",
+                    "auto_arm": _auto_arm,
+                    "auto_dry_run": _auto_dry_run,
+                    "default_ramp_seconds": _default_ramp_seconds,
+                    "decimation": _decimation,
+                },
+            ),
+            *([_arm_holder] if _arm_holder is not None else []),
+            *extra_tasks,
+        ],
+    ).transports(
+        {
+            ("joint_command", JointState): LCMTransport("/g1/joint_command", JointState),
+            ("g1_joints", JointState): LCMTransport(_G1_JOINTS_TOPIC, JointState),
+            ("cmd_vel", Twist): LCMTransport(_cmd_vel_topic, Twist),
+            # Real-hw only: the transport_lcm adapter speaks to
+            # G1WholeBodyConnection over these topics. autoconnect already
+            # matches by (name, type) so sim doesn't need them -- they're
+            # harmless when the sim engine doesn't expose those ports.
+            ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
+            ("imu", Imu): LCMTransport("/g1/imu", Imu),
+            ("motor_command", MotorCommandArray): LCMTransport(
+                "/g1/motor_command", MotorCommandArray
+            ),
+        }
+    )
+
 
 unitree_g1_groot_wbc = (
-    autoconnect(_backend, _coordinator, _nav_stack, _viewer())
+    autoconnect(_backend, g1_groot_coordinator(), _nav_stack, _viewer())
     .remappings(cast("Any", _remappings))
     .global_config(robot_model="unitree_g1", n_workers=_n_workers)
 )
