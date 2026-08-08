@@ -253,8 +253,19 @@ class PlanExecutionManager:
                 "Generated trajectory resolves to duplicate coordinator joints"
             )
 
-        return JointTrajectory(
+        trajectory = JointTrajectory(
             joint_names=coordinator_names,
             points=plan.trajectory.points,
             timestamp=plan.trajectory.timestamp,
         )
+        first = trajectory.points[0].positions if trajectory.points else []
+        last = trajectory.points[-1].positions if trajectory.points else []
+        logger.info(
+            "Dispatching trajectory: %d joints, %d points, %.3fs; first=%s last=%s",
+            len(coordinator_names),
+            len(trajectory.points),
+            trajectory.duration,
+            [f"{v:+.3f}" for v in first],
+            [f"{v:+.3f}" for v in last],
+        )
+        return trajectory
