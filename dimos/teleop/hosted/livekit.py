@@ -23,10 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass
 import importlib.util
 import json
-import os
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +37,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.teleop.hosted.livekit_broker_client import LiveKitBrokerClient, LiveKitSession
 from dimos.teleop.hosted.robot_type import RobotType
 from dimos.utils.logging_config import setup_logger
 
@@ -51,16 +50,6 @@ LIVEKIT_AVAILABLE = (
 
 if TYPE_CHECKING:
     from livekit import rtc
-
-
-@dataclass(frozen=True)
-class LiveKitSession:
-    """Connection material minted by the hosted teleop broker."""
-
-    session_id: str
-    url: str
-    token: str
-    room: str
 
 
 class LiveKitTeleopConfig(ModuleConfig):
@@ -104,6 +93,7 @@ class LiveKitTeleopModule(Module):
         self._video_publish_task: asyncio.Task[None] | None = None
         self._operator_present = False
         self._operator_lost = False
+        self._broker = LiveKitBrokerClient(self.config.broker_url, self.config.api_key)
 
     @rpc
     def start(self) -> None:
@@ -181,9 +171,13 @@ class LiveKitTeleopModule(Module):
         session: LiveKitSession | None = None
         heartbeat_task: asyncio.Task[None] | None = None
         try:
-            session = await self._create_session()
+            session = await self._broker.create_session(
+                self.config.robot_id, self.config.robot_name, self.config.robot_type
+            )
             await self._connect_room(session)
-            heartbeat_task = asyncio.create_task(self._heartbeat_loop(session.session_id))
+            heartbeat_task = asyncio.create_task(
+                self._broker.heartbeat(session.session_id, self.config.heartbeat_hz)
+            )
             self._ready.set()
             while not self._stop_event.is_set():
                 await asyncio.sleep(0.1)
@@ -197,86 +191,7 @@ class LiveKitTeleopModule(Module):
                     await heartbeat_task
             await self._disconnect_room()
             if session is not None:
-                await self._delete_session(session.session_id)
-
-    async def _create_session(self) -> LiveKitSession:
-        import httpx
-
-        broker_url, api_key = self._broker_credentials()
-
-        payload: dict[str, str] = {
-            "transport": "livekit",
-            "robot_name": self.config.robot_name,
-        }
-        robot_id = self.config.robot_id or os.environ.get("TELEOP_ROBOT_ID")
-        if robot_id:
-            payload["robot_id"] = robot_id
-        if self.config.robot_type is not None:
-            payload["robot_type"] = self.config.robot_type.value
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{broker_url.rstrip('/')}/api/v1/sessions",
-                headers={"X-Robot-API-Key": api_key, "Content-Type": "application/json"},
-                json=payload,
-            )
-        if response.status_code not in (200, 201):
-            raise RuntimeError(
-                f"LiveKit broker session create failed: {response.status_code} {response.text[:200]}"
-            )
-        data = response.json()
-        try:
-            return LiveKitSession(
-                session_id=data["session_id"],
-                url=data["url"],
-                token=data["token"],
-                room=data["room"],
-            )
-        except (KeyError, TypeError) as error:
-            raise RuntimeError(
-                "LiveKit broker response missing session_id, url, token, or room"
-            ) from error
-
-    def _broker_credentials(self) -> tuple[str, str]:
-        broker_url = self.config.broker_url or os.environ.get("TELEOP_BROKER_URL")
-        api_key = self.config.api_key or os.environ.get("TELEOP_API_KEY")
-        if not broker_url:
-            raise RuntimeError("LiveKitTeleopConfig.broker_url or TELEOP_BROKER_URL required")
-        if not api_key:
-            raise RuntimeError("LiveKitTeleopConfig.api_key or TELEOP_API_KEY required")
-        return broker_url.rstrip("/"), api_key
-
-    async def _heartbeat_loop(self, session_id: str) -> None:
-        import httpx
-
-        broker_url, api_key = self._broker_credentials()
-        interval = 1.0 / max(self.config.heartbeat_hz, 0.1)
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            while True:
-                try:
-                    response = await client.post(
-                        f"{broker_url}/api/v1/sessions/{session_id}/heartbeat",
-                        headers={"X-Robot-API-Key": api_key, "Content-Type": "application/json"},
-                        json={},
-                    )
-                    if response.status_code != 200:
-                        logger.warning("LiveKit heartbeat failed", status=response.status_code)
-                except Exception:
-                    logger.warning("LiveKit heartbeat failed", exc_info=True)
-                await asyncio.sleep(interval)
-
-    async def _delete_session(self, session_id: str) -> None:
-        import httpx
-
-        broker_url, api_key = self._broker_credentials()
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                await client.delete(
-                    f"{broker_url}/api/v1/sessions/{session_id}",
-                    headers={"X-Robot-API-Key": api_key, "Content-Type": "application/json"},
-                )
-        except Exception:
-            logger.warning("LiveKit broker session delete failed", exc_info=True)
+                await self._broker.close_session(session.session_id)
 
     async def _connect_room(self, session: LiveKitSession) -> None:
         from livekit import rtc

@@ -29,7 +29,8 @@ from dimos.teleop.hosted.blueprints.livekit import (
     teleop_hosted_xarm6_livekit,
     teleop_hosted_xarm7_livekit,
 )
-from dimos.teleop.hosted.livekit import LiveKitSession, LiveKitTeleopConfig, LiveKitTeleopModule
+from dimos.teleop.hosted.livekit import LiveKitTeleopConfig, LiveKitTeleopModule
+from dimos.teleop.hosted.livekit_broker_client import LiveKitSession
 from dimos.teleop.hosted.robot_type import RobotType
 
 
@@ -125,7 +126,11 @@ def test_broker_session_request_uses_robot_metadata(
     client.__aexit__ = AsyncMock(return_value=None)
     mocker.patch("httpx.AsyncClient", return_value=client)
 
-    session = asyncio.run(module._create_session())
+    session = asyncio.run(
+        module._broker.create_session(
+            module.config.robot_id, module.config.robot_name, module.config.robot_type
+        )
+    )
 
     assert session == LiveKitSession(
         session_id="session", url="wss://livekit.example", token="jwt", room="room"
