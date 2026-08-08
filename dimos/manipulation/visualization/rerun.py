@@ -33,7 +33,7 @@ def picknplace_rerun_config() -> dict[str, Any]:
                 image_topic="world/color_camera/color_image",
             ),
             "world/pointcloud": _pointcloud_to_rerun,
-            "world/graspgenx_candidates": _graspgenx_candidates_to_rerun,
+            "world/grasp_candidates": _grasp_candidates_to_rerun,
             "world/detections_3d": None,
             "world/depth_camera": None,
             "world/depth_camera/depth_image": None,
@@ -60,7 +60,7 @@ def _topic_to_entity(topic: Any) -> str:
         "/camera_info": "world/color_camera",
         "/depth_image": "world/depth_camera/depth_image",
         "/depth_camera_info": "world/depth_camera",
-        "/graspgenx_candidates": "world/graspgenx_candidates",
+        "/grasp_candidates": "world/grasp_candidates",
         "/detections_3d": "world/detections_3d",
         "/pointcloud": "world/pointcloud",
     }
@@ -81,11 +81,11 @@ def _pointcloud_to_rerun(msg: Any) -> Any:
     return msg.to_rerun(voxel_size=0.001, mode="points")
 
 
-def _graspgenx_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
+def _grasp_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
     """Render calibrated xArm TCP grasp candidates and their gripper geometry."""
     import rerun as rr
 
-    root = "world/graspgenx_candidates"
+    root = "world/grasp_candidates"
     data: list[tuple[str, Any]] = [(root, rr.Clear(recursive=True))]
     frame_id = msg.header.frame_id
     if frame_id:

@@ -50,11 +50,20 @@ uv run --no-sync dimos run picknplace --daemon \
 Moondream requires EdgeTAM because it produces detection boxes rather than masks.
 `pnp.grasp` accepts `heuristic` or `graspgenx`. The heuristic provider derives one top-down
 proposal from the segmented object cloud; GraspGenX loads only when selected.
+`pnp.candidate_filter` accepts `ik_collision` (default) or `off`; `pnp.candidate_ranking` accepts
+`confidence` (default) or `ik_feasibility`. Additional policies can be added in
+`PickNPlaceModule._prepare_candidates` without changing either provider.
 
 Then connect the console:
 
 ```bash
 uv run --no-sync python -m dimos.manipulation.pnpconsole
+```
+
+Run the box-filling agent with:
+
+```bash
+uv run --no-sync dimos run picknplace-agent --daemon
 ```
 
 Stop a running pipeline with:

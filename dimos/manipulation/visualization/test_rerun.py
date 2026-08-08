@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dimos.manipulation.visualization.rerun import (
-    _graspgenx_candidates_to_rerun,
+    _grasp_candidates_to_rerun,
     _topic_to_entity,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -24,10 +24,7 @@ from dimos.msgs.std_msgs.Header import Header
 
 
 def test_qualified_grasp_candidate_topic_uses_candidate_entity() -> None:
-    assert (
-        _topic_to_entity("dimos/PickNPlaceModule/graspgenx_candidates")
-        == "world/graspgenx_candidates"
-    )
+    assert _topic_to_entity("dimos/PickNPlaceModule/grasp_candidates") == "world/grasp_candidates"
 
 
 def test_top_grasp_candidate_has_selected_rerun_marker() -> None:
@@ -40,9 +37,9 @@ def test_top_grasp_candidate_has_selected_rerun_marker() -> None:
         selected_index=1,
     )
 
-    paths = [path for path, _ in _graspgenx_candidates_to_rerun(candidates)]
+    paths = [path for path, _ in _grasp_candidates_to_rerun(candidates)]
 
-    assert "world/graspgenx_candidates/00/selected" not in paths
-    assert "world/graspgenx_candidates/01/selected" in paths
-    assert "world/graspgenx_candidates/01/gripper_base" in paths
-    assert "world/graspgenx_candidates/01/gripper_base/jaws" in paths
+    assert "world/grasp_candidates/00/selected" not in paths
+    assert "world/grasp_candidates/01/selected" in paths
+    assert "world/grasp_candidates/01/gripper_base" in paths
+    assert "world/grasp_candidates/01/gripper_base/jaws" in paths

@@ -90,7 +90,7 @@ def _preview(manipulation: Any) -> None:
 def _print_grasp_candidates(candidates: Any) -> None:
     if not candidates.candidates:
         return
-    print(f"GraspGenX proposals: {len(candidates.candidates)}")
+    print(f"Grasp proposals: {len(candidates.candidates)}")
     for rank, candidate in enumerate(candidates.candidates[:10]):
         pose = candidate.pose
         print(

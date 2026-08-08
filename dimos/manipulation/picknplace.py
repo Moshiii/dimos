@@ -194,8 +194,10 @@ class PickNPlaceConfig(ModuleConfig):
     grasp: Literal["heuristic", "graspgenx"] = Field(
         default="heuristic", validation_alias=AliasChoices("grasp", "grasp_strategy")
     )
-    graspgenx_pregrasp_offset: float = 0.10
-    graspgenx_ik_filter_limit: int = 10
+    pregrasp_offset: float = 0.10
+    candidate_filter: Literal["off", "ik_collision"] = "ik_collision"
+    candidate_ranking: Literal["confidence", "ik_feasibility"] = "confidence"
+    candidate_ik_limit: int = Field(default=10, gt=0)
     grasp_empty_closed_threshold: float = 0.01
     grasp_feedback_delay: float = 0.5
 
@@ -212,7 +214,7 @@ class PickNPlaceModule(Module):
     _obstacle_world: ObstacleWorldSpec
     _visualization: ManipulationVisualizationSpec
     objects: In[list[DetObject]]
-    graspgenx_candidates: Out[GraspCandidateArray]
+    grasp_candidates: Out[GraspCandidateArray]
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -471,15 +473,15 @@ class PickNPlaceModule(Module):
             if self._grasp_generator is None:
                 raise RuntimeError("GraspGenX is not configured for this pick-and-place blueprint")
             candidates = self._grasp_generator.propose_grasps(obj.pointcloud)
-            candidates = self._filter_graspgenx_candidates(candidates)
         else:
             candidates = self._heuristic_grasp_generator.propose_grasps(obj.pointcloud)
+        candidates = self._prepare_candidates(candidates)
         self._selected_object = obj
         self._grasp_candidates = candidates
         if not candidates.candidates:
-            self.graspgenx_candidates.publish(candidates)
+            self.grasp_candidates.publish(candidates)
             return None
-        return self._select_graspgenx_candidate(0)
+        return self._select_grasp_candidate(0)
 
     @skill
     def select_object(self, number: int) -> SkillResult:
@@ -639,15 +641,15 @@ class PickNPlaceModule(Module):
 
     @rpc
     def select_grasp_candidate(self, rank: int) -> PoseStamped | None:
-        """Select one ranked GraspGenX proposal as the goal and Rerun highlight."""
-        return self._select_graspgenx_candidate(rank)
+        """Select one ranked grasp proposal as the goal and Rerun highlight."""
+        return self._select_grasp_candidate(rank)
 
-    def _select_graspgenx_candidate(self, rank: int) -> PoseStamped | None:
+    def _select_grasp_candidate(self, rank: int) -> PoseStamped | None:
         candidates = self._grasp_candidates
         if candidates is None or rank < 0 or rank >= len(candidates.candidates):
             return None
         candidates.selected_index = rank
-        self.graspgenx_candidates.publish(candidates)
+        self.grasp_candidates.publish(candidates)
         candidate = candidates.candidates[rank]
         self._goal_pose = PoseStamped(
             ts=candidates.header.timestamp,
@@ -658,16 +660,35 @@ class PickNPlaceModule(Module):
         self._pre_grasp_pose = None
         return self._goal_pose
 
-    def _filter_graspgenx_candidates(self, candidates: GraspCandidateArray) -> GraspCandidateArray:
-        """Keep only top-ranked proposals whose TCP IK is collision-free in the live world."""
-        accepted = []
-        for candidate in candidates.candidates[: self.config.graspgenx_ik_filter_limit]:
+    def _prepare_candidates(self, candidates: GraspCandidateArray) -> GraspCandidateArray:
+        """Filter and rank provider proposals using independently selectable policies."""
+        if self.config.candidate_filter == "off" and self.config.candidate_ranking == "confidence":
+            return GraspCandidateArray(
+                candidates.header,
+                sorted(candidates.candidates, key=lambda candidate: -candidate.score),
+            )
+
+        evaluated = []
+        candidates_to_evaluate = candidates.candidates[: self.config.candidate_ik_limit]
+        for candidate in candidates_to_evaluate:
             result = self._grasp_filter.inverse_kinematics_single(
                 candidate.pose, "arm", check_collision=True
             )
-            if result.is_success():
-                accepted.append(candidate)
-        return GraspCandidateArray(candidates.header, accepted)
+            evaluated.append((candidate, result.is_success()))
+
+        if self.config.candidate_filter == "ik_collision":
+            evaluated = [(candidate, feasible) for candidate, feasible in evaluated if feasible]
+        else:
+            evaluated.extend(
+                (candidate, False)
+                for candidate in candidates.candidates[len(candidates_to_evaluate) :]
+            )
+
+        if self.config.candidate_ranking == "ik_feasibility":
+            evaluated.sort(key=lambda item: (not item[1], -item[0].score))
+        else:
+            evaluated.sort(key=lambda item: -item[0].score)
+        return GraspCandidateArray(candidates.header, [candidate for candidate, _ in evaluated])
 
     @rpc
     def get_pre_grasp_pose(self) -> PoseStamped | None:
@@ -676,7 +697,7 @@ class PickNPlaceModule(Module):
             return None
         offset = self._goal_pose.orientation.rotate_vector(
             # Both providers express local +Z as the final approach direction.
-            Vector3(0.0, 0.0, -self.config.graspgenx_pregrasp_offset)
+            Vector3(0.0, 0.0, -self.config.pregrasp_offset)
         )
         self._pre_grasp_pose = PoseStamped(
             ts=self._goal_pose.ts,
@@ -759,7 +780,7 @@ class PickNPlaceModule(Module):
 
     @rpc
     def get_grasp_candidates(self) -> GraspCandidateArray:
-        """Return the GraspGenX proposals generated for the selected object."""
+        """Return proposals generated by the selected grasp provider."""
         return self._grasp_candidates or GraspCandidateArray()
 
     @rpc
