@@ -59,7 +59,7 @@ def test_quest_left_controller_routes_to_a1z_teleop() -> None:
 
     assert arm_kwargs["task_names"] == {"left": "teleop_a1z"}
     assert teleop_quest_a1z.remapping_map == {
-        ("armteleopmodule", "left_controller_output"): "coordinator_cartesian_command"
+        ("armteleopmodule", "left_controller_output"): "left_cartesian_command"
     }
 
 

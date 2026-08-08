@@ -18,8 +18,12 @@ from typing import Any
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import Blueprint
-from dimos.teleop.quest.blueprints import teleop_quest_dual, teleop_quest_xarm7
-from dimos.teleop.quest.quest_extensions import ArmTeleopModule
+from dimos.teleop.quest.blueprints import (
+    teleop_quest_dual,
+    teleop_quest_hand_xarm7,
+    teleop_quest_xarm7,
+)
+from dimos.teleop.quest.quest_extensions import ArmTeleopModule, HandTeleopModule
 
 
 def _coordinator_tasks(blueprint: Blueprint) -> list[TaskConfig]:
@@ -49,6 +53,13 @@ def test_single_arm_blueprint_uses_one_frame_binding_and_right_stream() -> None:
     assert tasks[0].params["robot_model"].name == "arm"
     assert (
         teleop_quest_xarm7.remapping_map[(ArmTeleopModule.name, "right_controller_output")]
+        == "right_cartesian_command"
+    )
+
+
+def test_single_arm_hand_blueprint_uses_right_card_stream() -> None:
+    assert (
+        teleop_quest_hand_xarm7.remapping_map[(HandTeleopModule.name, "right_controller_output")]
         == "right_cartesian_command"
     )
 

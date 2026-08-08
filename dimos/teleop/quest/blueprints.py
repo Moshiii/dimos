@@ -64,7 +64,7 @@ teleop_quest_xarm7 = autoconnect(
 teleop_quest_hand_xarm7 = autoconnect(
     HandTeleopModule.blueprint(task_names={"right": "teleop_xarm"}),
     coordinator_teleop_xarm7,
-).remappings([(HandTeleopModule, "right_controller_output", "coordinator_cartesian_command")])
+).remappings([(HandTeleopModule, "right_controller_output", "right_cartesian_command")])
 
 
 # XArm7 teleop + camera streaming into the Quest scene as a panel.
@@ -93,7 +93,7 @@ teleop_quest_piper = autoconnect(
 teleop_quest_a1z = autoconnect(
     ArmTeleopModule.blueprint(task_names={"left": "teleop_a1z"}),
     coordinator_teleop_a1z,
-).remappings([(ArmTeleopModule, "left_controller_output", "coordinator_cartesian_command")])
+).remappings([(ArmTeleopModule, "left_controller_output", "left_cartesian_command")])
 
 
 # XArm6 teleop (sim with --simulation, real otherwise): right controller -> xarm6
