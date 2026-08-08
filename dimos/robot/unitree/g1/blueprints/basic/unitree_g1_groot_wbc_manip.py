@@ -33,8 +33,10 @@ from dimos.control.coordinator import TaskConfig
 from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import g1_arms
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.manipulation.manipulation_module import ManipulationModule
+from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_groot_wbc import (
     _backend,
+    _G1GrootCoordinator,
     _n_workers,
     _nav_stack,
     _remappings,
@@ -50,14 +52,28 @@ _ARM_TRAJECTORY_TASK = TaskConfig(
     priority=30,
 )
 
+# Module-ref resolution matches provider classes exactly, so the coordinator
+# subclass must be remapped onto ManipulationModule's ControlCoordinator ref.
+_manip_remappings = [
+    *_remappings,
+    (ManipulationModule, "_control_coordinator", _G1GrootCoordinator),
+]
+
 unitree_g1_groot_wbc_manip = (
     autoconnect(
         _backend,
         g1_groot_coordinator(extra_tasks=(_ARM_TRAJECTORY_TASK,)),
         _nav_stack,
-        ManipulationModule.blueprint(robots=[make_g1_model_config()]),
+        ManipulationModule.blueprint(
+            robots=[make_g1_model_config()],
+            # Reaches are position-driven; a hard 0.01 rad orientation
+            # tolerance makes the 7-DOF solve knife-edged from live stances.
+            kinematics=PinkKinematicsConfig(
+                position_tolerance=0.01, orientation_cost=0.3, orientation_tolerance=0.35
+            ),
+        ),
         _viewer(),
     )
-    .remappings(cast("Any", _remappings))
+    .remappings(cast("Any", _manip_remappings))
     .global_config(robot_model="unitree_g1", n_workers=_n_workers + 1)
 )
