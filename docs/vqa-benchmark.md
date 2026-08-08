@@ -6,6 +6,36 @@ title: "VQA Benchmark"
 
 DimOS generates visual question-answering (VQA) cases from frozen robot recordings and evaluates an image-only model against private, point-cloud-grounded answers. The benchmark is designed so the model being scored cannot see calibration, point clouds, segmentation, measurements, tool calls, or expected answers.
 
+## Pipeline Flow
+
+```text
+Frozen robot recording
+        |
+        v
+Rectified RGB image + calibrated visible LiDAR frame
+        |
+        +-------------------- constrained generation --------------------+
+        | Image-only object author -> deterministic question families     |
+        | -> private MoonDream/EdgeTAM/LiDAR grounding                    |
+        | -> geometry quality-gate validation -> accepted or rejected     |
+        +-----------------------------------------------------------------+
+        |
+        +---------------------- agentic generation -----------------------+
+        | Image-only free-form author -> frozen public question/contract  |
+        | -> private local oracle tool calls                              |
+        | -> geometry quality-gate validation                             |
+        | -> private semantic-evidence validation -> accepted or rejected |
+        +-----------------------------------------------------------------+
+        |
+        v
+Accepted public cases: image + question + answer contract
+        |
+        v
+Image-only evaluator -> answer-format validation and scoring -> results + viewer
+```
+
+The private generation evidence, validation decisions, and expected answers are retained for audit but are never provided to the evaluator.
+
 ## Trust Boundary
 
 The benchmark has three independent roles.
