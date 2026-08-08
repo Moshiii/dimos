@@ -223,16 +223,32 @@ it is no longer declared separately.
 `get_gripper_dof()` reports gripper joints, returning `0` when there are none. A caller
 wanting the total adds them. On a `GripperAdapter`, `get_dof()` reports its own joints.
 
-> §7.2's standalone demonstration used the other convention — `get_dof() == 0` with
-> `get_gripper_dof() == 6` on a plain `ManipulatorAdapter` — and worked. Which convention
-> a standalone gripper adapter uses is a **PR 2 design decision**, open until PR 2 is
-> aligned.
+> **Confirmed 2026-08-07: the carve-out stands.** It only looked odd while a standalone
+> gripper rode `ManipulatorAdapter` (§7.2's demonstration used `get_dof() == 0` there,
+> and worked). Inside a dedicated `GripperAdapter` protocol there is no arm to be
+> ambiguous with, so `get_dof()` naturally means "my joints".
 
 > `get_dof()` is therefore **not** the length of `get_limits()`, `read_joint_positions()`
 > or the `write_joint_positions()` array — those cover all joints (R4, R13). This is the
 > one place in the protocol where two lengths are legitimately different; R13 states it.
 
-**R9.** *Moved to PR 2 — the `GripperAdapter` protocol. See §7.*
+**R9.** *Moved to PR 2 — the `GripperAdapter` protocol. See §7.* **Shape confirmed**
+(2026-08-07, per the 2026-08-04 design meeting): a **separate, minimal protocol** — the
+fourth adapter kind alongside manipulators, drive trains and whole-body — deliberately
+kept small ("basic lifecycle stuff"), merging with `ManipulatorAdapter` later only if
+the two converge. Grippers get per-device folders under `hardware/grippers/`, each
+carrying its own `adapter.py` and, for SDK-less devices like the H100, its
+`driver.py` / `transport.py`.
+
+> **The drift guard.** The shared joint-array surface — `read/write_joint_positions`,
+> the R4/R4a rules, `get_limits`, `get_gripper_dof` — MUST stay signature-identical
+> with `ManipulatorAdapter`, enforced by a **conformance test** that fails CI if the two
+> protocols disagree. One contract, stated twice, checked mechanically: this is how a
+> separate protocol coexists with "``write_joint_positions()`` is the API for all
+> joints" without re-creating §3.5's two-authorities shape.
+
+PR 2 opens with the protocol **proposal**; implementation starts after team approval —
+the sequence agreed in the design meeting.
 
 **R10.** A **joint** means an *actuated degree of freedom*, not necessarily a mechanical
 hinge. A pneumatic or suction gripper is one joint with limits `[0, 1]`; a
@@ -387,9 +403,11 @@ then flows through arbitration and the tick loop.
 > `0–0.1` m range is ten times over-range and survives only because the adapter clamps.
 > A Bool is what the keyboard actually has.
 >
-> **PR 2 note:** `broadcast` is correct while each blueprint has one gripper. The moment
-> two gripper tasks coexist (arm gripper + standalone H100), `gripper_command` needs
-> `by_task_name` routing, as `coordinator_ee_twist_command` already does.
+> **Routing note (deferral confirmed 2026-08-07):** `broadcast` is correct while each
+> blueprint has one gripper. The moment two gripper tasks coexist (arm gripper +
+> standalone H100), `gripper_command` needs `by_task_name` routing, as
+> `coordinator_ee_twist_command` already does. This lands in **step 3** — the PR that
+> first makes two grippers coexist.
 
 > **The task owns the gripper completely** — it commands it, and it reports it.
 > `get_position` returns the **measured** position from the `CoordinatorState` snapshot;
@@ -518,7 +536,9 @@ sharing its component (`tick_loop.py:386-397`). Priority is uncontested by R17.
 `task_invoke("arm_gripper", ...)` — `set_normalized` for the agent skills (R26), which is
 the scale they already think in. Only the shortcut route dies.
 
-**R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry. See §7.*
+**R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry. See
+§7.* **Confirmed as part of R9's package**: the fourth kind ships with its type and its
+registry, mirroring how `drive_trains` and `whole_body` are wired.
 
 **R25.** `ConnectedHardware` builds one ordered array from `all_joints` and makes one call.
 Its gripper branches are deleted — in `read_state`, `write_command`, and
@@ -712,8 +732,8 @@ verifiable**: a PR that cannot be proven on hardware we own does not ship.
 |---|---|---|---|
 | **0 — this PR** | The spec. Agreement on the API before anything is written | — | docs only |
 | **1 — this spec** ✅ | The joint model, units, `GripperControlTask`, RPC removal. **Four parts, §7.1** | everything except R9, R24 | **delivered**; verified on xArm6 |
-| **2 — third-party support** | `GripperAdapter`, `HardwareType.GRIPPER`, gripper registry, the standalone device shape — **design informed by §7.2, to be aligned before build** | R9, R24 | the H100 itself |
-| **3 — H100 integration** | Vendor adapter, driver, protocol | — | may merge with step 2 |
+| **2 — third-party support** | `GripperAdapter` (minimal, fourth kind) + `HardwareType.GRIPPER` + registry + the parity test — **shape confirmed; proposal → team approval → build** | R9, R24 | mock + parity test now; the H100 validates |
+| **3 — H100 integration** | Device folder (adapter + driver + transport); `by_task_name` gripper routing (R16); multi-joint `get_gripper()` skill surface (R26) | — | the H100 itself; may merge with step 2 |
 | **4 — transport layering** | Routing gripper bytes through an arm's bus when mounted | — | mounted H100 |
 
 ### 7.1 Step 1 ships in four parts
@@ -916,16 +936,12 @@ configured vendor grasp pose.
 > code, so PR 2's design starts from a working path rather than a guess. The decisions
 > PR 2 still owns, informed by this finding:
 >
-> - **R9** — a full `GripperAdapter` protocol, a base class with gripper defaults over
->   `ManipulatorAdapter`, or neither. A second protocol re-declares the one array
->   contract in a second place; a base class supplies only defaults; neither leaves a
->   vendor implementing 25 methods, 11 of them arm-shaped.
-> - **R8's standalone convention** — `get_dof()` reports its own joints (as R8 states)
->   or `0` with `get_gripper_dof()` carrying them (as this demonstration did).
-> - **R24** — whether `HardwareType.GRIPPER` and a separate registry buy enough
->   discoverability to justify a fourth adapter branch.
-> - **R16's routing** — `broadcast` on `gripper_command` is correct with one gripper;
->   two gripper tasks on one rig (arm jaw + standalone hand) need `by_task_name`.
+> All four were **resolved on 2026-08-07**, after checking the design-meeting
+> transcript and the PR review threads: R9 ships as a separate minimal protocol with a
+> signature-parity test (the meeting's "fourth protocol, keep separate initially, merge
+> later if similar"); R8's carve-out stands; R24 ships as part of R9's package; R16's
+> routing change lands in step 3. The finding below remains what it was — evidence that
+> the plumbing is ready, not a decision.
 >
 > **This was a mock.** It proves the plumbing accepts the shape. It does not prove any
 > real device fits, and the H100 — the first third-party multi-joint gripper — is what
@@ -939,6 +955,8 @@ configured vendor grasp pose.
 | VR trigger on hardware | 1.4's engagement gate and trigger polarity |
 | Preemption during a grasp | 1.4's arbitration claim |
 | a750 | converted blind; no device to verify against (R13) |
+| multi-joint `get_gripper()` | skill surface for a hand is undefined (greptile's review point); defined in step 3 |
+| R10 soft-body exclusion | stands as signed; answer mustafab0's review thread rather than reopen |
 | `keyboard_teleop_a750`, `coordinator_teleop_dual` | pre-existing: grippers unreachable, surfaced not caused by this work (R13, R30) |
 
 Nothing in step 1 is waiting on a decision: every question raised against this spec was
