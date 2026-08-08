@@ -21,6 +21,7 @@ import pink
 import pytest
 from pytest_mock import MockerFixture
 
+from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver, PoseTargetIKTaskConfig
 from dimos.control.tasks.teleop_ik_task.teleop_ik_task import (
     TeleopIKTaskParams,
 )
@@ -49,15 +50,29 @@ from dimos.robot.manipulators.openarm.config import (
     openarm_bimanual_model_config,
     openarm_mock_hardware,
 )
-from dimos.robot.manipulators.openarm.teleop_ik import OpenArmTeleopPinkIK
+from dimos.robot.manipulators.openarm.teleop_ik import OpenArmPinkPoseTargetSolver
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 from dimos.teleop.types import TeleopControls
-
-_TRACKING_ERROR_RAD = np.deg2rad(10.0)
 
 
 def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
     return next(atom.kwargs for atom in blueprint.blueprints if atom.module is module_type)
+
+
+def _solver_config(
+    model: Any,
+    frames: tuple[str, ...],
+    pink_config: PinkKinematicsConfig,
+    *,
+    max_joint_velocity_rad_s: float = 5.0,
+) -> PoseTargetIKTaskConfig:
+    return PoseTargetIKTaskConfig(
+        joint_names=tuple(OPENARM_ARM_JOINTS),
+        robot_model=model,
+        target_frames=frames,
+        pink=pink_config,
+        max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+    )
 
 
 def test_openarm_mock_hardware_is_unconditional(mocker: MockerFixture) -> None:
@@ -141,7 +156,7 @@ def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
     )
     assert task.params["robot_model"].model_path == OPENARM_BIMANUAL_MODEL
     assert isinstance(task.params["pink"], PinkKinematicsConfig)
-    assert task.params["ik_backend_type"] is OpenArmTeleopPinkIK
+    assert task.params["solver_type"] is OpenArmPinkPoseTargetSolver
     assert task.params["pink"].joint_limit_posture_margin == 0.3
     assert task.params["max_command_tracking_error_deg"] == 10.0
     assert TeleopIKTaskParams.model_validate(task.params).max_joint_velocity_rad_s == 5.0
@@ -165,18 +180,18 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
     mocker: MockerFixture,
 ) -> None:
     coordinator_kwargs = _module_kwargs(teleop_quest_openarm, OpenArmTeleopCoordinator)
-    mocker.patch.object(OpenArmTeleopPinkIK, "validate_frame_targets")
+    mocker.patch.object(OpenArmPinkPoseTargetSolver, "_validate_frame_targets")
     frame_poses = mocker.patch.object(
-        OpenArmTeleopPinkIK,
+        OpenArmPinkPoseTargetSolver,
         "frame_poses",
         return_value={
             "openarm_left_grasp_frame": PoseStamped(position=[0.5, 0.2, 0.4]),
             "openarm_right_grasp_frame": PoseStamped(position=[0.5, -0.2, 0.4]),
         },
     )
-    step_frame_targets = mocker.patch.object(
-        OpenArmTeleopPinkIK,
-        "step_frame_targets",
+    step = mocker.patch.object(
+        OpenArmPinkPoseTargetSolver,
+        "step",
         return_value=JointState(
             name=list(OPENARM_ARM_JOINTS),
             position=[0.01] * len(OPENARM_ARM_JOINTS),
@@ -214,13 +229,13 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
             1.0 - buttons.right_trigger_analog,
         ]
         frame_poses.assert_called_once()
-        step_frame_targets.assert_called_once()
+        step.assert_called_once()
 
         released = TeleopControls()
         released.right_primary = True
         coordinator._dispatch("teleop_buttons", released)
         coordinator._tick_loop._tick()
-        step_frame_targets.assert_called_once()
+        step.assert_called_once()
     finally:
         coordinator.stop()
 
@@ -282,16 +297,12 @@ def test_openarm_teleop_pink_objective_is_named_weighted_and_instance_local() ->
         gain=0.25,
     )
     seed = JointState(name=OPENARM_ARM_JOINTS, position=[0.0] * len(OPENARM_ARM_JOINTS))
-    first = OpenArmTeleopPinkIK(config)
-    second = OpenArmTeleopPinkIK(config)
-    targets = first.frame_poses(model, frames, OPENARM_ARM_JOINTS, seed)
+    first = OpenArmPinkPoseTargetSolver(_solver_config(model, frames, config))
+    second = OpenArmPinkPoseTargetSolver(_solver_config(model, frames, config))
+    targets = first.frame_poses(seed, frames)
 
-    first.step_frame_targets(
-        model, targets, OPENARM_ARM_JOINTS, seed, seed, _TRACKING_ERROR_RAD, dt=0.01
-    )
-    second.step_frame_targets(
-        model, targets, OPENARM_ARM_JOINTS, seed, seed, _TRACKING_ERROR_RAD, dt=0.01
-    )
+    first.step(targets, seed, 0.01)
+    second.step(targets, seed, 0.01)
 
     first_tasks = next(iter(first._control_contexts.values())).tasks
     second_tasks = next(iter(second._control_contexts.values())).tasks
@@ -323,19 +334,18 @@ def test_openarm_teleop_pink_objective_is_named_weighted_and_instance_local() ->
 def test_openarm_bimanual_pink_steps_from_canonical_zero_with_bounded_updates() -> None:
     model = openarm_bimanual_model_config()
     frames = ("openarm_left_grasp_frame", "openarm_right_grasp_frame")
-    ik = OpenArmTeleopPinkIK(
-        PinkKinematicsConfig(
-            dt=0.01,
-            position_cost=1.0,
-            orientation_cost=1.0,
-            posture_cost=1e-3,
-            joint_limit_posture_margin=0.3,
-            lm_damping=1e-6,
-            gain=0.25,
-        )
+    config = PinkKinematicsConfig(
+        dt=0.01,
+        position_cost=1.0,
+        orientation_cost=1.0,
+        posture_cost=1e-3,
+        joint_limit_posture_margin=0.3,
+        lm_damping=1e-6,
+        gain=0.25,
     )
+    ik = OpenArmPinkPoseTargetSolver(_solver_config(model, frames, config))
     seed = JointState(name=OPENARM_ARM_JOINTS, position=[0.0] * len(OPENARM_ARM_JOINTS))
-    initial = ik.frame_poses(model, frames, OPENARM_ARM_JOINTS, seed)
+    initial = ik.frame_poses(seed, frames)
     targets = {
         name: PoseStamped(
             frame_id=pose.frame_id,
@@ -347,22 +357,15 @@ def test_openarm_bimanual_pink_steps_from_canonical_zero_with_bounded_updates() 
 
     max_delta = 0.0
     for _ in range(100):
-        result = ik.step_frame_targets(
-            model,
-            targets,
-            OPENARM_ARM_JOINTS,
-            seed,
-            seed,
-            _TRACKING_ERROR_RAD,
-            dt=0.01,
-        )
+        result = ik.step(targets, seed, 0.01)
+        assert result is not None
         max_delta = max(
             max_delta,
             float(np.max(np.abs(np.asarray(result.position) - np.asarray(seed.position)))),
         )
         seed = result
 
-    final = ik.frame_poses(model, frames, OPENARM_ARM_JOINTS, seed)
+    final = ik.frame_poses(seed, frames)
     errors = [
         np.linalg.norm(
             np.array([target.position.x, target.position.y, target.position.z])
@@ -392,8 +395,10 @@ def test_openarm_large_bimanual_target_respects_velocity_envelope() -> None:
         gain=0.25,
     )
     seed = JointState(name=OPENARM_ARM_JOINTS, position=[0.0] * len(OPENARM_ARM_JOINTS))
-    fast_ik = OpenArmTeleopPinkIK(config)
-    initial = fast_ik.frame_poses(model, frames, OPENARM_ARM_JOINTS, seed)
+    fast_ik = OpenArmPinkPoseTargetSolver(
+        _solver_config(model, frames, config, max_joint_velocity_rad_s=100.0)
+    )
+    initial = fast_ik.frame_poses(seed, frames)
     offsets = {
         frames[0]: (-0.2392603575142903, 0.058126091381264344, 0.11668591075157508),
         frames[1]: (-0.07538693330773968, 0.011284814173532665, -0.203339709772524),
@@ -411,26 +416,12 @@ def test_openarm_large_bimanual_target_respects_velocity_envelope() -> None:
         for name, pose in initial.items()
     }
 
-    fast = fast_ik.step_frame_targets(
-        model,
-        targets,
-        OPENARM_ARM_JOINTS,
-        seed,
-        seed,
-        _TRACKING_ERROR_RAD,
-        dt=0.01,
-        max_joint_velocity_rad_s=100.0,
-    )
-    bounded = OpenArmTeleopPinkIK(config).step_frame_targets(
-        model,
-        targets,
-        OPENARM_ARM_JOINTS,
-        seed,
-        seed,
-        _TRACKING_ERROR_RAD,
-        dt=0.01,
-        max_joint_velocity_rad_s=1.0,
-    )
+    fast = fast_ik.step(targets, seed, 0.01)
+    bounded = OpenArmPinkPoseTargetSolver(
+        _solver_config(model, frames, config, max_joint_velocity_rad_s=1.0)
+    ).step(targets, seed, 0.01)
+    assert fast is not None
+    assert bounded is not None
 
     fast_delta_deg = np.rad2deg(np.abs(np.asarray(fast.position) - np.asarray(seed.position)))
     bounded_delta_deg = np.rad2deg(np.abs(np.asarray(bounded.position) - np.asarray(seed.position)))
@@ -442,21 +433,20 @@ def test_openarm_large_bimanual_target_respects_velocity_envelope() -> None:
 def test_openarm_streaming_pink_tolerates_feedback_just_outside_limit() -> None:
     model = openarm_bimanual_model_config()
     frame = "openarm_left_grasp_frame"
-    ik = PinkIK(PinkKinematicsConfig(dt=0.01, posture_cost=0.0))
+    ik = PinkPoseTargetSolver(
+        _solver_config(
+            model,
+            (frame,),
+            PinkKinematicsConfig(dt=0.01, posture_cost=0.0),
+        )
+    )
     seed_positions = [0.0] * len(OPENARM_ARM_JOINTS)
     seed_positions[2] = -1.5708010113375805
     seed = JointState(name=OPENARM_ARM_JOINTS, position=seed_positions)
-    target = ik.frame_poses(model, [frame], OPENARM_ARM_JOINTS, seed)[frame]
+    target = ik.frame_poses(seed, [frame])[frame]
 
-    result = ik.step_frame_targets(
-        model,
-        {frame: target},
-        OPENARM_ARM_JOINTS,
-        seed,
-        seed,
-        _TRACKING_ERROR_RAD,
-        dt=0.01,
-    )
+    result = ik.step({frame: target}, seed, 0.01)
+    assert result is not None
 
     result_by_name = dict(zip(result.name, result.position, strict=True))
     assert result_by_name["left_arm/joint3"] == pytest.approx(-1.5707)

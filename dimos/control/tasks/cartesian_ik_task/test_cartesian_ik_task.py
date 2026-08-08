@@ -23,7 +23,7 @@ from dimos.control.tasks.cartesian_ik_task.cartesian_ik_task import (
     CartesianIKTask,
     CartesianIKTaskConfig,
 )
-import dimos.control.tasks.pose_target_ik as pose_target_module
+from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -46,9 +46,9 @@ def _config() -> CartesianIKTaskConfig:
 def test_cartesian_leaf_maps_absolute_pose_to_configured_frame(
     mocker: MockerFixture,
 ) -> None:
-    ik = mocker.patch.object(pose_target_module, "PinkIK").return_value
-    ik.step_frame_targets.return_value = JointState(name=["arm/joint"], position=[0.01])
-    task = CartesianIKTask("cartesian", _config())
+    solver = mocker.Mock(spec=PinkPoseTargetSolver)
+    solver.step.return_value = JointState(name=["arm/joint"], position=[0.01])
+    task = CartesianIKTask("cartesian", _config(), solver=solver)
     target = PoseStamped(position=Vector3(0.4, 0.2, 0.1), frame_id="world")
 
     task.on_cartesian_command(target, t_now=2.0)
@@ -61,12 +61,12 @@ def test_cartesian_leaf_maps_absolute_pose_to_configured_frame(
     )
 
     assert output is not None
-    assert ik.step_frame_targets.call_args.kwargs["frame_targets"] == {"tool": target}
+    assert solver.step.call_args.args[0] == {"tool": target}
 
 
 def test_cartesian_leaf_clears_after_timeout(mocker: MockerFixture) -> None:
-    ik = mocker.patch.object(pose_target_module, "PinkIK").return_value
-    task = CartesianIKTask("cartesian", _config())
+    solver = mocker.Mock(spec=PinkPoseTargetSolver)
+    task = CartesianIKTask("cartesian", _config(), solver=solver)
     task.on_cartesian_command(PoseStamped(), t_now=1.0)
 
     output = task.compute(
@@ -79,13 +79,13 @@ def test_cartesian_leaf_clears_after_timeout(mocker: MockerFixture) -> None:
 
     assert output is None
     assert not task.is_active()
-    ik.step_frame_targets.assert_not_called()
+    solver.step.assert_not_called()
 
 
 def test_cartesian_clear_reseeds_command_from_feedback(mocker: MockerFixture) -> None:
-    ik = mocker.patch.object(pose_target_module, "PinkIK").return_value
-    ik.step_frame_targets.return_value = JointState(name=["arm/joint"], position=[0.1])
-    task = CartesianIKTask("cartesian", _config())
+    solver = mocker.Mock(spec=PinkPoseTargetSolver)
+    solver.step.return_value = JointState(name=["arm/joint"], position=[0.1])
+    task = CartesianIKTask("cartesian", _config(), solver=solver)
     state = CoordinatorState(
         joints=JointStateSnapshot(joint_positions={"arm/joint": 0.0}),
         t_now=1.0,
@@ -96,7 +96,7 @@ def test_cartesian_clear_reseeds_command_from_feedback(mocker: MockerFixture) ->
 
     task.clear()
     task.on_cartesian_command(PoseStamped(), t_now=1.1)
-    ik.step_frame_targets.return_value = JointState(name=["arm/joint"], position=[0.01])
+    solver.step.return_value = JointState(name=["arm/joint"], position=[0.01])
     assert task.compute(state) is not None
 
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0]
+    assert solver.reset.call_count == 1

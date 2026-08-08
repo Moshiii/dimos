@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import pytest
@@ -24,7 +23,7 @@ from dimos.control.tasks.eef_twist_task.eef_twist_task import (
     EEFTwistTask,
     EEFTwistTaskConfig,
 )
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
+from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
@@ -41,18 +40,22 @@ def _robot_model() -> RobotModelConfig:
     )
 
 
-def _ik(mocker: MockerFixture) -> PinkIK:
-    ik = mocker.Mock(spec=PinkIK)
-    ik.frame_poses.return_value = {"tool": PoseStamped(frame_id="world", position=[0.0, 0.0, 0.0])}
-    ik.step_frame_targets.return_value = JointState(
+def _solver(mocker: MockerFixture) -> PinkPoseTargetSolver:
+    solver = mocker.Mock(spec=PinkPoseTargetSolver)
+    solver.frame_poses.return_value = {
+        "tool": PoseStamped(frame_id="world", position=[0.0, 0.0, 0.0])
+    }
+    solver.step.return_value = JointState(
         name=["arm/joint1", "arm/joint2"],
         position=[0.01, 0.02],
     )
-    return cast("PinkIK", ik)
+    return solver
 
 
-def _task(mocker: MockerFixture, *, gripper: bool = False) -> tuple[EEFTwistTask, PinkIK]:
-    ik = _ik(mocker)
+def _task(
+    mocker: MockerFixture, *, gripper: bool = False
+) -> tuple[EEFTwistTask, PinkPoseTargetSolver]:
+    solver = _solver(mocker)
     task = EEFTwistTask(
         "eef",
         EEFTwistTaskConfig(
@@ -65,9 +68,9 @@ def _task(mocker: MockerFixture, *, gripper: bool = False) -> tuple[EEFTwistTask
             gripper_open_pos=0.8,
             gripper_closed_pos=0.1,
         ),
-        ik=ik,
+        solver=solver,
     )
-    return task, ik
+    return task, solver
 
 
 def _state(t_now: float = 1.0, *, dt: float = 0.01) -> CoordinatorState:
@@ -87,7 +90,7 @@ def _twist(x: float = 0.1) -> TwistStamped:
 def test_twist_integrates_target_and_uses_shared_persistent_command(
     mocker: MockerFixture,
 ) -> None:
-    task, ik = _task(mocker)
+    task, solver = _task(mocker)
     assert task.on_ee_twist_command(_twist(), t_now=1.0)
 
     first = task.compute(_state(1.01))
@@ -95,34 +98,33 @@ def test_twist_integrates_target_and_uses_shared_persistent_command(
 
     assert first is not None
     assert second is not None
-    first_target = ik.step_frame_targets.call_args_list[0].kwargs["frame_targets"]["tool"]
-    second_target = ik.step_frame_targets.call_args_list[1].kwargs["frame_targets"]["tool"]
+    first_target = solver.step.call_args_list[0].args[0]["tool"]
+    second_target = solver.step.call_args_list[1].args[0]["tool"]
     assert first_target.position.x == pytest.approx(0.001)
     assert second_target.position.x == pytest.approx(0.002)
-    assert ik.step_frame_targets.call_args_list[1].kwargs["command_state"].position == [0.01, 0.02]
 
 
 def test_zero_twist_holds_the_integrated_target(mocker: MockerFixture) -> None:
-    task, ik = _task(mocker)
+    task, solver = _task(mocker)
     task.on_ee_twist_command(_twist(), t_now=1.0)
     task.compute(_state(1.01))
     task.on_ee_twist_command(_twist(0.0), t_now=1.02)
 
     task.compute(_state(1.03))
 
-    target = ik.step_frame_targets.call_args.kwargs["frame_targets"]["tool"]
+    target = solver.step.call_args.args[0]["tool"]
     assert target.position.x == pytest.approx(0.001)
 
 
 def test_stale_twist_stops_motion_without_dropping_hold(mocker: MockerFixture) -> None:
-    task, ik = _task(mocker)
+    task, solver = _task(mocker)
     task.on_ee_twist_command(_twist(), t_now=1.0)
     task.compute(_state(1.01))
 
     output = task.compute(_state(1.31))
 
     assert output is not None
-    target = ik.step_frame_targets.call_args.kwargs["frame_targets"]["tool"]
+    target = solver.step.call_args.args[0]["tool"]
     assert target.position.x == pytest.approx(0.001)
 
 
@@ -139,7 +141,7 @@ def test_gripper_is_claimed_and_appended_to_joint_output(mocker: MockerFixture) 
 
 
 def test_estop_rejects_input_and_reanchors_after_clear(mocker: MockerFixture) -> None:
-    task, ik = _task(mocker)
+    task, solver = _task(mocker)
     task.on_ee_twist_command(_twist(), t_now=1.0)
     task.compute(_state(1.01))
 
@@ -149,19 +151,19 @@ def test_estop_rejects_input_and_reanchors_after_clear(mocker: MockerFixture) ->
 
     task.set_estop(False)
     assert task.compute(_state(1.03)) is not None
-    assert ik.frame_poses.call_count == 2
+    assert solver.frame_poses.call_count == 2
 
 
 def test_preemption_discards_twist_target_and_command_state(mocker: MockerFixture) -> None:
-    task, ik = _task(mocker)
+    task, solver = _task(mocker)
     task.on_ee_twist_command(_twist(), t_now=1.0)
     task.compute(_state(1.01))
 
     task.on_preempted("trajectory", frozenset({"arm/joint1"}))
     task.compute(_state(1.02))
 
-    assert ik.frame_poses.call_count == 2
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
+    assert solver.frame_poses.call_count == 2
+    assert solver.reset.call_count >= 1
 
 
 def test_invalid_twist_is_rejected(mocker: MockerFixture) -> None:

@@ -23,7 +23,7 @@ from pytest_mock import MockerFixture
 
 from dimos.control.coordinator import TaskConfig
 from dimos.control.task import CoordinatorState, JointStateSnapshot
-import dimos.control.tasks.pose_target_ik as pose_target_module
+from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver, PoseTargetIKTaskConfig
 from dimos.control.tasks.teleop_ik_task.teleop_ik_task import (
     OperatorHand,
     TeleopHandBinding,
@@ -31,7 +31,6 @@ from dimos.control.tasks.teleop_ik_task.teleop_ik_task import (
     TeleopIKTaskConfig,
     create_task,
 )
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -75,9 +74,9 @@ def _config(bindings: tuple[TeleopHandBinding, ...], *, timeout: float = 0.5) ->
     )
 
 
-def _ik(mocker: MockerFixture) -> PinkIK:
-    ik = mocker.Mock(spec=PinkIK)
-    ik.frame_poses.return_value = {
+def _solver(mocker: MockerFixture) -> PinkPoseTargetSolver:
+    solver = mocker.Mock(spec=PinkPoseTargetSolver)
+    solver.frame_poses.return_value = {
         "left_tool": PoseStamped(
             position=Vector3(1.0, 0.0, 0.0),
             orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
@@ -87,10 +86,10 @@ def _ik(mocker: MockerFixture) -> PinkIK:
             orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
         ),
     }
-    ik.step_frame_targets.return_value = JointState(
+    solver.step.return_value = JointState(
         name=["robot/left", "robot/right"], position=[0.01, -0.01]
     )
-    return cast("PinkIK", ik)
+    return solver
 
 
 def _state(t_now: float = 1.0) -> CoordinatorState:
@@ -122,15 +121,12 @@ def _pose(x: float) -> PoseStamped:
     )
 
 
-class _CustomPinkIK(PinkIK):
-    instances: list["_CustomPinkIK"] = []
+class _CustomPoseTargetSolver(PinkPoseTargetSolver):
+    instances: list["_CustomPoseTargetSolver"] = []
 
-    def __init__(self, config: object) -> None:
+    def __init__(self, config: PoseTargetIKTaskConfig) -> None:
         self.received_config = config
         self.instances.append(self)
-
-    def validate_frame_targets(self, *args: object, **kwargs: object) -> None:
-        pass
 
 
 @pytest.mark.parametrize(
@@ -168,15 +164,15 @@ def test_binding_configuration_rejects_invalid_collections(
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        TeleopIKTask("quest", _config(bindings), ik=_ik(mocker))
+        TeleopIKTask("quest", _config(bindings), solver=_solver(mocker))
 
 
 def test_single_binding_tracks_relative_controller_motion(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
+    solver = _solver(mocker)
     task = TeleopIKTask(
         "quest",
         _config((_binding("right", "right_tool"),)),
-        ik=ik,
+        solver=solver,
     )
     task.on_teleop_buttons(_buttons(right=True), 1.0)
     task.on_right_cartesian_command(_pose(0.5), 1.0)
@@ -186,14 +182,14 @@ def test_single_binding_tracks_relative_controller_motion(mocker: MockerFixture)
     output = task.compute(_state(1.1))
 
     assert output is not None
-    target = ik.step_frame_targets.call_args.kwargs["frame_targets"]["right_tool"]
+    target = solver.step.call_args.args[0]["right_tool"]
     assert target.position.x == pytest.approx(-0.8)
 
 
 def test_bimanual_task_requires_both_hands_and_releases_atomically(
     mocker: MockerFixture,
 ) -> None:
-    ik = _ik(mocker)
+    solver = _solver(mocker)
     task = TeleopIKTask(
         "quest",
         _config(
@@ -202,7 +198,7 @@ def test_bimanual_task_requires_both_hands_and_releases_atomically(
                 _binding("right", "right_tool"),
             )
         ),
-        ik=ik,
+        solver=solver,
     )
     task.on_teleop_buttons(_buttons(left=True), 1.0)
     task.on_left_cartesian_command(_pose(0.1), 1.0)
@@ -213,7 +209,7 @@ def test_bimanual_task_requires_both_hands_and_releases_atomically(
     task.on_left_cartesian_command(_pose(0.1), 1.1)
     task.on_right_cartesian_command(_pose(-0.1), 1.1)
     assert task.compute(_state(1.1)) is not None
-    assert ik.frame_poses.call_count == 1
+    assert solver.frame_poses.call_count == 1
 
     task.on_teleop_buttons(_buttons(left=True, right=False), 1.2)
     assert task.compute(_state(1.2)) is None
@@ -223,36 +219,34 @@ def test_bimanual_task_requires_both_hands_and_releases_atomically(
 def test_deadman_reengagement_reseeds_command_from_feedback(
     mocker: MockerFixture,
 ) -> None:
-    ik = _ik(mocker)
+    solver = _solver(mocker)
     task = TeleopIKTask(
         "quest",
         _config((_binding("left", "left_tool"),)),
-        ik=ik,
+        solver=solver,
     )
     task.on_teleop_buttons(_buttons(left=True), 1.0)
     task.on_left_cartesian_command(_pose(0.1), 1.0)
-    ik.step_frame_targets.return_value = JointState(
-        name=["robot/left", "robot/right"], position=[0.1, -0.1]
-    )
+    solver.step.return_value = JointState(name=["robot/left", "robot/right"], position=[0.1, -0.1])
     assert task.compute(_state()) is not None
 
     task.on_teleop_buttons(_buttons(), 1.1)
     task.on_teleop_buttons(_buttons(left=True), 1.2)
     task.on_left_cartesian_command(_pose(0.2), 1.2)
-    ik.step_frame_targets.return_value = JointState(
+    solver.step.return_value = JointState(
         name=["robot/left", "robot/right"], position=[0.01, -0.01]
     )
     assert task.compute(_state(1.2)) is not None
 
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
+    assert solver.reset.call_count >= 1
 
 
 def test_estop_and_preemption_clear_command_session(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
+    solver = _solver(mocker)
     task = TeleopIKTask(
         "quest",
         _config((_binding("left", "left_tool"),)),
-        ik=ik,
+        solver=solver,
     )
     task.on_teleop_buttons(_buttons(left=True), 1.0)
     task.on_left_cartesian_command(_pose(0.1), 1.0)
@@ -264,7 +258,7 @@ def test_estop_and_preemption_clear_command_session(mocker: MockerFixture) -> No
     task.on_teleop_buttons(_buttons(left=True), 1.1)
     task.on_left_cartesian_command(_pose(0.2), 1.1)
     assert task.compute(_state(1.1)) is not None
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
+    assert solver.reset.call_count >= 1
 
     task.on_preempted("trajectory", frozenset({"robot/left"}))
     assert not task.is_active()
@@ -273,7 +267,7 @@ def test_estop_and_preemption_clear_command_session(mocker: MockerFixture) -> No
 def test_bimanual_timeout_clears_both_sides_and_reengagement_recaptures(
     mocker: MockerFixture,
 ) -> None:
-    ik = _ik(mocker)
+    solver = _solver(mocker)
     task = TeleopIKTask(
         "quest",
         _config(
@@ -283,7 +277,7 @@ def test_bimanual_timeout_clears_both_sides_and_reengagement_recaptures(
             ),
             timeout=0.2,
         ),
-        ik=ik,
+        solver=solver,
     )
     task.on_teleop_buttons(_buttons(left=True, right=True), 1.0)
     task.on_left_cartesian_command(_pose(0.1), 1.0)
@@ -299,14 +293,14 @@ def test_bimanual_timeout_clears_both_sides_and_reengagement_recaptures(
     task.on_left_cartesian_command(_pose(0.2), 1.4)
     task.on_right_cartesian_command(_pose(-0.2), 1.4)
     assert task.compute(_state(1.4)) is not None
-    assert ik.frame_poses.call_count == 2
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
+    assert solver.frame_poses.call_count == 2
+    assert solver.reset.call_count >= 1
 
 
 def test_bimanual_step_contains_both_targets_and_grippers(
     mocker: MockerFixture,
 ) -> None:
-    ik = _ik(mocker)
+    solver = _solver(mocker)
     task = TeleopIKTask(
         "quest",
         _config(
@@ -315,7 +309,7 @@ def test_bimanual_step_contains_both_targets_and_grippers(
                 _binding("right", "right_tool", "robot/right_gripper"),
             )
         ),
-        ik=ik,
+        solver=solver,
     )
     task.on_teleop_buttons(
         _buttons(left=True, right=True, left_trigger=0.25, right_trigger=0.75),
@@ -327,7 +321,7 @@ def test_bimanual_step_contains_both_targets_and_grippers(
     output = task.compute(_state())
 
     assert output is not None
-    assert set(ik.step_frame_targets.call_args.kwargs["frame_targets"]) == {
+    assert set(solver.step.call_args.args[0]) == {
         "left_tool",
         "right_tool",
     }
@@ -341,8 +335,7 @@ def test_bimanual_step_contains_both_targets_and_grippers(
     assert output.positions[2:] == pytest.approx([0.75, 0.25], abs=0.01)
 
 
-def test_factory_rejects_gripper_missing_from_hardware(mocker: MockerFixture) -> None:
-    mocker.patch.object(pose_target_module, "PinkIK")
+def test_factory_rejects_gripper_missing_from_hardware() -> None:
     cfg = TaskConfig(
         name="quest",
         type="teleop_ik",
@@ -366,9 +359,10 @@ def test_factory_rejects_gripper_missing_from_hardware(mocker: MockerFixture) ->
         )
 
 
-def test_factory_constructs_plain_pink_backend_by_default(mocker: MockerFixture) -> None:
-    init = mocker.patch.object(PinkIK, "__init__", return_value=None)
-    mocker.patch.object(PinkIK, "validate_frame_targets")
+def test_factory_constructs_plain_pose_target_solver_by_default(
+    mocker: MockerFixture,
+) -> None:
+    init = mocker.patch.object(PinkPoseTargetSolver, "__init__", return_value=None)
     cfg = TaskConfig(
         name="quest",
         type="teleop_ik",
@@ -381,14 +375,14 @@ def test_factory_constructs_plain_pink_backend_by_default(mocker: MockerFixture)
 
     task = create_task(cfg, hardware={})
 
-    assert type(task._ik) is PinkIK
+    assert type(task._solver) is PinkPoseTargetSolver
     assert task._config.max_joint_velocity_rad_s == 5.0
     assert task._config.max_command_tracking_error_deg == 10.0
-    init.assert_called_once_with(task._config.pink)
+    assert init.call_args.args[0].pink == task._config.pink
 
 
-def test_factory_constructs_fresh_custom_backend_for_each_task() -> None:
-    _CustomPinkIK.instances.clear()
+def test_factory_constructs_fresh_custom_solver_for_each_task() -> None:
+    _CustomPoseTargetSolver.instances.clear()
     cfg = TaskConfig(
         name="quest",
         type="teleop_ik",
@@ -396,15 +390,15 @@ def test_factory_constructs_fresh_custom_backend_for_each_task() -> None:
         params={
             "robot_model": _robot_model(),
             "bindings": [{"hand": "left", "target_frame": "left_tool"}],
-            "ik_backend_type": _CustomPinkIK,
+            "solver_type": _CustomPoseTargetSolver,
         },
     )
 
     first = create_task(cfg, hardware={})
     second = create_task(cfg, hardware={})
 
-    assert len(_CustomPinkIK.instances) == 2
-    assert first._ik is _CustomPinkIK.instances[0]
-    assert second._ik is _CustomPinkIK.instances[1]
-    assert first._ik is not second._ik
-    assert _CustomPinkIK.instances[0].received_config == first._config.pink
+    assert len(_CustomPoseTargetSolver.instances) == 2
+    assert first._solver is _CustomPoseTargetSolver.instances[0]
+    assert second._solver is _CustomPoseTargetSolver.instances[1]
+    assert first._solver is not second._solver
+    assert _CustomPoseTargetSolver.instances[0].received_config == first._config

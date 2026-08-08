@@ -29,13 +29,15 @@ from pytest_mock import MockerFixture
 from dimos.manipulation.planning.factory import create_kinematics
 from dimos.manipulation.planning.groups.models import PlanningGroup, PlanningGroupDefinition
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
-import dimos.manipulation.planning.kinematics.pink_ik as pink_ik
 from dimos.manipulation.planning.kinematics.pink_ik import (
-    _CURRENT_POSTURE_TASK,
     PinkIK,
     PinkIKConfig,
+)
+import dimos.manipulation.planning.kinematics.pink_solver as pink_ik
+from dimos.manipulation.planning.kinematics.pink_solver import (
+    _CURRENT_POSTURE_TASK,
     PinkIKDependencyError,
-    PinkIKFeedbackLimitError,
+    PinkJointLimitError,
     _build_joint_mapping,
     _frame_task_key,
     _PinkControlContext,
@@ -52,6 +54,52 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
 
 _TRACKING_ERROR_RAD = np.deg2rad(10.0)
+
+
+class _StreamingTestPinkIK(PinkIK):
+    """Expose private streaming primitives for shared-core unit tests only."""
+
+    def __init__(self, config: PinkIKConfig) -> None:
+        super().__init__(config)
+        self.feedback_limit_tolerance = 1e-3
+        self.command_limit_margin = 1e-4
+
+    def step_frame_targets(
+        self,
+        robot_model: RobotModelConfig,
+        frame_targets: Mapping[str, PoseStamped],
+        controlled_joints: list[str],
+        command_state: JointState,
+        measured_state: JointState,
+        max_command_tracking_error_rad: float,
+        dt: float | None = None,
+        max_joint_velocity_rad_s: float = 5.0,
+    ) -> JointState:
+        return self._step_frame_targets(
+            robot_model=robot_model,
+            frame_targets=frame_targets,
+            controlled_joints=controlled_joints,
+            command_state=command_state,
+            measured_state=measured_state,
+            max_command_tracking_error_rad=max_command_tracking_error_rad,
+            feedback_limit_tolerance=self.feedback_limit_tolerance,
+            command_limit_margin=self.command_limit_margin,
+            dt=dt,
+            max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+        )
+
+    def validate_frame_targets(
+        self,
+        robot_model: RobotModelConfig,
+        frame_names: list[str],
+        controlled_joints: list[str],
+    ) -> None:
+        self._validate_frame_targets(
+            robot_model,
+            frame_names,
+            controlled_joints,
+            self.command_limit_margin,
+        )
 
 
 class _FakeJoint:
@@ -171,7 +219,7 @@ class _DerivedComposablePinkIK(_ComposablePinkIK):
         return tasks
 
 
-class _RecordingPinkIK(PinkIK):
+class _RecordingPinkIK(_StreamingTestPinkIK):
     def __init__(self, config: PinkIKConfig) -> None:
         super().__init__(config)
         self.before_tasks: list[Mapping[str, Any]] = []
@@ -251,11 +299,11 @@ def _robot_config() -> RobotModelConfig:
     )
 
 
-def _pink_ik(mocker: MockerFixture, converge: bool = True) -> PinkIK:
+def _pink_ik(mocker: MockerFixture, converge: bool = True) -> _StreamingTestPinkIK:
     mocker.patch.object(
         pink_ik, "_load_optional_dependencies", return_value=_fake_modules(converge=converge)
     )
-    return PinkIK(PinkIKConfig(max_iterations=3))
+    return _StreamingTestPinkIK(PinkIKConfig(max_iterations=3))
 
 
 def _context() -> _PinkRobotContext:
@@ -483,6 +531,17 @@ def test_pink_ik_config_overrides_are_applied(mocker: MockerFixture) -> None:
     )
 
 
+def test_planning_backend_does_not_expose_streaming_control_api(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    ik = PinkIK(PinkIKConfig())
+
+    assert not hasattr(ik, "step_frame_targets")
+    assert not hasattr(ik, "validate_frame_targets")
+    assert not hasattr(ik, "frame_poses")
+
+
 def test_joint_order_mapping_uses_names_not_positions() -> None:
     mapping = _build_joint_mapping(_FakeModel(), _robot_config())
     seed = JointState(name=["joint_b", "joint_c", "joint_a"], position=[20.0, 30.0, 10.0])
@@ -506,6 +565,7 @@ def test_streaming_envelope_intersects_configured_and_urdf_velocity(
         dt=0.1,
         max_joint_velocity=3.0,
         max_tracking_error=1.0,
+        command_limit_margin=1e-4,
     )
 
     assert result == pytest.approx([0.3, 0.2, 0.3])
@@ -525,6 +585,7 @@ def test_streaming_envelope_caps_command_at_measured_tracking_distance(
         dt=0.1,
         max_joint_velocity=5.0,
         max_tracking_error=0.15,
+        command_limit_margin=1e-4,
     )
 
     assert result == pytest.approx([0.15, 0.15, 0.15])
@@ -570,7 +631,7 @@ def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
         posture_cost=0.0,
     )
     mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
-    ik = PinkIK(config)
+    ik = _StreamingTestPinkIK(config)
     mocker.patch.object(
         ik,
         "_get_control_context",
@@ -655,7 +716,7 @@ def test_streaming_reuses_tasks_and_mutates_targets_in_place(
     mocker: MockerFixture,
 ) -> None:
     mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
-    ik = PinkIK(PinkIKConfig())
+    ik = _StreamingTestPinkIK(PinkIKConfig())
     context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     mocker.patch.object(ik, "_get_control_context", return_value=context)
     create_tasks = mocker.spy(ik, "_create_tasks")
@@ -782,7 +843,7 @@ def test_step_frame_targets_normalizes_feedback_and_saturates_commands(
     mocker: MockerFixture,
 ) -> None:
     mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
-    ik = PinkIK(PinkIKConfig(feedback_limit_tolerance=1e-3, command_limit_margin=1e-4))
+    ik = _StreamingTestPinkIK(PinkIKConfig())
     context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     mocker.patch.object(ik, "_get_control_context", return_value=context)
 
@@ -822,7 +883,7 @@ def test_step_frame_targets_rejects_feedback_beyond_tolerance(
     )
     step = mocker.patch.object(ik, "_step_configuration")
 
-    with pytest.raises(PinkIKFeedbackLimitError, match="joint_a.*lower limit"):
+    with pytest.raises(PinkJointLimitError, match="joint_a.*lower limit"):
         ik.step_frame_targets(
             robot_model=_robot_config(),
             frame_targets={"tool": PoseStamped()},
@@ -867,7 +928,8 @@ def test_validate_frame_targets_rejects_margin_wider_than_joint_range(
     mocker: MockerFixture,
 ) -> None:
     mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
-    ik = PinkIK(PinkIKConfig(command_limit_margin=1.1))
+    ik = _StreamingTestPinkIK(PinkIKConfig())
+    ik.command_limit_margin = 1.1
     mocker.patch.object(
         ik,
         "_get_control_context",
@@ -888,7 +950,7 @@ def test_step_frame_targets_rejects_unknown_frame(mocker: MockerFixture, tmp_pat
     config.model_path.write_text("<robot/>")
 
     with pytest.raises(ValueError, match="missing_frame"):
-        PinkIK(PinkIKConfig()).step_frame_targets(
+        _StreamingTestPinkIK(PinkIKConfig()).step_frame_targets(
             robot_model=config,
             frame_targets={"missing_frame": PoseStamped()},
             controlled_joints=config.joint_names,

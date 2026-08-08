@@ -32,7 +32,10 @@ from dimos.control.task import (
     ResourceClaim,
 )
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK, PinkIKFeedbackLimitError
+from dimos.manipulation.planning.kinematics.pink_solver import (
+    PinkJointLimitError,
+    _PinkSolverCore,
+)
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.logging_config import setup_logger
@@ -57,6 +60,8 @@ class PoseTargetIKTaskConfig:
     timeout: float = 0.5
     max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
+    feedback_limit_tolerance: float = 1e-3
+    command_limit_margin: float = 1e-4
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,72 @@ class FrameTargetSnapshot:
     extra_joint_positions: Mapping[str, float] = field(default_factory=dict)
 
 
+class PinkPoseTargetSolver(_PinkSolverCore):
+    """Stateful Pink solver owned by one pose-target control task."""
+
+    def __init__(self, config: PoseTargetIKTaskConfig) -> None:
+        super().__init__(config.pink)
+        self._control_config = config
+        self._command_state_lock = threading.Lock()
+        self._command_state: JointState | None = None
+        self._command_state_generation = 0
+        self._validate_frame_targets(
+            config.robot_model,
+            config.target_frames,
+            config.joint_names,
+            config.command_limit_margin,
+        )
+
+    def step(
+        self,
+        frame_targets: Mapping[str, PoseStamped],
+        measured_state: JointState,
+        dt: float,
+    ) -> JointState | None:
+        """Advance the persistent command trajectory by one bounded QP step."""
+        with self._command_state_lock:
+            command_state = _copy_joint_state(self._command_state or measured_state)
+            generation = self._command_state_generation
+        result = self._step_frame_targets(
+            robot_model=self._control_config.robot_model,
+            frame_targets=frame_targets,
+            controlled_joints=self._control_config.joint_names,
+            command_state=command_state,
+            measured_state=measured_state,
+            max_command_tracking_error_rad=float(
+                np.deg2rad(self._control_config.max_command_tracking_error_deg)
+            ),
+            feedback_limit_tolerance=self._control_config.feedback_limit_tolerance,
+            command_limit_margin=self._control_config.command_limit_margin,
+            dt=dt,
+            max_joint_velocity_rad_s=self._control_config.max_joint_velocity_rad_s,
+        )
+        with self._command_state_lock:
+            if self._command_state_generation != generation:
+                return None
+            self._command_state = _copy_joint_state(result)
+        return result
+
+    def frame_poses(
+        self,
+        measured_state: JointState,
+        frame_names: Sequence[str],
+    ) -> dict[str, PoseStamped]:
+        """Return current world poses for controlled frames."""
+        return self._frame_poses(
+            self._control_config.robot_model,
+            frame_names,
+            self._control_config.joint_names,
+            measured_state,
+        )
+
+    def reset(self) -> None:
+        """Discard the persistent command trajectory."""
+        with self._command_state_lock:
+            self._command_state = None
+            self._command_state_generation += 1
+
+
 class PoseTargetIKTask(BaseControlTask):
     """Turn frame targets into a feedback-bounded persistent command trajectory."""
 
@@ -77,7 +148,8 @@ class PoseTargetIKTask(BaseControlTask):
         config: PoseTargetIKTaskConfig,
         *,
         additional_claimed_joints: Sequence[str] = (),
-        ik: PinkIK | None = None,
+        solver: PinkPoseTargetSolver | None = None,
+        solver_type: type[PinkPoseTargetSolver] | None = None,
     ) -> None:
         if not config.joint_names:
             raise ValueError(f"PoseTargetIKTask '{name}' requires at least one joint")
@@ -101,6 +173,17 @@ class PoseTargetIKTask(BaseControlTask):
             raise ValueError(
                 f"PoseTargetIKTask '{name}' requires a positive finite command tracking error"
             )
+        if (
+            not np.isfinite(config.feedback_limit_tolerance)
+            or config.feedback_limit_tolerance < 0.0
+        ):
+            raise ValueError(
+                f"PoseTargetIKTask '{name}' requires a non-negative finite feedback tolerance"
+            )
+        if not np.isfinite(config.command_limit_margin) or config.command_limit_margin < 0.0:
+            raise ValueError(
+                f"PoseTargetIKTask '{name}' requires a non-negative finite command limit margin"
+            )
 
         additional_joints = tuple(additional_claimed_joints)
         if set(config.joint_names) & set(additional_joints):
@@ -115,13 +198,9 @@ class PoseTargetIKTask(BaseControlTask):
         self._joint_names = config.joint_names
         self._additional_claimed_joints = additional_joints
         self._feedback_limit_warning_times: dict[tuple[str, str], float] = {}
-        self._command_state_lock = threading.Lock()
-        self._command_state: JointState | None = None
-        self._command_state_generation = 0
-        self._ik = ik or PinkIK(config.pink)
-        self._ik.validate_frame_targets(
-            config.robot_model, config.target_frames, config.joint_names
-        )
+        if solver is not None and solver_type is not None:
+            raise ValueError("PoseTargetIKTask accepts either solver or solver_type, not both")
+        self._solver = solver or (solver_type or PinkPoseTargetSolver)(config)
 
     def claim(self) -> ResourceClaim:
         """Claim IK-controlled and leaf-provided additional joints."""
@@ -147,25 +226,9 @@ class PoseTargetIKTask(BaseControlTask):
         if measured_state is None:
             self._reset_command_state()
             return None
-        with self._command_state_lock:
-            if self._command_state is None:
-                self._command_state = _copy_joint_state(measured_state)
-            command_state = _copy_joint_state(self._command_state)
-            command_generation = self._command_state_generation
         try:
-            result = self._ik.step_frame_targets(
-                robot_model=self._config.robot_model,
-                frame_targets=snapshot.targets,
-                controlled_joints=self._joint_names,
-                command_state=command_state,
-                measured_state=measured_state,
-                max_command_tracking_error_rad=float(
-                    np.deg2rad(self._config.max_command_tracking_error_deg)
-                ),
-                dt=state.dt,
-                max_joint_velocity_rad_s=self._config.max_joint_velocity_rad_s,
-            )
-        except PinkIKFeedbackLimitError as exc:
+            result = self._solver.step(snapshot.targets, measured_state, state.dt)
+        except PinkJointLimitError as exc:
             warning_key = (exc.joint_name, exc.boundary)
             last_warning = self._feedback_limit_warning_times.get(warning_key)
             if (
@@ -189,6 +252,8 @@ class PoseTargetIKTask(BaseControlTask):
         except Exception as exc:
             logger.warning("Pink control step failed", task=self._name, error=str(exc))
             return None
+        if result is None:
+            return None
         if result.name != list(self._joint_names) or len(result.position) != len(self._joint_names):
             logger.warning("Pink control step returned an invalid joint result", task=self._name)
             return None
@@ -210,13 +275,6 @@ class PoseTargetIKTask(BaseControlTask):
                 return None
             output_names.append(joint_name)
             output_positions.append(float(snapshot.extra_joint_positions[joint_name]))
-        with self._command_state_lock:
-            if self._command_state_generation != command_generation:
-                return None
-            self._command_state = JointState(
-                name=list(self._joint_names),
-                position=positions.tolist(),
-            )
         return JointCommandOutput(
             joint_names=output_names,
             positions=output_positions,
@@ -230,12 +288,7 @@ class PoseTargetIKTask(BaseControlTask):
         measured_state = self._measured_joint_state(state)
         if measured_state is None:
             return None
-        return self._ik.frame_poses(
-            self._config.robot_model,
-            frame_names,
-            self._joint_names,
-            measured_state,
-        )
+        return self._solver.frame_poses(measured_state, frame_names)
 
     def on_preempted(self, by_task: str, joints: frozenset[str]) -> None:
         """Notify the leaf when any of its claimed joints are preempted."""
@@ -254,9 +307,7 @@ class PoseTargetIKTask(BaseControlTask):
 
     def _reset_command_state(self) -> None:
         """Discard the active command trajectory and clear a tracking fault."""
-        with self._command_state_lock:
-            self._command_state = None
-            self._command_state_generation += 1
+        self._solver.reset()
 
     @abstractmethod
     def _frame_target_snapshot(self, state: CoordinatorState) -> FrameTargetSnapshot | None:

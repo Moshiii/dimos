@@ -26,11 +26,11 @@ from pydantic import Field
 from dimos.control.task import CoordinatorState
 from dimos.control.tasks.pose_target_ik import (
     FrameTargetSnapshot,
+    PinkPoseTargetSolver,
     PoseTargetIKTask,
     PoseTargetIKTaskConfig,
 )
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -63,6 +63,8 @@ class TeleopIKTaskConfig:
     timeout: float = 0.5
     max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
+    feedback_limit_tolerance: float = 1e-3
+    command_limit_margin: float = 1e-4
 
 
 @dataclass
@@ -82,7 +84,8 @@ class TeleopIKTask(PoseTargetIKTask):
         name: str,
         config: TeleopIKTaskConfig,
         *,
-        ik: PinkIK | None = None,
+        solver: PinkPoseTargetSolver | None = None,
+        solver_type: type[PinkPoseTargetSolver] | None = None,
     ) -> None:
         self._validate_bindings(name, config)
         self._teleop_config = config
@@ -112,9 +115,12 @@ class TeleopIKTask(PoseTargetIKTask):
                 timeout=config.timeout,
                 max_joint_velocity_rad_s=config.max_joint_velocity_rad_s,
                 max_command_tracking_error_deg=config.max_command_tracking_error_deg,
+                feedback_limit_tolerance=config.feedback_limit_tolerance,
+                command_limit_margin=config.command_limit_margin,
             ),
             additional_claimed_joints=gripper_joints,
-            ik=ik,
+            solver=solver,
+            solver_type=solver_type,
         )
 
     @staticmethod
@@ -321,10 +327,12 @@ class TeleopIKTaskParams(BaseConfig):
     robot_model: RobotModelConfig
     bindings: list[TeleopHandBindingParams]
     pink: PinkKinematicsConfig = Field(default_factory=PinkKinematicsConfig)
-    ik_backend_type: type[PinkIK] = PinkIK
+    solver_type: type[PinkPoseTargetSolver] = PinkPoseTargetSolver
     timeout: float = 0.5
     max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
+    feedback_limit_tolerance: float = 1e-3
+    command_limit_margin: float = 1e-4
 
 
 def create_task(
@@ -353,18 +361,20 @@ def create_task(
     }
     if unknown_grippers:
         raise ValueError(f"Teleop task references unknown gripper joints: {unknown_grippers}")
-    ik = params.ik_backend_type(params.pink)
+    task_config = TeleopIKTaskConfig(
+        joint_names=tuple(cfg.joint_names),
+        robot_model=params.robot_model,
+        bindings=bindings,
+        pink=params.pink,
+        priority=cfg.priority,
+        timeout=params.timeout,
+        max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
+        max_command_tracking_error_deg=params.max_command_tracking_error_deg,
+        feedback_limit_tolerance=params.feedback_limit_tolerance,
+        command_limit_margin=params.command_limit_margin,
+    )
     return TeleopIKTask(
         cfg.name,
-        TeleopIKTaskConfig(
-            joint_names=tuple(cfg.joint_names),
-            robot_model=params.robot_model,
-            bindings=bindings,
-            pink=params.pink,
-            priority=cfg.priority,
-            timeout=params.timeout,
-            max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
-            max_command_tracking_error_deg=params.max_command_tracking_error_deg,
-        ),
-        ik=ik,
+        task_config,
+        solver_type=params.solver_type,
     )

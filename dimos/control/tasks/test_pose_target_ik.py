@@ -15,19 +15,21 @@
 """Behavior tests for the shared pose-target IK control core."""
 
 from pathlib import Path
-from typing import cast
 
-import numpy as np
 import pytest
 from pytest_mock import MockerFixture
 
 from dimos.control.task import CoordinatorState, JointStateSnapshot
 from dimos.control.tasks.pose_target_ik import (
     FrameTargetSnapshot,
+    PinkPoseTargetSolver,
     PoseTargetIKTask,
     PoseTargetIKTaskConfig,
 )
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK, PinkIKFeedbackLimitError
+from dimos.manipulation.planning.kinematics.pink_solver import (
+    PinkJointLimitError,
+    _PinkSolverCore,
+)
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -37,7 +39,7 @@ class _Task(PoseTargetIKTask):
     def __init__(
         self,
         config: PoseTargetIKTaskConfig,
-        ik: PinkIK,
+        solver: PinkPoseTargetSolver,
         snapshot: FrameTargetSnapshot | None,
         additional_joints: tuple[str, ...] = (),
     ) -> None:
@@ -47,7 +49,7 @@ class _Task(PoseTargetIKTask):
             "pose_target",
             config,
             additional_claimed_joints=additional_joints,
-            ik=ik,
+            solver=solver,
         )
 
     def is_active(self) -> bool:
@@ -87,13 +89,13 @@ def _config(
     )
 
 
-def _ik(mocker: MockerFixture, positions: list[float] | None = None) -> PinkIK:
-    ik = mocker.Mock(spec=PinkIK)
-    ik.step_frame_targets.return_value = JointState(
+def _solver(mocker: MockerFixture, positions: list[float] | None = None) -> PinkPoseTargetSolver:
+    solver = mocker.Mock(spec=PinkPoseTargetSolver)
+    solver.step.return_value = JointState(
         name=["arm/a", "arm/b"], position=positions or [0.01, -0.01]
     )
-    ik.frame_poses.return_value = {"tool": PoseStamped(frame_id="base")}
-    return cast("PinkIK", ik)
+    solver.frame_poses.return_value = {"tool": PoseStamped(frame_id="base")}
+    return solver
 
 
 def _state(*, t_now: float = 1.0, positions: dict[str, float] | None = None) -> CoordinatorState:
@@ -117,14 +119,61 @@ def _snapshot(
     )
 
 
-def test_constructor_validates_model_frames_and_controlled_joints(
+def _stateful_solver(mocker: MockerFixture) -> PinkPoseTargetSolver:
+    mocker.patch.object(_PinkSolverCore, "__init__", return_value=None)
+    mocker.patch.object(PinkPoseTargetSolver, "_validate_frame_targets")
+    return PinkPoseTargetSolver(_config())
+
+
+def test_pose_target_solver_advances_from_last_command_not_delayed_feedback(
     mocker: MockerFixture,
 ) -> None:
-    ik = _ik(mocker)
+    solver = _stateful_solver(mocker)
 
-    _Task(_config(), ik, _snapshot())
+    def advance(**kwargs: object) -> JointState:
+        command = kwargs["command_state"]
+        assert isinstance(command, JointState)
+        return JointState(
+            name=list(command.name),
+            position=[position + 0.1 for position in command.position],
+        )
 
-    ik.validate_frame_targets.assert_called_once_with(_robot_model(), ("tool",), ("arm/a", "arm/b"))
+    step = mocker.patch.object(solver, "_step_frame_targets", side_effect=advance)
+    targets = {"tool": PoseStamped()}
+
+    assert solver.step(targets, JointState(name=["arm/a", "arm/b"], position=[0.0, 0.0]), 0.01)
+    assert solver.step(
+        targets,
+        JointState(name=["arm/a", "arm/b"], position=[-0.3, -0.3]),
+        0.01,
+    )
+
+    assert step.call_args_list[0].kwargs["command_state"].position == [0.0, 0.0]
+    assert step.call_args_list[1].kwargs["command_state"].position == [0.1, 0.1]
+    assert step.call_args_list[1].kwargs["measured_state"].position == [-0.3, -0.3]
+
+
+def test_pose_target_solver_reset_reseeds_from_feedback(mocker: MockerFixture) -> None:
+    solver = _stateful_solver(mocker)
+    step = mocker.patch.object(
+        solver,
+        "_step_frame_targets",
+        side_effect=[
+            JointState(name=["arm/a", "arm/b"], position=[0.1, 0.1]),
+            JointState(name=["arm/a", "arm/b"], position=[-0.2, -0.2]),
+        ],
+    )
+    targets = {"tool": PoseStamped()}
+
+    assert solver.step(targets, JointState(name=["arm/a", "arm/b"], position=[0.0, 0.0]), 0.01)
+    solver.reset()
+    assert solver.step(
+        targets,
+        JointState(name=["arm/a", "arm/b"], position=[-0.3, -0.3]),
+        0.01,
+    )
+
+    assert step.call_args_list[1].kwargs["command_state"].position == [-0.3, -0.3]
 
 
 @pytest.mark.parametrize(
@@ -143,16 +192,16 @@ def test_constructor_rejects_invalid_common_configuration(
         config = (
             _config(joint_names=value) if field == "joint_names" else _config(target_frames=value)
         )
-        _Task(config, _ik(mocker), _snapshot())
+        _Task(config, _solver(mocker), _snapshot())
 
 
 def test_compute_calls_one_pink_step_and_preserves_output_order(
     mocker: MockerFixture,
 ) -> None:
-    ik = _ik(mocker, [0.02, -0.03])
+    solver = _solver(mocker, [0.02, -0.03])
     task = _Task(
         _config(),
-        ik,
+        solver,
         _snapshot(extra_joint_positions={"arm/gripper": 0.4}),
         additional_joints=("arm/gripper",),
     )
@@ -162,41 +211,9 @@ def test_compute_calls_one_pink_step_and_preserves_output_order(
     assert output is not None
     assert output.joint_names == ["arm/a", "arm/b", "arm/gripper"]
     assert output.positions == [0.02, -0.03, 0.4]
-    ik.step_frame_targets.assert_called_once()
-    assert ik.step_frame_targets.call_args.kwargs["dt"] == 0.01
-    assert ik.step_frame_targets.call_args.kwargs["max_joint_velocity_rad_s"] == 5.0
-    assert ik.step_frame_targets.call_args.kwargs[
-        "max_command_tracking_error_rad"
-    ] == pytest.approx(np.deg2rad(10.0))
+    solver.step.assert_called_once()
+    assert solver.step.call_args.args[2] == 0.01
     assert task.claim().joints == frozenset({"arm/a", "arm/b", "arm/gripper"})
-
-
-def test_compute_accumulates_commands_while_feedback_is_unchanged(
-    mocker: MockerFixture,
-) -> None:
-    ik = _ik(mocker)
-
-    def advance_command(**kwargs: object) -> JointState:
-        command_state = cast("JointState", kwargs["command_state"])
-        return JointState(
-            name=command_state.name,
-            position=[position + 0.01 for position in command_state.position],
-        )
-
-    ik.step_frame_targets.side_effect = advance_command
-    task = _Task(_config(), ik, _snapshot())
-    state = _state(positions={"arm/a": 0.0, "arm/b": 0.0})
-
-    first = task.compute(state)
-    second = task.compute(state)
-
-    assert first is not None
-    assert second is not None
-    assert first.positions == [0.01, 0.01]
-    assert second.positions == [0.02, 0.02]
-    assert ik.step_frame_targets.call_args_list[0].kwargs["command_state"].position == [0.0, 0.0]
-    assert ik.step_frame_targets.call_args_list[1].kwargs["command_state"].position == [0.01, 0.01]
-    assert ik.step_frame_targets.call_args_list[1].kwargs["measured_state"].position == [0.0, 0.0]
 
 
 @pytest.mark.parametrize("max_joint_velocity_rad_s", [0.0, -1.0, float("inf"), float("nan")])
@@ -206,7 +223,7 @@ def test_constructor_rejects_invalid_joint_velocity_limit(
     with pytest.raises(ValueError, match="positive finite joint velocity limit"):
         _Task(
             _config(max_joint_velocity_rad_s=max_joint_velocity_rad_s),
-            _ik(mocker),
+            _solver(mocker),
             _snapshot(),
         )
 
@@ -218,72 +235,32 @@ def test_constructor_rejects_invalid_command_tracking_error(
     with pytest.raises(ValueError, match="positive finite command tracking error"):
         _Task(
             _config(max_command_tracking_error_deg=max_command_tracking_error_deg),
-            _ik(mocker),
+            _solver(mocker),
             _snapshot(),
         )
 
 
-def test_compute_passes_joint_velocity_limit_to_pink(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
-    task = _Task(_config(max_joint_velocity_rad_s=1.0), ik, _snapshot())
-
-    assert task.compute(_state()) is not None
-
-    assert ik.step_frame_targets.call_args.kwargs["max_joint_velocity_rad_s"] == 1.0
-
-
 def test_compute_without_complete_joint_state_skips_pink(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
-    task = _Task(_config(), ik, _snapshot())
+    solver = _solver(mocker)
+    task = _Task(_config(), solver, _snapshot())
 
     output = task.compute(_state(positions={"arm/a": 0.0}))
 
     assert output is None
-    ik.step_frame_targets.assert_not_called()
+    solver.step.assert_not_called()
 
 
 def test_compute_skips_tick_when_pink_solver_raises(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
-    ik.step_frame_targets.side_effect = Exception("QP solver found no solution")
-    task = _Task(_config(), ik, _snapshot())
+    solver = _solver(mocker)
+    solver.step.side_effect = Exception("QP solver found no solution")
+    task = _Task(_config(), solver, _snapshot())
 
     assert task.compute(_state()) is None
 
 
-def test_solver_failure_preserves_last_accepted_command(mocker: MockerFixture) -> None:
-    ik = _ik(mocker, [0.05, -0.05])
-    task = _Task(_config(), ik, _snapshot())
-    state = _state()
-    assert task.compute(state) is not None
-    ik.step_frame_targets.side_effect = [
-        Exception("no solution"),
-        JointState(name=["arm/a", "arm/b"], position=[0.06, -0.06]),
-    ]
-
-    assert task.compute(state) is None
-    assert task.compute(state) is not None
-
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.05, -0.05]
-
-
-def test_feedback_delay_does_not_latch_command_state(
-    mocker: MockerFixture,
-) -> None:
-    ik = _ik(mocker, [0.1, 0.1])
-    task = _Task(_config(max_command_tracking_error_deg=10.0), ik, _snapshot())
-    assert task.compute(_state()) is not None
-
-    far_feedback = _state(positions={"arm/a": -0.3, "arm/b": -0.3})
-    assert task.compute(far_feedback) is not None
-
-    assert ik.step_frame_targets.call_count == 2
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.1, 0.1]
-    assert ik.step_frame_targets.call_args.kwargs["measured_state"].position == [-0.3, -0.3]
-
-
 def test_feedback_limit_warnings_are_rate_limited(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
-    ik.step_frame_targets.side_effect = PinkIKFeedbackLimitError(
+    solver = _solver(mocker)
+    solver.step.side_effect = PinkJointLimitError(
         joint_name="arm/a",
         value=-1.0011,
         lower=-1.0,
@@ -291,7 +268,7 @@ def test_feedback_limit_warnings_are_rate_limited(mocker: MockerFixture) -> None
         tolerance=1e-3,
     )
     warning = mocker.patch("dimos.control.tasks.pose_target_ik.logger.warning")
-    task = _Task(_config(timeout=0.0), ik, _snapshot())
+    task = _Task(_config(timeout=0.0), solver, _snapshot())
 
     assert task.compute(_state(t_now=1.0)) is None
     assert task.compute(_state(t_now=1.1)) is None
@@ -301,29 +278,29 @@ def test_feedback_limit_warnings_are_rate_limited(mocker: MockerFixture) -> None
 
 
 def test_compute_rejects_non_finite_pink_result(mocker: MockerFixture) -> None:
-    task = _Task(_config(), _ik(mocker, [float("nan"), 0.0]), _snapshot())
+    task = _Task(_config(), _solver(mocker, [float("nan"), 0.0]), _snapshot())
 
     assert task.compute(_state()) is None
 
 
 def test_stale_snapshot_times_out_without_calling_pink(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
-    task = _Task(_config(timeout=0.2), ik, _snapshot(last_update_time=1.0))
+    solver = _solver(mocker)
+    task = _Task(_config(timeout=0.2), solver, _snapshot(last_update_time=1.0))
 
     output = task.compute(_state(t_now=1.3))
 
     assert output is None
     assert task.timed_out
-    ik.step_frame_targets.assert_not_called()
+    solver.step.assert_not_called()
 
 
 def test_current_frame_poses_uses_live_coordinator_seed(mocker: MockerFixture) -> None:
-    ik = _ik(mocker)
-    task = _Task(_config(), ik, _snapshot())
+    solver = _solver(mocker)
+    task = _Task(_config(), solver, _snapshot())
 
     poses = task.current_frame_poses(_state(positions={"arm/a": 0.2, "arm/b": 0.3}), ["tool"])
 
     assert poses == {"tool": PoseStamped(frame_id="base")}
-    seed = ik.frame_poses.call_args.args[3]
+    seed = solver.frame_poses.call_args.args[0]
     assert seed.name == ["arm/a", "arm/b"]
     assert seed.position == [0.2, 0.3]

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""OpenArm-specific Pink objective for Quest teleoperation."""
+"""OpenArm-specific Pink pose-target solver for Quest teleoperation."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
+from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver
 
 _FRAME_POSITION_COST = 1.0
 _FRAME_ORIENTATION_COST = 0.2
@@ -32,7 +32,7 @@ _POSTURE_WEIGHTS = np.tile(
 )
 
 
-class OpenArmTeleopPinkIK(PinkIK):
+class OpenArmPinkPoseTargetSolver(PinkPoseTargetSolver):
     """Shape OpenArm redundancy without changing common solve or safety logic."""
 
     def _create_tasks(
@@ -49,7 +49,7 @@ class OpenArmTeleopPinkIK(PinkIK):
 
         posture_task = tasks.get("posture/current")
         if posture_task is None:
-            raise ValueError("OpenArmTeleopPinkIK requires a positive posture cost")
+            raise ValueError("OpenArmPinkPoseTargetSolver requires a positive posture cost")
         posture_task.cost = self.config.posture_cost * _POSTURE_WEIGHTS
 
         for frame_name in target_frames:

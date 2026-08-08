@@ -25,6 +25,7 @@ from pydantic import Field
 from dimos.control.task import CoordinatorState
 from dimos.control.tasks.pose_target_ik import (
     FrameTargetSnapshot,
+    PinkPoseTargetSolver,
     PoseTargetIKTask,
     PoseTargetIKTaskConfig,
 )
@@ -47,12 +48,18 @@ class CartesianIKTaskConfig(PoseTargetIKTaskConfig):
 class CartesianIKTask(PoseTargetIKTask):
     """Track one stream of absolute poses with the shared Pink control core."""
 
-    def __init__(self, name: str, config: CartesianIKTaskConfig) -> None:
+    def __init__(
+        self,
+        name: str,
+        config: CartesianIKTaskConfig,
+        *,
+        solver: PinkPoseTargetSolver | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._target_pose: PoseStamped | None = None
         self._last_update_time = 0.0
         self._active = False
-        super().__init__(name, config)
+        super().__init__(name, config, solver=solver)
 
     def is_active(self) -> bool:
         with self._lock:
@@ -115,6 +122,8 @@ class CartesianIKTaskParams(BaseConfig):
     timeout: float = 0.5
     max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
+    feedback_limit_tolerance: float = 1e-3
+    command_limit_margin: float = 1e-4
 
 
 def create_task(cfg: Any, hardware: Any) -> CartesianIKTask:
@@ -131,5 +140,7 @@ def create_task(cfg: Any, hardware: Any) -> CartesianIKTask:
             timeout=params.timeout,
             max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
             max_command_tracking_error_deg=params.max_command_tracking_error_deg,
+            feedback_limit_tolerance=params.feedback_limit_tolerance,
+            command_limit_margin=params.command_limit_margin,
         ),
     )
