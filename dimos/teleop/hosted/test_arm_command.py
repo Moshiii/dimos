@@ -26,17 +26,17 @@ from __future__ import annotations
 from collections.abc import Iterator
 import json
 import time
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+from pydantic import ValidationError
 import pytest
 
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.robot.manipulators.common.topics import EEF_TWIST_TASK_NAME
-from dimos.teleop.hosted.arm_command import ArmCommandModule
+from dimos.teleop.hosted.arm_command import ArmCommandConfig, ArmCommandModule
 from dimos.teleop.quest.quest_types import Hand, QuestControllerState
 from dimos.utils.testing.waiting import wait_until
 
@@ -50,7 +50,7 @@ def module(monkeypatch: pytest.MonkeyPatch) -> Iterator[ArmCommandModule]:
     reads ``config.task_names`` while constructing."""
 
     def _fake_init(self: Any, **kwargs: Any) -> None:
-        self.config = SimpleNamespace(
+        self.config = ArmCommandConfig(
             task_names={"right": "teleop_xarm"},
             control_loop_hz=50.0,
             cmd_stale_after_sec=0.5,
@@ -233,6 +233,29 @@ def test_release_disengages(module: ArmCommandModule) -> None:
     module._controllers[Hand.RIGHT] = QuestControllerState(is_left=False, primary=False)
     _tick(module)
     assert not module._is_engaged[Hand.RIGHT]
+
+
+def test_translation_scale_changes_pose_delta(module: ArmCommandModule) -> None:
+    module._initial_poses[Hand.RIGHT] = PoseStamped(position=[1.0, 2.0, 3.0])
+    module._current_poses[Hand.RIGHT] = PoseStamped(position=[1.2, 1.5, 4.0])
+
+    module.set_translation_scale(2.0)
+
+    output = module._get_output_pose(Hand.RIGHT)
+    assert output is not None
+    assert output.position.x == pytest.approx(0.4)
+    assert output.position.y == pytest.approx(-1.0)
+    assert output.position.z == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("translation_scale", [0.0, -1.0, float("inf")])
+def test_translation_scale_must_be_positive_and_finite(
+    module: ArmCommandModule, translation_scale: float
+) -> None:
+    with pytest.raises(ValidationError):
+        module.set_translation_scale(translation_scale)
+
+    assert module.config.translation_scale == 1.0
 
 
 # ─── E-STOP latch ──────────────────────────────────────────────────────
