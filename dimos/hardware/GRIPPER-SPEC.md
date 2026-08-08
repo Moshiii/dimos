@@ -1099,6 +1099,13 @@ mechanical merge rather than a reconciliation.
 The H100 validates the protocol on real hardware in step 3; nothing in this PR claims
 hardware verification.
 
+*Delivered.* 93 tests on the new path, 1041 across the affected tree; mypy and ruff
+clean. The parity test holds (all 14 signatures byte-identical to `ManipulatorAdapter`);
+the mock conforms on three vendor scales (`0-100`, `0-0.085` m, `0-1`); the component
+invariant rejects a partial GRIPPER; and the end-to-end pins §7.2's demonstration in
+CI — the same Bool the keyboard sends drives a six-joint hand onto its declared grasp
+pose, with the task resolving `(0, 100)` from the adapter unprompted.
+
 ### 8.6 Left to step 3, on purpose
 
 `by_task_name` routing for coexisting grippers (R16), the multi-joint `get_gripper()`
