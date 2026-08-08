@@ -52,6 +52,8 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
 
+_TRACKING_ERROR_RAD = np.deg2rad(10.0)
+
 
 class _FakeJoint:
     def __init__(self, idx_q: int) -> None:
@@ -499,9 +501,11 @@ def test_streaming_command_limit_intersects_model_velocity_and_raw_seed_budget()
     limit = _StreamingCommandLimit(
         model=model,
         mapping=mapping,
-        raw_q=raw_q,
+        raw_command_q=raw_q,
+        measured_q=raw_q,
         max_command_delta=0.15,
         max_controlled_velocity=None,
+        max_command_tracking_error=_TRACKING_ERROR_RAD,
     )
 
     inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
@@ -520,9 +524,11 @@ def test_streaming_command_limit_preserves_tighter_model_velocity() -> None:
     limit = _StreamingCommandLimit(
         model=model,
         mapping=mapping,
-        raw_q=np.zeros(3),
+        raw_command_q=np.zeros(3),
+        measured_q=np.zeros(3),
         max_command_delta=0.15,
         max_controlled_velocity=None,
+        max_command_tracking_error=_TRACKING_ERROR_RAD,
     )
 
     inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
@@ -539,9 +545,11 @@ def test_streaming_command_limit_caps_controlled_joint_velocity() -> None:
     limit = _StreamingCommandLimit(
         model=model,
         mapping=mapping,
-        raw_q=np.zeros(3),
+        raw_command_q=np.zeros(3),
+        measured_q=np.zeros(3),
         max_command_delta=0.15,
         max_controlled_velocity=0.5,
+        max_command_tracking_error=_TRACKING_ERROR_RAD,
     )
 
     inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
@@ -549,6 +557,50 @@ def test_streaming_command_limit_caps_controlled_joint_velocity() -> None:
     assert inequalities is not None
     _, vector = inequalities
     assert vector == pytest.approx([0.2, 0.05, 0.05, 0.2, 0.05, 0.05])
+
+
+def test_streaming_command_limit_caps_command_at_tracking_envelope() -> None:
+    model = _FakeModel()
+    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a"])
+    command_q = np.array([0.0, 0.1, 0.0])
+    configuration = _FakeConfiguration(model, model.createData(), command_q)
+    limit = _StreamingCommandLimit(
+        model=model,
+        mapping=mapping,
+        raw_command_q=command_q,
+        measured_q=np.zeros(3),
+        max_command_delta=0.15,
+        max_controlled_velocity=None,
+        max_command_tracking_error=0.15,
+    )
+
+    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
+
+    assert inequalities is not None
+    _, vector = inequalities
+    assert vector == pytest.approx([0.2, 0.05, 0.2, 0.15])
+
+
+def test_streaming_command_limit_outside_envelope_allows_only_recovery() -> None:
+    model = _FakeModel()
+    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a"])
+    command_q = np.array([0.0, 0.2, 0.0])
+    configuration = _FakeConfiguration(model, model.createData(), command_q)
+    limit = _StreamingCommandLimit(
+        model=model,
+        mapping=mapping,
+        raw_command_q=command_q,
+        measured_q=np.zeros(3),
+        max_command_delta=0.15,
+        max_controlled_velocity=None,
+        max_command_tracking_error=0.15,
+    )
+
+    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
+
+    assert inequalities is not None
+    _, vector = inequalities
+    assert vector == pytest.approx([0.2, 0.0, 0.2, 0.15])
 
 
 def test_step_frame_targets_preserves_controlled_joint_order(
@@ -570,7 +622,9 @@ def test_step_frame_targets_preserves_controlled_joint_order(
             )
         },
         controlled_joints=["joint_c", "joint_a"],
-        seed=JointState(name=["joint_a", "joint_c"], position=[0.0, 0.0]),
+        command_state=JointState(name=["joint_a", "joint_c"], position=[0.0, 0.0]),
+        measured_state=JointState(name=["joint_a", "joint_c"], position=[0.0, 0.0]),
+        max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
         dt=0.02,
     )
 
@@ -611,7 +665,9 @@ def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
             ),
         },
         controlled_joints=["joint_a", "joint_b", "joint_c"],
-        seed=JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        command_state=JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        measured_state=JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
         dt=0.02,
     )
 
@@ -690,6 +746,8 @@ def test_streaming_reuses_tasks_and_mutates_targets_in_place(
         {"tool": first_target},
         ["joint_a", "joint_b", "joint_c"],
         JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        _TRACKING_ERROR_RAD,
     )
     assert context.tasks is not None
     frame_task = context.tasks["frame/tool"]
@@ -704,6 +762,8 @@ def test_streaming_reuses_tasks_and_mutates_targets_in_place(
         {"tool": second_target},
         ["joint_a", "joint_b", "joint_c"],
         JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.1, 0.2, 0.3]),
+        JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.1, 0.2, 0.3]),
+        _TRACKING_ERROR_RAD,
     )
 
     create_tasks.assert_called_once()
@@ -731,6 +791,8 @@ def test_task_hooks_receive_read_only_stack_and_successful_velocity(
         },
         ["joint_a", "joint_b", "joint_c"],
         JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        JointState(name=["joint_a", "joint_b", "joint_c"], position=[0.0, 0.0, 0.0]),
+        _TRACKING_ERROR_RAD,
         dt=0.05,
     )
 
@@ -758,6 +820,11 @@ def test_after_solve_hook_is_not_called_when_solver_raises(
                 name=["joint_a", "joint_b", "joint_c"],
                 position=[0.0, 0.0, 0.0],
             ),
+            JointState(
+                name=["joint_a", "joint_b", "joint_c"],
+                position=[0.0, 0.0, 0.0],
+            ),
+            _TRACKING_ERROR_RAD,
         )
 
     assert len(ik.before_tasks) == 1
@@ -803,10 +870,15 @@ def test_step_frame_targets_normalizes_feedback_and_saturates_commands(
         robot_model=_robot_config(),
         frame_targets={"tool": PoseStamped()},
         controlled_joints=["joint_a", "joint_b", "joint_c"],
-        seed=JointState(
+        command_state=JointState(
             name=["joint_a", "joint_b", "joint_c"],
             position=[-1.0005, 0.0, 0.0],
         ),
+        measured_state=JointState(
+            name=["joint_a", "joint_b", "joint_c"],
+            position=[-1.0005, 0.0, 0.0],
+        ),
+        max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
     )
 
     assert result.position == pytest.approx([-0.9999, 0.9999, 0.25])
@@ -828,7 +900,9 @@ def test_step_frame_targets_rejects_feedback_beyond_tolerance(
             robot_model=_robot_config(),
             frame_targets={"tool": PoseStamped()},
             controlled_joints=["joint_a"],
-            seed=JointState(name=["joint_a"], position=[-1.0011]),
+            command_state=JointState(name=["joint_a"], position=[0.0]),
+            measured_state=JointState(name=["joint_a"], position=[-1.0011]),
+            max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
         )
 
     step.assert_not_called()
@@ -854,7 +928,9 @@ def test_step_frame_targets_leaves_unbounded_joints_unclamped(
         robot_model=_robot_config(),
         frame_targets={"tool": PoseStamped()},
         controlled_joints=["joint_b"],
-        seed=JointState(name=["joint_b"], position=[5.0]),
+        command_state=JointState(name=["joint_b"], position=[5.0]),
+        measured_state=JointState(name=["joint_b"], position=[5.0]),
+        max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
     )
 
     assert result.position == [6.0]
@@ -889,7 +965,9 @@ def test_step_frame_targets_rejects_unknown_frame(mocker: MockerFixture, tmp_pat
             robot_model=config,
             frame_targets={"missing_frame": PoseStamped()},
             controlled_joints=config.joint_names,
-            seed=JointState(name=config.joint_names, position=[0.0, 0.0, 0.0]),
+            command_state=JointState(name=config.joint_names, position=[0.0, 0.0, 0.0]),
+            measured_state=JointState(name=config.joint_names, position=[0.0, 0.0, 0.0]),
+            max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
         )
 
 

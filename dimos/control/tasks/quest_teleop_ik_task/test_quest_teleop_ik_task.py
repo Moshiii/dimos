@@ -223,6 +223,56 @@ def test_bimanual_task_requires_both_hands_and_releases_atomically(
     assert not task.is_active()
 
 
+def test_deadman_reengagement_reseeds_command_from_feedback(
+    mocker: MockerFixture,
+) -> None:
+    ik = _ik(mocker)
+    task = QuestTeleopIKTask(
+        "quest",
+        _config((_binding("left", "left_tool"),)),
+        ik=ik,
+    )
+    task.on_teleop_buttons(_buttons(left=True), 1.0)
+    task.on_left_cartesian_command(_pose(0.1), 1.0)
+    ik.step_frame_targets.return_value = JointState(
+        name=["robot/left", "robot/right"], position=[0.1, -0.1]
+    )
+    assert task.compute(_state()) is not None
+
+    task.on_teleop_buttons(_buttons(), 1.1)
+    task.on_teleop_buttons(_buttons(left=True), 1.2)
+    task.on_left_cartesian_command(_pose(0.2), 1.2)
+    ik.step_frame_targets.return_value = JointState(
+        name=["robot/left", "robot/right"], position=[0.01, -0.01]
+    )
+    assert task.compute(_state(1.2)) is not None
+
+    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
+
+
+def test_estop_and_preemption_clear_command_session(mocker: MockerFixture) -> None:
+    ik = _ik(mocker)
+    task = QuestTeleopIKTask(
+        "quest",
+        _config((_binding("left", "left_tool"),)),
+        ik=ik,
+    )
+    task.on_teleop_buttons(_buttons(left=True), 1.0)
+    task.on_left_cartesian_command(_pose(0.1), 1.0)
+    assert task.compute(_state()) is not None
+
+    task.set_estop(True)
+    assert not task.is_active()
+    task.set_estop(False)
+    task.on_teleop_buttons(_buttons(left=True), 1.1)
+    task.on_left_cartesian_command(_pose(0.2), 1.1)
+    assert task.compute(_state(1.1)) is not None
+    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
+
+    task.on_preempted("trajectory", frozenset({"robot/left"}))
+    assert not task.is_active()
+
+
 def test_bimanual_timeout_clears_both_sides_and_reengagement_recaptures(
     mocker: MockerFixture,
 ) -> None:
@@ -253,6 +303,7 @@ def test_bimanual_timeout_clears_both_sides_and_reengagement_recaptures(
     task.on_right_cartesian_command(_pose(-0.2), 1.4)
     assert task.compute(_state(1.4)) is not None
     assert ik.frame_poses.call_count == 2
+    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
 
 
 def test_bimanual_step_contains_both_targets_and_grippers(
@@ -335,6 +386,7 @@ def test_factory_constructs_plain_pink_backend_by_default(mocker: MockerFixture)
 
     assert type(task._ik) is PinkIK
     assert task._config.max_joint_velocity_rad_s == 1.0
+    assert task._config.max_command_tracking_error_deg == 10.0
     init.assert_called_once_with(task._config.pink)
 
 

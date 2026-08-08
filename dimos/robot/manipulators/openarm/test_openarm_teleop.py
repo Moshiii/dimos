@@ -52,6 +52,8 @@ from dimos.robot.manipulators.openarm.teleop_ik import OpenArmTeleopPinkIK
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 from dimos.teleop.quest.quest_types import Buttons
 
+_TRACKING_ERROR_RAD = np.deg2rad(10.0)
+
 
 def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
     return next(atom.kwargs for atom in blueprint.blueprints if atom.module is module_type)
@@ -131,6 +133,7 @@ def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
     assert task.params["ik_backend_type"] is OpenArmTeleopPinkIK
     assert task.params["pink"].joint_limit_posture_margin == 0.3
     assert task.params["max_joint_delta_deg"] == 10.0
+    assert task.params["max_command_tracking_error_deg"] == 10.0
     assert QuestTeleopIKTaskParams.model_validate(task.params).max_joint_velocity_rad_s == 1.0
     assert task.priority == 10
     assert trajectory.joint_names == OPENARM_ARM_JOINTS
@@ -273,8 +276,12 @@ def test_openarm_teleop_pink_objective_is_named_weighted_and_instance_local() ->
     second = OpenArmTeleopPinkIK(config)
     targets = first.frame_poses(model, frames, OPENARM_ARM_JOINTS, seed)
 
-    first.step_frame_targets(model, targets, OPENARM_ARM_JOINTS, seed, dt=0.01)
-    second.step_frame_targets(model, targets, OPENARM_ARM_JOINTS, seed, dt=0.01)
+    first.step_frame_targets(
+        model, targets, OPENARM_ARM_JOINTS, seed, seed, _TRACKING_ERROR_RAD, dt=0.01
+    )
+    second.step_frame_targets(
+        model, targets, OPENARM_ARM_JOINTS, seed, seed, _TRACKING_ERROR_RAD, dt=0.01
+    )
 
     first_tasks = next(iter(first._control_contexts.values())).tasks
     second_tasks = next(iter(second._control_contexts.values())).tasks
@@ -330,7 +337,15 @@ def test_openarm_bimanual_pink_steps_from_canonical_zero_with_bounded_updates() 
 
     max_delta = 0.0
     for _ in range(100):
-        result = ik.step_frame_targets(model, targets, OPENARM_ARM_JOINTS, seed, dt=0.01)
+        result = ik.step_frame_targets(
+            model,
+            targets,
+            OPENARM_ARM_JOINTS,
+            seed,
+            seed,
+            _TRACKING_ERROR_RAD,
+            dt=0.01,
+        )
         max_delta = max(
             max_delta,
             float(np.max(np.abs(np.asarray(result.position) - np.asarray(seed.position)))),
@@ -386,12 +401,22 @@ def test_openarm_large_bimanual_target_is_bounded_inside_pink_solve() -> None:
         for name, pose in initial.items()
     }
 
-    unbounded = unbounded_ik.step_frame_targets(model, targets, OPENARM_ARM_JOINTS, seed, dt=0.01)
+    unbounded = unbounded_ik.step_frame_targets(
+        model,
+        targets,
+        OPENARM_ARM_JOINTS,
+        seed,
+        seed,
+        _TRACKING_ERROR_RAD,
+        dt=0.01,
+    )
     bounded = OpenArmTeleopPinkIK(config).step_frame_targets(
         model,
         targets,
         OPENARM_ARM_JOINTS,
         seed,
+        seed,
+        _TRACKING_ERROR_RAD,
         dt=0.01,
         max_joint_delta_rad=np.deg2rad(5.0),
         max_joint_velocity_rad_s=1.0,
@@ -420,6 +445,8 @@ def test_openarm_streaming_pink_tolerates_feedback_just_outside_limit() -> None:
         {frame: target},
         OPENARM_ARM_JOINTS,
         seed,
+        seed,
+        _TRACKING_ERROR_RAD,
         dt=0.01,
     )
 

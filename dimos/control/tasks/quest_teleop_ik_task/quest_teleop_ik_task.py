@@ -63,6 +63,7 @@ class QuestTeleopIKTaskConfig:
     timeout: float = 0.5
     max_joint_delta_deg: float = 5.0
     max_joint_velocity_rad_s: float | None = 1.0
+    max_command_tracking_error_deg: float = 10.0
 
 
 @dataclass
@@ -112,6 +113,7 @@ class QuestTeleopIKTask(PoseTargetIKTask):
                 timeout=config.timeout,
                 max_joint_delta_deg=config.max_joint_delta_deg,
                 max_joint_velocity_rad_s=config.max_joint_velocity_rad_s,
+                max_command_tracking_error_deg=config.max_command_tracking_error_deg,
             ),
             additional_claimed_joints=gripper_joints,
             ik=ik,
@@ -222,6 +224,7 @@ class QuestTeleopIKTask(PoseTargetIKTask):
             state.robot_reference = None
 
     def _disengage_locked(self) -> None:
+        self._reset_command_state()
         self._engaged = False
         self._engagement_condition = False
         self._engagement_generation += 1
@@ -326,6 +329,7 @@ class QuestTeleopIKTaskParams(BaseConfig):
     timeout: float = 0.5
     max_joint_delta_deg: float = 5.0
     max_joint_velocity_rad_s: float | None = 1.0
+    max_command_tracking_error_deg: float = 10.0
 
 
 def create_task(
@@ -366,6 +370,7 @@ def create_task(
             timeout=params.timeout,
             max_joint_delta_deg=params.max_joint_delta_deg,
             max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
+            max_command_tracking_error_deg=params.max_command_tracking_error_deg,
         ),
         ik=ik,
     )

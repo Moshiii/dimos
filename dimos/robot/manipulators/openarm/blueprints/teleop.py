@@ -157,6 +157,7 @@ _openarm_quest_task = quest_teleop_ik_task(
         "pink": _openarm_quest_pink,
         "timeout": 0.5,
         "max_joint_delta_deg": 10.0,
+        "max_command_tracking_error_deg": 10.0,
     },
 )
 

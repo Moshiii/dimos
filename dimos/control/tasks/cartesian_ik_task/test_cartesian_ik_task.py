@@ -81,3 +81,23 @@ def test_cartesian_leaf_clears_after_timeout(mocker: MockerFixture) -> None:
     assert output is None
     assert not task.is_active()
     ik.step_frame_targets.assert_not_called()
+
+
+def test_cartesian_clear_reseeds_command_from_feedback(mocker: MockerFixture) -> None:
+    ik = mocker.patch.object(pose_target_module, "PinkIK").return_value
+    ik.step_frame_targets.return_value = JointState(name=["arm/joint"], position=[0.1])
+    task = CartesianIKTask("cartesian", _config())
+    state = CoordinatorState(
+        joints=JointStateSnapshot(joint_positions={"arm/joint": 0.0}),
+        t_now=1.0,
+        dt=0.01,
+    )
+    task.on_cartesian_command(PoseStamped(), t_now=1.0)
+    assert task.compute(state) is not None
+
+    task.clear()
+    task.on_cartesian_command(PoseStamped(), t_now=1.1)
+    ik.step_frame_targets.return_value = JointState(name=["arm/joint"], position=[0.01])
+    assert task.compute(state) is not None
+
+    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0]

@@ -100,22 +100,24 @@ class _JointMapping:
 
 
 class _StreamingCommandLimit:
-    """Intersect model velocity bounds with a raw-seed command interval."""
+    """Intersect streaming motion bounds with measured tracking feedback."""
 
     def __init__(
         self,
         *,
         model: Any,
         mapping: _JointMapping,
-        raw_q: NDArray[np.float64],
+        raw_command_q: NDArray[np.float64],
+        measured_q: NDArray[np.float64],
         max_command_delta: float,
         max_controlled_velocity: float | None,
+        max_command_tracking_error: float,
     ) -> None:
         velocity_limits = np.asarray(model.velocityLimit, dtype=np.float64)
         if velocity_limits.shape != (model.nv,):
             raise ValueError("Pink model velocity limits do not match its tangent dimension")
-        if raw_q.shape != (model.nq,):
-            raise ValueError("Pink raw seed does not match its configuration dimension")
+        if raw_command_q.shape != (model.nq,) or measured_q.shape != (model.nq,):
+            raise ValueError("Pink streaming states do not match its configuration dimension")
 
         velocity_limited = set(
             np.flatnonzero(np.logical_and(velocity_limits < 1e20, velocity_limits > 1e-10)).tolist()
@@ -129,9 +131,11 @@ class _StreamingCommandLimit:
         self._velocity_limits = velocity_limits
         self._velocity_limited = velocity_limited
         self._controlled_q_by_v = controlled_q_by_v
-        self._raw_q = raw_q.copy()
+        self._raw_command_q = raw_command_q.copy()
+        self._measured_q = measured_q.copy()
         self._max_command_delta = max_command_delta
         self._max_controlled_velocity = max_controlled_velocity
+        self._max_command_tracking_error = max_command_tracking_error
 
     def compute_qp_inequalities(
         self,
@@ -159,7 +163,7 @@ class _StreamingCommandLimit:
                     controlled_velocity_displacement = dt * self._max_controlled_velocity
                     lower = max(lower, -controlled_velocity_displacement)
                     upper = min(upper, controlled_velocity_displacement)
-                raw_position = float(self._raw_q[q_index])
+                raw_position = float(self._raw_command_q[q_index])
                 normalized_position = float(configuration.q[q_index])
                 lower = max(
                     lower,
@@ -169,6 +173,20 @@ class _StreamingCommandLimit:
                     upper,
                     raw_position + self._max_command_delta - normalized_position,
                 )
+                tracking_error = normalized_position - float(self._measured_q[q_index])
+                if tracking_error > self._max_command_tracking_error:
+                    upper = min(upper, 0.0)
+                elif tracking_error < -self._max_command_tracking_error:
+                    lower = max(lower, 0.0)
+                else:
+                    lower = max(
+                        lower,
+                        -self._max_command_tracking_error - tracking_error,
+                    )
+                    upper = min(
+                        upper,
+                        self._max_command_tracking_error - tracking_error,
+                    )
             if lower > upper:
                 raise ValueError(
                     "Pink streaming command and model velocity limits have no feasible interval"
@@ -239,16 +257,19 @@ class PinkIK:
         robot_model: RobotModelConfig,
         frame_targets: Mapping[str, PoseStamped],
         controlled_joints: Sequence[str],
-        seed: JointState,
+        command_state: JointState,
+        measured_state: JointState,
+        max_command_tracking_error_rad: float,
         dt: float | None = None,
         max_joint_delta_rad: float | None = None,
         max_joint_velocity_rad_s: float | None = None,
     ) -> JointState:
         """Perform one bounded Pink update for one robot's frame targets.
 
-        This is the control-loop entry point. Unlike the planning methods, it
-        performs no convergence loop, random restart, collision query, or world
-        lookup.
+        ``command_state`` advances the generated trajectory while
+        ``measured_state`` independently bounds it against hardware feedback.
+        Unlike the planning methods, this performs no convergence loop, random
+        restart, collision query, or world lookup.
         """
         if not frame_targets:
             raise ValueError("Pink frame-target step requires at least one target")
@@ -265,14 +286,18 @@ class PinkIK:
             frame_name: self._target_in_model_frame(robot_model, frame_targets[frame_name])
             for frame_name in frame_names
         }
-        seed_positions = _seed_positions_for_mapping(seed, robot_context.mapping)
-        seed_q = self._q_from_dimos_positions(robot_context, seed_positions)
-        raw_seed_q = seed_q.copy()
-        seed_q = self._normalize_streaming_seed(robot_context, seed_q)
+        if not np.isfinite(max_command_tracking_error_rad) or max_command_tracking_error_rad <= 0.0:
+            raise ValueError("Pink command tracking error must be positive and finite")
+        command_positions = _seed_positions_for_mapping(command_state, robot_context.mapping)
+        measured_positions = _seed_positions_for_mapping(measured_state, robot_context.mapping)
+        raw_command_q = self._q_from_dimos_positions(robot_context, command_positions)
+        measured_q = self._q_from_dimos_positions(robot_context, measured_positions)
+        self._validate_streaming_feedback(robot_context, measured_q)
+        command_q = self._clamp_streaming_configuration(robot_context, raw_command_q)
         configuration = self._modules.pink.Configuration(
             robot_context.model,
             robot_context.data,
-            seed_q.copy(),
+            command_q.copy(),
         )
         if control_context.tasks is None:
             control_context.tasks = self._build_task_stack(configuration, frame_names)
@@ -282,9 +307,11 @@ class PinkIK:
         solve_limits = self._streaming_solve_limits(
             configuration=configuration,
             mapping=robot_context.mapping,
-            raw_seed_q=raw_seed_q,
+            raw_command_q=raw_command_q,
+            measured_q=measured_q,
             max_joint_delta_rad=max_joint_delta_rad,
             max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+            max_command_tracking_error_rad=max_command_tracking_error_rad,
         )
         self._step_configuration(
             robot_context=robot_context,
@@ -836,13 +863,15 @@ class PinkIK:
         *,
         configuration: Any,
         mapping: _JointMapping,
-        raw_seed_q: NDArray[np.float64],
+        raw_command_q: NDArray[np.float64],
+        measured_q: NDArray[np.float64],
         max_joint_delta_rad: float | None,
         max_joint_velocity_rad_s: float | None,
-    ) -> list[Any] | None:
-        if max_joint_delta_rad is None:
-            return None
-        if not np.isfinite(max_joint_delta_rad) or max_joint_delta_rad <= 0.0:
+        max_command_tracking_error_rad: float,
+    ) -> list[Any]:
+        if max_joint_delta_rad is not None and (
+            not np.isfinite(max_joint_delta_rad) or max_joint_delta_rad <= 0.0
+        ):
             raise ValueError("Pink streaming joint delta limit must be positive and finite")
         if max_joint_velocity_rad_s is not None and (
             not np.isfinite(max_joint_velocity_rad_s) or max_joint_velocity_rad_s <= 0.0
@@ -855,9 +884,15 @@ class PinkIK:
             _StreamingCommandLimit(
                 model=model,
                 mapping=mapping,
-                raw_q=raw_seed_q,
-                max_command_delta=max_joint_delta_rad * _STREAMING_COMMAND_HEADROOM,
+                raw_command_q=raw_command_q,
+                measured_q=measured_q,
+                max_command_delta=(
+                    np.inf
+                    if max_joint_delta_rad is None
+                    else max_joint_delta_rad * _STREAMING_COMMAND_HEADROOM
+                ),
                 max_controlled_velocity=max_joint_velocity_rad_s,
+                max_command_tracking_error=max_command_tracking_error_rad,
             ),
         ]
         floating_base_limit = getattr(model, "floating_base_velocity_limit", None)
@@ -988,16 +1023,14 @@ class PinkIK:
     ) -> NDArray[np.float64]:
         return np.array([q[idx_q] for idx_q in context.mapping.idx_q], dtype=np.float64)
 
-    def _normalize_streaming_seed(
+    def _validate_streaming_feedback(
         self,
         context: _PinkRobotContext,
-        seed_q: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
-        normalized = seed_q.copy()
+        measured_q: NDArray[np.float64],
+    ) -> None:
         tolerance = self.config.feedback_limit_tolerance
-        margin = self.config.command_limit_margin
         for joint_name, q_index, lower, upper in _bounded_controlled_joint_limits(context):
-            value = float(seed_q[q_index])
+            value = float(measured_q[q_index])
             if value < lower - tolerance or value > upper + tolerance:
                 raise PinkIKFeedbackLimitError(
                     joint_name=joint_name,
@@ -1006,6 +1039,16 @@ class PinkIK:
                     upper=upper,
                     tolerance=tolerance,
                 )
+
+    def _clamp_streaming_configuration(
+        self,
+        context: _PinkRobotContext,
+        q: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        normalized = q.copy()
+        margin = self.config.command_limit_margin
+        for _joint_name, q_index, lower, upper in _bounded_controlled_joint_limits(context):
+            value = float(q[q_index])
             normalized[q_index] = np.clip(value, lower + margin, upper - margin)
         return normalized
 
