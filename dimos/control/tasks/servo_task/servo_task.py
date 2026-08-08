@@ -215,7 +215,11 @@ class JointServoTask(BaseControlTask):
         ordered = []
         for name in self._joint_names_list:
             if name not in positions:
-                # Missing joint - don't update
+                logger.warning(
+                    f"JointServoTask {self._name}: dropping command missing '{name}' "
+                    f"(partial sets are ignored; name all {len(self._joint_names_list)} "
+                    f"claimed joints)"
+                )
                 return False
             ordered.append(positions[name])
 
