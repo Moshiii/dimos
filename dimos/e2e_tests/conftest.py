@@ -156,11 +156,14 @@ def pimsim_case(
     if not isinstance(request.param, PimSimTabletopCase):
         raise TypeError("pimsim_case must be parameterized with PimSimTabletopCase")
     case = request.param
-    authoring = pytest.importorskip("pimsim.authoring")
+    asset_model = pytest.importorskip("pimsim.assets.model")
+    task_model = pytest.importorskip("pimsim.tasks.model")
+    tabletop = pytest.importorskip("pimsim.episodes.tabletop")
     asset_bundle = _pimsim_asset_bundle()
-    scenario_request = case.to_scenario_request(authoring)
-    episode = authoring.materialize_xarm_tabletop_case(
+    scenario_request = case.to_scenario_request(task_model, asset_model)
+    episode = tabletop.materialize_robot_tabletop_case(
         tmp_path / "episode",
+        robot_model="xarm7",
         asset_bundle=asset_bundle,
         request=scenario_request,
         object_count=case.object_count,

@@ -37,14 +37,14 @@ class PimSimTabletopCase:
     semantic_roles: Mapping[str, str]
     object_count: int = 2
 
-    def to_scenario_request(self, authoring: Any) -> Any:
-        return authoring.ScenarioRequest(
+    def to_scenario_request(self, task_model: Any, asset_model: Any) -> Any:
+        return task_model.ScenarioRequest(
             case_id=self.case_id,
             family_id=self.family_id,
             scene_seed=self.scene_seed,
             variation_seed=self.variation_seed,
             role_constraints={
-                role_id: authoring.AssetQuery(semantic_classes=(semantic_class,))
+                role_id: asset_model.AssetQuery(semantic_classes=(semantic_class,))
                 for role_id, semantic_class in self.semantic_roles.items()
             },
         )
