@@ -12,15 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
 import subprocess
 
 import pytest
+from pytest_mock import MockerFixture
 
 from dimos.utils import data
 from dimos.utils.data import LfsPath, backup_file
+
+
+def test_lfs_path_deepcopy_does_not_materialize_data(mocker: MockerFixture) -> None:
+    get_data = mocker.patch.object(data, "get_data")
+    original = LfsPath("robots/openarm.tar.gz")
+
+    copied = deepcopy(original)
+
+    get_data.assert_not_called()
+    assert object.__getattribute__(copied, "_lfs_filename") == "robots/openarm.tar.gz"
+    assert copied is not original
 
 
 def _make_backups(dir_path: Path, stem: str, suffix: str, timestamps: list[str]) -> None:

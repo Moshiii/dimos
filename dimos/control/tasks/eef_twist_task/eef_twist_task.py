@@ -16,10 +16,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
 import threading
 from typing import TYPE_CHECKING, Any
 
+import attrs
 import numpy as np
 import pinocchio
 from pydantic import Field
@@ -45,18 +46,32 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 
-@dataclass(frozen=True)
+def _single_target_frame(
+    _instance: object,
+    _attribute: attrs.Attribute[tuple[str, ...]],
+    value: tuple[str, ...],
+) -> None:
+    if len(value) != 1:
+        raise ValueError("EEFTwistTask requires exactly one target frame")
+
+
+def _to_target_frames(value: Sequence[str]) -> tuple[str, ...]:
+    return tuple(value)
+
+
+@attrs.frozen(slots=False)
 class EEFTwistTaskConfig(PoseTargetIKTaskConfig):
     """Configuration for command-relative end-effector twist control."""
 
-    command_timeout: float = 0.3
+    target_frames: tuple[str, ...] = attrs.field(
+        default=(),
+        converter=_to_target_frames,
+        validator=_single_target_frame,
+    )
+    command_timeout: float = attrs.field(default=0.3, converter=float)
     gripper_joint: str | None = None
-    gripper_open_pos: float = 0.0
-    gripper_closed_pos: float = 0.0
-
-    def __post_init__(self) -> None:
-        if len(self.target_frames) != 1:
-            raise ValueError("EEFTwistTask requires exactly one target frame")
+    gripper_open_pos: float = attrs.field(default=0.0, converter=float)
+    gripper_closed_pos: float = attrs.field(default=0.0, converter=float)
 
 
 class EEFTwistTask(PoseTargetIKTask):

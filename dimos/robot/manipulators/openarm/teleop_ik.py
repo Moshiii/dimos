@@ -16,9 +16,8 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
+import pink
 
 from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver
 
@@ -37,9 +36,9 @@ class OpenArmPinkPoseTargetSolver(PinkPoseTargetSolver):
 
     def _create_tasks(
         self,
-        configuration: Any,
+        configuration: pink.Configuration,
         target_frames: tuple[str, ...],
-    ) -> dict[str, Any]:
+    ) -> dict[str, pink.Task]:
         tasks = super()._create_tasks(configuration, target_frames)
 
         for frame_name in target_frames:
@@ -53,7 +52,7 @@ class OpenArmPinkPoseTargetSolver(PinkPoseTargetSolver):
         posture_task.cost = self.config.posture_cost * _POSTURE_WEIGHTS
 
         for frame_name in target_frames:
-            tasks[f"manipulability/{frame_name}"] = self._modules.pink.tasks.ManipulabilityTask(
+            tasks[f"manipulability/{frame_name}"] = pink.tasks.ManipulabilityTask(
                 frame_name,
                 configuration.model,
                 cost=_MANIPULABILITY_COST,

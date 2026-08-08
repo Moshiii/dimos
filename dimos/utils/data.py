@@ -357,7 +357,12 @@ class LfsPath(type(Path())):  # type: ignore[misc]
             return object.__getattribute__(self, name)
 
         # After construction, allow access to our internal attributes directly
-        if name in ("_lfs_filename", "_lfs_resolved_cache", "_ensure_downloaded"):
+        if name in (
+            "_lfs_filename",
+            "_lfs_resolved_cache",
+            "_ensure_downloaded",
+            "__deepcopy__",
+        ):
             return object.__getattribute__(self, name)
 
         # For all other attributes, ensure download first then delegate to resolved path
@@ -371,6 +376,15 @@ class LfsPath(type(Path())):  # type: ignore[misc]
     def __fspath__(self) -> str:
         """Return filesystem path, downloading from LFS if needed."""
         return str(self._ensure_downloaded())
+
+    def __deepcopy__(self, memo: dict[int, object]) -> "LfsPath":
+        """Copy lazy path state without materializing the LFS archive."""
+        filename = object.__getattribute__(self, "_lfs_filename")
+        copied = LfsPath(filename)
+        cache = object.__getattribute__(self, "_lfs_resolved_cache")
+        object.__setattr__(copied, "_lfs_resolved_cache", cache)
+        memo[id(self)] = copied
+        return copied
 
     def __truediv__(self, other: object) -> "LfsPath":
         """Path division operator - returns a new lazy LfsPath (no download)."""

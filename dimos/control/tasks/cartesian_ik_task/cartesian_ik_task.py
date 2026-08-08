@@ -16,10 +16,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 import threading
-from typing import Any
+from typing import TYPE_CHECKING
 
+import attrs
 from pydantic import Field
 
 from dimos.control.task import CoordinatorState
@@ -35,14 +36,33 @@ from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.protocol.service.spec import BaseConfig
 
+if TYPE_CHECKING:
+    from dimos.control.coordinator import TaskConfig
+    from dimos.control.hardware_interface import ConnectedHardware, ConnectedWholeBody
 
-@dataclass(frozen=True)
+
+def _single_target_frame(
+    _instance: object,
+    _attribute: attrs.Attribute[tuple[str, ...]],
+    value: tuple[str, ...],
+) -> None:
+    if len(value) != 1:
+        raise ValueError("CartesianIKTask requires exactly one target frame")
+
+
+def _to_target_frames(value: Sequence[str]) -> tuple[str, ...]:
+    return tuple(value)
+
+
+@attrs.frozen(slots=False)
 class CartesianIKTaskConfig(PoseTargetIKTaskConfig):
     """Configuration for one absolute Cartesian target frame."""
 
-    def __post_init__(self) -> None:
-        if len(self.target_frames) != 1:
-            raise ValueError("CartesianIKTask requires exactly one target frame")
+    target_frames: tuple[str, ...] = attrs.field(
+        default=(),
+        converter=_to_target_frames,
+        validator=_single_target_frame,
+    )
 
 
 class CartesianIKTask(PoseTargetIKTask):
@@ -126,7 +146,10 @@ class CartesianIKTaskParams(BaseConfig):
     command_limit_margin: float = 1e-4
 
 
-def create_task(cfg: Any, hardware: Any) -> CartesianIKTask:
+def create_task(
+    cfg: TaskConfig,
+    hardware: Mapping[str, ConnectedHardware | ConnectedWholeBody],
+) -> CartesianIKTask:
     """Create an absolute Cartesian Pink task from a registry configuration."""
     params = CartesianIKTaskParams.model_validate(cfg.params)
     return CartesianIKTask(

@@ -18,12 +18,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import importlib
 from pathlib import Path
-from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+try:
+    import pink
+    import pinocchio
+    import qpsolvers
+except ImportError as exc:
+    msg = "Pink IK dependencies not found; install them with: uv sync --extra manipulation."
+    raise ImportError(msg) from exc
 
 from dimos.manipulation.planning.groups.models import PlanningGroup, PlanningGroupSelection
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
@@ -48,10 +55,6 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 logger = setup_logger()
-
-
-class PinkIKDependencyError(ImportError):
-    """Raised when Pink or its QP solver dependencies are unavailable."""
 
 
 class PinkJointLimitError(ValueError):
@@ -79,12 +82,6 @@ class PinkJointLimitError(ValueError):
         )
 
 
-@dataclass(frozen=True)
-class _PinkModules:
-    pink: ModuleType
-    pinocchio: ModuleType
-
-
 _MANIPULATION_EXTRA_HINT = "Install manipulation dependencies with: uv sync --extra manipulation."
 
 
@@ -98,8 +95,8 @@ class _JointMapping:
 
 @dataclass
 class _PinkRobotContext:
-    model: Any
-    data: Any
+    model: pinocchio.Model
+    data: pinocchio.Data
     frame_id: int
     frame_name: str
     mapping: _JointMapping
@@ -109,7 +106,7 @@ class _PinkRobotContext:
 class _PinkControlContext:
     robot: _PinkRobotContext
     frames: Mapping[str, _PinkRobotContext]
-    tasks: Mapping[str, Any] | None = None
+    tasks: Mapping[str, pink.Task] | None = None
 
 
 _CURRENT_POSTURE_TASK = "posture/current"
@@ -125,7 +122,7 @@ class _PinkSolverCore:
     def __init__(
         self,
         config: PinkKinematicsConfig | None = None,
-        **overrides: Any,
+        **overrides: bool | float | int | str,
     ) -> None:
         """Create a Pink IK backend.
 
@@ -136,7 +133,12 @@ class _PinkSolverCore:
         config_values = (config or PinkKinematicsConfig()).model_dump()
         config_values.update(overrides)
         self.config = PinkKinematicsConfig(**config_values)
-        self._modules = _load_optional_dependencies(self.config.solver)
+        if self.config.solver not in qpsolvers.available_solvers:
+            raise ImportError(
+                f"Pink IK solver '{self.config.solver}' is unavailable. "
+                f"Available solvers: {sorted(qpsolvers.available_solvers)}. "
+                f"{_MANIPULATION_EXTRA_HINT}"
+            )
         self._robot_contexts: dict[tuple[str, str], _PinkRobotContext] = {}
         self._control_contexts: dict[
             tuple[str, tuple[str, ...], tuple[str, ...]], _PinkControlContext
@@ -193,7 +195,7 @@ class _PinkSolverCore:
         command_q = self._clamp_streaming_configuration(
             robot_context, raw_command_q, command_limit_margin
         )
-        configuration = self._modules.pink.Configuration(
+        configuration = pink.Configuration(
             robot_context.model,
             robot_context.data,
             command_q.copy(),
@@ -623,9 +625,8 @@ class _PinkSolverCore:
         self,
         targets: Sequence[tuple[_PinkRobotContext, NDArray[np.float64]]],
         seed_q: NDArray[np.float64],
-    ) -> tuple[Any, Mapping[str, Any]]:
+    ) -> tuple[pink.Configuration, Mapping[str, pink.Task]]:
         robot_context = targets[0][0]
-        pink = self._modules.pink
         configuration = pink.Configuration(robot_context.model, robot_context.data, seed_q.copy())
         frame_names = tuple(context.frame_name for context, _target in targets)
         tasks = self._build_task_stack(configuration, frame_names)
@@ -638,16 +639,15 @@ class _PinkSolverCore:
 
     def _create_tasks(
         self,
-        configuration: Any,
+        configuration: pink.Configuration,
         target_frames: tuple[str, ...],
-    ) -> dict[str, Any]:
+    ) -> dict[str, pink.Task]:
         """Create the ordered Pink task stack for a solve context.
 
         Subclasses should call ``super()``, then tune or replace named tasks
         and add auxiliary entries. The returned structure is validated and
         frozen before it is used by the solver.
         """
-        pink = self._modules.pink
         tasks = {
             _frame_task_key(frame_name): pink.tasks.FrameTask(
                 frame_name,
@@ -664,15 +664,15 @@ class _PinkSolverCore:
 
     def _before_solve(
         self,
-        tasks: Mapping[str, Any],
-        configuration: Any,
+        tasks: Mapping[str, pink.Task],
+        configuration: pink.Configuration,
         dt: float,
     ) -> None:
         """Update dynamic auxiliary task inputs before a Pink solve."""
 
     def _after_solve(
         self,
-        tasks: Mapping[str, Any],
+        tasks: Mapping[str, pink.Task],
         velocity: NDArray[np.float64],
         dt: float,
     ) -> None:
@@ -680,9 +680,9 @@ class _PinkSolverCore:
 
     def _build_task_stack(
         self,
-        configuration: Any,
+        configuration: pink.Configuration,
         target_frames: tuple[str, ...],
-    ) -> Mapping[str, Any]:
+    ) -> Mapping[str, pink.Task]:
         tasks = self._create_tasks(configuration, target_frames)
         if not isinstance(tasks, dict):
             raise TypeError("Pink _create_tasks() must return a dict")
@@ -705,17 +705,16 @@ class _PinkSolverCore:
 
     def _update_frame_task_targets(
         self,
-        tasks: Mapping[str, Any],
+        tasks: Mapping[str, pink.Task],
         targets: Mapping[str, NDArray[np.float64]],
     ) -> None:
-        pinocchio = self._modules.pinocchio
         for frame_name, target_model in targets.items():
-            tasks[_frame_task_key(frame_name)].set_target(_matrix_to_se3(pinocchio, target_model))
+            tasks[_frame_task_key(frame_name)].set_target(_matrix_to_se3(target_model))
 
     def _update_current_posture_target(
         self,
-        tasks: Mapping[str, Any],
-        configuration: Any,
+        tasks: Mapping[str, pink.Task],
+        configuration: pink.Configuration,
     ) -> None:
         posture_task = tasks.get(_CURRENT_POSTURE_TASK)
         if posture_task is None:
@@ -733,13 +732,13 @@ class _PinkSolverCore:
     def _step_configuration(
         self,
         robot_context: _PinkRobotContext,
-        configuration: Any,
-        tasks: Mapping[str, Any],
+        configuration: pink.Configuration,
+        tasks: Mapping[str, pink.Task],
         dt: float,
         locked_joint_positions: Mapping[int, float] | None = None,
     ) -> None:
         self._before_solve(tasks, configuration, dt)
-        velocity = self._modules.pink.solve_ik(
+        velocity = pink.solve_ik(
             configuration,
             list(tasks.values()),
             dt,
@@ -809,7 +808,6 @@ class _PinkSolverCore:
         frame_name: str,
         controlled_joints: Sequence[str] | None = None,
     ) -> _PinkRobotContext:
-        pinocchio = self._modules.pinocchio
         model_path = Path(config.model_path).resolve()
         if not model_path.exists():
             raise FileNotFoundError(f"Robot model not found: {model_path}")
@@ -845,7 +843,6 @@ class _PinkSolverCore:
         upper_limits: NDArray[np.float64],
         attempt: int,
     ) -> NDArray[np.float64]:
-        pinocchio = self._modules.pinocchio
         neutral = pinocchio.neutral(context.model)
         q = np.array(neutral, dtype=np.float64)
 
@@ -863,7 +860,6 @@ class _PinkSolverCore:
         context: _PinkRobotContext,
         positions: NDArray[np.float64],
     ) -> NDArray[np.float64]:
-        pinocchio = self._modules.pinocchio
         q = np.array(pinocchio.neutral(context.model), dtype=np.float64)
         if len(positions) != len(context.mapping.idx_q):
             raise ValueError(
@@ -967,7 +963,6 @@ class _PinkSolverCore:
     def _current_frame_matrix(
         self, context: _PinkRobotContext, q: NDArray[np.float64]
     ) -> NDArray[np.float64]:
-        pinocchio = self._modules.pinocchio
         pinocchio.forwardKinematics(context.model, context.data, q)
         pinocchio.updateFramePlacements(context.model, context.data)
         placement = context.data.oMf[context.frame_id]
@@ -987,43 +982,8 @@ class _PinkSolverCore:
         return target_model
 
 
-def _load_optional_dependencies(solver: str) -> _PinkModules:
-    pink = _import_required_module(
-        "pink",
-        "Pink IK backend requires Pink. "
-        f"{_MANIPULATION_EXTRA_HINT} PyPI package: pin-pink; import name: pink.",
-    )
-    pinocchio = _import_required_module(
-        "pinocchio",
-        f"Pink IK backend requires Pinocchio (import name 'pinocchio'). {_MANIPULATION_EXTRA_HINT}",
-    )
-    qpsolvers = _import_required_module(
-        "qpsolvers",
-        "Pink IK backend requires qpsolvers plus a QP backend such as proxqp. "
-        f"{_MANIPULATION_EXTRA_HINT}",
-    )
-
-    available_solvers = set(getattr(qpsolvers, "available_solvers", []))
-    if solver not in available_solvers:
-        raise PinkIKDependencyError(
-            f"Pink IK solver '{solver}' is not available from qpsolvers. "
-            f"Available solvers: {sorted(available_solvers)}. "
-            "Install manipulation dependencies with uv sync --extra manipulation, "
-            "which includes qpsolvers[proxqp]."
-        )
-
-    return _PinkModules(pink=pink, pinocchio=pinocchio)
-
-
-def _import_required_module(name: str, message: str) -> ModuleType:
-    try:
-        return importlib.import_module(name)
-    except ImportError as exc:
-        raise PinkIKDependencyError(message) from exc
-
-
 def _build_joint_mapping(
-    model: Any,
+    model: pinocchio.Model,
     config: RobotModelConfig,
     controlled_joints: Sequence[str] | None = None,
 ) -> _JointMapping:
@@ -1060,7 +1020,7 @@ def _build_joint_mapping(
     )
 
 
-def _get_joint_id(model: Any, joint_name: str) -> int:
+def _get_joint_id(model: pinocchio.Model, joint_name: str) -> int:
     if hasattr(model, "existJointName") and not model.existJointName(joint_name):
         raise ValueError(_missing_joint_message(model, joint_name))
     joint_id = int(model.getJointId(joint_name))
@@ -1069,7 +1029,9 @@ def _get_joint_id(model: Any, joint_name: str) -> int:
     return joint_id
 
 
-def _inward_joint_limit_posture(configuration: Any, margin: float) -> NDArray[np.float64]:
+def _inward_joint_limit_posture(
+    configuration: pink.Configuration, margin: float
+) -> NDArray[np.float64]:
     """Return the seed posture with near-limit coordinates moved inward."""
     target: NDArray[np.float64] = np.asarray(
         configuration.q,
@@ -1116,7 +1078,7 @@ def _bounded_controlled_joint_limits(
     return bounded
 
 
-def _get_frame_id(model: Any, frame_name: str) -> int:
+def _get_frame_id(model: pinocchio.Model, frame_name: str) -> int:
     if hasattr(model, "existFrame") and not model.existFrame(frame_name):
         raise ValueError(_missing_frame_message(model, frame_name))
     frame_id = int(model.getFrameId(frame_name))
@@ -1125,7 +1087,7 @@ def _get_frame_id(model: Any, frame_name: str) -> int:
     return frame_id
 
 
-def _assert_base_link_is_model_root(model: Any, base_link: str) -> None:
+def _assert_base_link_is_model_root(model: pinocchio.Model, base_link: str) -> None:
     """Validate that the configured base link is fixed at the Pinocchio model root."""
     frame_id = _get_frame_id(model, base_link)
     frame = model.frames[frame_id]
@@ -1137,12 +1099,12 @@ def _assert_base_link_is_model_root(model: Any, base_link: str) -> None:
         )
 
 
-def _missing_joint_message(model: Any, joint_name: str) -> str:
+def _missing_joint_message(model: pinocchio.Model, joint_name: str) -> str:
     available = [str(name) for name in getattr(model, "names", [])]
     return f"Joint '{joint_name}' not found in Pinocchio model. Available joints: {available}"
 
 
-def _missing_frame_message(model: Any, frame_name: str) -> str:
+def _missing_frame_message(model: pinocchio.Model, frame_name: str) -> str:
     frames = getattr(model, "frames", [])
     available = [str(getattr(frame, "name", frame)) for frame in frames]
     return f"Frame '{frame_name}' not found in Pinocchio model. Available frames: {available}"
@@ -1170,7 +1132,7 @@ def _seed_positions_for_mapping(seed: JointState, mapping: _JointMapping) -> NDA
     return np.array(seed.position, dtype=np.float64)
 
 
-def _matrix_to_se3(pinocchio: ModuleType, matrix: NDArray[np.float64]) -> Any:
+def _matrix_to_se3(matrix: NDArray[np.float64]) -> pinocchio.SE3:
     return pinocchio.SE3(matrix[:3, :3], matrix[:3, 3])
 
 

@@ -19,9 +19,11 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import math
 import threading
 from typing import TYPE_CHECKING
 
+import attrs
 import numpy as np
 
 from dimos.control.task import (
@@ -48,20 +50,89 @@ logger = setup_logger()
 _FEEDBACK_LIMIT_WARNING_INTERVAL_S = 1.0
 
 
-@dataclass(frozen=True)
+def _to_tuple(value: Sequence[str]) -> tuple[str, ...]:
+    return tuple(value)
+
+
+def _validate_unique_names(
+    _instance: object,
+    attribute: attrs.Attribute[tuple[str, ...]],
+    value: tuple[str, ...],
+) -> None:
+    singular = "joint" if attribute.name == "joint_names" else "target frame"
+    plural = "joint names" if attribute.name == "joint_names" else "target frames"
+    if not value:
+        raise ValueError(f"PoseTargetIKTask requires at least one {singular}")
+    if len(set(value)) != len(value):
+        raise ValueError(f"PoseTargetIKTask requires unique {plural}")
+
+
+def _positive_finite(
+    _instance: object,
+    attribute: attrs.Attribute[float],
+    value: float,
+) -> None:
+    if not math.isfinite(value) or value <= 0.0:
+        label = (
+            "joint velocity limit"
+            if attribute.name == "max_joint_velocity_rad_s"
+            else "command tracking error"
+        )
+        raise ValueError(f"PoseTargetIKTask requires a positive finite {label}")
+
+
+def _nonnegative_finite(
+    _instance: object,
+    attribute: attrs.Attribute[float],
+    value: float,
+) -> None:
+    if not math.isfinite(value) or value < 0.0:
+        label = (
+            "feedback tolerance"
+            if attribute.name == "feedback_limit_tolerance"
+            else "command limit margin"
+        )
+        raise ValueError(f"PoseTargetIKTask requires a non-negative finite {label}")
+
+
+@attrs.frozen(slots=False)
 class PoseTargetIKTaskConfig:
     """Configuration shared by absolute and Quest pose-target tasks."""
 
-    joint_names: tuple[str, ...]
-    robot_model: RobotModelConfig
-    target_frames: tuple[str, ...]
-    pink: PinkKinematicsConfig = field(default_factory=PinkKinematicsConfig)
-    priority: int = 10
-    timeout: float = 0.5
-    max_joint_velocity_rad_s: float = 5.0
-    max_command_tracking_error_deg: float = 10.0
-    feedback_limit_tolerance: float = 1e-3
-    command_limit_margin: float = 1e-4
+    joint_names: tuple[str, ...] = attrs.field(
+        converter=_to_tuple,
+        validator=_validate_unique_names,
+    )
+    robot_model: RobotModelConfig = attrs.field(
+        validator=attrs.validators.instance_of(RobotModelConfig)
+    )
+    target_frames: tuple[str, ...] = attrs.field(
+        converter=_to_tuple,
+        validator=_validate_unique_names,
+    )
+    pink: PinkKinematicsConfig = attrs.field(factory=PinkKinematicsConfig)
+    priority: int = attrs.field(default=10, converter=int)
+    timeout: float = attrs.field(default=0.5, converter=float)
+    max_joint_velocity_rad_s: float = attrs.field(
+        default=5.0,
+        converter=float,
+        validator=_positive_finite,
+    )
+    max_command_tracking_error_deg: float = attrs.field(
+        default=10.0,
+        converter=float,
+        validator=_positive_finite,
+    )
+    feedback_limit_tolerance: float = attrs.field(
+        default=1e-3,
+        converter=float,
+        validator=_nonnegative_finite,
+    )
+    command_limit_margin: float = attrs.field(
+        default=1e-4,
+        converter=float,
+        validator=_nonnegative_finite,
+    )
 
 
 @dataclass(frozen=True)
@@ -151,40 +222,6 @@ class PoseTargetIKTask(BaseControlTask):
         solver: PinkPoseTargetSolver | None = None,
         solver_type: type[PinkPoseTargetSolver] | None = None,
     ) -> None:
-        if not config.joint_names:
-            raise ValueError(f"PoseTargetIKTask '{name}' requires at least one joint")
-        if len(set(config.joint_names)) != len(config.joint_names):
-            raise ValueError(f"PoseTargetIKTask '{name}' requires unique joint names")
-        if not config.target_frames:
-            raise ValueError(f"PoseTargetIKTask '{name}' requires at least one target frame")
-        if len(set(config.target_frames)) != len(config.target_frames):
-            raise ValueError(f"PoseTargetIKTask '{name}' requires unique target frames")
-        if (
-            not np.isfinite(config.max_joint_velocity_rad_s)
-            or config.max_joint_velocity_rad_s <= 0.0
-        ):
-            raise ValueError(
-                f"PoseTargetIKTask '{name}' requires a positive finite joint velocity limit"
-            )
-        if (
-            not np.isfinite(config.max_command_tracking_error_deg)
-            or config.max_command_tracking_error_deg <= 0.0
-        ):
-            raise ValueError(
-                f"PoseTargetIKTask '{name}' requires a positive finite command tracking error"
-            )
-        if (
-            not np.isfinite(config.feedback_limit_tolerance)
-            or config.feedback_limit_tolerance < 0.0
-        ):
-            raise ValueError(
-                f"PoseTargetIKTask '{name}' requires a non-negative finite feedback tolerance"
-            )
-        if not np.isfinite(config.command_limit_margin) or config.command_limit_margin < 0.0:
-            raise ValueError(
-                f"PoseTargetIKTask '{name}' requires a non-negative finite command limit margin"
-            )
-
         additional_joints = tuple(additional_claimed_joints)
         if set(config.joint_names) & set(additional_joints):
             raise ValueError(

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -36,12 +37,10 @@ from dimos.manipulation.planning.kinematics.pink_ik import (
 import dimos.manipulation.planning.kinematics.pink_solver as pink_ik
 from dimos.manipulation.planning.kinematics.pink_solver import (
     _CURRENT_POSTURE_TASK,
-    PinkIKDependencyError,
     PinkJointLimitError,
     _build_joint_mapping,
     _frame_task_key,
     _PinkControlContext,
-    _PinkModules,
     _PinkRobotContext,
     _seed_positions_for_mapping,
 )
@@ -246,7 +245,13 @@ class _MismatchedFramePinkIK(PinkIK):
         return tasks
 
 
-def _fake_modules(converge: bool = True) -> _PinkModules:
+@dataclass(frozen=True)
+class _FakeModules:
+    pink: ModuleType
+    pinocchio: ModuleType
+
+
+def _fake_modules(converge: bool = True) -> _FakeModules:
     pinocchio = ModuleType("pinocchio")
     pinocchio.SE3 = _FakeSE3  # type: ignore[attr-defined]
     pinocchio.neutral = lambda model: np.zeros(model.nq)  # type: ignore[attr-defined]
@@ -278,7 +283,15 @@ def _fake_modules(converge: bool = True) -> _PinkModules:
 
     pink.solve_ik = solve_ik  # type: ignore[attr-defined]
 
-    return _PinkModules(pink=pink, pinocchio=pinocchio)
+    return _FakeModules(pink=pink, pinocchio=pinocchio)
+
+
+def _install_fake_modules(mocker: MockerFixture, converge: bool = True) -> _FakeModules:
+    modules = _fake_modules(converge=converge)
+    mocker.patch.object(pink_ik, "pink", modules.pink)
+    mocker.patch.object(pink_ik, "pinocchio", modules.pinocchio)
+    mocker.patch.object(pink_ik.qpsolvers, "available_solvers", ["proxqp"])
+    return modules
 
 
 def _robot_config() -> RobotModelConfig:
@@ -300,9 +313,7 @@ def _robot_config() -> RobotModelConfig:
 
 
 def _pink_ik(mocker: MockerFixture, converge: bool = True) -> _StreamingTestPinkIK:
-    mocker.patch.object(
-        pink_ik, "_load_optional_dependencies", return_value=_fake_modules(converge=converge)
-    )
+    _install_fake_modules(mocker, converge=converge)
     return _StreamingTestPinkIK(PinkIKConfig(max_iterations=3))
 
 
@@ -468,39 +479,17 @@ class _MultiRobotCollisionWorld:
         return len(self.context_states) < 2
 
 
-def test_create_kinematics_pink_missing_dependency_is_actionable(
-    mocker: MockerFixture,
-) -> None:
-    def fake_import_module(name: str) -> ModuleType:
-        if name == "pink":
-            raise ImportError("missing pink")
-        return ModuleType(name)
-
-    mocker.patch.object(pink_ik.importlib, "import_module", side_effect=fake_import_module)
-
-    with pytest.raises(PinkIKDependencyError) as exc_info:
-        create_kinematics("pink")
-    assert "pin-pink" in str(exc_info.value)
-    assert "--extra manipulation" in str(exc_info.value)
-
-
 def test_create_kinematics_pink_unavailable_solver_mentions_manipulation_extra(
     mocker: MockerFixture,
 ) -> None:
-    def fake_import_module(name: str) -> ModuleType:
-        module = ModuleType(name)
-        if name == "qpsolvers":
-            module.available_solvers = []  # type: ignore[attr-defined]
-        return module
+    mocker.patch.object(pink_ik.qpsolvers, "available_solvers", [])
 
-    mocker.patch.object(pink_ik.importlib, "import_module", side_effect=fake_import_module)
-
-    with pytest.raises(PinkIKDependencyError, match="--extra manipulation"):
+    with pytest.raises(ImportError, match="--extra manipulation"):
         create_kinematics("pink")
 
 
 def test_create_kinematics_pink_returns_backend(mocker: MockerFixture) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
 
     assert isinstance(create_kinematics("pink"), PinkIK)
 
@@ -508,7 +497,7 @@ def test_create_kinematics_pink_returns_backend(mocker: MockerFixture) -> None:
 def test_create_kinematics_pink_config_passes_tuning(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
 
     ik = create_kinematics(config=PinkKinematicsConfig(max_iterations=7, dt=0.02, posture_cost=0.0))
 
@@ -519,7 +508,7 @@ def test_create_kinematics_pink_config_passes_tuning(
 
 
 def test_pink_ik_config_overrides_are_applied(mocker: MockerFixture) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
 
     ik = PinkIK(PinkIKConfig(solver="proxqp", dt=0.1), max_iterations=7, posture_cost=0.0)
 
@@ -619,15 +608,15 @@ def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
         gain=0.25,
         posture_cost=0.0,
     )
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     ik = _StreamingTestPinkIK(config)
     mocker.patch.object(
         ik,
         "_get_control_context",
         return_value=_combined_control_context(("tool", "base"), ["joint_a", "joint_b", "joint_c"]),
     )
-    frame_task = mocker.patch.object(ik._modules.pink.tasks, "FrameTask", wraps=_FakeFrameTask)
-    solve_ik = mocker.spy(ik._modules.pink, "solve_ik")
+    frame_task = mocker.patch.object(pink_ik.pink.tasks, "FrameTask", wraps=_FakeFrameTask)
+    solve_ik = mocker.spy(pink_ik.pink, "solve_ik")
 
     result = ik.step_frame_targets(
         robot_model=_robot_config(),
@@ -663,7 +652,7 @@ def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
 def test_named_task_stack_supports_incremental_subclass_composition(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     context = _combined_control_context(("tool", "base"), ["joint_a", "joint_b", "joint_c"])
     configuration = _FakeConfiguration(context.robot.model, context.robot.data, np.zeros(3))
     ik = _DerivedComposablePinkIK(PinkIKConfig())
@@ -693,7 +682,7 @@ def test_named_task_stack_rejects_invalid_reserved_frame_tasks(
     ik_type: type[PinkIK],
     match: str,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     configuration = _FakeConfiguration(context.robot.model, context.robot.data, np.zeros(3))
 
@@ -704,7 +693,7 @@ def test_named_task_stack_rejects_invalid_reserved_frame_tasks(
 def test_streaming_reuses_task_stack_across_steps(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     ik = _StreamingTestPinkIK(PinkIKConfig())
     context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     mocker.patch.object(ik, "_get_control_context", return_value=context)
@@ -745,7 +734,7 @@ def test_streaming_reuses_task_stack_across_steps(
 def test_task_hooks_receive_read_only_stack_and_successful_velocity(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     ik = _RecordingPinkIK(PinkIKConfig(posture_cost=0.0))
     context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     mocker.patch.object(ik, "_get_control_context", return_value=context)
@@ -774,11 +763,11 @@ def test_task_hooks_receive_read_only_stack_and_successful_velocity(
 def test_after_solve_hook_is_not_called_when_solver_raises(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     ik = _RecordingPinkIK(PinkIKConfig(posture_cost=0.0))
     context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     mocker.patch.object(ik, "_get_control_context", return_value=context)
-    mocker.patch.object(ik._modules.pink, "solve_ik", side_effect=RuntimeError("no solution"))
+    mocker.patch.object(pink_ik.pink, "solve_ik", side_effect=RuntimeError("no solution"))
 
     with pytest.raises(RuntimeError, match="no solution"):
         ik.step_frame_targets(
@@ -801,7 +790,7 @@ def test_after_solve_hook_is_not_called_when_solver_raises(
 
 
 def test_separate_backends_do_not_share_task_instances(mocker: MockerFixture) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     first = PinkIK(PinkIKConfig())
     second = PinkIK(PinkIKConfig())
     first_context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
@@ -823,7 +812,7 @@ def test_separate_backends_do_not_share_task_instances(mocker: MockerFixture) ->
 def test_step_frame_targets_normalizes_feedback_and_saturates_commands(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     ik = _StreamingTestPinkIK(PinkIKConfig())
     context = _combined_control_context(("tool",), ["joint_a", "joint_b", "joint_c"])
     mocker.patch.object(ik, "_get_control_context", return_value=context)
@@ -908,7 +897,7 @@ def test_step_frame_targets_velocity_limits_unbounded_position_joint(
 def test_validate_frame_targets_rejects_margin_wider_than_joint_range(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     ik = _StreamingTestPinkIK(PinkIKConfig())
     ik.command_limit_margin = 1.1
     mocker.patch.object(
@@ -922,9 +911,8 @@ def test_validate_frame_targets_rejects_margin_wider_than_joint_range(
 
 
 def test_step_frame_targets_rejects_unknown_frame(mocker: MockerFixture, tmp_path: Path) -> None:
-    modules = _fake_modules()
+    modules = _install_fake_modules(mocker)
     modules.pinocchio.buildModelFromUrdf = lambda path: _FakeModel()  # type: ignore[attr-defined]
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=modules)
     mocker.patch.object(pink_ik, "prepare_urdf_for_drake", return_value=tmp_path / "prepared.urdf")
     config = _robot_config()
     config.model_path = tmp_path / "fake.urdf"
@@ -973,7 +961,7 @@ def test_solve_single_returns_successful_ik_result(mocker: MockerFixture) -> Non
 def test_planning_uses_named_stack_and_task_lifecycle_hooks(
     mocker: MockerFixture,
 ) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
+    _install_fake_modules(mocker)
     ik = _RecordingPinkIK(PinkIKConfig(max_iterations=3))
     target = np.eye(4)
     target[:3, 3] = [0.1, 0.2, 0.3]
@@ -1077,9 +1065,8 @@ def test_solve_retries_after_joint_limit_failure(mocker: MockerFixture) -> None:
 
 
 def test_robot_context_cache_key_includes_tip_frame(mocker: MockerFixture, tmp_path: Path) -> None:
-    modules = _fake_modules()
+    modules = _install_fake_modules(mocker)
     modules.pinocchio.buildModelFromUrdf = lambda path: _FakeModel()  # type: ignore[attr-defined]
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=modules)
     mocker.patch.object(pink_ik, "prepare_urdf_for_drake", return_value=tmp_path / "prepared.urdf")
     model_path = tmp_path / "fake.urdf"
     model_path.write_text("<robot/>")
@@ -1099,9 +1086,8 @@ def test_build_robot_context_rejects_base_link_not_model_root(
 ) -> None:
     model = _FakeModel()
     model.frames[0] = _FakeFrame("base", parent_joint=1)
-    modules = _fake_modules()
+    modules = _install_fake_modules(mocker)
     modules.pinocchio.buildModelFromUrdf = lambda path: model  # type: ignore[attr-defined]
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=modules)
     mocker.patch.object(pink_ik, "prepare_urdf_for_drake", return_value=tmp_path / "prepared.urdf")
     model_path = tmp_path / "fake.urdf"
     model_path.write_text("<robot/>")

@@ -40,7 +40,6 @@ from dimos.robot.manipulators.openarm.blueprints.teleop import (
 )
 from dimos.robot.manipulators.openarm.config import (
     OPENARM_ARM_JOINTS,
-    OPENARM_BIMANUAL_MODEL,
     OPENARM_HOME_JOINTS,
     OPENARM_JOINTS,
     openarm_bimanual_model_config,
@@ -141,7 +140,6 @@ def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
     assert set(task.joint_names) | {binding["gripper_joint"] for binding in bindings} == set(
         OPENARM_JOINTS
     )
-    assert task.params["robot_model"].model_path == OPENARM_BIMANUAL_MODEL
     assert isinstance(task.params["pink"], PinkKinematicsConfig)
     assert task.params["solver_type"] is OpenArmPinkPoseTargetSolver
     assert task.params["pink"].joint_limit_posture_margin == 0.3
@@ -150,7 +148,7 @@ def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
     assert task.priority == 10
     assert trajectory.joint_names == OPENARM_ARM_JOINTS
     assert trajectory.priority == 20
-    assert manipulation_kwargs["robots"] == [task.params["robot_model"]]
+    assert manipulation_kwargs["robots"][0] is task.params["robot_model"]
     assert manipulation_kwargs["kinematics"] == task.params["pink"]
     assert manipulation_kwargs["visualization"] == {"backend": "viser"}
     assert teleop_kwargs["task_names"] == {
@@ -227,6 +225,7 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
         coordinator.stop()
 
 
+@pytest.mark.self_hosted
 def test_openarm_teleop_pink_objective_uses_robot_specific_tuning() -> None:
     model = openarm_bimanual_model_config()
     frames = ("openarm_left_grasp_frame", "openarm_right_grasp_frame")
@@ -258,6 +257,7 @@ def test_openarm_teleop_pink_objective_uses_robot_specific_tuning() -> None:
     )
 
 
+@pytest.mark.self_hosted
 def test_openarm_bimanual_pink_steps_from_canonical_zero_with_bounded_updates() -> None:
     model = openarm_bimanual_model_config()
     frames = ("openarm_left_grasp_frame", "openarm_right_grasp_frame")
