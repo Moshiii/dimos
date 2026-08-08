@@ -433,6 +433,8 @@ def fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "roboplan.core",
         "roboplan.rrt",
         "roboplan.cartesian_planning",
+        "dimos.manipulation.planning.world.roboplan_world",
+        "dimos.manipulation.planning.planners.roboplan_planner",
     )
     original_modules = {name: sys.modules.get(name) for name in module_names}
     _install_fake_roboplan(monkeypatch)
@@ -442,12 +444,6 @@ def fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
             sys.modules.pop(name, None)
         else:
             sys.modules[name] = module
-    for name in (
-        "dimos.manipulation.planning.world.roboplan_world",
-        "dimos.manipulation.planning.planners.roboplan_planner",
-    ):
-        if name in sys.modules:
-            importlib.reload(sys.modules[name])
     _PLANNERS_BY_WORLD.clear()
 
 

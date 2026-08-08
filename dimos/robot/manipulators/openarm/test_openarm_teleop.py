@@ -33,7 +33,6 @@ from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.groups.registry import PlanningGroupRegistry
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
-from dimos.manipulation.planning.world.roboplan_world import RoboPlanWorld
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.openarm.blueprints.teleop import (
@@ -243,8 +242,13 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
 def test_openarm_single_group_pink_solve_holds_unselected_arm(
     mocker: MockerFixture,
 ) -> None:
+    roboplan_world = pytest.importorskip(
+        "dimos.manipulation.planning.world.roboplan_world",
+        exc_type=ImportError,
+        reason="RoboPlan is unavailable on this platform",
+    )
     model = openarm_bimanual_model_config()
-    world = RoboPlanWorld(enable_viz=False)
+    world = roboplan_world.RoboPlanWorld(enable_viz=False)
     robot_id = world.add_robot(model)
     world.finalize()
     seed_positions = [0.0] * len(OPENARM_ARM_JOINTS)
