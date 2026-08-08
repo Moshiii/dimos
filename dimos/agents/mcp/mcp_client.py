@@ -78,7 +78,7 @@ class McpClient(Module):
     _history: list[BaseMessage]
     _thread: Thread
     _stop_event: Event
-    _cancel_event: Event
+    _active_turn_cancel: Event | None
     _http_client: requests.Session
     _seq_ids: SequentialIds
     _tool_stream_cleanup: Callable[[], None] | None
@@ -96,7 +96,7 @@ class McpClient(Module):
             daemon=True,
         )
         self._stop_event = Event()
-        self._cancel_event = Event()
+        self._active_turn_cancel = None
         self._http_client = requests.Session()
         self._seq_ids = SequentialIds()
         self._tool_stream_cleanup = None
@@ -220,9 +220,12 @@ class McpClient(Module):
 
         self.register_disposable(Disposable(self.human_input.subscribe(_on_human_input)))
 
-        def _on_agent_cancel(_cancel: bool) -> None:
-            self._cancel_event.set()
-            self.agent_idle.publish(True)
+        def _on_agent_cancel(cancel: bool) -> None:
+            if not cancel:
+                return
+            with self._lock:
+                if self._active_turn_cancel is not None:
+                    self._active_turn_cancel.set()
 
         self.register_disposable(Disposable(self.agent_cancel.subscribe(_on_agent_cancel)))
 
@@ -339,37 +342,76 @@ class McpClient(Module):
             with self._lock:
                 if not self._state_graph:
                     raise ValueError("No state graph initialized")
-                self._cancel_event.clear()
-                try:
-                    self._process_message(self._state_graph, message)
-                except Exception:
-                    self._close_cancelled_tool_calls()
-                    logger.exception("Agent turn failed")
-                    self.agent_idle.publish(True)
+                state_graph = self._state_graph
+                turn_cancel = Event()
+                self._active_turn_cancel = turn_cancel
+            try:
+                self._process_message(state_graph, message, turn_cancel)
+            except Exception:
+                self._close_cancelled_tool_calls()
+                logger.exception("Agent turn failed")
+                self.agent_idle.publish(True)
+            finally:
+                with self._lock:
+                    if self._active_turn_cancel is turn_cancel:
+                        self._active_turn_cancel = None
 
     def _process_message(
-        self, state_graph: CompiledStateGraph[Any, Any, Any, Any], message: BaseMessage
+        self,
+        state_graph: CompiledStateGraph[Any, Any, Any, Any],
+        message: BaseMessage,
+        turn_cancel: Event,
     ) -> None:
         self.agent_idle.publish(False)
         self._history.append(message)
         pretty_print_langchain_message(message)
         self.agent.publish(message)
 
-        for update in state_graph.stream({"messages": self._history}, stream_mode="updates"):
-            if self._cancel_event.is_set():
+        updates: Queue[tuple[str, Any]] = Queue()
+        history = list(self._history)
+
+        def stream_turn() -> None:
+            try:
+                for update in state_graph.stream({"messages": history}, stream_mode="updates"):
+                    updates.put(("update", update))
+            except Exception as exc:
+                updates.put(("error", exc))
+            finally:
+                updates.put(("done", None))
+
+        Thread(target=stream_turn, name=f"{self.__class__.__name__}-turn", daemon=True).start()
+
+        while True:
+            if turn_cancel.is_set():
                 self._close_cancelled_tool_calls()
+                self.agent_idle.publish(True)
+                return
+
+            try:
+                event, value = updates.get(timeout=0.1)
+            except Empty:
+                continue
+
+            if event == "error":
+                if isinstance(value, Exception):
+                    raise value
+                raise RuntimeError("Agent turn failed with an unknown error")
+            if event == "done":
                 break
+
+            update = value
             for node_output in update.values():
                 for msg in node_output.get("messages", []):
                     self._history.append(msg)
                     pretty_print_langchain_message(msg)
                     self.agent.publish(msg)
 
-            if self._cancel_event.is_set():
+            if turn_cancel.is_set():
                 self._close_cancelled_tool_calls()
-                break
+                self.agent_idle.publish(True)
+                return
 
-        if self._cancel_event.is_set() or self._message_queue.empty():
+        if self._message_queue.empty():
             self.agent_idle.publish(True)
 
     def _close_cancelled_tool_calls(self) -> None:

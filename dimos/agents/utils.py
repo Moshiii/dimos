@@ -96,11 +96,11 @@ def _log_message(msg_type: str, content: object, tool_calls: list[dict[str, Any]
     logger.info("Agent message", **kw)
 
 
-def _display_message_content(content: Any) -> Any:
+def _display_message_content(content: Any) -> str:
     """Keep only user-visible text from OpenAI Responses content blocks."""
     if not isinstance(content, list):
-        return content
-    text_parts = []
+        return str(content)
+    text_parts: list[str] = []
     for item in content:
         if isinstance(item, dict) and item.get("type") == "text":
             text = item.get("text")

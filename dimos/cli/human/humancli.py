@@ -288,6 +288,7 @@ class HumanCLIApp(App):  # type: ignore[type-arg]
         # Tools that have stopped but whose box waits for the agent to catch up.
         self._pending_stops: set[str] = set()
         self._agent_is_idle = True
+        self._agent_cancel_requested = False
         self._running = False
 
     def compose(self) -> ComposeResult:
@@ -437,6 +438,7 @@ class HumanCLIApp(App):  # type: ignore[type-arg]
         assert self._thinking is not None
         self._agent_is_idle = is_idle
         if is_idle:
+            self._agent_cancel_requested = False
             # "thinking..." is only shown for human-initiated turns (on submit),
             # so just hide here. Showing it on every busy signal would flash it
             # for each tool-stream update, which the agent also runs through the
@@ -655,11 +657,11 @@ Tool calls are displayed in cyan with ▶ prefix"""
 
     def action_stop_agent(self) -> None:
         """Request cancellation of the active agent turn and return to input."""
-        if self._agent_is_idle:
+        if self._agent_is_idle or self._agent_cancel_requested:
             return
+        self._agent_cancel_requested = True
         self._agent_cancel.publish(True)
-        self._set_agent_idle(True)
-        self._add_system_message("Agent turn cancelled. You can enter a new message.")
+        self._add_system_message("Cancelling agent turn. You can enter a new message.")
         if self.input_widget is not None:
             self.input_widget.focus()
 

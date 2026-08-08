@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from queue import Empty
-from threading import RLock
+from threading import Event, RLock, Thread
 from unittest.mock import MagicMock, create_autospec, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -183,6 +183,34 @@ def test_cancelled_turn_closes_unresolved_tool_calls(mcp_client: McpClient) -> N
     assert isinstance(mcp_client._history[-1], ToolMessage)
     assert mcp_client._history[-1].tool_call_id == "call-pending"
     assert "cancelled" in str(mcp_client._history[-1].content)
+
+
+def test_cancelled_turn_does_not_wait_for_blocked_graph(mcp_client: McpClient) -> None:
+    started = Event()
+    release = Event()
+    cancelled = Event()
+    mcp_client.agent = MagicMock()
+    mcp_client.agent_idle = MagicMock()
+
+    class BlockingGraph:
+        def stream(self, *_args: object, **_kwargs: object):  # type: ignore[no-untyped-def]
+            started.set()
+            release.wait()
+            yield {}
+
+    thread = Thread(
+        target=mcp_client._process_message,
+        args=(BlockingGraph(), HumanMessage(content="move"), cancelled),
+    )
+    thread.start()
+    assert started.wait(timeout=1.0)
+
+    cancelled.set()
+    thread.join(timeout=1.0)
+    release.set()
+
+    assert not thread.is_alive()
+    mcp_client.agent_idle.publish.assert_called_with(True)
 
 
 def test_tool_stream_ignores_unrelated_frames(mcp_client: McpClient) -> None:
