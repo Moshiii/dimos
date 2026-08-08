@@ -138,7 +138,7 @@ coordinator_flowbase_autotune = autoconnect(
     AutotuneDriver.blueprint(
         robot_id="flowbase",
         joint_prefix="base/",
-        channels={"vx": 0.8, "vy": 0.8, "wz": 1.2},
+        channels={"wz": 1.2},
         odom_type="velocity",
         fitter="velocity",
     ),
