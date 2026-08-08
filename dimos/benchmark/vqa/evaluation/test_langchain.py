@@ -46,3 +46,28 @@ def test_langchain_answerer_sends_only_public_image_and_case() -> None:
     assert content[0]["text"].startswith("Which chair is closer?")
     assert content[1]["type"] == "image_url"
     assert "expected_answer" not in str(content)
+
+
+def test_langchain_answerer_requests_only_public_numeric_answer_format() -> None:
+    model = _Model()
+    answerer = LangChainVisionQuestionAnswerer(
+        LangChainVisionEvaluationConfig(), model=cast("object", model)
+    )
+    image = Image.from_numpy(np.zeros((4, 4, 3), dtype=np.uint8))
+    case = SingleFrameVqaEvaluationCase(
+        case_id="chair-height",
+        image_path="image.jpg",
+        question="How tall is the chair?",
+        answer_kind="numeric",
+        unit="m",
+        tolerance=0.1,
+    )
+
+    answerer.answer(image, case)
+
+    content = model.messages[1].content
+    assert isinstance(content, list)
+    assert "ANSWER: <number> m" in content[0]["text"]
+    assert "Allowed answers" not in content[0]["text"]
+    assert "tolerance" not in content[0]["text"]
+    assert "expected_answer" not in str(content)

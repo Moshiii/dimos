@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VQA Review</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #10131d; color: #e8eaf2; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+      header { height: 72px; padding: 18px 28px; border-bottom: 1px solid #252b3d; background: rgba(16, 19, 29, .94); display: flex; align-items: center; justify-content: space-between; }
+      h1 { font-size: 12px; margin: 0; letter-spacing: .16em; color: #c8d1ff; }
+      .summary { display: flex; gap: 22px; font-size: 12px; }
+      .pass { color: #65d6a4; }
+      .fail { color: #ff8593; }
+      .pending { color: #d9b97b; }
+      main { display: grid; grid-template-columns: 280px 1fr; height: calc(100vh - 130px); }
+      aside { padding: 10px; border-right: 1px solid #252b3d; overflow: auto; background: #121622; }
+      .case { padding: 11px 12px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; font-size: 11px; line-height: 1.45; color: #b8c0d7; margin-bottom: 3px; }
+      .case:hover { background: #1b2132; color: #e8eaf2; }
+      .case.active { background: #252d45; border-color: #3c4b76; color: #fff; }
+      .case small { display: block; color: #79839d; margin-top: 5px; font-size: 10px; }
+      .badge { float: right; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+      .images { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 22px 24px 14px; }
+      .panel { min-width: 0; border: 1px solid #2a3145; border-radius: 14px; padding: 14px; background: #181d2b; box-shadow: 0 16px 34px rgba(0, 0, 0, .2); }
+      .panel h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .14em; color: #8e9ab9; margin: 0 0 11px; }
+      .panel img { width: 100%; height: calc(100vh - 250px); object-fit: contain; background: #0a0c12; border-radius: 9px; }
+      .detail { margin: 0 24px; padding: 14px 16px; border: 1px solid #2a3145; border-radius: 10px; background: #181d2b; font-size: 12px; }
+      .detail strong { font-size: 13px; color: #fff; }
+      .detail span { color: #8e9ab9; margin-left: 12px; }
+      @media (max-width: 800px) { header { padding: 16px; } .summary { gap: 10px; } main { grid-template-columns: 1fr; grid-template-rows: 180px 1fr; } aside { border-right: 0; border-bottom: 1px solid #252b3d; } .images { grid-template-columns: 1fr; padding: 12px; gap: 12px; } .panel img { height: 32vh; } .detail { margin: 0 12px; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>VQA EVALUATION REVIEW</h1>
+      <div class="summary">
+        <span id="progress"></span><span class="pass" id="passed"></span>
+        <span class="fail" id="failed"></span><span class="pending" id="infra"></span>
+      </div>
+    </header>
+    <main>
+      <aside id="cases"></aside>
+      <section>
+        <div class="images">
+          <div class="panel"><h2 id="image-title">Public evaluation image</h2><img id="image" /></div>
+          <div class="panel"><h2 id="overlay-title">Local grounding overlay</h2><img id="overlay" /></div>
+        </div>
+        <div class="detail" id="detail">Waiting for cases...</div>
+      </section>
+    </main>
+    <script src="/static/viewer.js"></script>
+  </body>
+</html>

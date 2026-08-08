@@ -7,12 +7,21 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from dimos.benchmark.vqa.evaluation.models import (
+    EvaluationRunConfig,
+    LangChainVisionEvaluationConfig,
     SingleFrameVqaEvaluationCase,
     SingleFrameVqaOracle,
 )
-from dimos.benchmark.vqa.evaluation.runner import evaluate_case, evaluate_dataset
+from dimos.benchmark.vqa.evaluation.persistence import EvaluationRunStore
+from dimos.benchmark.vqa.evaluation.runner import (
+    evaluate_case,
+    evaluate_run,
+    evaluation_summary,
+    inventory,
+)
 from dimos.msgs.sensor_msgs.Image import Image
 
 
@@ -80,12 +89,68 @@ def test_evaluate_case_rejects_answer_marker_followed_by_explanation(tmp_path: P
     assert result.passed is False
 
 
-def test_evaluate_dataset_loads_exported_case_directories(tmp_path: Path) -> None:
+def test_evaluate_run_checkpoints_deterministic_inventory(tmp_path: Path) -> None:
     case_path = _write_case(tmp_path / "frame-000001" / "cases" / "case-1")
-    answerer = _Answerer("ANSWER: left")
-
-    results = evaluate_dataset(tmp_path, answerer, "model")
+    config = EvaluationRunConfig(
+        model="model", langchain=LangChainVisionEvaluationConfig(model="model"), workers=2
+    )
+    store = EvaluationRunStore.create(tmp_path / "run", tmp_path, config)
+    try:
+        results = evaluate_run(tmp_path, store, lambda: _Answerer("ANSWER: left"))
+    finally:
+        store.close()
 
     assert len(results) == 1
     assert results[0].case_id == "case-1"
     assert json.loads((case_path / "case.json").read_text())["question"] == "Which chair is closer?"
+    assert (tmp_path / "run" / "checkpoints" / "00000000.json").is_file()
+    assert json.loads((tmp_path / "run" / "run-manifest.json").read_text())["status"] == "completed"
+
+
+def test_inventory_uses_public_parquet_index_when_present(tmp_path: Path) -> None:
+    pytest.importorskip("pyarrow")
+    case_path = _write_case(tmp_path / "frame-000001" / "cases" / "case-1")
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    pq.write_table(
+        pa.Table.from_pylist([{"case_path": "frame-000001/cases/case-1"}]),
+        tmp_path / "public_cases.parquet",
+    )
+
+    assert inventory(tmp_path) == [case_path]
+
+
+def test_evaluate_run_converts_worker_failure_to_terminal_infra_error(tmp_path: Path) -> None:
+    _write_case(tmp_path / "frame-000001" / "cases" / "case-1")
+    config = EvaluationRunConfig(
+        model="model", langchain=LangChainVisionEvaluationConfig(model="model"), workers=1
+    )
+    store = EvaluationRunStore.create(tmp_path / "run", tmp_path, config)
+    try:
+        results = evaluate_run(tmp_path, store, lambda: (_ for _ in ()).throw(RuntimeError()))
+    finally:
+        store.close()
+
+    assert results[0].passed is None
+    assert results[0].infra_error == "evaluation worker failed (RuntimeError)"
+    assert evaluation_summary(results)["accuracy"] is None
+
+
+def test_evaluate_run_emits_live_case_events(tmp_path: Path) -> None:
+    _write_case(tmp_path / "frame-000001" / "cases" / "case-1")
+    config = EvaluationRunConfig(
+        model="model", langchain=LangChainVisionEvaluationConfig(model="model"), workers=1
+    )
+    store = EvaluationRunStore.create(tmp_path / "run", tmp_path, config)
+    events = []
+    try:
+        evaluate_run(tmp_path, store, lambda: _Answerer("ANSWER: left"), on_event=events.append)
+    finally:
+        store.close()
+
+    assert [event.event_type for event in events] == [
+        "case_started",
+        "case_completed",
+        "run_completed",
+    ]

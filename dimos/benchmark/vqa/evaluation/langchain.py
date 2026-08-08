@@ -28,14 +28,22 @@ class LangChainVisionQuestionAnswerer:
         """Return the model response for the supplied public image and case."""
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        if case.answer_kind == "choice":
+            assert case.allowed_answers is not None
+            answer_instruction = (
+                f"Allowed answers: {', '.join(case.allowed_answers)}. "
+                f"End with exactly `{case.answer_marker} <answer>` using one allowed answer."
+            )
+        else:
+            assert case.unit is not None
+            answer_instruction = (
+                f"End with exactly `{case.answer_marker} <number> {case.unit}` on the final line."
+            )
         message = HumanMessage(
             content=[
                 {
                     "type": "text",
-                    "text": (
-                        f"{case.question}\n\nAllowed answers: {', '.join(case.allowed_answers)}. "
-                        f"End with exactly `{case.answer_marker} <answer>` using one allowed answer."
-                    ),
+                    "text": (f"{case.question}\n\n{answer_instruction}"),
                 },
                 *image.agent_encode(),
             ]

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import re
 from typing import Protocol
 
@@ -81,21 +82,37 @@ def score_vqa_response(
     """Parse one closed answer using public choices and score it privately."""
     if oracle.case_id != case.case_id:
         raise ValueError("oracle case_id must match the public case")
-    expected = _canonical_answer(oracle.expected_answer, case.allowed_answers)
-    if expected is None:
-        raise ValueError("oracle expected_answer must be an allowed public answer")
-    answer = _parse_marked_answer(response, case.answer_marker, case.allowed_answers)
+    if case.answer_kind == "choice":
+        if case.allowed_answers is None or not isinstance(oracle.expected_answer, str):
+            raise ValueError("choice case requires choice oracle answer")
+        expected = _canonical_answer(oracle.expected_answer, case.allowed_answers)
+        if expected is None:
+            raise ValueError("oracle expected_answer must be an allowed public answer")
+        answer = _parse_marked_choice_answer(response, case.answer_marker, case.allowed_answers)
+        passed = answer == expected
+    else:
+        if (
+            not isinstance(oracle.expected_answer, float)
+            or oracle.tolerance is None
+            or case.unit is None
+            or case.tolerance is None
+        ):
+            raise ValueError("numeric case requires numeric oracle answer and tolerance provenance")
+        if oracle.tolerance != case.tolerance:
+            raise ValueError("numeric oracle tolerance must match public case tolerance")
+        answer = _parse_marked_numeric_answer(response, case.answer_marker, case.unit)
+        passed = answer is not None and abs(answer - oracle.expected_answer) <= case.tolerance
     return SingleFrameVqaEvaluationResult(
         case_id=case.case_id,
         model=model,
         raw_response=response,
         normalized_answer=answer,
-        passed=answer == expected,
+        passed=passed,
         validator_revision=oracle.validator_revision,
     )
 
 
-def _parse_marked_answer(
+def _parse_marked_choice_answer(
     response: str, marker: str, allowed_answers: tuple[str, ...]
 ) -> str | None:
     lines = [line.strip() for line in response.splitlines() if line.strip()]
@@ -103,6 +120,25 @@ def _parse_marked_answer(
     if len(marked) != 1 or not lines or lines[-1] != marked[0]:
         return None
     return _canonical_answer(marked[0].removeprefix(marker), allowed_answers)
+
+
+def _parse_marked_numeric_answer(response: str, marker: str, unit: str) -> float | None:
+    value = _final_marked_value(response, marker)
+    if value is None:
+        return None
+    match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s+(\S+)", value)
+    if match is None or match.group(2) != unit:
+        return None
+    answer = float(match.group(1))
+    return answer if math.isfinite(answer) else None
+
+
+def _final_marked_value(response: str, marker: str) -> str | None:
+    lines = [line.strip() for line in response.splitlines() if line.strip()]
+    marked = [line for line in lines if line.startswith(marker)]
+    if len(marked) != 1 or not lines or lines[-1] != marked[0]:
+        return None
+    return marked[0].removeprefix(marker).strip()
 
 
 def _canonical_answer(value: str, allowed_answers: tuple[str, ...]) -> str | None:
