@@ -49,6 +49,7 @@ Benchmarker in one process.
 
 from __future__ import annotations
 
+from dimos.constants import STATE_DIR
 from dimos.control.components import HardwareComponent, HardwareType, make_twist_base_joints
 from dimos.control.coordinator import TaskConfig
 from dimos.control.path_following_coordinator import PathFollowingCoordinator
@@ -108,6 +109,8 @@ unitree_go2_holonomic_controller = (
                         "lookahead": 0.25,
                         "goal_tolerance": 0.20,
                         "orientation_tolerance": 0.25,
+                        # Our own autotune output, not the vendored reference artifact.
+                        "artifact_path": str(STATE_DIR / "autotune" / "go2" / "tuned_config.json"),
                     },
                 ),
             ],
