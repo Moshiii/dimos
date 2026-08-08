@@ -34,6 +34,7 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import g1_arms
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
+from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_groot_wbc import (
     _backend,
     _G1GrootCoordinator,
@@ -71,6 +72,7 @@ unitree_g1_groot_wbc_manip = (
             kinematics=PinkKinematicsConfig(
                 position_tolerance=0.01, orientation_cost=0.3, orientation_tolerance=0.35
             ),
+            visualization=ViserVisualizationConfig(),
         ),
         _viewer(),
     )
