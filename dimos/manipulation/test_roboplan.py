@@ -1721,7 +1721,7 @@ def test_native_selected_planner_uses_explicit_start_after_live_state_advances(
     assert observed_scene_start[:2] == pytest.approx(start.position)
 
 
-def test_native_selected_planner_supports_multi_group_selection(
+def test_native_selected_planner_composes_disjoint_groups_within_one_robot(
     fake_roboplan: None, robot_config: RobotModelConfig
 ) -> None:
     config = robot_config.model_copy(

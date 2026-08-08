@@ -29,8 +29,6 @@ from dimos.robot.manipulators.common.topics import (
 )
 from dimos.robot.manipulators.openyam.config import (
     OPENYAM_ARM_JOINTS,
-    OPENYAM_DOF,
-    OPENYAM_GRAVITY_MODEL_PATH,
     OPENYAM_GRIPPER_JOINT,
     make_openyam_model_config,
     openyam_hardware,
@@ -38,6 +36,7 @@ from dimos.robot.manipulators.openyam.config import (
 from dimos.teleop.keyboard.keyboard_teleop_module import KeyboardTeleopModule
 
 _openyam_keyboard_hw = openyam_hardware()
+_openyam_model = make_openyam_model_config(name="arm")
 
 
 def _eef_twist_task(*, priority: int = 10) -> TaskConfig:
@@ -46,10 +45,7 @@ def _eef_twist_task(*, priority: int = 10) -> TaskConfig:
         type="eef_twist",
         joint_names=list(OPENYAM_ARM_JOINTS),
         priority=priority,
-        params={
-            "model_path": OPENYAM_GRAVITY_MODEL_PATH,
-            "ee_joint_id": OPENYAM_DOF,
-        },
+        params={"robot_model": _openyam_model},
     )
 
 
@@ -92,7 +88,7 @@ _openyam_keyboard_planner_hw = openyam_hardware()
 
 keyboard_teleop_openyam_planner = autoconnect(
     KeyboardTeleopModule.blueprint(),
-    planner(robots=[make_openyam_model_config(name="arm")]),
+    planner(robots=[_openyam_model]),
     coordinator(
         hardware=[_openyam_keyboard_planner_hw],
         tasks=[
