@@ -66,7 +66,7 @@ teleop/
 ├── quest/
 │   ├── quest_teleop_module.py   # Base Quest teleop module (local WebSocket)
 │   ├── quest_extensions.py      # ArmTeleop, TwistTeleop
-│   ├── quest_types.py           # QuestControllerState + Quest normalization
+│   ├── quest_types.py           # QuestControllerState, Buttons
 │   └── web/
 │       └── static/index.html    # WebXR client
 ├── hosted/                      # Hosted teleop (transport-swap, per-concern modules)
