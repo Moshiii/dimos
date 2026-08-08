@@ -18,21 +18,62 @@ from __future__ import annotations
 
 from dimos.control.coordinator import ControlCoordinator
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.global_config import global_config
 from dimos.robot.manipulators.a1z.config import (
     A1Z_G1Z_MODEL_PATH,
     a1z_hardware,
     make_a1z_model_config,
+    make_a1z_sim_hardware,
+    make_a1z_sim_robot_config,
 )
 from dimos.robot.manipulators.common.blueprints import coordinator, planner, trajectory_task
+from dimos.simulation.providers import (
+    SimulationBinding,
+    SimulationRequest,
+    load_simulation_provider,
+)
+from dimos.visualization.vis_module import vis_module
 
-_a1z_planner_hw = a1z_hardware("arm")
+
+def _resolve_a1z_simulation() -> SimulationBinding | None:
+    if not global_config.simulation_provider:
+        return None
+    provider = load_simulation_provider(global_config.simulation_provider)
+    return provider.build(
+        SimulationRequest(
+            robot_model="galaxea_a1z",
+            model_path=A1Z_G1Z_MODEL_PATH,
+            scene_package=global_config.scene_package,
+        )
+    )
+
+
+_simulation = _resolve_a1z_simulation()
+if _simulation is None:
+    _a1z_planner_hw = a1z_hardware("arm")
+    _a1z_planner_model = make_a1z_model_config(name="arm")
+    _a1z_simulation_modules = ()
+else:
+    _a1z_planner_hw = make_a1z_sim_hardware(
+        _simulation.adapter_address,
+        adapter_type=_simulation.adapter_type,
+    )
+    _a1z_planner_model = make_a1z_sim_robot_config(_simulation.robot_base_pose)
+    _a1z_simulation_modules = (
+        _simulation.backend,
+        vis_module(
+            viewer_backend=global_config.viewer,
+            rerun_config=_simulation.rerun_config,
+        ),
+    )
 
 a1z_planner_coordinator = autoconnect(
-    planner(robots=[make_a1z_model_config(name="arm")]),
+    planner(robots=[_a1z_planner_model]),
     coordinator(
         hardware=[_a1z_planner_hw],
         tasks=[trajectory_task(_a1z_planner_hw)],
     ),
+    *_a1z_simulation_modules,
 )
 
 _coordinator_a1z_hw = a1z_hardware(

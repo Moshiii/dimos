@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import attrs
@@ -28,6 +29,10 @@ from dimos.hardware.manipulators.galaxea_a1z.config import (
 )
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
+from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.robot.manipulators._modeling import (
     base_pose,
     coordinator_joint_mapping,
@@ -36,6 +41,19 @@ from dimos.robot.manipulators._modeling import (
 from dimos.utils.data import LfsPath
 
 A1Z_DOF = 6
+A1Z_SIM_GRIPPER_OPEN = 0.052
+A1Z_SIM_HOME = [0.0, 0.05, -0.05, 0.0, 0.0, 0.0]
+A1Z_GRIPPER_CONTACT_OFFSET = 0.075
+_A1Z_GRASP_TO_TCP_PITCH = math.radians(-110.0)
+A1Z_GRASP_FRAME_TO_TCP = Pose(
+    position=Vector3(
+        -A1Z_GRIPPER_CONTACT_OFFSET * math.cos(_A1Z_GRASP_TO_TCP_PITCH),
+        0.0,
+        A1Z_GRIPPER_CONTACT_OFFSET * math.sin(_A1Z_GRASP_TO_TCP_PITCH),
+    ),
+    orientation=Quaternion.from_euler(Vector3(0.0, _A1Z_GRASP_TO_TCP_PITCH, 0.0)),
+)
+A1Z_PRE_GRASP_DIRECTION = Vector3(-1.0, 0.0, 0.0)
 
 A1Z_COLLISION_EXCLUSIONS: list[tuple[str, str]] = [
     ("arm_link2", "arm_link5"),
@@ -96,12 +114,16 @@ def make_a1z_model_config(
     has_gripper: bool = True,
     joint_prefix: str | None = None,
     home_joints: list[float] | None = None,
+    placement: PoseStamped | None = None,
+    pre_grasp_offset: float = 0.10,
+    grasp_frame_to_tcp: Pose | None = None,
+    pre_grasp_direction: Vector3 | None = None,
 ) -> RobotModelConfig:
     local_joint_names = joint_names(A1Z_DOF, prefix="arm_joint")
     return RobotModelConfig(
         name=name,
         model_path=A1Z_G1Z_MODEL_PATH if has_gripper else A1Z_FLANGE_MODEL_PATH,
-        base_pose=base_pose(),
+        base_pose=placement if placement is not None else base_pose(),
         joint_names=local_joint_names,
         base_link="base_link",
         planning_groups=[
@@ -123,4 +145,39 @@ def make_a1z_model_config(
         ),
         gripper_hardware_id=name if has_gripper else None,
         home_joints=home_joints or [0.0] * A1Z_DOF,
+        pre_grasp_offset=pre_grasp_offset,
+        grasp_frame_to_tcp=grasp_frame_to_tcp or Pose(),
+        pre_grasp_direction=pre_grasp_direction or Vector3(0.0, 0.0, -1.0),
+    )
+
+
+def make_a1z_sim_hardware(
+    address: str | Path,
+    *,
+    adapter_type: str = "sim_mujoco",
+) -> HardwareComponent:
+    """Configure the A1Z shared-memory boundary supplied by a simulator provider."""
+    return HardwareComponent(
+        hardware_id="arm",
+        hardware_type=HardwareType.MANIPULATOR,
+        joints=make_joints("arm", A1Z_DOF),
+        adapter_type=adapter_type,
+        address=address,
+        auto_enable=True,
+        gripper_joints=["arm/gripper"],
+        gripper_open_position=A1Z_SIM_GRIPPER_OPEN,
+        gripper_closed_position=0.0,
+        adapter_kwargs={"initial_positions": A1Z_SIM_HOME},
+    )
+
+
+def make_a1z_sim_robot_config(robot_base_pose: PoseStamped) -> RobotModelConfig:
+    """Configure A1Z planning in the same world frame as its simulator binding."""
+    return make_a1z_model_config(
+        name="arm",
+        has_gripper=True,
+        home_joints=A1Z_SIM_HOME,
+        placement=robot_base_pose,
+        grasp_frame_to_tcp=A1Z_GRASP_FRAME_TO_TCP,
+        pre_grasp_direction=A1Z_PRE_GRASP_DIRECTION,
     )
