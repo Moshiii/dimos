@@ -108,6 +108,9 @@ class JointServoTask(BaseControlTask):
         self._target: list[float] | None = None
         self._last_update_time: float = 0.0
         self._active = False
+        self._name_to_index = {name: i for i, name in enumerate(self._joint_names_list)}
+        self._preempted_joints: set[str] = set()
+        self._logged_preemption: frozenset[str] = frozenset()
 
         if config.default_positions is not None:
             if len(config.default_positions) != self._num_joints:
@@ -146,6 +149,23 @@ class JointServoTask(BaseControlTask):
             if not self._active or self._target is None:
                 return None
 
+            if self._preempted_joints:
+                # Bumpless handoff: while a higher-priority task drives some of
+                # our joints, track their measured positions so the hold
+                # resumes from wherever that task releases them instead of
+                # snapping back to the previously latched target.
+                for name in self._preempted_joints:
+                    position = state.joints.joint_positions.get(name)
+                    if position is not None:
+                        self._target[self._name_to_index[name]] = position
+                self._preempted_joints.clear()
+                # Preemption defers the timeout: the joints are actively
+                # driven, and the hold must be alive when they are released.
+                self._last_update_time = state.t_now
+            elif self._logged_preemption:
+                self._logged_preemption = frozenset()
+                logger.info(f"JointServoTask {self._name} resumed hold at handed-off positions")
+
             # Check timeout
             if self._config.timeout > 0:
                 time_since_update = state.t_now - self._last_update_time
@@ -170,8 +190,19 @@ class JointServoTask(BaseControlTask):
             by_task: Name of preempting task
             joints: Joints that were preempted
         """
-        if joints & self._joint_names:
-            logger.warning(f"JointServoTask {self._name} preempted by {by_task} on joints {joints}")
+        overlap = joints & self._joint_names
+        if not overlap:
+            return
+        with self._lock:
+            self._preempted_joints |= overlap
+            should_log = overlap != self._logged_preemption
+            if should_log:
+                self._logged_preemption = frozenset(overlap)
+        if should_log:
+            logger.warning(
+                f"JointServoTask {self._name} preempted by {by_task} on joints "
+                f"{sorted(overlap)}; hold target tracks measured positions until released"
+            )
 
     def set_target(self, positions: list[float], t_now: float) -> bool:
         """Set target joint positions.

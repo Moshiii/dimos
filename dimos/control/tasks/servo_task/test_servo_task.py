@@ -43,3 +43,34 @@ def test_on_joint_command_requires_all_claimed_joints() -> None:
     task = _task()
     assert not task.on_joint_command(JointState(name=["a/j1"], position=[0.1]), 1.0)
     assert not task.is_active()
+
+
+def _state(t_now: float, positions: dict[str, float] | None = None) -> CoordinatorState:
+    return CoordinatorState(joints=JointStateSnapshot(joint_positions=positions or {}), t_now=t_now)
+
+
+def test_preempted_joints_track_measured_positions() -> None:
+    task = _task()
+    task.on_joint_command(JointState(name=["a/j1", "a/j2"], position=[0.0, 0.0]), 1.0)
+
+    task.on_preempted("traj", frozenset({"a/j2"}))
+    out = task.compute(_state(1.1, {"a/j1": 0.5, "a/j2": 0.8}))
+    assert out is not None
+    assert out.positions == [0.0, 0.8]
+
+    out = task.compute(_state(1.2, {"a/j1": 0.5, "a/j2": 0.0}))
+    assert out is not None
+    assert out.positions == [0.0, 0.8]
+
+
+def test_hold_resumes_at_handoff_position_after_release() -> None:
+    task = _task()
+    task.on_joint_command(JointState(name=["a/j1", "a/j2"], position=[0.0, 0.0]), 1.0)
+
+    for step in range(5):
+        task.on_preempted("traj", frozenset({"a/j1", "a/j2"}))
+        task.compute(_state(1.0 + 0.1 * step, {"a/j1": 0.2 * step, "a/j2": 0.1 * step}))
+
+    out = task.compute(_state(1.5, {"a/j1": 0.81, "a/j2": 0.41}))
+    assert out is not None
+    assert out.positions == [0.8, 0.4]
