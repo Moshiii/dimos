@@ -1601,6 +1601,7 @@ agents = [
     { name = "nbformat" },
     { name = "ollama" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "pyzmq" },
     { name = "sounddevice" },
     { name = "uvicorn" },
@@ -1646,6 +1647,7 @@ all = [
     { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64'" },
     { name = "open-clip-torch" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "pillow" },
     { name = "piper-sdk" },
     { name = "playground" },
@@ -1706,6 +1708,7 @@ base = [
     { name = "ollama" },
     { name = "omegaconf" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "pillow" },
     { name = "pyzmq" },
     { name = "rerun-sdk" },
@@ -1814,6 +1817,7 @@ unitree = [
     { name = "ollama" },
     { name = "omegaconf" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "pillow" },
     { name = "pyzmq" },
     { name = "rerun-sdk" },
@@ -1853,6 +1857,7 @@ unitree-dds = [
     { name = "ollama" },
     { name = "omegaconf" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "pillow" },
     { name = "pyzmq" },
     { name = "rerun-sdk" },
@@ -1915,6 +1920,7 @@ lint = [
     { name = "open-clip-torch" },
     { name = "openai" },
     { name = "openai-whisper" },
+    { name = "openevals" },
     { name = "pandas-stubs" },
     { name = "pytest" },
     { name = "python-can" },
@@ -1954,6 +1960,7 @@ project-deps = [
     { name = "ollama" },
     { name = "open-clip-torch" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "tensorboard" },
     { name = "torch" },
     { name = "torchreid" },
@@ -1985,6 +1992,7 @@ tests = [
     { name = "ollama" },
     { name = "open-clip-torch" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "pre-commit" },
     { name = "py-spy" },
     { name = "pygame" },
@@ -2037,6 +2045,7 @@ tests-self-hosted = [
     { name = "ollama" },
     { name = "open-clip-torch" },
     { name = "openai" },
+    { name = "openevals" },
     { name = "pre-commit" },
     { name = "py-spy" },
     { name = "pybind11" },
@@ -2137,6 +2146,7 @@ requires-dist = [
     { name = "open3d-unofficial-arm", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'", specifier = ">=0.19.0.post9" },
     { name = "openai", marker = "extra == 'agents'" },
     { name = "opencv-contrib-python", specifier = ">=4.8,<5" },
+    { name = "openevals", marker = "extra == 'agents'", specifier = ">=0.2,<0.3" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "pandas", marker = "extra == 'learning'" },
     { name = "pillow", marker = "extra == 'perception'" },
@@ -2228,6 +2238,7 @@ lint = [
     { name = "open-clip-torch", specifier = "==3.2.0" },
     { name = "openai" },
     { name = "openai-whisper" },
+    { name = "openevals", specifier = ">=0.2,<0.3" },
     { name = "pandas-stubs", specifier = ">=2.3.2.250926,<3" },
     { name = "pytest", specifier = "==8.3.5" },
     { name = "python-can", specifier = ">=4" },
@@ -2267,6 +2278,7 @@ project-deps = [
     { name = "ollama", specifier = ">=0.6.0" },
     { name = "open-clip-torch", specifier = "==3.2.0" },
     { name = "openai" },
+    { name = "openevals", specifier = ">=0.2,<0.3" },
     { name = "tensorboard", specifier = "==2.20.0" },
     { name = "torch" },
     { name = "torchreid", specifier = "==0.2.5" },
@@ -2299,6 +2311,7 @@ tests = [
     { name = "ollama", specifier = ">=0.6.0" },
     { name = "open-clip-torch", specifier = "==3.2.0" },
     { name = "openai" },
+    { name = "openevals", specifier = ">=0.2,<0.3" },
     { name = "pre-commit", specifier = "==4.2.0" },
     { name = "py-spy" },
     { name = "pygame", specifier = ">=2.6.1" },
@@ -2353,6 +2366,7 @@ tests-self-hosted = [
     { name = "ollama", specifier = ">=0.6.0" },
     { name = "open-clip-torch", specifier = "==3.2.0" },
     { name = "openai" },
+    { name = "openevals", specifier = ">=0.2,<0.3" },
     { name = "pre-commit", specifier = "==4.2.0" },
     { name = "py-spy" },
     { name = "pybind11", specifier = ">=2.12" },
@@ -5901,6 +5915,21 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.11' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.11' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+]
+
+[[package]]
+name = "openevals"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain" },
+    { name = "langchain-openai" },
+    { name = "langsmith" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b0/b1/028a05846136805b29b7a3afb58a940c2d213fa2c3d0a7d7003c7fbaa115/openevals-0.2.0.tar.gz", hash = "sha256:7e95fa64625be53eaa8c657d7f69b842a52bda10bdf3bb91781c7d09a385b069", size = 140711, upload-time = "2026-04-07T19:45:22.749Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4a/8b/00f402b7f3475e235c339a9bc82d2eaf46cc08b53ecd85d4a117850170d3/openevals-0.2.0-py3-none-any.whl", hash = "sha256:2bce5964be9d162e3d38c2dfd026739156e1ac521536ade6b8e2f0a89b632f2c", size = 106958, upload-time = "2026-04-07T19:45:21.575Z" },
 ]
 
 [[package]]
