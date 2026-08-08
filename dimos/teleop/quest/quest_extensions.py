@@ -26,7 +26,7 @@ import asyncio
 from typing import Any
 
 from fastapi import WebSocket
-from pydantic import Field, FiniteFloat
+from pydantic import Field
 
 from dimos.core.core import rpc
 from dimos.core.stream import In, Out
@@ -132,12 +132,9 @@ class ArmTeleopConfig(QuestTeleopConfig):
         task_names: Mapping of Hand -> coordinator task name. Used to set
             frame_id on output PoseStamped so the coordinator routes each
             hand's commands to the correct TeleopIKTask.
-        translation_scale: Positive multiplier applied to controller position
-            deltas before they are sent to the coordinator.
     """
 
     task_names: dict[str, str] = Field(default_factory=dict)
-    translation_scale: FiniteFloat = Field(default=1.0, gt=0.0)
 
 
 class ArmTeleopModule(QuestTeleopModule):
@@ -172,26 +169,6 @@ class ArmTeleopModule(QuestTeleopModule):
         self._task_names: dict[Hand, str] = {
             Hand[k.upper()]: v for k, v in self.config.task_names.items()
         }
-
-    @rpc
-    def set_translation_scale(self, translation_scale: float) -> None:
-        """Set the positive multiplier applied to controller position deltas."""
-        with self._lock:
-            self.config = type(self.config).model_validate(
-                {**self.config.model_dump(), "translation_scale": translation_scale}
-            )
-
-    def _get_output_pose(self, hand: Hand) -> PoseStamped | None:
-        """Return the controller delta with its translation scaled."""
-        output_pose = super()._get_output_pose(hand)
-        if output_pose is None:
-            return None
-        return PoseStamped(
-            position=output_pose.position * self.config.translation_scale,
-            orientation=output_pose.orientation,
-            ts=output_pose.ts,
-            frame_id=output_pose.frame_id,
-        )
 
     def _publish_msg(self, hand: Hand, output_msg: PoseStamped) -> None:
         """Stamp frame_id with task name and publish."""

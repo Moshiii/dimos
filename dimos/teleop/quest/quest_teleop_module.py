@@ -33,6 +33,7 @@ from dimos_lcm.sensor_msgs import Joy as LCMJoy
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import Field, FiniteFloat
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.core import rpc
@@ -68,6 +69,7 @@ class QuestTeleopConfig(ModuleConfig):
 
     control_loop_hz: float = 50.0
     server_port: int = 8443
+    translation_scale: FiniteFloat = Field(default=1.0, gt=0.0)
 
 
 _Config = TypeVar("_Config", bound=QuestTeleopConfig)
@@ -365,11 +367,19 @@ class QuestTeleopModule(Module):
 
         delta = current_pose - initial_pose
         return PoseStamped(
-            position=delta.position,
+            position=delta.position * self.config.translation_scale,
             orientation=delta.orientation,
             ts=current_pose.ts,
             frame_id=current_pose.frame_id,
         )
+
+    @rpc
+    def set_translation_scale(self, translation_scale: float) -> None:
+        """Set the positive multiplier applied to controller position deltas."""
+        with self._lock:
+            self.config = type(self.config).model_validate(
+                {**self.config.model_dump(), "translation_scale": translation_scale}
+            )
 
     def _publish_msg(self, hand: Hand, output_msg: PoseStamped) -> None:
         """Publish message for a controller.
