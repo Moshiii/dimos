@@ -232,7 +232,7 @@ wanting the total adds them. On a `GripperAdapter`, `get_dof()` reports its own 
 > or the `write_joint_positions()` array — those cover all joints (R4, R13). This is the
 > one place in the protocol where two lengths are legitimately different; R13 states it.
 
-**R9.** *Moved to PR 2 — the `GripperAdapter` protocol. See §7.* **Shape confirmed**
+**R9.** *Moved to PR 2 — the `GripperAdapter` protocol; full proposal in §8.* **Shape confirmed**
 (2026-08-07, per the 2026-08-04 design meeting): a **separate, minimal protocol** — the
 fourth adapter kind alongside manipulators, drive trains and whole-body — deliberately
 kept small ("basic lifecycle stuff"), merging with `ManipulatorAdapter` later only if
@@ -536,8 +536,8 @@ sharing its component (`tick_loop.py:386-397`). Priority is uncontested by R17.
 `task_invoke("arm_gripper", ...)` — `set_normalized` for the agent skills (R26), which is
 the scale they already think in. Only the shortcut route dies.
 
-**R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry. See
-§7.* **Confirmed as part of R9's package**: the fourth kind ships with its type and its
+**R24.** *Moved to PR 2 — `HardwareType.GRIPPER` and the gripper adapter registry;
+wiring in §8.4.* **Confirmed as part of R9's package**: the fourth kind ships with its type and its
 registry, mirroring how `drive_trains` and `whole_body` are wired.
 
 **R25.** `ConnectedHardware` builds one ordered array from `all_joints` and makes one call.
@@ -732,7 +732,7 @@ verifiable**: a PR that cannot be proven on hardware we own does not ship.
 |---|---|---|---|
 | **0 — this PR** | The spec. Agreement on the API before anything is written | — | docs only |
 | **1 — this spec** ✅ | The joint model, units, `GripperControlTask`, RPC removal. **Four parts, §7.1** | everything except R9, R24 | **delivered**; verified on xArm6 |
-| **2 — third-party support** | `GripperAdapter` (minimal, fourth kind) + `HardwareType.GRIPPER` + registry + the parity test — **shape confirmed; proposal → team approval → build** | R9, R24 | mock + parity test now; the H100 validates |
+| **2 — third-party support** | `GripperAdapter` (minimal, fourth kind) + `HardwareType.GRIPPER` + registry + the parity test — **shape confirmed; proposal in §8 → team approval → build** | R9, R24 | mock + parity test now; the H100 validates |
 | **3 — H100 integration** | Device folder (adapter + driver + transport); `by_task_name` gripper routing (R16); multi-joint `get_gripper()` skill surface (R26) | — | the H100 itself; may merge with step 2 |
 | **4 — transport layering** | Routing gripper bytes through an arm's bus when mounted | — | mounted H100 |
 
@@ -962,3 +962,134 @@ configured vendor grasp pose.
 Nothing in step 1 is waiting on a decision: every question raised against this spec was
 resolved into the requirements above (R4a, R13, R13a, R14a, R16, R17, R21a, R26, R28,
 R30).
+## 8. PR 2 proposal — the `GripperAdapter` protocol (R9, R24)
+
+**Status: proposal, awaiting team review.** Implementation starts after approval — the
+sequence agreed in the 2026-08-04 meeting. Nothing in this section is code yet.
+
+### 8.1 The protocol
+
+New package `dimos/hardware/grippers/`, mirroring `drive_trains` and `whole_body` — the
+existing fourth-kind precedent, whose protocols are deliberately lean (8 and 7 methods).
+Shared types (`ControlMode`, `JointLimits`) are imported from `manipulators/spec.py`,
+the established pattern (`control/task.py` already does this).
+
+```python
+# PROPOSED — dimos/hardware/grippers/spec.py
+@runtime_checkable
+class GripperAdapter(Protocol):
+    """Hardware IO for a gripper that is a device in its own right.
+
+    A deliberate signature-SUBSET of ManipulatorAdapter (8.3): every method
+    here exists there with the identical signature, so ConnectedHardware
+    wraps either kind unchanged (R25) and the two protocols cannot drift.
+    Every joint value is in the unit this adapter declares (R12/R13).
+    """
+
+    # lifecycle — called by the coordinator
+    def connect(self) -> bool: ...
+    def disconnect(self) -> None: ...
+    def is_connected(self) -> bool: ...
+    def activate(self) -> bool: ...
+    def deactivate(self) -> bool: ...
+    def write_enable(self, enable: bool) -> bool: ...
+
+    # identity and range
+    def get_dof(self) -> int: ...          # ITS OWN joints — the R8 carve-out
+    def get_limits(self) -> JointLimits:   # len == get_dof(); R13 units rule
+        ...
+
+    # control mode — ConnectedHardware switches modes through this
+    def set_control_mode(self, mode: ControlMode) -> bool: ...
+
+    # the joint arrays — the parity surface (R4)
+    def read_joint_positions(self) -> list[float]: ...
+    def read_joint_velocities(self) -> list[float]: ...   # 0.0 where unmeasured
+    def read_joint_efforts(self) -> list[float]: ...
+    def write_joint_positions(
+        self, positions: list[float], velocity: float = 1.0
+    ) -> bool: ...
+    def write_joint_velocities(self, velocities: list[float]) -> bool: ...
+```
+
+**14 methods, and every one is exercised by the existing stack**: the lifecycle six by
+the coordinator's setup/teardown, the mode switch and the five joint-array methods by
+`ConnectedHardware`, `get_limits` by the task's R14a resolution, `get_dof` by the
+registry. Nothing is included "for completeness".
+
+Notes, per method group:
+
+- **`get_dof()`** returns this device's joint count — six for the H100. There is no
+  `get_gripper_dof()`: the component's `gripper_dof` is the authoritative count (R7),
+  and inside a gripper-only protocol the question answers itself.
+- **`get_limits()`** has length `get_dof()` and carries the device's own units. The
+  H100 declares `(0, 100)` per joint — its firmware's dimensionless scale, exactly
+  R12's "vendor's own scale" and the special case named in the meeting (passive joints
+  make SI unrepresentable there).
+- **`write_joint_velocities()`** is a documented no-op returning `False`: under
+  R4a/R22 nothing in this system produces a gripper velocity. It exists so
+  `ConnectedHardware`'s VELOCITY branch cannot crash on a gripper device, and so the
+  parity rule below stays a clean subset.
+
+### 8.2 Deliberately omitted
+
+From `ManipulatorAdapter`'s 25: the cartesian pair, `read_force_torque`, `read_state`,
+`read_error`, `read_enabled`, `get_control_mode`, `write_stop`, `write_clear_errors`,
+`get_info`, and `get_gripper_dof`. None are called on a gripper by the coordinator,
+wrapper, or task. Any of them can be **added on team review** — omission here is a
+starting point, not a verdict.
+
+**KP/KD gains stay private** to the adapter/driver (`adapter_kwargs` at most), per the
+meeting: *"we don't need it to be an API or a protocol method — we want that to be a
+private method."*
+
+### 8.3 The parity rule and its test
+
+> **`GripperAdapter` MUST remain a strict signature-subset of `ManipulatorAdapter`.**
+> Every method it declares exists on `ManipulatorAdapter` with the byte-identical
+> signature; only docstring semantics may differ (`get_dof`, R8).
+
+A conformance test walks `GripperAdapter`'s members and asserts each against
+`inspect.signature` of its `ManipulatorAdapter` counterpart. CI fails the moment the
+two disagree, so the one array contract stays declared in one authoritative place —
+this is how a separate protocol coexists with the §1 principle without re-creating
+§3.5's two-authorities shape. It also keeps Ruthwik's "combine later if similar" a
+mechanical merge rather than a reconciliation.
+
+### 8.4 Type, registry, and wiring (R24)
+
+- `HardwareType.GRIPPER` joins the enum.
+- `grippers/registry.py`: a `LazyAdapterRegistry[GripperAdapter]` with manifest
+  discovery over `dimos.hardware.grippers`, exactly like the other three kinds.
+- Per-device folders: `grippers/<device>/adapter.py`, plus `driver.py` /
+  `transport.py` for SDK-less devices like the H100 — the meeting's layout.
+- `grippers/mock/adapter.py`: a `MockGripperAdapter` for tests and blueprints.
+- Coordinator: a `_create_gripper_adapter` branch on `HardwareType.GRIPPER`, calling
+  `create(adapter_type, dof=component.gripper_dof, address=..., hardware_id=...,
+  **adapter_kwargs)`, with the same adapter/type mismatch `TypeError` BASE and
+  WHOLE_BODY already get.
+- **A GRIPPER component MUST satisfy `gripper_dof == len(all_joints)`** — validated in
+  `HardwareComponent.__post_init__`, so the degenerate split (`arm_joints == []`) is a
+  checked invariant rather than a convention.
+- `ConnectedHardware` is untouched (R25), and `GripperControlTask` is untouched — its
+  R14a resolution works on a GRIPPER component verbatim, as §7.2 demonstrated.
+
+### 8.5 Deliverables and verification
+
+| Deliverable | Verified by |
+|---|---|
+| `grippers/spec.py` + registry + `HardwareType.GRIPPER` | the parity test; registry discovery test |
+| `MockGripperAdapter` | the R13 length/units conformance checks, run over the gripper registry |
+| A reference standalone blueprint (mock gripper + `{hardware_id}_gripper` task) | blueprint test: task claims all joints, resolves its limits, both modes drive the mock — §7.2's demonstration pinned in CI |
+| Component invariant | unit test on `__post_init__` |
+
+The H100 validates the protocol on real hardware in step 3; nothing in this PR claims
+hardware verification.
+
+### 8.6 Left to step 3, on purpose
+
+`by_task_name` routing for coexisting grippers (R16), the multi-joint `get_gripper()`
+skill surface (R26), and any retargeting-style control task for dexterous teleop (the
+meeting's motion-retargeting discussion) — all need the H100 or a second gripper to be
+real.
+
