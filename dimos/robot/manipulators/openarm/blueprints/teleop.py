@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from dimos.control.components import HardwareComponent
 from dimos.control.coordinator import ControlCoordinator, ControlCoordinatorConfig, TaskConfig
 from dimos.control.teleop_coordinator import TeleopControlCoordinator
@@ -25,7 +27,6 @@ from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.robot.manipulators.common.blueprints import (
     coordinator,
     planner,
-    teleop_ik_task,
 )
 from dimos.robot.manipulators.common.topics import DEFAULT_TRAJECTORY_TASK_NAME
 from dimos.robot.manipulators.openarm.config import (
@@ -130,6 +131,18 @@ class OpenArmTeleopCoordinator(TeleopControlCoordinator):
     config: OpenArmTeleopCoordinatorConfig
 
     def _setup_from_config(self) -> None:
+        self.config.tasks = [
+            replace(
+                task,
+                params={
+                    **task.params,
+                    "robot_model": openarm_bimanual_model_config(),
+                },
+            )
+            if task.name == OPENARM_QUEST_TASK_NAME
+            else task
+            for task in self.config.tasks
+        ]
         self.config.hardware = [
             _openarm_quest_hardware(
                 self.config.left_can_port,
@@ -139,8 +152,14 @@ class OpenArmTeleopCoordinator(TeleopControlCoordinator):
         super()._setup_from_config()
 
 
-_openarm_quest_hw = openarm_mock_hardware()
-_openarm_quest_model = openarm_bimanual_model_config()
+class _OpenArmManipulationModule(ManipulationModule):
+    """Own the fixed OpenArm model outside blueprint CLI configuration."""
+
+    def _initialize_planning(self) -> None:
+        self.config.robots = [openarm_bimanual_model_config()]
+        super()._initialize_planning()
+
+
 _openarm_quest_pink = PinkKinematicsConfig(
     dt=0.01,
     position_cost=1.0,
@@ -150,29 +169,28 @@ _openarm_quest_pink = PinkKinematicsConfig(
     lm_damping=1e-6,
     gain=0.25,
 )
-_openarm_quest_task = teleop_ik_task(
-    _openarm_quest_hw,
+_openarm_quest_task = TaskConfig(
     name=OPENARM_QUEST_TASK_NAME,
-    robot_model=_openarm_quest_model,
+    type="teleop_ik",
     joint_names=OPENARM_ARM_JOINTS,
-    bindings=[
-        {
-            "hand": "left",
-            "target_frame": "openarm_left_grasp_frame",
-            "gripper_joint": OPENARM_GRIPPER_JOINTS[0],
-            "gripper_open_position": 1.0,
-            "gripper_closed_position": 0.0,
-        },
-        {
-            "hand": "right",
-            "target_frame": "openarm_right_grasp_frame",
-            "gripper_joint": OPENARM_GRIPPER_JOINTS[1],
-            "gripper_open_position": 1.0,
-            "gripper_closed_position": 0.0,
-        },
-    ],
-    solver_type=OpenArmPinkPoseTargetSolver,
     params={
+        "bindings": [
+            {
+                "hand": "left",
+                "target_frame": "openarm_left_grasp_frame",
+                "gripper_joint": OPENARM_GRIPPER_JOINTS[0],
+                "gripper_open_position": 1.0,
+                "gripper_closed_position": 0.0,
+            },
+            {
+                "hand": "right",
+                "target_frame": "openarm_right_grasp_frame",
+                "gripper_joint": OPENARM_GRIPPER_JOINTS[1],
+                "gripper_open_position": 1.0,
+                "gripper_closed_position": 0.0,
+            },
+        ],
+        "solver_type": OpenArmPinkPoseTargetSolver,
         "pink": _openarm_quest_pink,
         "timeout": 0.5,
         "max_command_tracking_error_deg": 10.0,
@@ -192,8 +210,7 @@ teleop_quest_openarm = autoconnect(
             _trajectory_task(priority=20),
         ],
     ),
-    planner(
-        robots=[_openarm_quest_model],
+    _OpenArmManipulationModule.blueprint(
         kinematics=_openarm_quest_pink,
         visualization={"backend": "viser"},
     ),

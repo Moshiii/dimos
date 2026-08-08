@@ -22,13 +22,9 @@ import pytest
 from pytest_mock import MockerFixture
 
 from dimos.control.tasks.pose_target_ik import PoseTargetIKTaskConfig
-from dimos.control.tasks.teleop_ik_task.teleop_ik_task import (
-    TeleopIKTaskParams,
-)
 from dimos.control.tick_loop import TickLoop
 from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.core.coordination.blueprints import Blueprint
-from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -36,6 +32,7 @@ from dimos.robot.manipulators.openarm.blueprints.teleop import (
     OPENARM_QUEST_TASK_NAME,
     OpenArmTeleopCoordinator,
     _openarm_quest_hardware,
+    _OpenArmManipulationModule,
     teleop_quest_openarm,
 )
 from dimos.robot.manipulators.openarm.config import (
@@ -48,6 +45,7 @@ from dimos.robot.manipulators.openarm.config import (
 from dimos.robot.manipulators.openarm.teleop_ik import OpenArmPinkPoseTargetSolver
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 from dimos.teleop.quest.quest_types import Buttons
+from dimos.utils import data
 
 
 def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
@@ -95,7 +93,9 @@ def test_openarm_quest_hardware_requires_both_can_ports(
         _openarm_quest_hardware(left_can_port, right_can_port)
 
 
-def test_openarm_can_ports_are_blueprint_cli_options() -> None:
+def test_openarm_can_ports_are_blueprint_cli_options(mocker: MockerFixture) -> None:
+    get_data = mocker.patch.object(data, "get_data")
+
     parsed = BlueprintConfigParser(teleop_quest_openarm).parse(
         ["--left-can-port", "can8", "--right-can-port", "can9"],
         environ={},
@@ -104,6 +104,7 @@ def test_openarm_can_ports_are_blueprint_cli_options() -> None:
     coordinator = parsed.module_kwargs("ControlCoordinator")
     assert coordinator["left_can_port"] == "can8"
     assert coordinator["right_can_port"] == "can9"
+    get_data.assert_not_called()
 
 
 def test_openarm_mock_hardware_and_model_use_canonical_zero_start() -> None:
@@ -118,7 +119,7 @@ def test_openarm_mock_hardware_and_model_use_canonical_zero_start() -> None:
 def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
     coordinator_kwargs = _module_kwargs(teleop_quest_openarm, OpenArmTeleopCoordinator)
     teleop_kwargs = _module_kwargs(teleop_quest_openarm, ArmTeleopModule)
-    manipulation_kwargs = _module_kwargs(teleop_quest_openarm, ManipulationModule)
+    manipulation_kwargs = _module_kwargs(teleop_quest_openarm, _OpenArmManipulationModule)
     tasks = coordinator_kwargs["tasks"]
 
     assert "hardware" not in coordinator_kwargs
@@ -141,14 +142,14 @@ def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
         OPENARM_JOINTS
     )
     assert isinstance(task.params["pink"], PinkKinematicsConfig)
+    assert "robot_model" not in task.params
     assert task.params["solver_type"] is OpenArmPinkPoseTargetSolver
     assert task.params["pink"].joint_limit_posture_margin == 0.3
     assert task.params["max_command_tracking_error_deg"] == 10.0
-    assert TeleopIKTaskParams.model_validate(task.params).max_joint_velocity_rad_s == 5.0
     assert task.priority == 10
     assert trajectory.joint_names == OPENARM_ARM_JOINTS
     assert trajectory.priority == 20
-    assert manipulation_kwargs["robots"][0] is task.params["robot_model"]
+    assert "robots" not in manipulation_kwargs
     assert manipulation_kwargs["kinematics"] == task.params["pink"]
     assert manipulation_kwargs["visualization"] == {"backend": "viser"}
     assert teleop_kwargs["task_names"] == {
@@ -187,6 +188,9 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
 
     try:
         coordinator.start()
+        task = coordinator._tasks[OPENARM_QUEST_TASK_NAME]
+        assert task._teleop_config.robot_model.name == "openarm"
+        assert task._teleop_config.max_joint_velocity_rad_s == 5.0
         buttons = Buttons()
         buttons.left_primary = True
         buttons.right_primary = True
