@@ -31,7 +31,6 @@ from dimos.robot.manipulators.common.blueprints import (
 )
 from dimos.robot.manipulators.common.sim import mujoco_if_sim
 from dimos.robot.manipulators.piper.config import (
-    PIPER_FK_MODEL,
     PIPER_SIM_PATH,
     make_piper_hardware,
     make_piper_model_config,
@@ -57,7 +56,7 @@ keyboard_teleop_piper = autoconnect(
         joint_state_frame_id="coordinator",
         hardware=[_piper_keyboard_hw],
         tasks=[
-            eef_twist_task(_piper_keyboard_hw, model_path=PIPER_FK_MODEL, ee_joint_id=6),
+            eef_twist_task(_piper_keyboard_hw, robot_model=_piper_model),
             TaskConfig(
                 name="servo_gripper",
                 type="servo",

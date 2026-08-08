@@ -17,9 +17,9 @@ from collections.abc import Iterator
 import pytest
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.teleop.quest.quest_extensions import ArmTeleopModule
+from dimos.teleop.quest.quest_extensions import ArmTeleopModule, HandTeleopModule
 from dimos.teleop.quest.quest_teleop_module import QuestTeleopModule
-from dimos.teleop.quest.quest_types import Hand
+from dimos.teleop.quest.quest_types import Hand, QuestControllerState
 
 
 @pytest.fixture
@@ -53,5 +53,39 @@ def test_arm_teleop_publishes_absolute_controller_pose() -> None:
         module._initial_poses[Hand.LEFT] = PoseStamped(position=[0.5, 0.5, 0.5])
 
         assert module._get_output_pose(Hand.LEFT) is pose
+    finally:
+        module.stop()
+
+
+def test_hand_teleop_pinch_toggles_engagement(mocker) -> None:
+    module = HandTeleopModule()
+    try:
+        publish = mocker.patch.object(module.teleop_buttons, "publish")
+        module._current_poses[Hand.RIGHT] = mocker.Mock()
+        module._controllers[Hand.RIGHT] = QuestControllerState(
+            is_left=False, primary=True, trigger=1.0
+        )
+
+        module._handle_engage()
+
+        assert module._is_engaged[Hand.RIGHT]
+        module._publish_button_state(None, module._controllers[Hand.RIGHT])
+        assert publish.call_args.args[0].right_primary
+        assert publish.call_args.args[0].right_trigger_analog == pytest.approx(1.0)
+
+        module._handle_engage()
+
+        assert module._is_engaged[Hand.RIGHT]
+
+        module._controllers[Hand.RIGHT] = QuestControllerState(is_left=False, primary=False)
+        module._handle_engage()
+        module._publish_button_state(None, module._controllers[Hand.RIGHT])
+        assert publish.call_args.args[0].right_primary
+        module._controllers[Hand.RIGHT] = QuestControllerState(is_left=False, primary=True)
+        module._handle_engage()
+
+        assert not module._is_engaged[Hand.RIGHT]
+        module._publish_button_state(None, module._controllers[Hand.RIGHT])
+        assert not publish.call_args.args[0].right_primary
     finally:
         module.stop()

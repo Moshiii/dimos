@@ -32,6 +32,7 @@ from dimos.hardware.whole_body.registry import whole_body_adapter_registry
 # anything else (a typo in a manifest, an internal dimos import breaking,
 # a bad import inside an installed SDK) fails CI.
 OPTIONAL_VENDOR_MODULES = {
+    "a1z",
     "can",
     "cyclonedds",
     "mujoco",
@@ -52,7 +53,9 @@ UNREGISTERED_ADAPTER_DIRS = {
 EXPECTED_NAMES = {
     "manipulators": {
         "a750",
+        "galaxea_a1z",
         "mock",
+        "openarm",
         "piper",
         "sim_mujoco",
         "xarm",
