@@ -28,6 +28,7 @@ from dimos.manipulation.planning.groups.identifiers import (
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 
 
 class RobotModelConfig(ModuleConfig):
@@ -60,6 +61,8 @@ class RobotModelConfig(ModuleConfig):
         grasp_frame_to_tcp: Transform from a grasp contact frame to the planning
             group's TCP frame. Grasp generators define contact poses; planners target
             the TCP link.
+        pre_grasp_direction: Unit direction from the grasp TCP pose to the pre-grasp
+            pose, expressed in the TCP frame.
     """
 
     name: str
@@ -89,6 +92,7 @@ class RobotModelConfig(ModuleConfig):
     # Pre-grasp offset distance in meters (along approach direction)
     pre_grasp_offset: float = 0.10
     grasp_frame_to_tcp: Pose = Field(default_factory=Pose)
+    pre_grasp_direction: Vector3 = Field(default_factory=lambda: Vector3(0.0, 0.0, -1.0))
 
     def model_post_init(self, __context: object) -> None:
         """Validate delimiter-based naming constraints."""

@@ -446,6 +446,16 @@ class TestPlanningInitialization:
             initialize_planning.assert_called_once_with()
             initialize_execution.assert_called_once_with()
 
+    def test_planning_ready_requires_a_finalized_world(self, module_factory) -> None:
+        module = module_factory()
+
+        assert module.is_planning_ready() is False
+
+        module._world_monitor = MagicMock(spec=WorldMonitor)
+        module._world_monitor.is_finalized = True
+
+        assert module.is_planning_ready() is True
+
     def test_kinematics_config_is_passed_to_factory(
         self,
         robot_config,

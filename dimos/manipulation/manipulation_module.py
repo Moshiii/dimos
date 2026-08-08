@@ -415,6 +415,11 @@ class ManipulationModule(Module):
         return self._state.name
 
     @rpc
+    def is_planning_ready(self) -> bool:
+        """Return true after the planning world is finalized."""
+        return self._world_monitor is not None and self._world_monitor.is_finalized
+
+    @rpc
     def get_error(self) -> str:
         """Get last error message.
 

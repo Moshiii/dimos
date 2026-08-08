@@ -184,19 +184,29 @@ class PickAndPlaceModule(ManipulationModule):
             "GraspGen Docker support removed; see issue #1266 for re-implementation as NativeModule subclass"
         )
 
-    def _compute_pre_grasp_pose(self, grasp_pose: Pose, offset: float = 0.10) -> Pose:
-        """Compute a pre-grasp pose offset along the approach direction (local -Z).
+    def _compute_pre_grasp_pose(
+        self,
+        grasp_pose: Pose,
+        offset: float = 0.10,
+        direction: Vector3 | None = None,
+    ) -> Pose:
+        """Compute a pre-grasp pose along the configured TCP-local direction.
 
         Args:
             grasp_pose: The final grasp pose
             offset: Distance to retract along the approach direction (meters)
+            direction: TCP-local retreat direction. Defaults to local -Z.
 
         Returns:
             Pre-grasp pose offset from the grasp pose
         """
         from dimos.utils.transform_utils import offset_distance
 
-        return offset_distance(grasp_pose, offset)
+        return offset_distance(
+            grasp_pose,
+            offset,
+            approach_vector=direction or Vector3(0.0, 0.0, -1.0),
+        )
 
     def _find_object_in_detections(
         self, object_name: str, object_id: str | None = None
@@ -562,7 +572,11 @@ then refreshes perception obstacles.
             gp = grasp_pose.position
             xy_dist = (gp.x**2 + gp.y**2) ** 0.5
             offset = pre_grasp_offset if xy_dist < _FAR_REACH_XY_THRESHOLD else 0.05
-            pre_grasp_pose = self._compute_pre_grasp_pose(grasp_pose, offset)
+            pre_grasp_pose = self._compute_pre_grasp_pose(
+                grasp_pose,
+                offset,
+                config.pre_grasp_direction,
+            )
 
             logger.info(f"Planning approach to pre-grasp (attempt {i + 1}/{max_attempts})...")
             if not self.plan_to_pose(pre_grasp_pose, rname):
@@ -661,8 +675,15 @@ then refreshes perception obstacles.
         if xy_dist >= _FAR_REACH_XY_THRESHOLD:
             pre_place_offset = 0.05
 
-        place_pose = Pose(Vector3(x, y, z), orientation)
-        pre_place_pose = self._compute_pre_grasp_pose(place_pose, pre_place_offset)
+        contact_pose = Pose(Vector3(x, y, z), orientation)
+        place_pose = matrix_to_pose(
+            pose_to_matrix(contact_pose) @ pose_to_matrix(config.grasp_frame_to_tcp)
+        )
+        pre_place_pose = self._compute_pre_grasp_pose(
+            place_pose,
+            pre_place_offset,
+            config.pre_grasp_direction,
+        )
 
         # Lift if EE is low before approaching
         lift = self._lift_if_low(rname)

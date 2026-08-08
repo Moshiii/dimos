@@ -193,6 +193,17 @@ class TestGraspHeuristics:
         assert grasps is not None
         assert grasps[0].position.z == pytest.approx(0.27)
 
+    def test_pre_grasp_uses_the_robot_tcp_direction(self, module):
+        grasp = Pose(0.5, 0.0, 0.3)
+
+        pre_grasp = module._compute_pre_grasp_pose(
+            grasp,
+            0.1,
+            Vector3(-1.0, 0.0, 0.0),
+        )
+
+        assert pre_grasp.position == Vector3(0.4, 0.0, 0.3)
+
     def test_pick_excludes_selected_object_from_collision_world(self, module):
         det = _make_det_object(name="cup", object_id="cup-1")
         module._detection_snapshot = [det]
@@ -205,7 +216,11 @@ class TestGraspHeuristics:
                 return_value=(
                     "arm",
                     "robot-1",
-                    SimpleNamespace(pre_grasp_offset=0.05, grasp_frame_to_tcp=Pose()),
+                    SimpleNamespace(
+                        pre_grasp_offset=0.05,
+                        grasp_frame_to_tcp=Pose(),
+                        pre_grasp_direction=Vector3(0.0, 0.0, -1.0),
+                    ),
                     None,
                 ),
             ),
