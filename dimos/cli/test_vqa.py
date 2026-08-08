@@ -27,3 +27,10 @@ def test_evaluate_rejects_existing_output_without_resume(tmp_path, monkeypatch) 
 
     assert result.exit_code == 2
     assert "run output already exists" in result.output
+
+
+def test_constrained_question_mode_uses_author_without_explicit_query() -> None:
+    assert vqa._uses_image_question_author("constrained", [], False) is True
+    assert vqa._uses_image_question_author("constrained", ["chair"], False) is False
+    assert vqa._uses_image_question_author("constrained", ["chair"], True) is True
+    assert vqa._uses_image_question_author("agentic", ["chair"], False) is True

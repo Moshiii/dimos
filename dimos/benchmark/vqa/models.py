@@ -204,6 +204,7 @@ class OracleToolResult:
     evidence: tuple[OracleEvidence, ...]
     version: str = "v1"
     measurement: OracleMeasurement | None = None
+    choice: str | None = None
     plane: GroundPlaneEstimate | None = None
     quality_flags: tuple[str, ...] = ()
     rejection_reason: str | None = None

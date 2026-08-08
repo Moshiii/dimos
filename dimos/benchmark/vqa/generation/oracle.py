@@ -189,6 +189,9 @@ def validate_oracle_answer(
     if isinstance(contract, ChoiceAnswerContract):
         if not isinstance(answer, str) or answer not in contract.choices:
             raise ValueError("choice answer is not allowed")
+        measured_choices = {result.choice for result in results if result.choice is not None}
+        if measured_choices and answer not in measured_choices:
+            raise ValueError("choice answer does not match cited measurement bucket")
         return answer
     if isinstance(contract, NumericAnswerContract):
         if not isinstance(answer, (int, float)) or isinstance(answer, bool):

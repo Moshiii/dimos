@@ -57,6 +57,14 @@ class LocalOracleToolRegistry:
                     "then measure its visible point-cloud height above the estimated ground plane."
                 ),
             ),
+            StructuredTool.from_function(
+                self.measure_object_height_bucket,
+                name="measure_object_height_bucket",
+                description=(
+                    "Measure one visible object's height, then return its deterministic public "
+                    "height bucket: under 0.5 m, 0.5-1.0 m, 1.0-1.5 m, or over 1.5 m."
+                ),
+            ),
         ]
 
     def ground_semantic_object(self, query: str) -> str:
@@ -183,6 +191,24 @@ class LocalOracleToolRegistry:
         self._results.append(result)
         return json.dumps(_tool_payload(result))
 
+    def measure_object_height_bucket(self, query: str) -> str:
+        """Measure an object, then map its private height to a fixed public choice."""
+        self.measure_object_height(query)
+        height_result = self._results[-1]
+        if height_result.measurement is None:
+            return json.dumps(_tool_payload(height_result))
+        result = OracleToolResult(
+            "measure_object_height_bucket",
+            query,
+            height_result.evidence,
+            measurement=height_result.measurement,
+            choice=_height_bucket(height_result.measurement.value),
+            plane=height_result.plane,
+            quality_flags=height_result.quality_flags,
+        )
+        self._results.append(result)
+        return json.dumps(_tool_payload(result))
+
     def _record_rejection(self, tool: str, query: str, flags: list[str], reason: str | None) -> str:
         result = OracleToolResult(
             tool, query, (), quality_flags=tuple(flags), rejection_reason=reason
@@ -207,6 +233,7 @@ def _tool_payload(result: OracleToolResult) -> dict[str, Any]:
             if result.measurement is not None
             else None
         ),
+        "choice": result.choice,
         "quality_flags": result.quality_flags,
         "rejection_reason": result.rejection_reason,
         "plane": (
@@ -242,3 +269,13 @@ def _evidence_payload(item: OracleEvidence) -> dict[str, Any]:
             "provenance_ids": item.measurement.provenance_ids,
         }
     return payload
+
+
+def _height_bucket(height_m: float) -> str:
+    if height_m < 0.5:
+        return "under 0.5 m"
+    if height_m < 1.0:
+        return "0.5-1.0 m"
+    if height_m < 1.5:
+        return "1.0-1.5 m"
+    return "over 1.5 m"

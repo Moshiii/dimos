@@ -23,6 +23,7 @@ from dimos.benchmark.vqa.generation.question_agent import (
 from dimos.benchmark.vqa.models import (
     BooleanAnswerContract,
     CalibratedFrame,
+    ChoiceAnswerContract,
     NumericAnswerContract,
     OracleEvidence,
     OracleToolResult,
@@ -131,7 +132,8 @@ def test_freeform_question_author_parses_public_contract() -> None:
 
 
 def test_freeform_author_prompt_prioritizes_geometric_questions() -> None:
-    assert "measure_object_height" in AGENTIC_QUESTION_PROMPT
+    assert "measure_object_height_bucket" in AGENTIC_QUESTION_PROMPT
+    assert '"0.5-1.0 m"' in AGENTIC_QUESTION_PROMPT
     assert "which of two named objects is" in AGENTIC_QUESTION_PROMPT
     assert "closer (choice" in AGENTIC_QUESTION_PROMPT
     assert "Use visibility/presence questions only" in AGENTIC_QUESTION_PROMPT
@@ -244,6 +246,21 @@ def test_height_tool_measures_visible_object_points_above_plane() -> None:
     assert "visible_point_cloud_height" in payload["quality_flags"]
 
 
+def test_height_bucket_tool_maps_private_measurement_to_public_choice() -> None:
+    frame = _measurement_frame()
+    mask = np.zeros((100, 100), dtype=np.uint8)
+    projected = project_visible_points(frame)
+    for (x, y), point in zip(projected.pixels, projected.camera_points, strict=True):
+        if point[0] > 1.5:
+            mask[y, x] = 255
+    registry = LocalOracleToolRegistry(frame, cast("Any", _GroundingWithMask(mask)))
+
+    payload = json.loads(registry.measure_object_height_bucket("chair"))
+
+    assert payload["choice"] == "0.5-1.0 m"
+    assert registry.results[-1].choice == "0.5-1.0 m"
+
+
 def test_local_registry_exposes_geometry_tools() -> None:
     registry = LocalOracleToolRegistry(cast("Any", object()), cast("Any", _Grounding()))
 
@@ -251,6 +268,7 @@ def test_local_registry_exposes_geometry_tools() -> None:
         "ground_semantic_object",
         "estimate_ground_plane",
         "measure_object_height",
+        "measure_object_height_bucket",
     }
 
 
@@ -273,6 +291,26 @@ def test_oracle_validates_evidence_and_answer_contract() -> None:
         assert "unknown evidence" in str(exc)
     else:
         raise AssertionError("unknown evidence was accepted")
+
+
+def test_oracle_rejects_choice_that_conflicts_with_measurement_bucket() -> None:
+    proposal = QuestionProposal(
+        "q", "How tall is the chair?", ChoiceAnswerContract(("under 0.5 m", "0.5-1.0 m"))
+    )
+    result = OracleToolResult(
+        "measure_object_height_bucket",
+        "chair",
+        (OracleEvidence("e1", "v1", "o1", "chair", 1.0, "left", 3),),
+        choice="0.5-1.0 m",
+    )
+
+    assert validate_oracle_answer(proposal, "0.5-1.0 m", ["e1"], (result,)) == "0.5-1.0 m"
+    try:
+        validate_oracle_answer(proposal, "under 0.5 m", ["e1"], (result,))
+    except ValueError as exc:
+        assert "measurement bucket" in str(exc)
+    else:
+        raise AssertionError("conflicting measurement bucket was accepted")
 
 
 def test_private_oracle_runs_direct_structured_tool() -> None:

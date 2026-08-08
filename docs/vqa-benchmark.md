@@ -56,6 +56,7 @@ The oracle receives the frozen question and can call only direct, read-only loca
 | `ground_semantic_object(query)` | Grounded objects, range, side, point support, and evidence IDs. |
 | `estimate_ground_plane()` | Open3D RANSAC ground-plane fit, inliers, residual, and quality flags. |
 | `measure_object_height(query)` | Visible point-cloud height above the fitted ground plane, unit, tolerance, provenance, and quality flags. |
+| `measure_object_height_bucket(query)` | The same private height measurement mapped deterministically to a public height bucket. |
 
 MoonDream, EdgeTAM, LiDAR projection, and Open3D run privately. These are direct Python tools exposed through LangChain schemas, not MCP or robot RPC tools. The oracle has a bounded tool-call budget and cannot use shell, Python execution, network access, or mutable robot skills.
 
@@ -81,14 +82,14 @@ Object height is a visible-point-cloud estimate, not a full CAD dimension. The h
 
 ## Public Answer Contracts
 
-Public cases are either choice or numeric.
+Public cases are either choice or numeric. Metric questions use public choices by default so an image-only model can make a visual estimate rather than reproduce an exact measurement.
 
 | Contract | Evaluated-model final line | Scoring |
 |---|---|---|
 | Choice | `ANSWER: left` | Must exactly match a public allowed choice. |
 | Numeric | `ANSWER: 0.86 m` | Must be finite, use the required unit, and fall within the public tolerance. |
 
-The expected numeric value, measurement provenance, and validator decision remain private.
+Height questions use the fixed choices `under 0.5 m`, `0.5-1.0 m`, `1.0-1.5 m`, and `over 1.5 m`. The private oracle measures the height and maps it deterministically to one of those choices. Numeric contracts remain available for specialized measurement evaluation; their expected values, measurement provenance, and validator decisions remain private.
 
 ## Generate a Dataset
 
@@ -98,7 +99,7 @@ Generate a constrained five-frame sample:
 OPENAI_API_KEY="$OPENAI_API_KEY" dimos vqa generate \
   --recording go2_short \
   --start-index 0 --stop-index 100 --stride 20 \
-  --propose-questions \
+  --question-mode constrained \
   --output ~/.local/state/dimos/datasets/vqa/go2-short-constrained
 ```
 
@@ -113,6 +114,8 @@ OPENAI_API_KEY="$OPENAI_API_KEY" dimos vqa generate \
 ```
 
 Generation is resumable. A directory containing `frame.json` is complete and skipped on a later run; aggregate indexes are rebuilt after all requested frames are considered.
+
+Constrained mode uses the image-only object author automatically unless one or more explicit `--query` values are supplied. `--propose-questions` remains a compatible alias for forcing image-authored constrained questions.
 
 ## Dataset Layout
 

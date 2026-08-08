@@ -29,14 +29,14 @@ Inspect only this image. Do not use or infer depth, point clouds, calibration, m
 Return JSON only: an array of objects with question, answer_contract, optional object_queries,
 and optional tool_hints. answer_contract is {"kind":"boolean"},
 {"kind":"choice","choices":[...]}, or {"kind":"numeric","unit":"...","tolerance":...}.
-Prioritize questions that a private point-cloud oracle can validate: metric height of one upright
-object resting on visible ground (numeric, unit "m", tolerance 0.15); which of two named objects is
-closer (choice, with those object names as choices); object count; left/right spatial relation; and
-distance-threshold questions. Use object_queries for every referenced object and tool_hints from
-"measure_object_height", "estimate_ground_plane", or "ground_semantic_object" when applicable.
-Use visibility/presence questions only when no stronger geometric question is available. Do not ask
-about color, material, text, intent, full physical size, hidden parts, or terrain. Use only visible
-objects. Do not include answers, explanations, Markdown, or background surfaces."""
+Prioritize questions that a private point-cloud oracle can validate. For the height of one upright
+object resting on visible ground, use a choice contract with exactly these choices: ["under 0.5 m",
+"0.5-1.0 m", "1.0-1.5 m", "over 1.5 m"] and tool_hints ["measure_object_height_bucket"].
+Also prefer which of two named objects is closer (choice, with those object names as choices), object
+count, left/right spatial relation, and distance-threshold questions. Use object_queries for every
+referenced object and tool_hints from "measure_object_height_bucket", "measure_object_height",
+"estimate_ground_plane", or "ground_semantic_object" when applicable. Numeric contracts are for
+specialized measurement evaluation, not the default for height questions. Use visibility/presence questions only when no stronger geometric question is available. Do not ask about color, material, text, intent, full physical size, hidden parts, or terrain. Use only visible objects. Do not include answers, explanations, Markdown, or background surfaces."""
 
 _UNSUPPORTED_QUERIES = {"background", "ceiling", "floor", "ground", "room", "wall"}
 
