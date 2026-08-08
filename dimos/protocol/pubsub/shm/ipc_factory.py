@@ -144,16 +144,29 @@ def _safe_unlink(name: str) -> None:
 
 def _create_or_open(name: str, size: int) -> tuple[SharedMemory, bool]:
     """Create a named SHM segment (owner) or attach to an existing one (reader)."""
-    try:
-        # Owner: leave registered because unlink() will unregister, and
-        # the tracker serves as safety net if the process crashes.
-        shm = SharedMemory(create=True, size=size, name=name)
-        owner = True
-    except FileExistsError:
-        # Reader: unregister because we only close(), never unlink().
-        shm = _unregister(SharedMemory(name=name))
-        owner = False
-    return shm, owner
+    # The creator shm_open()s the segment and ftruncate()s it a moment later;
+    # attaching inside that window mmaps a zero-byte file and raises
+    # "ValueError: cannot mmap an empty file". Retry until the creator
+    # finishes. FileNotFoundError means the segment vanished between the
+    # create attempt and the attach, so go around and create it ourselves.
+    last_error: Exception | None = None
+    for delay in (0.001, 0.005, 0.02, 0.1, 0.5):
+        try:
+            # Owner: leave registered because unlink() will unregister, and
+            # the tracker serves as safety net if the process crashes.
+            return SharedMemory(create=True, size=size, name=name), True
+        except FileExistsError:
+            pass
+        try:
+            # Reader: unregister because we only close(), never unlink().
+            return _unregister(SharedMemory(name=name)), False
+        except (ValueError, FileNotFoundError) as e:
+            last_error = e
+            time.sleep(delay)
+    raise RuntimeError(
+        f"shared-memory segment '{name}' exists but stayed empty; "
+        f"remove it from /dev/shm if a previous run crashed"
+    ) from last_error
 
 
 class CpuShmChannel(FrameChannel):

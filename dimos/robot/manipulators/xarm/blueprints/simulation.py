@@ -63,9 +63,9 @@ def _xarm7_perception_sim(
 xarm_perception_sim = autoconnect(_xarm7_perception_sim(XARM7_SIM_PATH))
 
 # The room-and-objects scene with learned grasps: GraspGenX proposals feed
-# pick's provider path, and the table matches data/xarm_grasp_sim/scene.xml so
-# the planner always respects it.
-XARM_GRASP_TABLE = {"name": "table", "center": (0.47, 0.0, 0.065), "size": (0.38, 0.60, 0.13)}
+# pick's provider path. The box tracks the table in data/xarm_grasp_sim/scene.xml
+# but is sunk 5cm so near-tabletop grasps clear the planner's collision check.
+XARM_GRASP_TABLE = {"name": "table", "center": (0.47, 0.0, 0.055), "size": (0.38, 0.60, 0.13)}
 
 # Ground-truth detections from sim state instead of the camera: perception is
 # the weak link in this scene, and grasping is what we are testing.
@@ -81,6 +81,9 @@ _XARM_GRASP_PICK_KWARGS: dict[str, object] = {
     "grasp_viz_gripper": _XARM_GRASPGENX.gripper,
     "grasp_viz_frame_to_tcp": _XARM_GRASPGENX.grasp_frame_to_tcp,
     "use_mesh_obstacles": True,
+    # Clears the tallest object (bottle top at z=0.31) plus a held item hanging
+    # below the TCP, while staying reachable across the table.
+    "transfer_height": 0.40,
 }
 
 

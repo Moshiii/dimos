@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections import Counter
 from contextlib import nullcontext
 import json
+import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -192,6 +193,49 @@ class TestPlaceBack:
         assert not result.is_success()
         assert result.error_code == "NO_PRIOR_POSE"
         assert "pick" in result.message.lower()
+
+
+class TestPlaceOrientation:
+    """place() must keep the held object's gravity attitude from the pick."""
+
+    SIDE_PICK = Pose(
+        Vector3(0.5, 0.0, 0.2),
+        Quaternion.from_euler(Vector3(math.pi / 2, 0.0, 0.0)),
+    )
+
+    def test_reyawed_orientation_preserves_gravity_attitude(self):
+        q = PickAndPlaceModule._reyawed_orientation(self.SIDE_PICK, 0.0, 0.5)
+
+        down_before = self.SIDE_PICK.orientation.rotate_vector(Vector3(0.0, 0.0, -1.0))
+        down_after = q.rotate_vector(Vector3(0.0, 0.0, -1.0))
+        assert down_after.z == pytest.approx(down_before.z, abs=1e-9)
+        # The horizontal component swung 90 degrees with the bearing.
+        assert down_after.x == pytest.approx(-down_before.y, abs=1e-9)
+        assert down_after.y == pytest.approx(down_before.x, abs=1e-9)
+
+    def test_place_uses_pick_attitude_when_holding(self, module, mocker):
+        module._last_pick_pose = self.SIDE_PICK
+        spy = mocker.patch.object(
+            module, "_place_with_orientation", return_value=SkillResult.ok("ok")
+        )
+
+        module.place(0.0, 0.5, 0.2)
+
+        orientation = spy.call_args.args[3]
+        assert orientation == PickAndPlaceModule._reyawed_orientation(self.SIDE_PICK, 0.0, 0.5)
+
+    def test_place_falls_back_without_pick(self, module, mocker):
+        module._last_pick_pose = None
+        spy = mocker.patch.object(
+            module, "_place_with_orientation", return_value=SkillResult.ok("ok")
+        )
+
+        module.place(0.4, 0.1, 0.2)
+
+        orientation = spy.call_args.args[3]
+        assert orientation == PickAndPlaceModule._grasp_orientation(
+            0.4, 0.1, (0.4**2 + 0.1**2) ** 0.5
+        )
 
 
 def test_grasp_pipeline_error_agent_encoding_is_structured() -> None:

@@ -128,6 +128,11 @@ class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     # envelops the object at every height, so a gripper reaching in from the
     # side collides with empty space.
     use_mesh_obstacles: bool = False
+    # TCP height (planning frame) for travel between pick and place. The held
+    # object hangs below the TCP and is not in the collision model, so transfers
+    # route lift -> overhead traverse -> descend instead of crossing the scene
+    # at grasp height.
+    transfer_height: FiniteFloat | None = Field(default=None, gt=0.0)
 
     @model_validator(mode="after")
     def _validate_grasp_pipeline(self) -> PickAndPlaceModuleConfig:
@@ -704,6 +709,25 @@ then refreshes perception obstacles.
         self._publish_candidate_layers(ranked[: self.config.max_grasp_candidates_to_check])
         return ranked
 
+    def _transfer_lift(self, robot_name: str | None) -> SkillResult[ManipulationSkillError]:
+        """Lift to the transfer corridor, or the plain safety lift without one.
+
+        A straight-up lift can be unreachable at the workspace edge; with a
+        corridor configured that is survivable because the overhead traverse
+        still routes above the scene, so it degrades to a warning.
+        """
+        transfer_z = self.config.transfer_height
+        if transfer_z is None:
+            return self._lift_if_low(robot_name)
+        lift = self._lift_if_low(robot_name, min_z=transfer_z)
+        if not lift.is_success():
+            logger.warning(
+                "Transfer lift to z=%.2f failed (%s); continuing without it",
+                transfer_z,
+                lift.message,
+            )
+        return SkillResult.ok()
+
     @contextmanager
     def _suppress_target(self, transaction: _PickTransaction) -> Iterator[None]:
         """Hide only the pick target, so the rest of the scene stays planned against.
@@ -940,7 +964,7 @@ then refreshes perception obstacles.
         verification = self.config.grasp_verification
 
         transaction.phase = _PickPhase.PREPARE
-        lift = self._lift_if_low(robot_name)
+        lift = self._transfer_lift(robot_name)
         if not lift.is_success():
             return self._phase_failure(
                 transaction, lift.error_code or "EXECUTION_FAILED", lift.message
@@ -1111,9 +1135,26 @@ then refreshes perception obstacles.
             z: Target Z position in meters.
             robot_name: Robot to use (only needed for multi-arm setups).
         """
-        xy_dist = (x**2 + y**2) ** 0.5
-        orientation = self._grasp_orientation(x, y, xy_dist)
+        if self._last_pick_pose is not None:
+            # The held object keeps the attitude it was grasped with; only the
+            # yaw swings toward the target. _grasp_orientation would re-orient
+            # the wrist top-down and lay a side-grasped bottle on its side.
+            orientation = self._reyawed_orientation(self._last_pick_pose, x, y)
+        else:
+            xy_dist = (x**2 + y**2) ** 0.5
+            orientation = self._grasp_orientation(x, y, xy_dist)
         return self._place_with_orientation(x, y, z, orientation, robot_name)
+
+    @staticmethod
+    def _reyawed_orientation(pick: Pose, x: float, y: float) -> Quaternion:
+        """Pick orientation rotated about world z toward the target bearing.
+
+        A world-z rotation cannot change the held object's attitude relative
+        to gravity, so whatever stood upright at the pick stands upright at
+        the place.
+        """
+        dpsi = math.atan2(y, x) - math.atan2(pick.position.y, pick.position.x)
+        return (Quaternion.from_euler(Vector3(0.0, 0.0, dpsi)) * pick.orientation).normalize()
 
     def _place_with_orientation(
         self,
@@ -1139,9 +1180,21 @@ then refreshes perception obstacles.
         pre_place_pose = self._compute_pre_grasp_pose(place_pose, pre_place_offset)
 
         # Lift if EE is low before approaching
-        lift = self._lift_if_low(rname)
+        lift = self._transfer_lift(rname)
         if not lift.is_success():
             return lift
+        transfer_z = self.config.transfer_height
+
+        # 0. Traverse overhead: descend on the target from above instead of
+        # crossing the scene at grasp height with the object in hand.
+        if transfer_z is not None:
+            overhead = Pose(Vector3(x, y, max(transfer_z, pre_place_pose.position.z)), orientation)
+            logger.info(f"Traversing at transfer height z={overhead.position.z:.3f}...")
+            if not self.plan_to_pose(overhead, rname):
+                return SkillResult.fail("PLANNING_FAILED", "Transfer traverse planning failed")
+            exec_result = self._preview_execute_wait(rname)
+            if not exec_result.is_success():
+                return exec_result
 
         # 1. Move to pre-place
         logger.info(f"Planning approach to place position ({x:.3f}, {y:.3f}, {z:.3f})...")
@@ -1172,6 +1225,10 @@ then refreshes perception obstacles.
         exec_result = self._preview_execute_wait(rname)
         if not exec_result.is_success():
             return exec_result
+
+        # The object left the gripper; a later bare place() must not inherit
+        # this grasp's orientation.
+        self._last_pick_pose = None
 
         return SkillResult.ok(f"Place complete — object released at ({x:.3f}, {y:.3f}, {z:.3f})")
 
