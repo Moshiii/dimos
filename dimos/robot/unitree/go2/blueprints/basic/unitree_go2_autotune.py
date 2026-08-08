@@ -40,7 +40,7 @@ unitree_go2_autotune = (
         AutotuneDriver.blueprint(
             robot_id="go2",
             joint_prefix="go2/",
-            channels={"vx": 1.0, "wz": 1.5},
+            channels={"vx": 1.0},
             odom_type="pose",
             fitter="pose",
             step_duration_s=8.0,

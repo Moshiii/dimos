@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import pickle
 import queue
@@ -75,6 +76,7 @@ class SegmentRecorder:
     def start(self, channel: str, amplitude: float, t0: float) -> None:
         self._channel, self._amplitude, self._t0 = channel, amplitude, t0
         self._t, self._y = [], []
+        self._origin: tuple[float, float, float] | None = None
 
     def stop(self) -> Segment:
         y = np.unwrap(self._y) if self._channel == "wz" else np.array(self._y)
@@ -93,9 +95,16 @@ class SegmentRecorder:
     def on_pose(self, msg: PoseStamped, now: float) -> None:
         if self._channel is None or self._odom_type != "pose":
             return
-        value = {"vx": msg.position.x, "vy": msg.position.y, "wz": msg.orientation.euler[2]}.get(
-            self._channel
-        )
+        x, y, theta = msg.position.x, msg.position.y, msg.orientation.euler[2]
+        if self._channel == "vx":
+            if self._origin is None:
+                self._origin = (x, y, theta)
+            x0, y0, theta0 = self._origin
+            # Heading-frame forward distance, not raw world-frame x -- otherwise
+            # any heading drift during the step contaminates vx with wz.
+            value = (x - x0) * math.cos(theta0) + (y - y0) * math.sin(theta0)
+        else:
+            value = {"vy": y, "wz": theta}.get(self._channel)
         if value is not None:
             self._t.append(now - self._t0)
             self._y.append(value)
