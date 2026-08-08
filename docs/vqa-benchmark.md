@@ -12,7 +12,7 @@ DimOS generates visual question-answering (VQA) cases from frozen robot recordin
 Frozen robot recording
         |
         v
-Rectified RGB image + calibrated visible LiDAR frame
+Rectified RGB image + calibrated visible point cloud
         |
         +-------------------- constrained generation --------------------+
         | Image-only object author -> deterministic question families     |
