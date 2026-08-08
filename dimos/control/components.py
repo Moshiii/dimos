@@ -41,6 +41,7 @@ class HardwareType(Enum):
     MANIPULATOR = "manipulator"
     BASE = "base"
     WHOLE_BODY = "whole_body"
+    GRIPPER = "gripper"
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,13 @@ class HardwareComponent:
             raise ValueError(
                 f"HardwareComponent '{self.hardware_id}': gripper_dof {self.gripper_dof} "
                 f"exceeds all_joints length {len(self.all_joints)}"
+            )
+        # A standalone gripper is ALL gripper: the degenerate split
+        # (arm_joints == []) is a checked invariant, not a convention.
+        if self.hardware_type is HardwareType.GRIPPER and self.gripper_dof != len(self.all_joints):
+            raise ValueError(
+                f"HardwareComponent '{self.hardware_id}': a GRIPPER component must have "
+                f"gripper_dof == len(all_joints), got {self.gripper_dof} != {len(self.all_joints)}"
             )
 
     @property

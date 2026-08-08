@@ -28,6 +28,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from dimos.hardware.grippers.spec import GripperAdapter
 from dimos.hardware.manipulators.spec import ControlMode, ManipulatorAdapter
 from dimos.utils.logging_config import setup_logger
 
@@ -58,7 +59,7 @@ class ConnectedHardware:
 
     def __init__(
         self,
-        adapter: ManipulatorAdapter,
+        adapter: ManipulatorAdapter | GripperAdapter,
         component: HardwareComponent,
     ) -> None:
         self._adapter = adapter
@@ -74,7 +75,7 @@ class ConnectedHardware:
         self._current_mode: ControlMode | None = None
 
     @property
-    def adapter(self) -> ManipulatorAdapter:
+    def adapter(self) -> ManipulatorAdapter | GripperAdapter:
         """The underlying hardware adapter."""
         return self._adapter
 
