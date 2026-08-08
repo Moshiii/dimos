@@ -263,8 +263,8 @@ class LiveKitTeleopModule(Module):
 
     def _publish_video(self, image: Image) -> None:
         with self._lock:
-            loop = self._loop
-        if loop is None or not loop.is_running():
+            loop, room = self._loop, self._room
+        if loop is None or room is None or not loop.is_running():
             return
         try:
             width, height, rgba = self._image_to_rgba(image)
@@ -294,6 +294,8 @@ class LiveKitTeleopModule(Module):
     def _capture_video(self, width: int, height: int, rgba: bytes) -> None:
         from livekit import rtc
 
+        if self._room is None:
+            return
         if self._video_source is None:
             self._video_source = rtc.VideoSource(width, height)
             self._video_publish_task = asyncio.create_task(self._publish_video_track())

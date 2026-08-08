@@ -176,6 +176,15 @@ def test_image_conversion_produces_rgba() -> None:
     assert rgba == bytes([3, 2, 1, 255])
 
 
+def test_video_frames_are_dropped_until_the_room_connects(module: LiveKitTestModule) -> None:
+    module._loop = MagicMock()
+    module._loop.is_running.return_value = True
+
+    module._publish_video(MagicMock(spec=Image))
+
+    assert module._loop.call_soon_threadsafe.call_count == 0
+
+
 def test_livekit_blueprints_are_exposed() -> None:
     assert teleop_hosted_go2_livekit is not None
     assert teleop_hosted_xarm6_livekit is not None
