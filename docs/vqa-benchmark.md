@@ -80,6 +80,8 @@ The semantic validator receives only the frozen question, proposed answer, and c
 
 ## Geometry Quality Gates
 
+Geometry quality gates are a private validation step: after the oracle grounds or measures a question, they decide whether the point-cloud evidence is reliable enough to accept it as benchmark ground truth. A failed gate rejects the question; it never becomes a public case.
+
 Ground-plane estimation uses Open3D `segment_plane` on visible points in the lower image band. It rejects insufficient support, insufficient inliers, and high residuals.
 
 Object height is a visible-point-cloud estimate, not a full CAD dimension. The height tool requires one unambiguous grounded mask, sufficient object point support, an accepted ground plane, and elevated points above that plane. It records its uncertainty and rejects sparse, partial, or ambiguous measurements.
