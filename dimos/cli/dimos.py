@@ -51,6 +51,7 @@ import typer
 from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
 from dimos.cli.cache import app as cache_app
 from dimos.cli.can import app as can_app
+from dimos.cli.hardware_cli import app as hardware_app
 from dimos.cli.shell import shell
 from dimos.constants import CONFIG_DIR, LOG_DIR
 from dimos.core.daemon import daemonize, install_signal_handlers
@@ -172,7 +173,6 @@ def create_dynamic_callback():  # type: ignore[no-untyped-def]
 
 
 main.callback()(create_dynamic_callback())  # type: ignore[no-untyped-call]
-hardware_app = typer.Typer(help="Configure and inspect robot hardware", no_args_is_help=True)
 hardware_app.add_typer(can_app, name="can")
 main.add_typer(hardware_app, name="hardware")
 main.add_typer(go2tool_app, name="go2tool")
