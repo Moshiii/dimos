@@ -21,11 +21,11 @@ import pink
 import pytest
 from pytest_mock import MockerFixture
 
-from dimos.control.coordinator import ControlCoordinator
-from dimos.control.tasks.quest_teleop_ik_task.quest_teleop_ik_task import (
-    QuestTeleopIKTaskParams,
+from dimos.control.tasks.teleop_ik_task.teleop_ik_task import (
+    TeleopIKTaskParams,
 )
 from dimos.control.tick_loop import TickLoop
+from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.core.global_config import global_config
 from dimos.manipulation.manipulation_module import ManipulationModule
@@ -37,6 +37,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.openarm.blueprints.teleop import (
     OPENARM_QUEST_TASK_NAME,
+    OpenArmTeleopCoordinator,
     _openarm_quest_hardware,
     teleop_quest_openarm,
 )
@@ -50,7 +51,7 @@ from dimos.robot.manipulators.openarm.config import (
 )
 from dimos.robot.manipulators.openarm.teleop_ik import OpenArmTeleopPinkIK
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
-from dimos.teleop.quest.quest_types import Buttons
+from dimos.teleop.types import TeleopControls
 
 _TRACKING_ERROR_RAD = np.deg2rad(10.0)
 
@@ -93,6 +94,17 @@ def test_openarm_quest_hardware_requires_both_can_ports(
         _openarm_quest_hardware(left_can_port, right_can_port)
 
 
+def test_openarm_can_ports_are_blueprint_cli_options() -> None:
+    parsed = BlueprintConfigParser(teleop_quest_openarm).parse(
+        ["--left-can-port", "can8", "--right-can-port", "can9"],
+        environ={},
+    )
+
+    coordinator = parsed.module_kwargs("ControlCoordinator")
+    assert coordinator["left_can_port"] == "can8"
+    assert coordinator["right_can_port"] == "can9"
+
+
 def test_openarm_mock_hardware_and_model_use_canonical_zero_start() -> None:
     hardware = openarm_mock_hardware()
     model = openarm_bimanual_model_config()
@@ -103,22 +115,21 @@ def test_openarm_mock_hardware_and_model_use_canonical_zero_start() -> None:
 
 
 def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
-    coordinator_kwargs = _module_kwargs(teleop_quest_openarm, ControlCoordinator)
+    coordinator_kwargs = _module_kwargs(teleop_quest_openarm, OpenArmTeleopCoordinator)
     teleop_kwargs = _module_kwargs(teleop_quest_openarm, ArmTeleopModule)
     manipulation_kwargs = _module_kwargs(teleop_quest_openarm, ManipulationModule)
-    hardware = coordinator_kwargs["hardware"]
     tasks = coordinator_kwargs["tasks"]
 
-    assert len(hardware) == 1
-    assert hardware[0].adapter_type == "mock_whole_body"
-    assert hardware[0].joints == OPENARM_JOINTS
+    assert "hardware" not in coordinator_kwargs
+    assert "left_can_port" not in coordinator_kwargs
+    assert "right_can_port" not in coordinator_kwargs
     assert len(tasks) == 2
 
-    task = next(task for task in tasks if task.type == "quest_teleop_ik")
+    task = next(task for task in tasks if task.type == "teleop_ik")
     trajectory = next(task for task in tasks if task.type == "trajectory")
     bindings = task.params["bindings"]
     assert task.name == OPENARM_QUEST_TASK_NAME
-    assert task.type == "quest_teleop_ik"
+    assert task.type == "teleop_ik"
     assert task.joint_names == OPENARM_ARM_JOINTS
     assert {binding["hand"] for binding in bindings} == {"left", "right"}
     assert {binding["target_frame"] for binding in bindings} == {
@@ -132,9 +143,8 @@ def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
     assert isinstance(task.params["pink"], PinkKinematicsConfig)
     assert task.params["ik_backend_type"] is OpenArmTeleopPinkIK
     assert task.params["pink"].joint_limit_posture_margin == 0.3
-    assert task.params["max_joint_delta_deg"] == 10.0
     assert task.params["max_command_tracking_error_deg"] == 10.0
-    assert QuestTeleopIKTaskParams.model_validate(task.params).max_joint_velocity_rad_s == 1.0
+    assert TeleopIKTaskParams.model_validate(task.params).max_joint_velocity_rad_s == 5.0
     assert task.priority == 10
     assert trajectory.joint_names == OPENARM_ARM_JOINTS
     assert trajectory.priority == 20
@@ -154,7 +164,7 @@ def test_openarm_quest_blueprint_has_one_bimanual_mock_task() -> None:
 def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
     mocker: MockerFixture,
 ) -> None:
-    coordinator_kwargs = _module_kwargs(teleop_quest_openarm, ControlCoordinator)
+    coordinator_kwargs = _module_kwargs(teleop_quest_openarm, OpenArmTeleopCoordinator)
     mocker.patch.object(OpenArmTeleopPinkIK, "validate_frame_targets")
     frame_poses = mocker.patch.object(
         OpenArmTeleopPinkIK,
@@ -173,11 +183,11 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
         ),
     )
     mocker.patch.object(TickLoop, "start")
-    coordinator = ControlCoordinator(publish_joint_state=False, **coordinator_kwargs)
+    coordinator = OpenArmTeleopCoordinator(publish_joint_state=False, **coordinator_kwargs)
 
     try:
         coordinator.start()
-        buttons = Buttons()
+        buttons = TeleopControls()
         buttons.left_primary = True
         buttons.right_primary = True
         buttons.pack_analog_triggers(left=0.25, right=0.75)
@@ -206,7 +216,7 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
         frame_poses.assert_called_once()
         step_frame_targets.assert_called_once()
 
-        released = Buttons()
+        released = TeleopControls()
         released.right_primary = True
         coordinator._dispatch("teleop_buttons", released)
         coordinator._tick_loop._tick()
@@ -372,7 +382,7 @@ def test_openarm_bimanual_pink_steps_from_canonical_zero_with_bounded_updates() 
     assert np.rad2deg(max_delta) < 5.0
 
 
-def test_openarm_large_bimanual_target_is_bounded_inside_pink_solve() -> None:
+def test_openarm_large_bimanual_target_respects_velocity_envelope() -> None:
     model = openarm_bimanual_model_config()
     frames = ("openarm_left_grasp_frame", "openarm_right_grasp_frame")
     config = PinkKinematicsConfig(
@@ -382,8 +392,8 @@ def test_openarm_large_bimanual_target_is_bounded_inside_pink_solve() -> None:
         gain=0.25,
     )
     seed = JointState(name=OPENARM_ARM_JOINTS, position=[0.0] * len(OPENARM_ARM_JOINTS))
-    unbounded_ik = OpenArmTeleopPinkIK(config)
-    initial = unbounded_ik.frame_poses(model, frames, OPENARM_ARM_JOINTS, seed)
+    fast_ik = OpenArmTeleopPinkIK(config)
+    initial = fast_ik.frame_poses(model, frames, OPENARM_ARM_JOINTS, seed)
     offsets = {
         frames[0]: (-0.2392603575142903, 0.058126091381264344, 0.11668591075157508),
         frames[1]: (-0.07538693330773968, 0.011284814173532665, -0.203339709772524),
@@ -401,7 +411,7 @@ def test_openarm_large_bimanual_target_is_bounded_inside_pink_solve() -> None:
         for name, pose in initial.items()
     }
 
-    unbounded = unbounded_ik.step_frame_targets(
+    fast = fast_ik.step_frame_targets(
         model,
         targets,
         OPENARM_ARM_JOINTS,
@@ -409,6 +419,7 @@ def test_openarm_large_bimanual_target_is_bounded_inside_pink_solve() -> None:
         seed,
         _TRACKING_ERROR_RAD,
         dt=0.01,
+        max_joint_velocity_rad_s=100.0,
     )
     bounded = OpenArmTeleopPinkIK(config).step_frame_targets(
         model,
@@ -418,15 +429,12 @@ def test_openarm_large_bimanual_target_is_bounded_inside_pink_solve() -> None:
         seed,
         _TRACKING_ERROR_RAD,
         dt=0.01,
-        max_joint_delta_rad=np.deg2rad(5.0),
         max_joint_velocity_rad_s=1.0,
     )
 
-    unbounded_delta_deg = np.rad2deg(
-        np.abs(np.asarray(unbounded.position) - np.asarray(seed.position))
-    )
+    fast_delta_deg = np.rad2deg(np.abs(np.asarray(fast.position) - np.asarray(seed.position)))
     bounded_delta_deg = np.rad2deg(np.abs(np.asarray(bounded.position) - np.asarray(seed.position)))
-    assert np.max(unbounded_delta_deg) > 5.0
+    assert np.max(fast_delta_deg) > np.max(bounded_delta_deg)
     assert np.all(np.isfinite(bounded.position))
     assert 0.0 < np.max(bounded_delta_deg) <= np.rad2deg(0.01) + 1e-3
 

@@ -42,7 +42,6 @@ from dimos.manipulation.planning.kinematics.pink_ik import (
     _PinkModules,
     _PinkRobotContext,
     _seed_positions_for_mapping,
-    _StreamingCommandLimit,
 )
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.enums import IKStatus
@@ -493,114 +492,42 @@ def test_joint_order_mapping_uses_names_not_positions() -> None:
     assert _seed_positions_for_mapping(seed, mapping).tolist() == [10.0, 20.0, 30.0]
 
 
-def test_streaming_command_limit_intersects_model_velocity_and_raw_seed_budget() -> None:
-    model = _FakeModel()
-    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a", "joint_c"])
-    raw_q = np.array([0.0, -1.0005, 0.0])
-    configuration = _FakeConfiguration(model, model.createData(), np.array([0.0, -0.9999, 0.0]))
-    limit = _StreamingCommandLimit(
-        model=model,
-        mapping=mapping,
-        raw_command_q=raw_q,
-        measured_q=raw_q,
-        max_command_delta=0.15,
-        max_controlled_velocity=None,
-        max_command_tracking_error=_TRACKING_ERROR_RAD,
+def test_streaming_envelope_intersects_configured_and_urdf_velocity(
+    mocker: MockerFixture,
+) -> None:
+    ik = _pink_ik(mocker)
+    context = _context()
+
+    result = ik._apply_streaming_command_envelope(
+        context=context,
+        candidate=np.ones(3),
+        previous=np.zeros(3),
+        measured=np.zeros(3),
+        dt=0.1,
+        max_joint_velocity=3.0,
+        max_tracking_error=1.0,
     )
 
-    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
-
-    assert inequalities is not None
-    matrix, vector = inequalities
-    assert matrix == pytest.approx(np.vstack([np.eye(3), -np.eye(3)]))
-    assert vector == pytest.approx([0.2, 0.1494, 0.15, 0.2, 0.1506, 0.15])
+    assert result == pytest.approx([0.3, 0.2, 0.3])
 
 
-def test_streaming_command_limit_preserves_tighter_model_velocity() -> None:
-    model = _FakeModel()
-    model.velocityLimit[1] = 1.0
-    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a"])
-    configuration = _FakeConfiguration(model, model.createData(), np.zeros(3))
-    limit = _StreamingCommandLimit(
-        model=model,
-        mapping=mapping,
-        raw_command_q=np.zeros(3),
-        measured_q=np.zeros(3),
-        max_command_delta=0.15,
-        max_controlled_velocity=None,
-        max_command_tracking_error=_TRACKING_ERROR_RAD,
+def test_streaming_envelope_caps_command_at_measured_tracking_distance(
+    mocker: MockerFixture,
+) -> None:
+    ik = _pink_ik(mocker)
+    context = _context()
+
+    result = ik._apply_streaming_command_envelope(
+        context=context,
+        candidate=np.full(3, 0.5),
+        previous=np.full(3, 0.1),
+        measured=np.zeros(3),
+        dt=0.1,
+        max_joint_velocity=5.0,
+        max_tracking_error=0.15,
     )
 
-    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
-
-    assert inequalities is not None
-    _, vector = inequalities
-    assert vector == pytest.approx([0.2, 0.1, 0.2, 0.1])
-
-
-def test_streaming_command_limit_caps_controlled_joint_velocity() -> None:
-    model = _FakeModel()
-    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a", "joint_c"])
-    configuration = _FakeConfiguration(model, model.createData(), np.zeros(3))
-    limit = _StreamingCommandLimit(
-        model=model,
-        mapping=mapping,
-        raw_command_q=np.zeros(3),
-        measured_q=np.zeros(3),
-        max_command_delta=0.15,
-        max_controlled_velocity=0.5,
-        max_command_tracking_error=_TRACKING_ERROR_RAD,
-    )
-
-    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
-
-    assert inequalities is not None
-    _, vector = inequalities
-    assert vector == pytest.approx([0.2, 0.05, 0.05, 0.2, 0.05, 0.05])
-
-
-def test_streaming_command_limit_caps_command_at_tracking_envelope() -> None:
-    model = _FakeModel()
-    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a"])
-    command_q = np.array([0.0, 0.1, 0.0])
-    configuration = _FakeConfiguration(model, model.createData(), command_q)
-    limit = _StreamingCommandLimit(
-        model=model,
-        mapping=mapping,
-        raw_command_q=command_q,
-        measured_q=np.zeros(3),
-        max_command_delta=0.15,
-        max_controlled_velocity=None,
-        max_command_tracking_error=0.15,
-    )
-
-    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
-
-    assert inequalities is not None
-    _, vector = inequalities
-    assert vector == pytest.approx([0.2, 0.05, 0.2, 0.15])
-
-
-def test_streaming_command_limit_outside_envelope_allows_only_recovery() -> None:
-    model = _FakeModel()
-    mapping = _build_joint_mapping(model, _robot_config(), ["joint_a"])
-    command_q = np.array([0.0, 0.2, 0.0])
-    configuration = _FakeConfiguration(model, model.createData(), command_q)
-    limit = _StreamingCommandLimit(
-        model=model,
-        mapping=mapping,
-        raw_command_q=command_q,
-        measured_q=np.zeros(3),
-        max_command_delta=0.15,
-        max_controlled_velocity=None,
-        max_command_tracking_error=0.15,
-    )
-
-    inequalities = limit.compute_qp_inequalities(configuration, dt=0.1)
-
-    assert inequalities is not None
-    _, vector = inequalities
-    assert vector == pytest.approx([0.2, 0.0, 0.2, 0.15])
+    assert result == pytest.approx([0.15, 0.15, 0.15])
 
 
 def test_step_frame_targets_preserves_controlled_joint_order(
@@ -629,7 +556,7 @@ def test_step_frame_targets_preserves_controlled_joint_order(
     )
 
     assert result.name == ["joint_c", "joint_a"]
-    assert result.position == pytest.approx([0.3, 0.2])
+    assert result.position == pytest.approx([0.1, 0.08])
 
 
 def test_step_frame_targets_builds_both_frame_tasks_with_tuning(
@@ -881,7 +808,7 @@ def test_step_frame_targets_normalizes_feedback_and_saturates_commands(
         max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
     )
 
-    assert result.position == pytest.approx([-0.9999, 0.9999, 0.25])
+    assert result.position == pytest.approx([-0.9999, 0.1, _TRACKING_ERROR_RAD])
 
 
 def test_step_frame_targets_rejects_feedback_beyond_tolerance(
@@ -908,7 +835,7 @@ def test_step_frame_targets_rejects_feedback_beyond_tolerance(
     step.assert_not_called()
 
 
-def test_step_frame_targets_leaves_unbounded_joints_unclamped(
+def test_step_frame_targets_velocity_limits_unbounded_position_joint(
     mocker: MockerFixture,
 ) -> None:
     ik = _pink_ik(mocker)
@@ -933,7 +860,7 @@ def test_step_frame_targets_leaves_unbounded_joints_unclamped(
         max_command_tracking_error_rad=_TRACKING_ERROR_RAD,
     )
 
-    assert result.position == [6.0]
+    assert result.position == pytest.approx([5.1])
 
 
 def test_validate_frame_targets_rejects_margin_wider_than_joint_range(

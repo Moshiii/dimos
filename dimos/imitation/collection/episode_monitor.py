@@ -33,7 +33,8 @@ from reactivex.disposable import Disposable
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.teleop.quest.quest_types import BUTTON_ALIASES, Buttons
+from dimos.teleop.quest.quest_types import BUTTON_ALIASES
+from dimos.teleop.types import TeleopControls
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -74,7 +75,7 @@ class EpisodeMonitorModuleConfig(ModuleConfig):
 class EpisodeMonitorModule(Module):
     config: EpisodeMonitorModuleConfig
 
-    teleop_buttons: In[Buttons]
+    teleop_buttons: In[TeleopControls]
     # TODO: no KeyPress producer exists yet — add a pygame keyboard module that
     # publishes KeyPress so this port is actually fed (today only buttons drive it).
     keyboard: In[KeyPress]
@@ -112,7 +113,7 @@ class EpisodeMonitorModule(Module):
 
     # ── port handlers ────────────────────────────────────────────────────────
 
-    def _on_buttons(self, msg: Buttons) -> None:
+    def _on_buttons(self, msg: TeleopControls) -> None:
         """Rising-edge detect against `config.button_map`; advance state machine."""
         ts = time.time()
         # Edge-detect under the lock (it shares `_prev_bits` with reset_counters),

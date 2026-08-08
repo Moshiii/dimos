@@ -76,5 +76,5 @@ class RecordingTask(BaseControlTask):
         return True
 
     def on_teleop_buttons(self, msg: Any, t_now: float) -> bool:
-        # Mirrors QuestTeleopIKTask: the uniform handler delegates to on_buttons.
+        # Mirrors TeleopIKTask: the uniform handler delegates to on_buttons.
         return self.on_buttons(msg)

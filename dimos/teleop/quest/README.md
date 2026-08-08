@@ -9,10 +9,10 @@ Quest Browser  ──WebSocket──→  Embedded HTTPS Server  ──→  ArmTe
 (WebXR poses + Joy)             (port 8443)                  (absolute PoseStamped)
                                                                   │ left/right
                                                                   ▼
-                                                        ControlCoordinator
+                                                     TeleopControlCoordinator
                                                                   │ by task name
                                                                   ▼
-                                                        QuestTeleopIKTask
+                                                        TeleopIKTask
                                                         (relative targets + Pink)
 ```
 
@@ -44,6 +44,13 @@ coordinates at their lower limits, the OpenArm planner and Quest task share a
 Pink joint-limit posture margin that supplies a deterministic inward direction
 without changing the measured seed. No random retry runs in the control loop.
 
+Specify both CAN interfaces to select real OpenArm hardware. Supplying only one
+is rejected:
+
+```bash
+dimos run teleop-quest-openarm --left-can-port can0 --right-can-port can1
+```
+
 The blueprint also includes `ManipulationModule` with the same bimanual model
 and Viser visualization. Its coordinator has a joint-trajectory task over both
 arms at priority 20; planned execution therefore preempts the priority-10 Quest
@@ -51,7 +58,7 @@ task through normal arbitration and clears the teleoperation engagement state.
 
 ## Arm task bindings
 
-Arm teleoperation uses one `QuestTeleopIKTask` configured with one or two hand
+Arm teleoperation uses one `TeleopIKTask` configured with one or two hand
 bindings. Each binding names the controller (`left` or `right`), a frame in the
 task's `RobotModelConfig`, and optionally a gripper joint plus its open/closed
 positions. The task's top-level `joint_names` explicitly select the joints Pink
@@ -89,7 +96,7 @@ browser.
 
 **Axes**: thumbstick X, thumbstick Y, trigger (analog), grip (analog)
 
-**Buttons**: trigger, grip, touchpad, thumbstick, X/A, Y/B, menu
+**Digital controls**: trigger, grip, touchpad, thumbstick, X/A, Y/B, menu
 
 ## File Structure
 
@@ -97,7 +104,7 @@ browser.
 quest/
 ├── quest_teleop_module.py   # Base module
 ├── quest_extensions.py      # ArmTeleop, TwistTeleop
-├── quest_types.py           # QuestControllerState, Buttons
+├── quest_types.py           # QuestControllerState + TeleopControls normalization
 ├── blueprints.py
 └── web/static/index.html    # WebXR client
 ```

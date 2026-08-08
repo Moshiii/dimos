@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""One- or two-hand Quest teleoperation over the shared Pink IK core."""
+"""One- or two-hand device-independent teleoperation over the Pink IK core."""
 
 from __future__ import annotations
 
@@ -35,14 +35,14 @@ from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.protocol.service.spec import BaseConfig
-from dimos.teleop.quest.quest_types import Buttons
+from dimos.teleop.types import TeleopControls
 
 OperatorHand = Literal["left", "right"]
 
 
 @dataclass(frozen=True)
-class QuestHandBinding:
-    """Bind one Quest controller to one robot frame and optional gripper."""
+class TeleopHandBinding:
+    """Bind one operator hand to one robot frame and optional gripper."""
 
     hand: OperatorHand
     target_frame: str
@@ -52,17 +52,16 @@ class QuestHandBinding:
 
 
 @dataclass(frozen=True)
-class QuestTeleopIKTaskConfig:
-    """Configuration for single-arm or bimanual Quest pose control."""
+class TeleopIKTaskConfig:
+    """Configuration for single-arm or bimanual pose control."""
 
     joint_names: tuple[str, ...]
     robot_model: RobotModelConfig
-    bindings: tuple[QuestHandBinding, ...]
+    bindings: tuple[TeleopHandBinding, ...]
     pink: PinkKinematicsConfig = field(default_factory=PinkKinematicsConfig)
     priority: int = 10
     timeout: float = 0.5
-    max_joint_delta_deg: float = 5.0
-    max_joint_velocity_rad_s: float | None = 1.0
+    max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
 
 
@@ -75,18 +74,18 @@ class _HandState:
     gripper_target: float = 0.0
 
 
-class QuestTeleopIKTask(PoseTargetIKTask):
-    """Map one or two Quest controller streams into absolute robot frame targets."""
+class TeleopIKTask(PoseTargetIKTask):
+    """Map one or two controller streams into absolute robot frame targets."""
 
     def __init__(
         self,
         name: str,
-        config: QuestTeleopIKTaskConfig,
+        config: TeleopIKTaskConfig,
         *,
         ik: PinkIK | None = None,
     ) -> None:
         self._validate_bindings(name, config)
-        self._quest_config = config
+        self._teleop_config = config
         self._bindings = {binding.hand: binding for binding in config.bindings}
         self._lock = threading.Lock()
         self._hands = {
@@ -111,7 +110,6 @@ class QuestTeleopIKTask(PoseTargetIKTask):
                 pink=config.pink,
                 priority=config.priority,
                 timeout=config.timeout,
-                max_joint_delta_deg=config.max_joint_delta_deg,
                 max_joint_velocity_rad_s=config.max_joint_velocity_rad_s,
                 max_command_tracking_error_deg=config.max_command_tracking_error_deg,
             ),
@@ -120,11 +118,9 @@ class QuestTeleopIKTask(PoseTargetIKTask):
         )
 
     @staticmethod
-    def _validate_bindings(name: str, config: QuestTeleopIKTaskConfig) -> None:
+    def _validate_bindings(name: str, config: TeleopIKTaskConfig) -> None:
         if not 1 <= len(config.bindings) <= 2:
-            raise ValueError(
-                f"QuestTeleopIKTask '{name}' requires exactly one or two hand bindings"
-            )
+            raise ValueError(f"TeleopIKTask '{name}' requires exactly one or two hand bindings")
         hands = [binding.hand for binding in config.bindings]
         frames = [binding.target_frame for binding in config.bindings]
         grippers = [
@@ -133,13 +129,13 @@ class QuestTeleopIKTask(PoseTargetIKTask):
             if binding.gripper_joint is not None
         ]
         if any(hand not in ("left", "right") for hand in hands):
-            raise ValueError(f"QuestTeleopIKTask '{name}' has an unknown operator hand")
+            raise ValueError(f"TeleopIKTask '{name}' has an unknown operator hand")
         if len(set(hands)) != len(hands):
-            raise ValueError(f"QuestTeleopIKTask '{name}' requires unique operator hands")
+            raise ValueError(f"TeleopIKTask '{name}' requires unique operator hands")
         if any(not frame for frame in frames) or len(set(frames)) != len(frames):
-            raise ValueError(f"QuestTeleopIKTask '{name}' requires unique target frames")
+            raise ValueError(f"TeleopIKTask '{name}' requires unique target frames")
         if len(set(grippers)) != len(grippers):
-            raise ValueError(f"QuestTeleopIKTask '{name}' requires unique gripper joints")
+            raise ValueError(f"TeleopIKTask '{name}' requires unique gripper joints")
 
     def is_active(self) -> bool:
         with self._lock:
@@ -183,7 +179,7 @@ class QuestTeleopIKTask(PoseTargetIKTask):
             state.last_update_time = t_now
         return True
 
-    def on_teleop_buttons(self, msg: Buttons, t_now: float) -> bool:
+    def on_teleop_buttons(self, msg: TeleopControls, t_now: float) -> bool:
         """Update the all-bound-hands deadman condition and gripper targets."""
         del t_now
         primary_by_hand = {
@@ -249,7 +245,7 @@ class QuestTeleopIKTask(PoseTargetIKTask):
             )
 
         if needs_capture:
-            frame_names = [binding.target_frame for binding in self._quest_config.bindings]
+            frame_names = [binding.target_frame for binding in self._teleop_config.bindings]
             robot_poses = self.current_frame_poses(state, frame_names)
             if robot_poses is None:
                 return None
@@ -280,7 +276,7 @@ class QuestTeleopIKTask(PoseTargetIKTask):
                     return None
                 delta = current - controller_reference
                 targets[binding.target_frame] = PoseStamped(
-                    frame_id=self._quest_config.robot_model.base_pose.frame_id,
+                    frame_id=self._teleop_config.robot_model.base_pose.frame_id,
                     position=robot_reference.position + delta.position,
                     orientation=delta.orientation * robot_reference.orientation,
                 )
@@ -302,14 +298,14 @@ class QuestTeleopIKTask(PoseTargetIKTask):
             self._disengage_locked()
 
     def start(self) -> None:
-        """Quest tasks remain inert until their deadman condition is met."""
+        """Teleop tasks remain inert until their deadman condition is met."""
 
     def stop(self) -> None:
         with self._lock:
             self._disengage_locked()
 
 
-class QuestHandBindingParams(BaseConfig):
+class TeleopHandBindingParams(BaseConfig):
     """Serialized hand binding carried by `TaskConfig.params`."""
 
     hand: OperatorHand
@@ -319,27 +315,26 @@ class QuestHandBindingParams(BaseConfig):
     gripper_closed_position: float = 0.0
 
 
-class QuestTeleopIKTaskParams(BaseConfig):
+class TeleopIKTaskParams(BaseConfig):
     """Task-owned parameters carried inside the generic task envelope."""
 
     robot_model: RobotModelConfig
-    bindings: list[QuestHandBindingParams]
+    bindings: list[TeleopHandBindingParams]
     pink: PinkKinematicsConfig = Field(default_factory=PinkKinematicsConfig)
     ik_backend_type: type[PinkIK] = PinkIK
     timeout: float = 0.5
-    max_joint_delta_deg: float = 5.0
-    max_joint_velocity_rad_s: float | None = 1.0
+    max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
 
 
 def create_task(
     cfg: Any,
     hardware: Mapping[str, Any],
-) -> QuestTeleopIKTask:
-    """Create and validate a Quest pose-target task from registry configuration."""
-    params = QuestTeleopIKTaskParams.model_validate(cfg.params)
+) -> TeleopIKTask:
+    """Create and validate a pose-target teleop task from registry configuration."""
+    params = TeleopIKTaskParams.model_validate(cfg.params)
     bindings = tuple(
-        QuestHandBinding(
+        TeleopHandBinding(
             hand=binding.hand,
             target_frame=binding.target_frame,
             gripper_joint=binding.gripper_joint,
@@ -357,18 +352,17 @@ def create_task(
         if binding.gripper_joint is not None and binding.gripper_joint not in available_joints
     }
     if unknown_grippers:
-        raise ValueError(f"Quest task references unknown gripper joints: {unknown_grippers}")
+        raise ValueError(f"Teleop task references unknown gripper joints: {unknown_grippers}")
     ik = params.ik_backend_type(params.pink)
-    return QuestTeleopIKTask(
+    return TeleopIKTask(
         cfg.name,
-        QuestTeleopIKTaskConfig(
+        TeleopIKTaskConfig(
             joint_names=tuple(cfg.joint_names),
             robot_model=params.robot_model,
             bindings=bindings,
             pink=params.pink,
             priority=cfg.priority,
             timeout=params.timeout,
-            max_joint_delta_deg=params.max_joint_delta_deg,
             max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
             max_command_tracking_error_deg=params.max_command_tracking_error_deg,
         ),

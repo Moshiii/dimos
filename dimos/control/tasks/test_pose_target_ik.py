@@ -74,8 +74,7 @@ def _config(
     joint_names: tuple[str, ...] = ("arm/a", "arm/b"),
     target_frames: tuple[str, ...] = ("tool",),
     timeout: float = 0.5,
-    max_joint_delta_deg: float = 10.0,
-    max_joint_velocity_rad_s: float | None = None,
+    max_joint_velocity_rad_s: float = 5.0,
     max_command_tracking_error_deg: float = 10.0,
 ) -> PoseTargetIKTaskConfig:
     return PoseTargetIKTaskConfig(
@@ -83,7 +82,6 @@ def _config(
         robot_model=_robot_model(),
         target_frames=target_frames,
         timeout=timeout,
-        max_joint_delta_deg=max_joint_delta_deg,
         max_joint_velocity_rad_s=max_joint_velocity_rad_s,
         max_command_tracking_error_deg=max_command_tracking_error_deg,
     )
@@ -166,10 +164,7 @@ def test_compute_calls_one_pink_step_and_preserves_output_order(
     assert output.positions == [0.02, -0.03, 0.4]
     ik.step_frame_targets.assert_called_once()
     assert ik.step_frame_targets.call_args.kwargs["dt"] == 0.01
-    assert ik.step_frame_targets.call_args.kwargs["max_joint_delta_rad"] == pytest.approx(
-        np.deg2rad(10.0)
-    )
-    assert ik.step_frame_targets.call_args.kwargs["max_joint_velocity_rad_s"] is None
+    assert ik.step_frame_targets.call_args.kwargs["max_joint_velocity_rad_s"] == 5.0
     assert ik.step_frame_targets.call_args.kwargs[
         "max_command_tracking_error_rad"
     ] == pytest.approx(np.deg2rad(10.0))
@@ -202,18 +197,6 @@ def test_compute_accumulates_commands_while_feedback_is_unchanged(
     assert ik.step_frame_targets.call_args_list[0].kwargs["command_state"].position == [0.0, 0.0]
     assert ik.step_frame_targets.call_args_list[1].kwargs["command_state"].position == [0.01, 0.01]
     assert ik.step_frame_targets.call_args_list[1].kwargs["measured_state"].position == [0.0, 0.0]
-
-
-@pytest.mark.parametrize("max_joint_delta_deg", [0.0, -1.0, float("inf"), float("nan")])
-def test_constructor_rejects_invalid_joint_delta_limit(
-    mocker: MockerFixture, max_joint_delta_deg: float
-) -> None:
-    with pytest.raises(ValueError, match="positive finite joint delta limit"):
-        _Task(
-            _config(max_joint_delta_deg=max_joint_delta_deg),
-            _ik(mocker),
-            _snapshot(),
-        )
 
 
 @pytest.mark.parametrize("max_joint_velocity_rad_s", [0.0, -1.0, float("inf"), float("nan")])
@@ -283,7 +266,7 @@ def test_solver_failure_preserves_last_accepted_command(mocker: MockerFixture) -
     assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.05, -0.05]
 
 
-def test_hard_tracking_error_latches_until_command_state_reset(
+def test_feedback_delay_does_not_latch_command_state(
     mocker: MockerFixture,
 ) -> None:
     ik = _ik(mocker, [0.1, 0.1])
@@ -291,15 +274,11 @@ def test_hard_tracking_error_latches_until_command_state_reset(
     assert task.compute(_state()) is not None
 
     far_feedback = _state(positions={"arm/a": -0.3, "arm/b": -0.3})
-    assert task.compute(far_feedback) is None
-    calls_at_fault = ik.step_frame_targets.call_count
-    assert task.compute(_state()) is None
-    assert ik.step_frame_targets.call_count == calls_at_fault
+    assert task.compute(far_feedback) is not None
 
-    task._reset_command_state()
-    ik.step_frame_targets.return_value = JointState(name=["arm/a", "arm/b"], position=[0.01, 0.01])
-    assert task.compute(_state()) is not None
-    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.0, 0.0]
+    assert ik.step_frame_targets.call_count == 2
+    assert ik.step_frame_targets.call_args.kwargs["command_state"].position == [0.1, 0.1]
+    assert ik.step_frame_targets.call_args.kwargs["measured_state"].position == [-0.3, -0.3]
 
 
 def test_feedback_limit_warnings_are_rate_limited(mocker: MockerFixture) -> None:
@@ -321,9 +300,8 @@ def test_feedback_limit_warnings_are_rate_limited(mocker: MockerFixture) -> None
     assert warning.call_count == 2
 
 
-@pytest.mark.parametrize("positions", [[float("nan"), 0.0], [1.0, 0.0]])
-def test_compute_rejects_unsafe_pink_result(mocker: MockerFixture, positions: list[float]) -> None:
-    task = _Task(_config(), _ik(mocker, positions), _snapshot())
+def test_compute_rejects_non_finite_pink_result(mocker: MockerFixture) -> None:
+    task = _Task(_config(), _ik(mocker, [float("nan"), 0.0]), _snapshot())
 
     assert task.compute(_state()) is None
 

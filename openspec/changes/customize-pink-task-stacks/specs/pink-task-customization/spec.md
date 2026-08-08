@@ -81,5 +81,5 @@ Plain `PinkIK` SHALL preserve its existing frame-task parameters, posture regula
 Robot-specific composition SHALL be able to construct a `PinkIK` subclass and inject that instance into the generic pose-target control task without subclassing the control task.
 
 #### Scenario: Quest task receives a robot-specific backend
-- **WHEN** a generic `QuestTeleopIKTask` is initialized with a fresh robot-specific `PinkIK` instance
+- **WHEN** a generic `TeleopIKTask` is initialized with a fresh robot-specific `PinkIK` instance
 - **THEN** Quest engagement and target semantics SHALL remain generic while the injected backend's named task stack controls the Pink objective

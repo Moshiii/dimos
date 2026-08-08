@@ -24,6 +24,6 @@ None.
 ## Impact
 
 - Refactors `dimos/manipulation/planning/kinematics/pink_ik.py` and its tests while retaining the existing public planning and streaming entry points.
-- Keeps `PoseTargetIKTask`, `CartesianIKTask`, and `QuestTeleopIKTask` behavior and dependency-injection API unchanged.
+- Keeps `PoseTargetIKTask`, `CartesianIKTask`, and `TeleopIKTask` behavior and dependency-injection API unchanged.
 - Establishes a protected subclass contract that robot packages can use for direct Pink task declarations without adding robot fields to the global kinematics configuration.
 - May extract private Pink model/mapping or planning helpers to keep the public backend navigable; no new runtime dependency is required.

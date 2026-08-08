@@ -92,8 +92,7 @@ def eef_twist_task(
     name: str = EEF_TWIST_TASK_NAME,
     priority: int = 10,
     timeout: float = 0.3,
-    max_joint_delta_deg: float = 15.0,
-    max_joint_velocity_rad_s: float | None = None,
+    max_joint_velocity_rad_s: float = 5.0,
     max_command_tracking_error_deg: float = 10.0,
     pink: PinkKinematicsConfig | None = None,
     params: GripperTaskOverrides | None = None,
@@ -101,7 +100,6 @@ def eef_twist_task(
     task_params: dict[str, Any] = {
         "robot_model": robot_model,
         "timeout": timeout,
-        "max_joint_delta_deg": max_joint_delta_deg,
         "max_joint_velocity_rad_s": max_joint_velocity_rad_s,
         "max_command_tracking_error_deg": max_command_tracking_error_deg,
     }
@@ -120,7 +118,7 @@ def eef_twist_task(
     )
 
 
-def quest_teleop_ik_task(
+def teleop_ik_task(
     hardware: HardwareComponent,
     *,
     robot_model: RobotModelConfig,
@@ -140,7 +138,7 @@ def quest_teleop_ik_task(
         task_params.update(params)
     return TaskConfig(
         name=name,
-        type="quest_teleop_ik",
+        type="teleop_ik",
         joint_names=list(joint_names) if joint_names is not None else hardware.joints,
         priority=priority,
         params=task_params,

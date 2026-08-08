@@ -17,15 +17,15 @@
 from __future__ import annotations
 
 from dimos.control.components import HardwareComponent
-from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.control.coordinator import ControlCoordinator, ControlCoordinatorConfig, TaskConfig
+from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.global_config import global_config
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.robot.manipulators.common.blueprints import (
     coordinator,
     planner,
-    quest_teleop_ik_task,
+    teleop_ik_task,
 )
 from dimos.robot.manipulators.common.topics import DEFAULT_TRAJECTORY_TASK_NAME
 from dimos.robot.manipulators.openarm.config import (
@@ -117,10 +117,29 @@ def _openarm_quest_hardware(
     )
 
 
-_openarm_quest_hw = _openarm_quest_hardware(
-    global_config.left_can_port,
-    global_config.right_can_port,
-)
+class OpenArmTeleopCoordinatorConfig(ControlCoordinatorConfig):
+    """OpenArm teleop deployment configuration."""
+
+    left_can_port: str | None = None
+    right_can_port: str | None = None
+
+
+class OpenArmTeleopCoordinator(TeleopControlCoordinator):
+    """Select fake or dual-CAN OpenArm hardware before normal coordinator setup."""
+
+    config: OpenArmTeleopCoordinatorConfig
+
+    def _setup_from_config(self) -> None:
+        self.config.hardware = [
+            _openarm_quest_hardware(
+                self.config.left_can_port,
+                self.config.right_can_port,
+            )
+        ]
+        super()._setup_from_config()
+
+
+_openarm_quest_hw = openarm_mock_hardware()
 _openarm_quest_model = openarm_bimanual_model_config()
 _openarm_quest_pink = PinkKinematicsConfig(
     dt=0.01,
@@ -131,7 +150,7 @@ _openarm_quest_pink = PinkKinematicsConfig(
     lm_damping=1e-6,
     gain=0.25,
 )
-_openarm_quest_task = quest_teleop_ik_task(
+_openarm_quest_task = teleop_ik_task(
     _openarm_quest_hw,
     name=OPENARM_QUEST_TASK_NAME,
     robot_model=_openarm_quest_model,
@@ -156,7 +175,6 @@ _openarm_quest_task = quest_teleop_ik_task(
     params={
         "pink": _openarm_quest_pink,
         "timeout": 0.5,
-        "max_joint_delta_deg": 10.0,
         "max_command_tracking_error_deg": 10.0,
     },
 )
@@ -167,8 +185,8 @@ teleop_quest_openarm = autoconnect(
     ArmTeleopModule.blueprint(
         task_names={"left": OPENARM_QUEST_TASK_NAME, "right": OPENARM_QUEST_TASK_NAME}
     ),
-    ControlCoordinator.blueprint(
-        hardware=[_openarm_quest_hw],
+    OpenArmTeleopCoordinator.blueprint(
+        instance_name="ControlCoordinator",
         tasks=[
             _openarm_quest_task,
             _trajectory_task(priority=20),

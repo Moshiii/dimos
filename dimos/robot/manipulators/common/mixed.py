@@ -17,8 +17,9 @@
 from __future__ import annotations
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.global_config import global_config
-from dimos.robot.manipulators.common.blueprints import quest_teleop_ik_task
+from dimos.robot.manipulators.common.blueprints import teleop_ik_task
 from dimos.robot.manipulators.piper.config import (
     make_piper_hardware,
     make_piper_model_config,
@@ -67,17 +68,17 @@ _piper_teleop_hw = make_piper_hardware(
     gripper=True,
 )
 
-coordinator_teleop_dual = ControlCoordinator.blueprint(
+coordinator_teleop_dual = TeleopControlCoordinator.blueprint(
     hardware=[_xarm6_teleop_hw, _piper_teleop_hw],
     tasks=[
-        quest_teleop_ik_task(
+        teleop_ik_task(
             _xarm6_teleop_hw,
             name="teleop_xarm",
             robot_model=make_xarm6_model_config("xarm_arm"),
             bindings=[{"hand": "left", "target_frame": "link_tcp"}],
             priority=10,
         ),
-        quest_teleop_ik_task(
+        teleop_ik_task(
             _piper_teleop_hw,
             name="teleop_piper",
             robot_model=make_piper_model_config("piper_arm"),

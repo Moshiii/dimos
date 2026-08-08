@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import pink  # type: ignore[import-untyped]
 
 from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
 
@@ -54,7 +53,7 @@ class OpenArmTeleopPinkIK(PinkIK):
         posture_task.cost = self.config.posture_cost * _POSTURE_WEIGHTS
 
         for frame_name in target_frames:
-            tasks[f"manipulability/{frame_name}"] = pink.tasks.ManipulabilityTask(
+            tasks[f"manipulability/{frame_name}"] = self._modules.pink.tasks.ManipulabilityTask(
                 frame_name,
                 configuration.model,
                 cost=_MANIPULABILITY_COST,

@@ -409,7 +409,7 @@ KeyboardTeleopModule ──→ ControlCoordinator ──→ ManipulationModule
 
 ### Streaming pose-target control
 
-`CartesianIKTask` and `QuestTeleopIKTask` are sibling leaves over the shared
+`CartesianIKTask` and `TeleopIKTask` are sibling leaves over the shared
 `PoseTargetIKTask` control core. Their configuration uses a `RobotModelConfig`,
 explicit controlled `joint_names`, and named target frames. The common core
 warm-starts one bounded Pink update from live coordinator joint state on each
@@ -460,7 +460,7 @@ Construct a fresh backend for each stateful control-task instance and inject it
 through the existing `ik=` argument:
 
 ```python skip
-teleop_task = QuestTeleopIKTask(
+teleop_task = TeleopIKTask(
     "teleop_openarm",
     openarm_quest_config,
     ik=OpenArmPinkIK(openarm_quest_config.pink),

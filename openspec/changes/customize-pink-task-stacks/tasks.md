@@ -28,7 +28,7 @@
 - [x] 5.2 Add a multi-level inheritance test proving a derived subclass can modify one parent-declared named task without recreating or disturbing the remaining stack.
 - [x] 5.3 Add tests proving task identities persist across control ticks, frame targets mutate in place, and separate backend instances do not share task state.
 - [x] 5.4 Add tests for read-only per-tick mappings, missing or mismatched frame entries, temporal before/after hooks, and absence of an after-solve callback on solver failure.
-- [x] 5.5 Verify an injected `PinkIK` subclass changes the objective used by the generic `QuestTeleopIKTask` without changing its engagement, synchronization, timeout, or output-safety semantics.
+- [x] 5.5 Verify an injected `PinkIK` subclass changes the objective used by the generic `TeleopIKTask` without changing its engagement, synchronization, timeout, or output-safety semantics.
 
 ## 6. Documentation and Verification
 

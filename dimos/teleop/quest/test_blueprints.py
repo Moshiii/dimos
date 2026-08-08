@@ -34,7 +34,7 @@ def _coordinator_tasks(blueprint: Blueprint) -> list[TaskConfig]:
 
 
 def _quest_tasks(blueprint: Blueprint) -> list[TaskConfig]:
-    return [task for task in _coordinator_tasks(blueprint) if task.type == "quest_teleop_ik"]
+    return [task for task in _coordinator_tasks(blueprint) if task.type == "teleop_ik"]
 
 
 def _binding(task: TaskConfig) -> dict[str, Any]:

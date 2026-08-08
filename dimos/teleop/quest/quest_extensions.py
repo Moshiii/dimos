@@ -36,7 +36,11 @@ from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.teleop.quest.quest_teleop_module import QuestTeleopConfig, QuestTeleopModule
-from dimos.teleop.quest.quest_types import Buttons, Hand, QuestControllerState
+from dimos.teleop.quest.quest_types import (
+    Hand,
+    QuestControllerState,
+    teleop_controls_from_controllers,
+)
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -95,7 +99,7 @@ class TwistTeleopModule(QuestTeleopModule):
     Outputs:
         - left_twist: TwistStamped (linear + angular velocity)
         - right_twist: TwistStamped (linear + angular velocity)
-        - buttons: Buttons (inherited)
+        - buttons: TeleopControls (inherited)
     """
 
     config: TwistTeleopConfig
@@ -131,7 +135,7 @@ class ArmTeleopConfig(QuestTeleopConfig):
     Attributes:
         task_names: Mapping of Hand -> coordinator task name. Used to set
             frame_id on output PoseStamped so the coordinator routes each
-            hand's commands to the correct QuestTeleopIKTask.
+            hand's commands to the correct TeleopIKTask.
     """
 
     task_names: dict[str, str] = Field(default_factory=dict)
@@ -145,7 +149,7 @@ class ArmTeleopModule(QuestTeleopModule):
 
     When task_names is configured, output PoseStamped messages have their
     frame_id set to the task name, enabling the coordinator to route
-    each hand's commands to the correct QuestTeleopIKTask.
+    each hand's commands to the correct TeleopIKTask.
 
     Unlike the base module, this publishes absolute controller poses. The
     control task owns controller-to-robot reference capture so one task can
@@ -154,7 +158,7 @@ class ArmTeleopModule(QuestTeleopModule):
     Outputs:
         - left_controller_output: PoseStamped (inherited)
         - right_controller_output: PoseStamped (inherited)
-        - buttons: Buttons (inherited)
+        - buttons: TeleopControls (inherited)
     """
 
     config: ArmTeleopConfig
@@ -195,8 +199,8 @@ class ArmTeleopModule(QuestTeleopModule):
         left: QuestControllerState | None,
         right: QuestControllerState | None,
     ) -> None:
-        """Publish Buttons with analog triggers packed into bits 16-29."""
-        buttons = Buttons.from_controllers(left, right)
+        """Publish TeleopControls with analog triggers packed into bits 16-29."""
+        buttons = teleop_controls_from_controllers(left, right)
         buttons.pack_analog_triggers(
             left=left.trigger if left is not None else 0.0,
             right=right.trigger if right is not None else 0.0,
@@ -234,7 +238,7 @@ class HandTeleopModule(ArmTeleopModule):
         right: QuestControllerState | None,
     ) -> None:
         """Keep downstream press-and-hold teleop tasks engaged between pinches."""
-        buttons = Buttons.from_controllers(left, right)
+        buttons = teleop_controls_from_controllers(left, right)
         buttons.pack_analog_triggers(
             left=left.trigger if left is not None else 0.0,
             right=right.trigger if right is not None else 0.0,
@@ -263,7 +267,7 @@ class VideoArmTeleopModule(ArmTeleopModule):
     Outputs:
         - left_controller_output: PoseStamped (inherited)
         - right_controller_output: PoseStamped (inherited)
-        - buttons: Buttons (inherited)
+        - buttons: TeleopControls (inherited)
     """
 
     config: VideoArmTeleopConfig

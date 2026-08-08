@@ -99,106 +99,6 @@ class _JointMapping:
     idx_v: list[int]
 
 
-class _StreamingCommandLimit:
-    """Intersect streaming motion bounds with measured tracking feedback."""
-
-    def __init__(
-        self,
-        *,
-        model: Any,
-        mapping: _JointMapping,
-        raw_command_q: NDArray[np.float64],
-        measured_q: NDArray[np.float64],
-        max_command_delta: float,
-        max_controlled_velocity: float | None,
-        max_command_tracking_error: float,
-    ) -> None:
-        velocity_limits = np.asarray(model.velocityLimit, dtype=np.float64)
-        if velocity_limits.shape != (model.nv,):
-            raise ValueError("Pink model velocity limits do not match its tangent dimension")
-        if raw_command_q.shape != (model.nq,) or measured_q.shape != (model.nq,):
-            raise ValueError("Pink streaming states do not match its configuration dimension")
-
-        velocity_limited = set(
-            np.flatnonzero(np.logical_and(velocity_limits < 1e20, velocity_limits > 1e-10)).tolist()
-        )
-        controlled_q_by_v = dict(zip(mapping.idx_v, mapping.idx_q, strict=True))
-        self._indices = np.array(
-            sorted(velocity_limited | controlled_q_by_v.keys()),
-            dtype=np.int64,
-        )
-        self._projection = np.eye(model.nv, dtype=np.float64)[self._indices]
-        self._velocity_limits = velocity_limits
-        self._velocity_limited = velocity_limited
-        self._controlled_q_by_v = controlled_q_by_v
-        self._raw_command_q = raw_command_q.copy()
-        self._measured_q = measured_q.copy()
-        self._max_command_delta = max_command_delta
-        self._max_controlled_velocity = max_controlled_velocity
-        self._max_command_tracking_error = max_command_tracking_error
-
-    def compute_qp_inequalities(
-        self,
-        configuration: Any,
-        dt: float,
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
-        if not self._indices.size:
-            return None
-
-        lower_displacements: list[float] = []
-        upper_displacements: list[float] = []
-        for velocity_index in self._indices:
-            index = int(velocity_index)
-            if index in self._velocity_limited:
-                velocity_displacement = dt * float(self._velocity_limits[index])
-                lower = -velocity_displacement
-                upper = velocity_displacement
-            else:
-                lower = -np.inf
-                upper = np.inf
-
-            q_index = self._controlled_q_by_v.get(index)
-            if q_index is not None:
-                if self._max_controlled_velocity is not None:
-                    controlled_velocity_displacement = dt * self._max_controlled_velocity
-                    lower = max(lower, -controlled_velocity_displacement)
-                    upper = min(upper, controlled_velocity_displacement)
-                raw_position = float(self._raw_command_q[q_index])
-                normalized_position = float(configuration.q[q_index])
-                lower = max(
-                    lower,
-                    raw_position - self._max_command_delta - normalized_position,
-                )
-                upper = min(
-                    upper,
-                    raw_position + self._max_command_delta - normalized_position,
-                )
-                tracking_error = normalized_position - float(self._measured_q[q_index])
-                if tracking_error > self._max_command_tracking_error:
-                    upper = min(upper, 0.0)
-                elif tracking_error < -self._max_command_tracking_error:
-                    lower = max(lower, 0.0)
-                else:
-                    lower = max(
-                        lower,
-                        -self._max_command_tracking_error - tracking_error,
-                    )
-                    upper = min(
-                        upper,
-                        self._max_command_tracking_error - tracking_error,
-                    )
-            if lower > upper:
-                raise ValueError(
-                    "Pink streaming command and model velocity limits have no feasible interval"
-                )
-            lower_displacements.append(lower)
-            upper_displacements.append(upper)
-
-        matrix = np.vstack([self._projection, -self._projection])
-        vector = np.hstack([upper_displacements, -np.asarray(lower_displacements)])
-        return matrix, vector
-
-
 @dataclass
 class _PinkRobotContext:
     model: Any
@@ -216,7 +116,6 @@ class _PinkControlContext:
 
 
 _CURRENT_POSTURE_TASK = "posture/current"
-_STREAMING_COMMAND_HEADROOM = 0.99
 
 
 def _frame_task_key(frame_name: str) -> str:
@@ -261,8 +160,7 @@ class PinkIK:
         measured_state: JointState,
         max_command_tracking_error_rad: float,
         dt: float | None = None,
-        max_joint_delta_rad: float | None = None,
-        max_joint_velocity_rad_s: float | None = None,
+        max_joint_velocity_rad_s: float = 5.0,
     ) -> JointState:
         """Perform one bounded Pink update for one robot's frame targets.
 
@@ -288,9 +186,15 @@ class PinkIK:
         }
         if not np.isfinite(max_command_tracking_error_rad) or max_command_tracking_error_rad <= 0.0:
             raise ValueError("Pink command tracking error must be positive and finite")
-        command_positions = _seed_positions_for_mapping(command_state, robot_context.mapping)
+        step_dt = self.config.dt if dt is None else dt
+        if not np.isfinite(step_dt) or step_dt <= 0.0:
+            raise ValueError("Pink streaming timestep must be positive and finite")
+        if not np.isfinite(max_joint_velocity_rad_s) or max_joint_velocity_rad_s <= 0.0:
+            raise ValueError("Pink streaming joint velocity limit must be positive and finite")
+
+        previous_positions = _seed_positions_for_mapping(command_state, robot_context.mapping)
         measured_positions = _seed_positions_for_mapping(measured_state, robot_context.mapping)
-        raw_command_q = self._q_from_dimos_positions(robot_context, command_positions)
+        raw_command_q = self._q_from_dimos_positions(robot_context, previous_positions)
         measured_q = self._q_from_dimos_positions(robot_context, measured_positions)
         self._validate_streaming_feedback(robot_context, measured_q)
         command_q = self._clamp_streaming_configuration(robot_context, raw_command_q)
@@ -304,24 +208,22 @@ class PinkIK:
         tasks = control_context.tasks
         self._update_frame_task_targets(tasks, targets)
         self._update_current_posture_target(tasks, configuration)
-        solve_limits = self._streaming_solve_limits(
-            configuration=configuration,
-            mapping=robot_context.mapping,
-            raw_command_q=raw_command_q,
-            measured_q=measured_q,
-            max_joint_delta_rad=max_joint_delta_rad,
-            max_joint_velocity_rad_s=max_joint_velocity_rad_s,
-            max_command_tracking_error_rad=max_command_tracking_error_rad,
-        )
         self._step_configuration(
             robot_context=robot_context,
             configuration=configuration,
             tasks=tasks,
-            dt=self.config.dt if dt is None else dt,
-            limits=solve_limits,
+            dt=step_dt,
         )
-        command_positions = self._q_to_dimos_positions(robot_context, configuration.q)
-        command_positions = self._saturate_streaming_command(robot_context, command_positions)
+        candidate_positions = self._q_to_dimos_positions(robot_context, configuration.q)
+        command_positions = self._apply_streaming_command_envelope(
+            context=robot_context,
+            candidate=candidate_positions,
+            previous=previous_positions,
+            measured=measured_positions,
+            dt=step_dt,
+            max_joint_velocity=max_joint_velocity_rad_s,
+            max_tracking_error=max_command_tracking_error_rad,
+        )
         return JointState(
             {
                 "name": list(joint_names),
@@ -838,7 +740,6 @@ class PinkIK:
         tasks: Mapping[str, Any],
         dt: float,
         locked_joint_positions: Mapping[int, float] | None = None,
-        limits: Sequence[Any] | None = None,
     ) -> None:
         self._before_solve(tasks, configuration, dt)
         velocity = self._modules.pink.solve_ik(
@@ -847,7 +748,6 @@ class PinkIK:
             dt,
             solver=self.config.solver,
             damping=self.config.damping,
-            limits=limits,
             safety_break=self.config.safety_break,
         )
         self._after_solve(tasks, velocity, dt)
@@ -857,48 +757,6 @@ class PinkIK:
             for local_index, value in locked_joint_positions.items():
                 locked_q[robot_context.mapping.idx_q[local_index]] = value
             configuration.update(locked_q)
-
-    def _streaming_solve_limits(
-        self,
-        *,
-        configuration: Any,
-        mapping: _JointMapping,
-        raw_command_q: NDArray[np.float64],
-        measured_q: NDArray[np.float64],
-        max_joint_delta_rad: float | None,
-        max_joint_velocity_rad_s: float | None,
-        max_command_tracking_error_rad: float,
-    ) -> list[Any]:
-        if max_joint_delta_rad is not None and (
-            not np.isfinite(max_joint_delta_rad) or max_joint_delta_rad <= 0.0
-        ):
-            raise ValueError("Pink streaming joint delta limit must be positive and finite")
-        if max_joint_velocity_rad_s is not None and (
-            not np.isfinite(max_joint_velocity_rad_s) or max_joint_velocity_rad_s <= 0.0
-        ):
-            raise ValueError("Pink streaming joint velocity limit must be positive and finite")
-
-        model = configuration.model
-        limits: list[Any] = [
-            model.configuration_limit,
-            _StreamingCommandLimit(
-                model=model,
-                mapping=mapping,
-                raw_command_q=raw_command_q,
-                measured_q=measured_q,
-                max_command_delta=(
-                    np.inf
-                    if max_joint_delta_rad is None
-                    else max_joint_delta_rad * _STREAMING_COMMAND_HEADROOM
-                ),
-                max_controlled_velocity=max_joint_velocity_rad_s,
-                max_command_tracking_error=max_command_tracking_error_rad,
-            ),
-        ]
-        floating_base_limit = getattr(model, "floating_base_velocity_limit", None)
-        if floating_base_limit is not None:
-            limits.append(floating_base_limit)
-        return limits
 
     def _get_robot_context(
         self,
@@ -1052,23 +910,53 @@ class PinkIK:
             normalized[q_index] = np.clip(value, lower + margin, upper - margin)
         return normalized
 
-    def _saturate_streaming_command(
+    def _apply_streaming_command_envelope(
         self,
+        *,
         context: _PinkRobotContext,
-        positions: NDArray[np.float64],
+        candidate: NDArray[np.float64],
+        previous: NDArray[np.float64],
+        measured: NDArray[np.float64],
+        dt: float,
+        max_joint_velocity: float,
+        max_tracking_error: float,
     ) -> NDArray[np.float64]:
-        saturated = positions.copy()
-        margin = self.config.command_limit_margin
+        """Clamp one Pink candidate to the complete streaming safety envelope."""
+        joint_count = len(context.mapping.idx_q)
+        expected_shape = (joint_count,)
+        if any(values.shape != expected_shape for values in (candidate, previous, measured)):
+            raise ValueError("Pink streaming states do not match the controlled joint count")
+
+        model_velocity = np.asarray(context.model.velocityLimit, dtype=np.float64)
+        if model_velocity.shape != (context.model.nv,):
+            raise ValueError("Pink model velocity limits do not match its tangent dimension")
+        velocity_limits = np.full(joint_count, max_joint_velocity, dtype=np.float64)
+        for index, v_index in enumerate(context.mapping.idx_v):
+            urdf_velocity = float(model_velocity[v_index])
+            if np.isfinite(urdf_velocity) and 1e-10 < urdf_velocity < 1e20:
+                velocity_limits[index] = min(velocity_limits[index], urdf_velocity)
+
+        step_limits = velocity_limits * dt
+        lower = np.maximum(previous - step_limits, measured - max_tracking_error)
+        upper = np.minimum(previous + step_limits, measured + max_tracking_error)
+
         controlled_index_by_q = {
             q_index: controlled_index
             for controlled_index, q_index in enumerate(context.mapping.idx_q)
         }
-        for _joint_name, q_index, lower, upper in _bounded_controlled_joint_limits(context):
-            controlled_index = controlled_index_by_q[q_index]
-            saturated[controlled_index] = np.clip(
-                positions[controlled_index], lower + margin, upper - margin
-            )
-        return saturated
+        margin = self.config.command_limit_margin
+        for _joint_name, q_index, urdf_lower, urdf_upper in _bounded_controlled_joint_limits(
+            context
+        ):
+            index = controlled_index_by_q[q_index]
+            lower[index] = max(lower[index], urdf_lower + margin)
+            upper[index] = min(upper[index], urdf_upper - margin)
+
+        invalid = np.flatnonzero(lower > upper)
+        if invalid.size:
+            joint_name = context.mapping.dimos_joint_names[int(invalid[0])]
+            raise ValueError(f"Pink streaming command envelope is empty for '{joint_name}'")
+        return np.clip(candidate, lower, upper)
 
     def _validate_streaming_limit_margin(self, context: _PinkRobotContext) -> None:
         margin = self.config.command_limit_margin

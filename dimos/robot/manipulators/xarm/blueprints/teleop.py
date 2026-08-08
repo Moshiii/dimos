@@ -20,6 +20,7 @@ from typing import cast
 
 from dimos.control.components import make_gripper_joints
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.core.stream import Out
@@ -28,7 +29,7 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.common.blueprints import (
     GripperTaskOverrides,
     eef_twist_task,
-    quest_teleop_ik_task,
+    teleop_ik_task,
     trajectory_task,
 )
 from dimos.robot.manipulators.common.sim import mujoco_if_sim
@@ -161,13 +162,13 @@ _xarm6_teleop_hw = xarm6_hardware(
 _xarm6_teleop_model = make_xarm6_model_config(add_gripper=True)
 _xarm7_teleop_model = make_xarm7_model_config(add_gripper=True)
 
-# Dual-input arm: VR (quest_teleop_ik) preempts browser keyboard (eef_twist) via
+# Dual-input arm: VR (teleop_ik) preempts browser keyboard (eef_twist) via
 # higher priority; when VR is idle the always-active eef_twist holds/drives.
 # While engaged, VR also owns the gripper joint (trigger), so the browser
 # gripper toggle only takes effect when VR is disengaged.
 
 
-class _XArm7TeleopCoordinator(ControlCoordinator):
+class _XArm7TeleopCoordinator(TeleopControlCoordinator):
     arm_joints: Out[JointState]
 
 
@@ -177,7 +178,7 @@ coordinator_teleop_xarm7 = autoconnect(
         publish_robot_joint_states=True,
         hardware=[_xarm7_teleop_hw],
         tasks=[
-            quest_teleop_ik_task(
+            teleop_ik_task(
                 _xarm7_teleop_hw,
                 robot_model=_xarm7_teleop_model,
                 bindings=[
@@ -210,10 +211,10 @@ coordinator_teleop_xarm7 = autoconnect(
 )
 
 coordinator_teleop_xarm6 = autoconnect(
-    ControlCoordinator.blueprint(
+    TeleopControlCoordinator.blueprint(
         hardware=[_xarm6_teleop_hw],
         tasks=[
-            quest_teleop_ik_task(
+            teleop_ik_task(
                 _xarm6_teleop_hw,
                 robot_model=_xarm6_teleop_model,
                 bindings=[

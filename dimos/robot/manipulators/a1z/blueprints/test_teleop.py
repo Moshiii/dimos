@@ -16,7 +16,8 @@ from typing import Any, cast
 
 import pytest
 
-from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.control.coordinator import TaskConfig
+from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.core.global_config import global_config
 from dimos.robot.manipulators.a1z.blueprints.teleop import coordinator_teleop_a1z
@@ -26,7 +27,9 @@ from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 
 
 def _coordinator_kwargs(blueprint: Blueprint) -> dict[str, Any]:
-    return next(atom.kwargs for atom in blueprint.blueprints if atom.module is ControlCoordinator)
+    return next(
+        atom.kwargs for atom in blueprint.blueprints if atom.module is TeleopControlCoordinator
+    )
 
 
 def test_quest_teleop_uses_mock_a1z_hardware_and_gripper_by_default() -> None:

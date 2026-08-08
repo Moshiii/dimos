@@ -43,7 +43,6 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 _FEEDBACK_LIMIT_WARNING_INTERVAL_S = 1.0
-_HARD_TRACKING_ERROR_MULTIPLIER = 2.0
 
 
 @dataclass(frozen=True)
@@ -56,8 +55,7 @@ class PoseTargetIKTaskConfig:
     pink: PinkKinematicsConfig = field(default_factory=PinkKinematicsConfig)
     priority: int = 10
     timeout: float = 0.5
-    max_joint_delta_deg: float = 5.0
-    max_joint_velocity_rad_s: float | None = None
+    max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
 
 
@@ -89,11 +87,7 @@ class PoseTargetIKTask(BaseControlTask):
             raise ValueError(f"PoseTargetIKTask '{name}' requires at least one target frame")
         if len(set(config.target_frames)) != len(config.target_frames):
             raise ValueError(f"PoseTargetIKTask '{name}' requires unique target frames")
-        if not np.isfinite(config.max_joint_delta_deg) or config.max_joint_delta_deg <= 0.0:
-            raise ValueError(
-                f"PoseTargetIKTask '{name}' requires a positive finite joint delta limit"
-            )
-        if config.max_joint_velocity_rad_s is not None and (
+        if (
             not np.isfinite(config.max_joint_velocity_rad_s)
             or config.max_joint_velocity_rad_s <= 0.0
         ):
@@ -124,7 +118,6 @@ class PoseTargetIKTask(BaseControlTask):
         self._command_state_lock = threading.Lock()
         self._command_state: JointState | None = None
         self._command_state_generation = 0
-        self._command_tracking_faulted = False
         self._ik = ik or PinkIK(config.pink)
         self._ik.validate_frame_targets(
             config.robot_model, config.target_frames, config.joint_names
@@ -155,33 +148,10 @@ class PoseTargetIKTask(BaseControlTask):
             self._reset_command_state()
             return None
         with self._command_state_lock:
-            if self._command_tracking_faulted:
-                return None
             if self._command_state is None:
                 self._command_state = _copy_joint_state(measured_state)
             command_state = _copy_joint_state(self._command_state)
             command_generation = self._command_state_generation
-
-            tracking_errors = np.abs(
-                np.asarray(command_state.position, dtype=np.float64)
-                - np.asarray(measured_state.position, dtype=np.float64)
-            )
-            hard_limit_rad = np.deg2rad(
-                self._config.max_command_tracking_error_deg * _HARD_TRACKING_ERROR_MULTIPLIER
-            )
-            if np.any(tracking_errors > hard_limit_rad):
-                worst_index = int(np.argmax(tracking_errors))
-                self._command_state = None
-                self._command_state_generation += 1
-                self._command_tracking_faulted = True
-                logger.warning(
-                    "Pose-target command exceeded hard tracking error",
-                    task=self._name,
-                    joint=self._joint_names[worst_index],
-                    error_deg=float(np.rad2deg(tracking_errors[worst_index])),
-                    limit_deg=float(np.rad2deg(hard_limit_rad)),
-                )
-                return None
         try:
             result = self._ik.step_frame_targets(
                 robot_model=self._config.robot_model,
@@ -193,7 +163,6 @@ class PoseTargetIKTask(BaseControlTask):
                     np.deg2rad(self._config.max_command_tracking_error_deg)
                 ),
                 dt=state.dt,
-                max_joint_delta_rad=float(np.deg2rad(self._config.max_joint_delta_deg)),
                 max_joint_velocity_rad_s=self._config.max_joint_velocity_rad_s,
             )
         except PinkIKFeedbackLimitError as exc:
@@ -224,21 +193,9 @@ class PoseTargetIKTask(BaseControlTask):
             logger.warning("Pink control step returned an invalid joint result", task=self._name)
             return None
 
-        current = np.asarray(command_state.position, dtype=np.float64)
         positions = np.asarray(result.position, dtype=np.float64)
         if not np.all(np.isfinite(positions)):
             logger.warning("Pink control step returned non-finite positions", task=self._name)
-            return None
-        delta_deg = np.rad2deg(np.abs(positions - current))
-        if np.any(delta_deg > self._config.max_joint_delta_deg):
-            worst_index = int(np.argmax(delta_deg))
-            logger.warning(
-                "Rejecting Pink control step above joint delta limit",
-                task=self._name,
-                joint=self._joint_names[worst_index],
-                delta_deg=float(delta_deg[worst_index]),
-                limit_deg=self._config.max_joint_delta_deg,
-            )
             return None
 
         output_names = list(self._joint_names)
@@ -254,10 +211,7 @@ class PoseTargetIKTask(BaseControlTask):
             output_names.append(joint_name)
             output_positions.append(float(snapshot.extra_joint_positions[joint_name]))
         with self._command_state_lock:
-            if (
-                self._command_tracking_faulted
-                or self._command_state_generation != command_generation
-            ):
+            if self._command_state_generation != command_generation:
                 return None
             self._command_state = JointState(
                 name=list(self._joint_names),
@@ -303,7 +257,6 @@ class PoseTargetIKTask(BaseControlTask):
         with self._command_state_lock:
             self._command_state = None
             self._command_state_generation += 1
-            self._command_tracking_faulted = False
 
     @abstractmethod
     def _frame_target_snapshot(self, state: CoordinatorState) -> FrameTargetSnapshot | None:

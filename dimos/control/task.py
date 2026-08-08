@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.Pose import Pose
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
-    from dimos.teleop.quest.quest_types import Buttons
+    from dimos.teleop.types import TeleopControls
 
 
 @dataclass(frozen=True)
@@ -288,7 +288,7 @@ class ControlTask(Protocol):
         """
         ...
 
-    def on_buttons(self, msg: Buttons) -> bool:
+    def on_buttons(self, msg: TeleopControls) -> bool:
         """Handle button state from teleop controllers."""
         ...
 
@@ -334,7 +334,7 @@ class BaseControlTask(ControlTask):
         """Unique task identifier, backed by ``self._name``."""
         return self._name
 
-    def on_buttons(self, msg: Buttons) -> bool:
+    def on_buttons(self, msg: TeleopControls) -> bool:
         """No-op default."""
         return False
 

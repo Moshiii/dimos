@@ -61,7 +61,6 @@ def _task(mocker: MockerFixture, *, gripper: bool = False) -> tuple[EEFTwistTask
             target_frames=("tool",),
             timeout=0.0,
             command_timeout=0.3,
-            max_joint_delta_deg=15.0,
             gripper_joint="arm/gripper" if gripper else None,
             gripper_open_pos=0.8,
             gripper_closed_pos=0.1,

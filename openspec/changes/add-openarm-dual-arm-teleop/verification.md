@@ -20,7 +20,7 @@ blueprint wiring without starting physical hardware.
 
 | Spec scenarios | Coverage |
 |---|---|
-| One/two bindings and invalid collections | `test_quest_teleop_ik_task.py` configuration, single-binding, and bimanual tests |
+| One/two bindings and invalid collections | `test_teleop_ik_task.py` configuration, single-binding, and bimanual tests |
 | Relative controller mapping | `test_single_binding_tracks_relative_controller_motion` |
 | One-hand inactive, atomic two-hand engage, either-hand release | `test_bimanual_task_requires_both_hands_and_releases_atomically` |
 | Stale side disables all; two fresh targets share one Pink step | bimanual timeout and combined-step tests |

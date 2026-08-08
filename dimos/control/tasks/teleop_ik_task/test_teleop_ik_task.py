@@ -24,11 +24,11 @@ from pytest_mock import MockerFixture
 from dimos.control.coordinator import TaskConfig
 from dimos.control.task import CoordinatorState, JointStateSnapshot
 import dimos.control.tasks.pose_target_ik as pose_target_module
-from dimos.control.tasks.quest_teleop_ik_task.quest_teleop_ik_task import (
+from dimos.control.tasks.teleop_ik_task.teleop_ik_task import (
     OperatorHand,
-    QuestHandBinding,
-    QuestTeleopIKTask,
-    QuestTeleopIKTaskConfig,
+    TeleopHandBinding,
+    TeleopIKTask,
+    TeleopIKTaskConfig,
     create_task,
 )
 from dimos.manipulation.planning.kinematics.pink_ik import PinkIK
@@ -37,7 +37,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.teleop.quest.quest_types import Buttons
+from dimos.teleop.types import TeleopControls
 
 
 def _robot_model() -> RobotModelConfig:
@@ -56,8 +56,8 @@ def _binding(
     hand: str,
     frame: str,
     gripper_joint: str | None = None,
-) -> QuestHandBinding:
-    return QuestHandBinding(
+) -> TeleopHandBinding:
+    return TeleopHandBinding(
         hand=cast("OperatorHand", hand),
         target_frame=frame,
         gripper_joint=gripper_joint,
@@ -66,15 +66,12 @@ def _binding(
     )
 
 
-def _config(
-    bindings: tuple[QuestHandBinding, ...], *, timeout: float = 0.5
-) -> QuestTeleopIKTaskConfig:
-    return QuestTeleopIKTaskConfig(
+def _config(bindings: tuple[TeleopHandBinding, ...], *, timeout: float = 0.5) -> TeleopIKTaskConfig:
+    return TeleopIKTaskConfig(
         joint_names=("robot/left", "robot/right"),
         robot_model=_robot_model(),
         bindings=bindings,
         timeout=timeout,
-        max_joint_delta_deg=10.0,
     )
 
 
@@ -110,8 +107,8 @@ def _buttons(
     right: bool = False,
     left_trigger: float = 0.0,
     right_trigger: float = 0.0,
-) -> Buttons:
-    buttons = Buttons()
+) -> TeleopControls:
+    buttons = TeleopControls()
     buttons.left_primary = left
     buttons.right_primary = right
     buttons.pack_analog_triggers(left_trigger, right_trigger)
@@ -167,16 +164,16 @@ class _CustomPinkIK(PinkIK):
 )
 def test_binding_configuration_rejects_invalid_collections(
     mocker: MockerFixture,
-    bindings: tuple[QuestHandBinding, ...],
+    bindings: tuple[TeleopHandBinding, ...],
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        QuestTeleopIKTask("quest", _config(bindings), ik=_ik(mocker))
+        TeleopIKTask("quest", _config(bindings), ik=_ik(mocker))
 
 
 def test_single_binding_tracks_relative_controller_motion(mocker: MockerFixture) -> None:
     ik = _ik(mocker)
-    task = QuestTeleopIKTask(
+    task = TeleopIKTask(
         "quest",
         _config((_binding("right", "right_tool"),)),
         ik=ik,
@@ -197,7 +194,7 @@ def test_bimanual_task_requires_both_hands_and_releases_atomically(
     mocker: MockerFixture,
 ) -> None:
     ik = _ik(mocker)
-    task = QuestTeleopIKTask(
+    task = TeleopIKTask(
         "quest",
         _config(
             (
@@ -227,7 +224,7 @@ def test_deadman_reengagement_reseeds_command_from_feedback(
     mocker: MockerFixture,
 ) -> None:
     ik = _ik(mocker)
-    task = QuestTeleopIKTask(
+    task = TeleopIKTask(
         "quest",
         _config((_binding("left", "left_tool"),)),
         ik=ik,
@@ -252,7 +249,7 @@ def test_deadman_reengagement_reseeds_command_from_feedback(
 
 def test_estop_and_preemption_clear_command_session(mocker: MockerFixture) -> None:
     ik = _ik(mocker)
-    task = QuestTeleopIKTask(
+    task = TeleopIKTask(
         "quest",
         _config((_binding("left", "left_tool"),)),
         ik=ik,
@@ -277,7 +274,7 @@ def test_bimanual_timeout_clears_both_sides_and_reengagement_recaptures(
     mocker: MockerFixture,
 ) -> None:
     ik = _ik(mocker)
-    task = QuestTeleopIKTask(
+    task = TeleopIKTask(
         "quest",
         _config(
             (
@@ -310,7 +307,7 @@ def test_bimanual_step_contains_both_targets_and_grippers(
     mocker: MockerFixture,
 ) -> None:
     ik = _ik(mocker)
-    task = QuestTeleopIKTask(
+    task = TeleopIKTask(
         "quest",
         _config(
             (
@@ -348,7 +345,7 @@ def test_factory_rejects_gripper_missing_from_hardware(mocker: MockerFixture) ->
     mocker.patch.object(pose_target_module, "PinkIK")
     cfg = TaskConfig(
         name="quest",
-        type="quest_teleop_ik",
+        type="teleop_ik",
         joint_names=["robot/left", "robot/right"],
         params={
             "robot_model": _robot_model(),
@@ -374,7 +371,7 @@ def test_factory_constructs_plain_pink_backend_by_default(mocker: MockerFixture)
     mocker.patch.object(PinkIK, "validate_frame_targets")
     cfg = TaskConfig(
         name="quest",
-        type="quest_teleop_ik",
+        type="teleop_ik",
         joint_names=["robot/left", "robot/right"],
         params={
             "robot_model": _robot_model(),
@@ -385,7 +382,7 @@ def test_factory_constructs_plain_pink_backend_by_default(mocker: MockerFixture)
     task = create_task(cfg, hardware={})
 
     assert type(task._ik) is PinkIK
-    assert task._config.max_joint_velocity_rad_s == 1.0
+    assert task._config.max_joint_velocity_rad_s == 5.0
     assert task._config.max_command_tracking_error_deg == 10.0
     init.assert_called_once_with(task._config.pink)
 
@@ -394,7 +391,7 @@ def test_factory_constructs_fresh_custom_backend_for_each_task() -> None:
     _CustomPinkIK.instances.clear()
     cfg = TaskConfig(
         name="quest",
-        type="quest_teleop_ik",
+        type="teleop_ik",
         joint_names=["robot/left", "robot/right"],
         params={
             "robot_model": _robot_model(),

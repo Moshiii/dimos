@@ -15,7 +15,7 @@
 """Characterization tests for coordinator input-stream routing.
 
 These pin the observable routing behavior of the coordinator's input
-streams (joint_command, Cartesian and Quest pose commands,
+streams (joint_command, Cartesian and teleop pose commands,
 coordinator_ee_twist_command, twist_command, teleop_buttons) so the
 card-routing refactor can prove it preserves them. They intentionally
 avoid coordinator internals: messages enter through the ports'
@@ -40,24 +40,22 @@ import dimos.control.coordinator as coord_mod
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.control.tasks.registry import control_task_registry
 from dimos.control.tasks.servo_task.servo_task import JointServoTask, JointServoTaskConfig
+from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.stream import In
 from dimos.hardware.drive_trains.registry import twist_base_adapter_registry
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.teleop.quest.quest_types import Buttons
+from dimos.teleop.types import TeleopControls
 
 ARM_JOINTS = ["arm/joint1", "arm/joint2"]
 
 STREAMS = (
     "joint_command",
     "coordinator_cartesian_command",
-    "left_cartesian_command",
-    "right_cartesian_command",
     "coordinator_ee_twist_command",
     "twist_command",
-    "teleop_buttons",
 )
 
 
@@ -205,6 +203,7 @@ class TestByTaskNameRouting:
     @staticmethod
     def _cartesian_coordinator(make_coordinator):
         coordinator, taps = make_coordinator(
+            coordinator_cls=TeleopControlCoordinator,
             stub_task_types=True,
             tasks=[
                 TaskConfig(name="cart_a", type="cartesian_ik", joint_names=ARM_JOINTS),
@@ -237,19 +236,20 @@ class TestByTaskNameRouting:
         assert coordinator.get_task("cart_b").cartesian_calls == []
 
     @staticmethod
-    def _quest_coordinator(make_coordinator):
+    def _teleop_coordinator(make_coordinator):
         coordinator, taps = make_coordinator(
+            coordinator_cls=TeleopControlCoordinator,
             stub_task_types=True,
             tasks=[
-                TaskConfig(name="dual", type="quest_teleop_ik", joint_names=ARM_JOINTS),
-                TaskConfig(name="single", type="quest_teleop_ik", joint_names=ARM_JOINTS),
+                TaskConfig(name="dual", type="teleop_ik", joint_names=ARM_JOINTS),
+                TaskConfig(name="single", type="teleop_ik", joint_names=ARM_JOINTS),
             ],
         )
         coordinator.start()
         return coordinator, taps
 
     def test_left_and_right_poses_reach_distinct_handlers_on_one_task(self, make_coordinator):
-        coordinator, taps = self._quest_coordinator(make_coordinator)
+        coordinator, taps = self._teleop_coordinator(make_coordinator)
 
         taps["left_cartesian_command"].emit(PoseStamped(frame_id="dual"))
         taps["right_cartesian_command"].emit(PoseStamped(frame_id="dual"))
@@ -260,8 +260,8 @@ class TestByTaskNameRouting:
         assert coordinator.get_task("single").left_cartesian_calls == []
         assert coordinator.get_task("single").right_cartesian_calls == []
 
-    def test_quest_poses_route_to_independent_task_names(self, make_coordinator):
-        coordinator, taps = self._quest_coordinator(make_coordinator)
+    def test_teleop_poses_route_to_independent_task_names(self, make_coordinator):
+        coordinator, taps = self._teleop_coordinator(make_coordinator)
 
         taps["left_cartesian_command"].emit(PoseStamped(frame_id="dual"))
         taps["right_cartesian_command"].emit(PoseStamped(frame_id="single"))
@@ -272,8 +272,8 @@ class TestByTaskNameRouting:
         assert len(coordinator.get_task("single").right_cartesian_calls) == 1
 
     @pytest.mark.parametrize("stream", ["left_cartesian_command", "right_cartesian_command"])
-    def test_quest_pose_with_unknown_task_name_delivers_nothing(self, make_coordinator, stream):
-        coordinator, taps = self._quest_coordinator(make_coordinator)
+    def test_teleop_pose_with_unknown_task_name_delivers_nothing(self, make_coordinator, stream):
+        coordinator, taps = self._teleop_coordinator(make_coordinator)
 
         taps[stream].emit(PoseStamped(frame_id="unknown"))
 
@@ -316,15 +316,16 @@ class TestByTaskNameRouting:
         assert coordinator.get_task("eef_b").ee_twist_calls == []
 
 
-class TestButtonsRouting:
+class TestTeleopControlsRouting:
     def test_buttons_reach_teleop_task(self, make_coordinator):
         coordinator, taps = make_coordinator(
+            coordinator_cls=TeleopControlCoordinator,
             stub_task_types=True,
-            tasks=[TaskConfig(name="teleop1", type="quest_teleop_ik", joint_names=ARM_JOINTS)],
+            tasks=[TaskConfig(name="teleop1", type="teleop_ik", joint_names=ARM_JOINTS)],
         )
         coordinator.start()
 
-        taps["teleop_buttons"].emit(Buttons())
+        taps["teleop_buttons"].emit(TeleopControls())
 
         assert len(coordinator.get_task("teleop1").buttons_calls) == 1
 
@@ -635,14 +636,15 @@ class TestCardRoutingContract:
 
     def test_buttons_skip_card_less_tasks(self, make_coordinator):
         coordinator, taps = make_coordinator(
+            coordinator_cls=TeleopControlCoordinator,
             stub_task_types=True,
-            tasks=[TaskConfig(name="teleop1", type="quest_teleop_ik", joint_names=ARM_JOINTS)],
+            tasks=[TaskConfig(name="teleop1", type="teleop_ik", joint_names=ARM_JOINTS)],
         )
         cardless = RecordingTask("cardless")
         coordinator.add_task(cardless)
         coordinator.start()
 
-        taps["teleop_buttons"].emit(Buttons())
+        taps["teleop_buttons"].emit(TeleopControls())
 
         assert len(coordinator.get_task("teleop1").buttons_calls) == 1
         assert cardless.buttons_calls == []

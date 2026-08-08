@@ -70,9 +70,6 @@ from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.std_msgs.Bool import Bool
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
-from dimos.teleop.quest.quest_types import (
-    Buttons,
-)
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -168,20 +165,12 @@ class ControlCoordinator(Module):
     # Uses frame_id as task name for routing
     coordinator_cartesian_command: In[PoseStamped]
 
-    # Inputs: Quest controller poses routed independently by task name.
-    # A single bimanual task may consume both streams.
-    left_cartesian_command: In[PoseStamped]
-    right_cartesian_command: In[PoseStamped]
-
     # Input: Routed spatial EEF twist commands for EEFTwistTask.
     # Uses frame_id as task name for routing.
     coordinator_ee_twist_command: In[TwistStamped]
 
     # Input: Streaming twist commands for velocity-commanded platforms
     twist_command: In[Twist]
-
-    # Input: Teleop buttons for engage/disengage signaling
-    teleop_buttons: In[Buttons]
 
     # Input: Gripper toggle (True = closed) routed to eef_twist tasks' gripper.
     gripper_command: In[Bool]

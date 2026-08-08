@@ -40,7 +40,6 @@ def _config() -> CartesianIKTaskConfig:
             joint_name_mapping={"arm/joint": "model_joint"},
         ),
         target_frames=("tool",),
-        max_joint_delta_deg=10.0,
     )
 
 

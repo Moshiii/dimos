@@ -34,12 +34,12 @@ The control task hierarchy will be:
 BaseControlTask
 └── PoseTargetIKTask
     ├── CartesianIKTask
-    └── QuestTeleopIKTask
+    └── TeleopIKTask
 ```
 
 `PoseTargetIKTask` owns model/context construction, current-state seeding, frame-target solving, coordinator-to-model joint mapping, resource claims, joint-delta validation, timeout support, and `JointCommandOutput` construction. Leaf tasks own how inputs become a snapshot of absolute frame targets and when that snapshot is active.
 
-`CartesianIKTask` remains an absolute-pose leaf. `QuestTeleopIKTask` owns Quest controller state, engagement edges, captured controller and robot reference poses, relative-to-absolute mapping, and gripper targets.
+`CartesianIKTask` remains an absolute-pose leaf. `TeleopIKTask` owns Quest controller state, engagement edges, captured controller and robot reference poses, relative-to-absolute mapping, and gripper targets.
 
 This avoids making Quest teleoperation inherit single-end-effector Cartesian semantics. A separate Quest mapper module was rejected because it would add an unnecessary stream synchronization and lifecycle boundary around state used only by the Quest task.
 
@@ -61,7 +61,7 @@ Numeric end-effector joint IDs and standalone model paths are removed from the C
 
 ### 3. Use one collection-based Quest task configuration
 
-`QuestTeleopIKTaskConfig` contains one or two immutable hand bindings. Each binding contains:
+`TeleopIKTaskConfig` contains one or two immutable hand bindings. Each binding contains:
 
 - `hand`: left or right operator hand;
 - `target_frame`: the robot-model frame controlled by that hand;
@@ -109,7 +109,7 @@ Using `solve_pose_targets(..., max_iterations=1)` directly was rejected because 
 The default `teleop-quest-openarm` blueprint composes:
 
 - `ArmTeleopModule` with both outputs naming one OpenArm Quest task;
-- one coordinator containing one two-binding `QuestTeleopIKTask`;
+- one coordinator containing one two-binding `TeleopIKTask`;
 - `openarm_bimanual_model_config()`;
 - left and right grasp-frame bindings;
 - both OpenArm arm joint sets and gripper joints;
@@ -152,7 +152,7 @@ multi-target control path unchanged.
 
 1. Extract and test the concrete Pink frame-target step while preserving planning behavior.
 2. Introduce `PoseTargetIKTask`, then migrate Cartesian IK to the new robot-model/frame configuration.
-3. Replace the existing Quest-specific `TeleopIKTask` implementation and registry entry with `QuestTeleopIKTask`; update all repository blueprint callers in the same change.
+3. Replace the existing Quest-specific `TeleopIKTask` implementation and registry entry with `TeleopIKTask`; update all repository blueprint callers in the same change.
 4. Add distinct Quest pose routing, migrate mixed-arm wiring, and verify one- and two-binding tasks.
 5. Add the mock-default OpenArm blueprint, regenerate the blueprint registry, and run focused control, kinematics, Quest, and blueprint tests.
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dimos.control.components import make_gripper_joints
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.core.stream import Out
@@ -26,7 +27,7 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.common.blueprints import (
     cartesian_ik_task,
     eef_twist_task,
-    quest_teleop_ik_task,
+    teleop_ik_task,
     trajectory_task,
 )
 from dimos.robot.manipulators.common.sim import mujoco_if_sim
@@ -92,7 +93,7 @@ coordinator_cartesian_ik_mock = ControlCoordinator.blueprint(
 _piper_teleop_hw = piper_hardware("arm", gripper_open_position=0.07, gripper_closed_position=0.0)
 
 
-class _PiperTeleopCoordinator(ControlCoordinator):
+class _PiperTeleopCoordinator(TeleopControlCoordinator):
     arm_joints: Out[JointState]
 
 
@@ -102,7 +103,7 @@ coordinator_teleop_piper = autoconnect(
         publish_robot_joint_states=True,
         hardware=[_piper_teleop_hw],
         tasks=[
-            quest_teleop_ik_task(
+            teleop_ik_task(
                 _piper_teleop_hw,
                 robot_model=_piper_model,
                 bindings=[

@@ -18,7 +18,7 @@
 **Non-Goals:**
 
 - Define a universal configuration schema for every possible Pink task.
-- Add robot-specific `PoseTargetIKTask`, `CartesianIKTask`, or `QuestTeleopIKTask` subclasses.
+- Add robot-specific `PoseTargetIKTask`, `CartesianIKTask`, or `TeleopIKTask` subclasses.
 - Add an empty `DualArmPinkIK` taxonomy; an intermediate subclass is justified only by shared objective declarations.
 - Move teleoperation lifecycle or reset semantics into Pink or the control coordinator.
 - Implement the G1 PR's complete robot-specific task stack in this change.

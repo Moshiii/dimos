@@ -16,7 +16,7 @@
 ## 3. Implement unified Quest arm teleoperation
 
 - [x] 3.1 Add configuration tests for valid one- and two-binding Quest tasks and rejection of empty, oversized, duplicate-hand, duplicate-frame, unknown-frame, and unknown-joint bindings.
-- [x] 3.2 Implement immutable Quest hand bindings and refactor the Quest task as `QuestTeleopIKTask`, a thin leaf over `PoseTargetIKTask` that owns controller samples, reference poses, relative target mapping, and per-hand gripper state.
+- [x] 3.2 Implement immutable Quest hand bindings and refactor the Quest task as `TeleopIKTask`, a thin leaf over `PoseTargetIKTask` that owns controller samples, reference poses, relative target mapping, and per-hand gripper state.
 - [x] 3.3 Add task tests proving single-binding engagement and relative motion continue to work through the shared Pink core.
 - [x] 3.4 Add bimanual safety tests proving one engaged hand emits nothing, two-hand engagement captures both references atomically, release of either hand clears the whole task, stale input on either side disables output, and re-engagement recaptures both references.
 - [x] 3.5 Add bimanual output tests proving both fresh frame targets enter one Pink step and independently mapped grippers appear once in the combined ordered command only while fully engaged.

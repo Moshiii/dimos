@@ -192,8 +192,7 @@ class EEFTwistTaskParams(BaseConfig):
     target_frame: str | None = None
     pink: PinkKinematicsConfig = Field(default_factory=PinkKinematicsConfig)
     timeout: float = 0.3
-    max_joint_delta_deg: float = 15.0
-    max_joint_velocity_rad_s: float | None = None
+    max_joint_velocity_rad_s: float = 5.0
     max_command_tracking_error_deg: float = 10.0
     gripper_joint: str | None = None
     gripper_open_pos: float = 0.0
@@ -212,7 +211,6 @@ def create_task(cfg: Any, hardware: Any) -> EEFTwistTask:
             priority=cfg.priority,
             timeout=0.0,
             command_timeout=params.timeout,
-            max_joint_delta_deg=params.max_joint_delta_deg,
             max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
             max_command_tracking_error_deg=params.max_command_tracking_error_deg,
             gripper_joint=params.gripper_joint,
