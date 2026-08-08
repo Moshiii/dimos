@@ -114,6 +114,7 @@ class FlowBaseAdapter:
             if odom is None:
                 return None
 
+            logger.info(f"FlowBase odometry RPC keys: {list(odom.keys())}")
             translation = odom["translation"]  # [x, y]
             rotation = odom["rotation"]  # theta in radians
             return [float(translation[0]), float(translation[1]), float(rotation)]
