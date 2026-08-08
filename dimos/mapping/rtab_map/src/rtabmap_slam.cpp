@@ -37,6 +37,8 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
+#include <pcl/common/io.h>
+#include <pcl/pcl_base.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
@@ -171,6 +173,17 @@ private:
     std::map<std::string, std::map<std::string, rtabmap::Transform>> edges_;
 };
 
+const std::map<std::string, ULogger::Level>& ulogger_levels() {
+    static const std::map<std::string, ULogger::Level> levels = {
+        {"debug", ULogger::kDebug},
+        {"info", ULogger::kInfo},
+        {"warning", ULogger::kWarning},
+        {"error", ULogger::kError},
+        {"fatal", ULogger::kFatal},
+    };
+    return levels;
+}
+
 }  // namespace
 
 struct RtabmapConfig {
@@ -203,6 +216,12 @@ struct RtabmapConfig {
     /// Log processing time (mean and worst) every this many seconds, so a run
     /// reports the rate it could sustain rather than the rate it was fed at. 0 is off.
     double timing_report_period_s;
+    /// How much of rtabmap's own logger to let through: "debug", "info", "warning",
+    /// "error" or "fatal". Its warnings are per-frame registration and loop closure
+    /// rejections -- normal for a moving camera, one line each, and already counted
+    /// by this module -- so anything below "error" is a stream, not a signal. Below
+    /// "info" it also silences this module's own timing report.
+    std::string log_level;
     /// Distance between the two imagers of the stereo pair, metres. Only read in
     /// stereo_ir mode -- in rgbd mode the camera has already triangulated. 0 means
     /// unset, and the distance is taken from camera_info instead: that is where a rig
@@ -240,7 +259,8 @@ struct RtabmapConfig {
     int vis_max_features;
     /// Vis/MinInliers. Correspondences needed to accept a transform.
     int min_inliers;
-    /// Kp/DetectorStrategy. 8=GFTT/ORB (rtabmap's default), 2=ORB, 1=SIFT.
+    /// Kp/DetectorStrategy and Vis/FeatureType, which must agree. 8=GFTT/ORB,
+    /// 2=ORB, 1=SIFT.
     int feature_type;
     /// Optimizer/Strategy: 0=TORO, 1=g2o, 2=GTSAM, 3=Ceres. Only the ones this
     /// build was linked against will work; g2o and TORO are always available.
@@ -282,6 +302,9 @@ struct RtabmapConfig {
     /// not worth a config field each.
     std::map<std::string, std::string> extra_parameters;
 
+    /// Whether this module's own periodic reports are wanted. Same knob as
+    /// rtabmap's logger, because at "error" a report every few seconds is noise too.
+    bool logs_info() const { return ulogger_levels().at(log_level) <= ULogger::kInfo; }
     bool stereo() const { return input_mode == "stereo_ir"; }
     bool mono() const { return input_mode == "mono"; }
     bool rgbd() const { return input_mode == "rgbd"; }
@@ -294,6 +317,11 @@ struct RtabmapConfig {
     bool uses_tf() const { return !camera_frames.empty(); }
 
     void validate() const {
+        if (ulogger_levels().count(log_level) == 0) {
+            throw std::runtime_error(
+                "log_level must be 'debug', 'info', 'warning', 'error' or 'fatal', got '" +
+                log_level + "'");
+        }
         if (input_mode != "rgbd" && input_mode != "stereo_ir" && input_mode != "mono") {
             throw std::runtime_error("input_mode must be 'rgbd', 'stereo_ir' or 'mono', got '" +
                                      input_mode + "'");
@@ -411,10 +439,9 @@ public:
 
     void setup() override {
         // rtabmap's own logger writes free-form text; the coordinator expects one
-        // JSON object per line. Warnings and errors are worth the format break,
-        // routine info is not.
+        // JSON object per line, so every line it emits breaks the format.
         ULogger::setType(ULogger::kTypeConsole);
-        ULogger::setLevel(ULogger::kWarning);
+        ULogger::setLevel(ulogger_levels().at(cfg_.log_level));
     }
 
     void teardown() override {
@@ -587,7 +614,7 @@ private:
         timing_max_ms_ = std::max(timing_max_ms_, ms);
         ++timing_count_;
 
-        if (cfg_.timing_report_period_s <= 0.0) {
+        if (cfg_.timing_report_period_s <= 0.0 || !cfg_.logs_info()) {
             return;
         }
         if (timing_count_ == 1) {
@@ -716,7 +743,10 @@ private:
         params.at(rtabmap::Parameters::kKpMaxFeatures()) = std::to_string(cfg_.max_features);
         params.at(rtabmap::Parameters::kVisMaxFeatures()) = std::to_string(cfg_.vis_max_features);
         params.at(rtabmap::Parameters::kVisMinInliers()) = std::to_string(cfg_.min_inliers);
+        // Both keys, always the same value: rtabmap silently drops Mem/UseOdomFeatures
+        // when they disagree, and then re-extracts features the odometry already found.
         params.at(rtabmap::Parameters::kKpDetectorStrategy()) = std::to_string(cfg_.feature_type);
+        params.at(rtabmap::Parameters::kVisFeatureType()) = std::to_string(cfg_.feature_type);
         params.at(rtabmap::Parameters::kOptimizerStrategy()) =
             std::to_string(cfg_.optimizer_strategy);
         // Publishing the last signature is what makes getStatistics() carry the
@@ -994,14 +1024,27 @@ private:
         if (id <= 0 || cloud_cache_.count(id) != 0) {
             return;
         }
+        // The cloud comes back organized, with a NaN wherever the depth frame had
+        // no return. Voxelizing that without the valid indices makes rtabmap hand
+        // back an empty cloud, so keep them and collapse to a dense cloud here.
+        pcl::IndicesPtr valid(new std::vector<int>);
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = rtabmap::util3d::cloudFromSensorData(
             data, cfg_.cloud_decimation, static_cast<float>(cfg_.max_depth_m),
-            static_cast<float>(cfg_.min_depth_m));
-        if (cloud->empty()) {
+            static_cast<float>(cfg_.min_depth_m), valid.get());
+        if (valid->empty()) {
             return;
         }
         if (cfg_.cloud_voxel_size_m > 0.0) {
-            cloud = rtabmap::util3d::voxelize(cloud, static_cast<float>(cfg_.cloud_voxel_size_m));
+            cloud = rtabmap::util3d::voxelize(cloud, valid,
+                                              static_cast<float>(cfg_.cloud_voxel_size_m));
+        } else {
+            pcl::PointCloud<pcl::PointXYZ>::Ptr dense(new pcl::PointCloud<pcl::PointXYZ>);
+            pcl::copyPointCloud(*cloud, *valid, *dense);
+            dense->is_dense = true;
+            cloud = dense;
+        }
+        if (cloud->empty()) {
+            return;
         }
         cloud_cache_[id] = cloud;
     }

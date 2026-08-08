@@ -100,8 +100,15 @@ class RtabmapConfig(NativeModuleConfig):
     # mapped against a stale pose.
     external_odometry_timeout_s: float = 0.1
     # Report mean/worst processing time this often, so a run states the rate it could
-    # sustain rather than the rate it happened to be fed. 0 disables.
+    # sustain rather than the rate it happened to be fed. 0 disables, and so does a
+    # log_level above "info".
     timing_report_period_s: float = 10.0
+    # How much of RTAB-Map's own logger to let through. Its warnings are per-frame
+    # registration failures and rejected loop closures -- normal for a moving camera,
+    # one line each at frame rate, and already counted by this module -- so "warning"
+    # buries every other module's logs. Below "info" the timing report above goes quiet
+    # too. Raise it to "warning" or "info" when debugging RTAB-Map itself.
+    log_level: Literal["debug", "info", "warning", "error", "fatal"] = "error"
     # Distance between the two imagers of the stereo pair, metres. Only read in
     # stereo_ir mode -- in rgbd mode the camera has already triangulated. It is
     # per-model and per-unit (a D435 is ~50 mm, a D455 ~95 mm), so there is no default
@@ -151,7 +158,7 @@ class RtabmapConfig(NativeModuleConfig):
     vis_max_features: int = 1000
     # Correspondences needed to accept a transform. Raise it if odometry is jumping.
     min_inliers: int = 20
-    # Kp/DetectorStrategy. 8=GFTT/ORB (default), 2=ORB, 1=SIFT.
+    # Kp/DetectorStrategy and Vis/FeatureType, set together. 8=GFTT/ORB, 2=ORB, 1=SIFT.
     feature_type: int = 8
     # 0=TORO, 1=g2o, 2=GTSAM, 3=Ceres. This build links g2o and TORO; GTSAM and Ceres
     # are not compiled in, so asking for them falls back with a warning from rtabmap.

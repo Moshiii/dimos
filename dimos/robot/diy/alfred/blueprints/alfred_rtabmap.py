@@ -30,18 +30,40 @@ itself.
 The camera is assumed to sit at the body origin. Once the mount is measured, pass
 its ``base_transform`` here -- RTAB-Map's pose is the camera's, so an unmeasured
 mount offsets the whole trail by it.
+
+Every run also records the camera streams and RTAB-Map's odometry into
+``recordings/<timestamp>/rtabmap.db``, so a session that felt laggy can be replayed
+into RTAB-Map afterwards instead of re-driving it. The depth stream is stored
+losslessly and dominates the write -- expect a few MB/s, and delete old runs.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
+
+from dimos.constants import RECORDINGS_DIR
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
 from dimos.mapping.odometry_path import OdometryPath
+from dimos.mapping.rtab_map.recorder import RtabmapRecorder
 from dimos.mapping.rtab_map.rtabmap import RERUN_CONFIG, RtabmapSlam
 from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.robot.diy.alfred.effector_high_level import AlfredHighLevel
 from dimos.visualization.vis_module import vis_module
+
+
+def _recording_dir() -> Path:
+    now = datetime.now().astimezone()
+    stamp = (
+        now.strftime("%Y-%m-%d") + "_" + now.strftime("%I-%M%p").lower() + "-" + now.strftime("%Z")
+    )
+    return RECORDINGS_DIR / stamp
+
+
+# Resolved on the host at import, so every module in the run agrees on one directory.
+_RECORDING_DIR = _recording_dir()
 
 alfred_rtabmap = autoconnect(
     RealSenseCamera.blueprint(
@@ -57,6 +79,11 @@ alfred_rtabmap = autoconnect(
         enable_imu=False,
     ),
     RtabmapSlam.blueprint(input_mode="rgbd"),
+    # The db stream is named after the recorder's port, so RTAB-Map's odometry is
+    # recorded as "rtabmap_odometry" rather than a bare "odometry".
+    RtabmapRecorder.blueprint(db_path=str(_RECORDING_DIR / "rtabmap.db")).remappings(
+        [(RtabmapRecorder, "rtabmap_odometry", "odometry")]
+    ),
     # RTAB-Map publishes where the robot is now; this keeps the history so the
     # viewer can draw where it has been.
     OdometryPath.blueprint(),
@@ -67,4 +94,4 @@ alfred_rtabmap = autoconnect(
         global_config.viewer,
         rerun_config={**RERUN_CONFIG, "memory_limit": "1GB"},
     ),
-).global_config(n_workers=8)
+).global_config(n_workers=9)

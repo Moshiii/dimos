@@ -277,6 +277,7 @@ all_modules = {
     "replanning-a-star-planner": "dimos.navigation.replanning_a_star.module.ReplanningAStarPlanner",
     "rerun-bridge-module": "dimos.visualization.rerun.bridge.RerunBridgeModule",
     "rerun-web-socket-server": "dimos.visualization.rerun.websocket_server.RerunWebSocketServer",
+    "rtabmap-recorder": "dimos.mapping.rtab_map.recorder.RtabmapRecorder",
     "rtabmap-slam": "dimos.mapping.rtab_map.rtabmap.RtabmapSlam",
     "security-module": "dimos.experimental.security_demo.security_module.SecurityModule",
     "semantic-search": "dimos.memory2.module.SemanticSearch",
