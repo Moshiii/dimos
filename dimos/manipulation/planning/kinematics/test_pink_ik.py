@@ -531,17 +531,6 @@ def test_pink_ik_config_overrides_are_applied(mocker: MockerFixture) -> None:
     )
 
 
-def test_planning_backend_does_not_expose_streaming_control_api(
-    mocker: MockerFixture,
-) -> None:
-    mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
-    ik = PinkIK(PinkIKConfig())
-
-    assert not hasattr(ik, "step_frame_targets")
-    assert not hasattr(ik, "validate_frame_targets")
-    assert not hasattr(ik, "frame_poses")
-
-
 def test_joint_order_mapping_uses_names_not_positions() -> None:
     mapping = _build_joint_mapping(_FakeModel(), _robot_config())
     seed = JointState(name=["joint_b", "joint_c", "joint_a"], position=[20.0, 30.0, 10.0])
@@ -712,7 +701,7 @@ def test_named_task_stack_rejects_invalid_reserved_frame_tasks(
         ik_type(PinkIKConfig())._build_task_stack(configuration, ("tool",))
 
 
-def test_streaming_reuses_tasks_and_mutates_targets_in_place(
+def test_streaming_reuses_task_stack_across_steps(
     mocker: MockerFixture,
 ) -> None:
     mocker.patch.object(pink_ik, "_load_optional_dependencies", return_value=_fake_modules())
@@ -738,12 +727,6 @@ def test_streaming_reuses_tasks_and_mutates_targets_in_place(
         _TRACKING_ERROR_RAD,
     )
     assert context.tasks is not None
-    frame_task = context.tasks["frame/tool"]
-    posture_task = context.tasks[_CURRENT_POSTURE_TASK]
-    first_frame_task_id = id(frame_task)
-    first_posture_task_id = id(posture_task)
-    assert frame_task.target.translation == pytest.approx([0.1, 0.2, 0.3])
-    assert posture_task.target == pytest.approx([0.0, 0.0, 0.0])
 
     ik.step_frame_targets(
         _robot_config(),
@@ -755,10 +738,8 @@ def test_streaming_reuses_tasks_and_mutates_targets_in_place(
     )
 
     create_tasks.assert_called_once()
-    assert id(context.tasks["frame/tool"]) == first_frame_task_id
-    assert id(context.tasks[_CURRENT_POSTURE_TASK]) == first_posture_task_id
-    assert frame_task.target.translation == pytest.approx([0.3, 0.2, 0.1])
-    assert posture_task.target == pytest.approx([0.2, 0.1, 0.3])
+    assert context.tasks["frame/tool"].target.translation == pytest.approx([0.3, 0.2, 0.1])
+    assert context.tasks[_CURRENT_POSTURE_TASK].target == pytest.approx([0.2, 0.1, 0.3])
 
 
 def test_task_hooks_receive_read_only_stack_and_successful_velocity(

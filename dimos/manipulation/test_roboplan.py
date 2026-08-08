@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import replace
 from enum import Enum
 import importlib
@@ -427,24 +426,8 @@ def _install_fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    module_names = (
-        "roboplan",
-        "roboplan.core",
-        "roboplan.rrt",
-        "roboplan.cartesian_planning",
-        "dimos.manipulation.planning.world.roboplan_world",
-        "dimos.manipulation.planning.planners.roboplan_planner",
-    )
-    original_modules = {name: sys.modules.get(name) for name in module_names}
+def fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_roboplan(monkeypatch)
-    yield
-    for name, module in original_modules.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
-    _PLANNERS_BY_WORLD.clear()
 
 
 @pytest.fixture
@@ -1741,6 +1724,23 @@ def test_native_selected_planner_composes_disjoint_groups_within_one_robot(
     assert result.status == PlanningStatus.SUCCESS
     assert result.path[-1].name == list(selection.joint_names)
     assert result.path[-1].position == pytest.approx([0.1, 0.1])
+
+
+def test_overlapping_group_selection_rejected_before_planning(
+    fake_roboplan: None, robot_config: RobotModelConfig
+) -> None:
+    config = robot_config.model_copy(
+        update={
+            "planning_groups": [
+                PlanningGroupDefinition("left", ("joint1", "joint2"), "base", "left_tip"),
+                PlanningGroupDefinition("right", ("joint2",), "base", "right_tip"),
+            ]
+        }
+    )
+    _make_world(fake_roboplan, config)
+
+    with pytest.raises(ValueError, match="overlap"):
+        _selection((config,), "arm/left", "arm/right")
 
 
 def test_native_planner_coordinates_groups_across_two_robots(
