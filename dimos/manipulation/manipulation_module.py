@@ -1366,8 +1366,7 @@ class ManipulationModule(Module):
         if sum(a * b for a, b in zip(start_values, target_values, strict=True)) < 0.0:
             target_values = tuple(-value for value in target_values)
         values = tuple(
-            a + fraction * (b - a)
-            for a, b in zip(start_values, target_values, strict=True)
+            a + fraction * (b - a) for a, b in zip(start_values, target_values, strict=True)
         )
         norm = math.sqrt(sum(value * value for value in values))
         if norm <= 1e-12:

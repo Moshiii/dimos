@@ -622,9 +622,7 @@ class PickAndPlaceModule(ManipulationModule):
         numbered: list[dict[str, object]] = []
         for number, det in enumerate(detections, start=1):
             c = det.center
-            lines.append(
-                f"  {number}. {det.name}: ({c.x:.3f}, {c.y:.3f}, {c.z:.3f})"
-            )
+            lines.append(f"  {number}. {det.name}: ({c.x:.3f}, {c.y:.3f}, {c.z:.3f})")
             numbered.append(
                 {
                     "number": number,
@@ -740,9 +738,7 @@ class PickAndPlaceModule(ManipulationModule):
         )
 
     @skill
-    def pick_selected(
-        self, robot_name: str | None = None
-    ) -> SkillResult[ManipulationSkillError]:
+    def pick_selected(self, robot_name: str | None = None) -> SkillResult[ManipulationSkillError]:
         """Pick the object prepared by select_object using fresh feasibility checks.
 
         Args:
@@ -1123,7 +1119,9 @@ class PickAndPlaceModule(ManipulationModule):
         object_to_tcp = self._held_object_to_tcp
         object_orientation = self._held_object_orientation
         if object_to_tcp is None or object_orientation is None:
-            return SkillResult.fail("INVALID_STATE", "No verified held object is available to place")
+            return SkillResult.fail(
+                "INVALID_STATE", "No verified held object is available to place"
+            )
         desired_object_pose = Pose(Vector3(x, y, z), object_orientation)
         target_tcp = desired_object_pose + object_to_tcp
         result = self._place_with_orientation(

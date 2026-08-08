@@ -541,9 +541,7 @@ class TestPickTransaction:
         candidate = _candidate(0.4, 0.9)
         selected = _FeasibleGrasp(candidate, 1, Pose(0.4, 0.0, 0.3), Pose(0.4, 0.0, 0.3))
         robot_config = SimpleNamespace(pre_grasp_offset=0.1)
-        mocker.patch.object(
-            module, "_get_robot", return_value=("arm", "robot-id", robot_config)
-        )
+        mocker.patch.object(module, "_get_robot", return_value=("arm", "robot-id", robot_config))
         mocker.patch.object(module, "_require_pick_object", return_value=detection)
         mocker.patch.object(module, "_provider_candidates", return_value=[candidate])
         mocker.patch.object(module, "_select_feasible_grasp", return_value=selected)
@@ -902,9 +900,7 @@ class TestNumberedSelectionApi:
         module.config.preparation_timeout = 1.0
         get_robot = mocker.patch.object(module, "_get_robot")
 
-        with patch(
-            "dimos.manipulation.pick_and_place_module.time.monotonic", return_value=2.0
-        ):
+        with patch("dimos.manipulation.pick_and_place_module.time.monotonic", return_value=2.0):
             result = module.pick_selected()
 
         assert result.error_code == "INVALID_STATE"
@@ -917,7 +913,9 @@ class TestNumberedSelectionApi:
         module._held_object_orientation = quarter_turn
         module._held_object_to_tcp = Pose(Vector3(0.1, 0.0, 0.0), Quaternion())
         module._held_object_size = Vector3(0.05, 0.05, 0.1)
-        place = mocker.patch.object(module, "_place_with_orientation", return_value=SkillResult.ok())
+        place = mocker.patch.object(
+            module, "_place_with_orientation", return_value=SkillResult.ok()
+        )
 
         result = module.place_at(0.5, 0.2, 0.3)
 
@@ -957,9 +955,7 @@ class TestBoxFillingPolicy:
     def test_destination_policy_rejects_object_that_does_not_fit(
         self, box_module: BoxFillingPickAndPlaceModule
     ) -> None:
-        box_module._replace_detection_snapshot(
-            [_make_det_object(name="box", size=(0.1, 0.1, 0.2))]
-        )
+        box_module._replace_detection_snapshot([_make_det_object(name="box", size=(0.1, 0.1, 0.2))])
         assert box_module.select_destination_container(1).is_success()
         box_module._held_object_size = Vector3(0.2, 0.04, 0.05)
 

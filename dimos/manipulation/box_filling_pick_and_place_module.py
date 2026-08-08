@@ -56,9 +56,7 @@ class BoxFillingPickAndPlaceModule(PickAndPlaceModule):
         self._destination_box: _DestinationBox | None = None
 
     @skill
-    def select_destination_container(
-        self, number: int
-    ) -> SkillResult[ManipulationSkillError]:
+    def select_destination_container(self, number: int) -> SkillResult[ManipulationSkillError]:
         """Use one object from the latest scan as the destination open box.
 
         Args:
@@ -112,18 +110,11 @@ class BoxFillingPickAndPlaceModule(PickAndPlaceModule):
             return SkillResult.fail(
                 "INVALID_STATE", "No verified held object is available to place"
             )
-        if (
-            held_size.x > destination.opening_width
-            or held_size.y > destination.opening_depth
-        ):
+        if held_size.x > destination.opening_width or held_size.y > destination.opening_depth:
             return SkillResult.fail(
                 "INVALID_INPUT", "Held object does not fit inside the destination opening"
             )
-        object_z = (
-            destination.rim_z
-            + held_size.z / 2.0
-            + float(self.config.drop_clearance)
-        )
+        object_z = destination.rim_z + held_size.z / 2.0 + float(self.config.drop_clearance)
         return self.place_at(
             destination.center_x,
             destination.center_y,
