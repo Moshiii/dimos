@@ -6,16 +6,20 @@
 4 runs — 8 for 8. `K` is negative in most fits, which real hardware watching
 confirms is wrong (robot turns the correct direction; the fit doesn't).
 
-| | Run 1 | Run 2 | Run 3 (shaking) | Run 4 (4s) | Run 5 (6s) | Run 6 (8s, no zenoh) | Run 7 (8s, wz unwrapped, no zenoh) | Run 8 (zenoh back, L<=1.0) | Run 9 (zenoh, L<=1.0) | Run 10 (no zenoh, vx only) | **Run 11 (2nd robot, zenoh out)** | Old tool's ground truth |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `vx.K` | 0.072 | 0.071 | −0.017 | −0.524 | +0.572 | +0.779 | — (not run) | — (not characterized) | +0.275 | +0.271 | **−0.279** | 0.80–0.92 |
-| `vx.tau` | 0.600 (edge) | 0.399 | 0.030 (edge) | 0.334 | 0.363 | 0.262 | — | — | 0.061 | 0.157 | **0.030 (edge)** | 0.30–0.40 |
-| `vx.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | — | — | 0.528 | 0.421 | **0.538** | **0.065–0.15** |
-| `vx.verdict` | marginal | marginal | — | marginal | marginal | pass | — | absent (identity placeholder, caveat) | marginal | marginal | **marginal/worse** | — |
-| `wz.K` | −0.176 | −0.212 | −0.0067 | −0.038 | +0.319 | +0.044 | +0.779 | +0.775 | +0.782 | — (not run) | **+0.828** | 0.90–2.45 |
-| `wz.tau` | 0.600 (edge) | 0.600 (edge) | 0.030 (edge) | 0.030 (edge) | 0.051 | 0.600 (edge) | 0.300 (in range) | 0.129 | 0.264 | — | **0.045** | 0.3–0.60 |
-| `wz.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge, old bound) | 0.430 (not pinned) | 0.335 (not pinned) | — | **0.545 (not pinned)** | **0.05–0.15** |
-| `wz.verdict` | absent | absent | — | — | pass | absent | pass | pass | pass | — | **pass** | — |
+| | Run 1 | Run 2 | Run 3 (shaking) | Run 4 (4s) | Run 5 (6s) | Run 6 (8s, no zenoh) | Run 7 (8s, wz unwrapped, no zenoh) | Run 8 (zenoh back, L<=1.0) | Run 9 (zenoh, L<=1.0) | Run 10 (no zenoh, vx only) | Run 11 (2nd robot, zenoh out) | **Run 12 (heading-frame fix)** | Old tool's ground truth |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `vx.K` | 0.072 | 0.071 | −0.017 | −0.524 | +0.572 | +0.779 | — (not run) | — (not characterized) | +0.275 | +0.271 | −0.279 | **+0.757** | 0.80–0.92 |
+| `vx.tau` | 0.600 (edge) | 0.399 | 0.030 (edge) | 0.334 | 0.363 | 0.262 | — | — | 0.061 | 0.157 | 0.030 (edge) | **0.021 (refit, not pinned)** | 0.30–0.40 |
+| `vx.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | — | — | 0.528 | 0.421 | 0.538 | **0.631 (not pinned)** | **0.065–0.15** |
+| `vx.verdict` | marginal | marginal | — | marginal | marginal | pass | — | absent (identity placeholder, caveat) | marginal | marginal | marginal/worse | **pass** | — |
+| `wz.K` | −0.176 | −0.212 | −0.0067 | −0.038 | +0.319 | +0.044 | +0.779 | +0.775 | +0.782 | — (not run) | +0.828 | — (not run) | 0.90–2.45 |
+| `wz.tau` | 0.600 (edge) | 0.600 (edge) | 0.030 (edge) | 0.030 (edge) | 0.051 | 0.600 (edge) | 0.300 (in range) | 0.129 | 0.264 | — | 0.045 | — | 0.3–0.60 |
+| `wz.L` | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge) | 0.300 (edge, old bound) | 0.430 (not pinned) | 0.335 (not pinned) | — | 0.545 (not pinned) | — | **0.05–0.15** |
+| `wz.verdict` | absent | absent | — | — | pass | absent | pass | pass | pass | — | pass | — | — |
+
+**Run 12 confirms the heading-frame fix.** `vx` recorded as forward distance in the robot's heading frame at step-start, not raw world-frame `x` (`autotune_driver.py::SegmentRecorder.on_pose`). `K` jumped from -0.279 (Run 11) to **+0.757**, verdict **`pass`**, saturation 0.174 (matching Run 6's 0.183). Offline refit with a looser `tau` floor (0.005 instead of 0.03) confirmed `tau=0.021` is a genuine converged value, not pinned -- **r2=0.998**, by far the best fit quality of any `vx` run. Sign flips and degenerate fits are gone.
+
+**Both channels now cleanly show real deadtime well above the old tool's reference range** (`vx.L≈0.63`, `wz.L≈0.43-0.55` vs. reference 0.05-0.15s), with high-quality, non-pinned fits on both. This is no longer a fitter artifact on either axis -- it's a consistent signal that the current live pipeline has more real command latency than whatever the old characterization tool measured on. Worth raising with Mustafa as a single, unified finding rather than two separate channel quirks.
 
 **Run 7 confirms the `np.unwrap()` fix.** `wz.K` jumped from 0.044 to 0.779 -- by far the closest to the reference range of any run, channel, ever. `wz.tau` came fully off its pinned edge for the first time and landed inside the reference band (0.3-0.60). This is strong, direct evidence the yaw-wrap corruption was the real problem, not duration.
 
@@ -27,7 +31,7 @@ confirms is wrong (robot turns the correct direction; the fit doesn't).
 
 **Run 11 (a second, different physical robot) also fails on `vx`** -- worse, in fact (`K` goes negative, `tau` pins at the opposite/low edge) -- while `wz` stays clean on that same robot. That rules out "just this one robot's mechanical condition" too. Three runs, three different bad `vx` signatures, `wz` clean throughout: this is the same shape of problem `wz`'s yaw-wrap bug had -- one channel structurally broken, reproducing across hardware -- not yet root-caused.
 
-**Leading hypothesis, unconfirmed:** `SegmentRecorder.on_pose` (`autotune_driver.py:95`) reads `vx` as raw world-frame `msg.position.x`, not a body-frame/forward-distance measure. Any real heading drift during a `vx` step would corrupt this channel's step-response shape while leaving `wz` (yaw itself) unaffected. Needs `check_yaw_wrap.py`'s segment range-covered output (or the raw trajectory shape) against a real `vx` run to confirm.
+**Confirmed by Run 12.** `SegmentRecorder.on_pose` read `vx` as raw world-frame `msg.position.x`, not a body-frame/forward-distance measure -- any real heading drift during a `vx` step corrupted the step-response shape while leaving `wz` (yaw itself) unaffected. Fixed by projecting displacement onto the heading captured at the start of each step (`autotune_driver.py`, commit `741a22021`). See Run 12 above.
 
 ## `L` pinning: not a bounds bug -- real deadtime is ~0.45s
 
