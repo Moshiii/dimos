@@ -43,6 +43,26 @@ def test_run_config_round_trips_through_pydantic() -> None:
     assert decoded.agent.backend == "pi"
     assert decoded.agent.model == "gpt-5.6-luna"
     assert decoded.agent.auth.mode == "codex-oauth"
+    assert decoded.render == "none"
+
+
+def test_native_render_rejects_a_non_vlnce_case_before_private_preflight(tmp_path) -> None:
+    case = EvalCase.compile(
+        case_id="case",
+        source=FrozenRecordingSource(recording="recording", progress=1.0),
+        task=IntegerQuestionTask(prompt="How many rooms?"),
+        interaction=FrozenCodePolicyInteraction(driver_revision="v1"),
+        validator=ExactIntegerValidatorRef(
+            revision="v1",
+            private_path="private/oracle.json",
+            private_sha256="0" * 64,
+        ),
+    )
+    case_path = tmp_path / "case.json"
+    case_path.write_text(case.model_dump_json())
+
+    with pytest.raises(ValueError, match="currently supports VLN-CE"):
+        execute_single_case(case_path, config=EvalRunConfig(render="native"))
 
 
 def test_api_key_auth_uses_named_environment_without_serializing_secret(monkeypatch) -> None:

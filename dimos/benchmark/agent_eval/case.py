@@ -20,6 +20,7 @@ import hashlib
 import math
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, JsonValue, model_validator
 
@@ -28,8 +29,10 @@ from dimos.benchmark.spatial.utilities import canonical_json
 
 NonEmpty = Annotated[str, Field(min_length=1)]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 NormalizedProgress = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 PositiveFinite = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
+PositiveInteger = Annotated[int, Field(gt=0)]
 
 
 class SourcePreparationRef(BaseEvalModel):
@@ -84,8 +87,104 @@ class SimulatorSceneSource(BaseEvalModel):
     preparation: SourcePreparationRef | None = None
 
 
+class ExternalAssetFileRef(BaseEvalModel):
+    path: NonEmpty
+    sha256: Sha256
+
+    @model_validator(mode="after")
+    def path_is_relative(self) -> ExternalAssetFileRef:
+        _validate_relative_path(self.path, label="asset path")
+        return self
+
+
+class ExternalAssetRef(BaseEvalModel):
+    asset_id: NonEmpty
+    url: NonEmpty
+    archive_sha256: Sha256
+    archive_bytes: PositiveInteger
+    cache_subdir: NonEmpty
+    required_files: tuple[ExternalAssetFileRef, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def fields_are_safe_and_unique(self) -> ExternalAssetRef:
+        parsed = urlsplit(self.url)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError("external asset URL must be an unauthenticated HTTPS URL")
+        _validate_relative_path(self.cache_subdir, label="asset cache_subdir")
+        paths = [item.path for item in self.required_files]
+        if len(paths) != len(set(paths)):
+            raise ValueError("external asset required file paths must be unique")
+        return self
+
+
+class ExternalOciImageRef(BaseEvalModel):
+    image_name: NonEmpty
+    image_digest: Sha256
+    build_context: NonEmpty
+    build_recipe_sha256: Sha256
+    base_image: NonEmpty
+    base_image_digest: Sha256
+
+    @model_validator(mode="after")
+    def build_context_is_relative(self) -> ExternalOciImageRef:
+        _validate_relative_path(self.build_context, label="OCI build_context")
+        return self
+
+
+class ExternalBenchmarkPreparationRef(BaseEvalModel):
+    kind: Literal["vlnce_public_assets"] = "vlnce_public_assets"
+    revision: NonEmpty
+    cache_namespace: NonEmpty
+    assets: tuple[ExternalAssetRef, ...] = Field(min_length=1)
+    image: ExternalOciImageRef
+
+    @model_validator(mode="after")
+    def assets_are_unique(self) -> ExternalBenchmarkPreparationRef:
+        asset_ids = [asset.asset_id for asset in self.assets]
+        if len(asset_ids) != len(set(asset_ids)):
+            raise ValueError("external preparation asset ids must be unique")
+        _validate_relative_path(self.cache_namespace, label="cache namespace")
+        return self
+
+
+class ExternalBenchmarkEpisodeSource(BaseEvalModel):
+    kind: Literal["external_benchmark_episode"] = "external_benchmark_episode"
+    benchmark: Literal["vlnce_r2r"] = "vlnce_r2r"
+    upstream_revision: GitSha
+    dataset_revision: NonEmpty
+    split: NonEmpty
+    episode_id: NonEmpty
+    episode_sha256: Sha256
+    scene_id: NonEmpty
+    episode_asset_id: NonEmpty
+    episode_path: NonEmpty
+    scene_asset_id: NonEmpty
+    scene_path: NonEmpty
+    navmesh_path: NonEmpty
+    robot_profile: NonEmpty
+    dimos_blueprint: NonEmpty
+    protocol_revision: NonEmpty
+    result_schema_revision: NonEmpty
+    condition_label: NonEmpty
+    preparation: ExternalBenchmarkPreparationRef
+
+    @model_validator(mode="after")
+    def asset_references_are_resolvable(self) -> ExternalBenchmarkEpisodeSource:
+        assets = {asset.asset_id: asset for asset in self.preparation.assets}
+        for asset_id in (self.episode_asset_id, self.scene_asset_id):
+            if asset_id not in assets:
+                raise ValueError(f"external source references unknown asset {asset_id!r}")
+        for value, label in (
+            (self.episode_path, "episode_path"),
+            (self.scene_path, "scene_path"),
+            (self.navmesh_path, "navmesh_path"),
+        ):
+            _validate_relative_path(value, label=label)
+        return self
+
+
 SourceSpec = Annotated[
-    FrozenRecordingSource | LiveDimosSource | SimulatorSceneSource,
+    FrozenRecordingSource | LiveDimosSource | SimulatorSceneSource | ExternalBenchmarkEpisodeSource,
     Field(discriminator="kind"),
 ]
 
@@ -101,8 +200,22 @@ class EmbodiedInstructionTask(BaseEvalModel):
     prompt: NonEmpty
 
 
+class BenchmarkInstructionTask(BaseEvalModel):
+    kind: Literal["benchmark_instruction"] = "benchmark_instruction"
+    prompt: NonEmpty
+    instruction_sha256: Sha256
+    submission_guidance: NonEmpty
+
+    @model_validator(mode="after")
+    def instruction_digest_matches(self) -> BenchmarkInstructionTask:
+        digest = hashlib.sha256(self.prompt.encode()).hexdigest()
+        if digest != self.instruction_sha256:
+            raise ValueError("benchmark instruction digest does not match prompt")
+        return self
+
+
 TaskSpec = Annotated[
-    IntegerQuestionTask | EmbodiedInstructionTask,
+    IntegerQuestionTask | EmbodiedInstructionTask | BenchmarkInstructionTask,
     Field(discriminator="kind"),
 ]
 
@@ -166,8 +279,27 @@ class SemanticObjectProximityGoal(BaseEvalModel):
     poll_interval_seconds: PositiveFinite
 
 
+class BenchmarkNativeResultValidatorRef(BaseEvalModel):
+    kind: Literal["benchmark_native_result"] = "benchmark_native_result"
+    revision: NonEmpty
+    result_filename: NonEmpty
+    result_schema_sha256: Sha256
+    success_metric: Literal["SUCCESS"] = "SUCCESS"
+    identity_fields: tuple[NonEmpty, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def result_contract_is_safe(self) -> BenchmarkNativeResultValidatorRef:
+        _validate_relative_path(self.result_filename, label="benchmark result filename")
+        if len(self.identity_fields) != len(set(self.identity_fields)):
+            raise ValueError("benchmark result identity fields must be unique")
+        return self
+
+
 ValidatorRef = Annotated[
-    ExactIntegerValidatorRef | NativeValidatorRef | PeriodicGoalValidatorRef,
+    ExactIntegerValidatorRef
+    | NativeValidatorRef
+    | PeriodicGoalValidatorRef
+    | BenchmarkNativeResultValidatorRef,
     Field(discriminator="kind"),
 ]
 
@@ -190,6 +322,26 @@ class EvalCase(BaseEvalModel):
     interaction: InteractionSpec
     validator: ValidatorRef
     fingerprint: Sha256
+
+    @model_validator(mode="after")
+    def contracts_are_compatible(self) -> EvalCase:
+        external = isinstance(self.source, ExternalBenchmarkEpisodeSource)
+        benchmark_task = isinstance(self.task, BenchmarkInstructionTask)
+        benchmark_validator = isinstance(self.validator, BenchmarkNativeResultValidatorRef)
+        if external:
+            if not benchmark_task:
+                raise ValueError("external benchmark source requires a benchmark instruction task")
+            if not isinstance(self.interaction, LiveCodePolicyInteraction):
+                raise ValueError("external benchmark source requires live CodePolicy interaction")
+            if not benchmark_validator:
+                raise ValueError(
+                    "external benchmark source requires benchmark-native result validation"
+                )
+        elif benchmark_task or benchmark_validator:
+            raise ValueError(
+                "benchmark instruction and native result validator require an external source"
+            )
+        return self
 
     @classmethod
     def compile(
@@ -323,6 +475,10 @@ def _case_payload(
 
 
 def _validate_private_path(value: str) -> None:
+    _validate_relative_path(value, label="validator private_path")
+
+
+def _validate_relative_path(value: str, *, label: str) -> None:
     path = PurePosixPath(value)
-    if path.is_absolute() or not path.parts or ".." in path.parts:
-        raise ValueError("validator private_path must be a safe relative path")
+    if path.is_absolute() or not path.parts or ".." in path.parts or path == PurePosixPath("."):
+        raise ValueError(f"{label} must be a safe relative path")

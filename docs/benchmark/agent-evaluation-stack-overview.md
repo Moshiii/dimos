@@ -172,6 +172,35 @@ This separation prevents each benchmark from inventing a new runner. A new
 evaluation usually adds a source, interaction, or validator while reusing the
 same attempt and evidence machinery.
 
+### How case configuration differs
+
+Frozen QA and real-time simulation use the same four-part case shape, but bind
+different facts:
+
+| Contract | Frozen QA | Real-time simulator | External native benchmark |
+| --- | --- | --- | --- |
+| Source | recording and progress | scene, robot, and preparation | episode, scene assets, OCI image, and protocol |
+| Task | question | embodied instruction | exact upstream route instruction |
+| Interaction | bounded frozen CodePolicy turn | live CodePolicy with timeout | live CodePolicy until native STOP or timeout |
+| Validator | private expected answer | private periodic goal check | benchmark-owned native result |
+
+The external benchmark keeps its oracle, reference path, progress, and scoring
+inside its container. DimOS receives RGB, depth, pose, a geometry-only map, and
+bounded planar control over a public Unix-domain socket. The evaluator alone
+reads the terminal native result.
+
+```text
+private benchmark container              public DimOS runtime
++--------------------------------+       +---------------------------+
+| episode + reference path       |       | connection + navigation   |
+| Habitat simulation             |<----->| memory + CodePolicy + Pi  |
+| official VLN-CE measures       |  UDS  | submit_route()            |
++---------------+----------------+       +---------------------------+
+                |
+                v
+       evaluator-only result
+```
+
 ## Short-horizon frozen QA
 
 A frozen question-answering attempt works like this:

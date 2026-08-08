@@ -95,6 +95,7 @@ class GlobalConfig(BaseSettings):
         default_factory=_default_transport,
         validation_alias=AliasChoices("DIMOS_TRANSPORT", "transport"),
     )
+    configure_system: bool = True
     build_native: bool = DEFAULT_BUILD_NATIVE
     dtop: bool = False
     obstacle_avoidance: bool = True

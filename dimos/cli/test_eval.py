@@ -189,6 +189,23 @@ def test_eval_run_accepts_dotted_auth_and_agent_options(tmp_path, monkeypatch) -
     assert captured["output_root"] == output
 
 
+def test_eval_run_passes_native_render_as_presentation_config(tmp_path, monkeypatch) -> None:
+    case = tmp_path / "case.json"
+    case.write_text("{}")
+    captured = {}
+
+    def execute(path, *, config, output_root=None, progress=None):
+        captured["config"] = config
+        return _result(tmp_path)
+
+    monkeypatch.setattr(eval_cli, "execute_single_case", execute)
+
+    result = CliRunner().invoke(main, ["eval", "run", str(case), "--render", "native"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["config"].render == "native"
+
+
 def test_eval_run_honors_global_rerun_web_options(tmp_path, monkeypatch) -> None:
     case = tmp_path / "case.json"
     case.write_text("{}")
@@ -225,6 +242,27 @@ def test_eval_run_honors_global_rerun_web_options(tmp_path, monkeypatch) -> None
             "rerun_web": True,
             "rerun_open": "web",
         }
+    finally:
+        global_config.update(**original)
+
+
+def test_eval_run_is_headless_when_viewer_is_not_explicit(tmp_path, monkeypatch) -> None:
+    case = tmp_path / "case.json"
+    case.write_text("{}")
+    observed = {}
+    original = global_config.model_dump()
+
+    def execute(path, *, config, output_root=None, progress=None):
+        observed["viewer"] = global_config.viewer
+        return _result(tmp_path)
+
+    monkeypatch.setattr(eval_cli, "execute_single_case", execute)
+    try:
+        global_config.update(viewer="rerun")
+        result = CliRunner().invoke(main, ["eval", "run", str(case)])
+
+        assert result.exit_code == 0, result.output
+        assert observed["viewer"] == "none"
     finally:
         global_config.update(**original)
 

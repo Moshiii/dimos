@@ -40,12 +40,14 @@ from dimos.benchmark.agent_eval.single_case import (
     PiAgentConfig,
     execute_single_case,
 )
+from dimos.core.global_config import global_config
 
 app = typer.Typer(help="Run immutable agent evaluation cases", no_args_is_help=True)
 
 
 @app.command("run")
 def run(
+    ctx: typer.Context,
     case: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
     agent_backend: Literal["pi"] = typer.Option("pi", "--agent.backend"),
     agent_model: Literal["gpt-5.6-luna"] = typer.Option("gpt-5.6-luna", "--agent.model"),
@@ -58,10 +60,18 @@ def run(
     auth_path: Path | None = typer.Option(None, "--agent.auth.path"),
     auth_env: str | None = typer.Option(None, "--agent.auth.env"),
     output: Path | None = typer.Option(None, "--output"),
+    render: Literal["none", "native"] = typer.Option(
+        "none",
+        "--render",
+        help="Presentation rendering; native currently records VLN-CE RGB and top-down video",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print compact JSON"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress live evaluation progress"),
 ) -> None:
     """Run one static evaluation case synchronously."""
+    root_overrides = ctx.find_root().obj or {}
+    if "viewer" not in root_overrides:
+        global_config.update(viewer="none")
     if auth_mode is None:
         if auth_path is not None and auth_env is not None:
             raise typer.BadParameter(
@@ -87,7 +97,8 @@ def run(
             model=agent_model,
             thinking_level=thinking_level,
             auth=auth,
-        )
+        ),
+        render=render,
     )
     renderer = None if quiet else ProgressRenderer()
     try:
@@ -125,7 +136,7 @@ def format_result(result: CompactEvalResult) -> str:
     if result.progress is not None:
         source += f" @ {result.progress * 100:g}%"
     answer = str(result.integer_answer) if result.integer_answer is not None else "—"
-    task_label = "Task" if result.source_kind == "simulator_scene" else "Question"
+    task_label = "Question" if result.source_kind == "frozen_memory" else "Task"
     rows = [
         ("Case", result.case_id),
         ("Source", source),
@@ -143,6 +154,11 @@ def format_result(result: CompactEvalResult) -> str:
     ]
     if result.source_kind == "frozen_memory":
         rows.insert(3, ("Answer", answer))
+    if result.official_metrics is not None:
+        metrics = ", ".join(f"{name}={value:g}" for name, value in result.official_metrics.items())
+        rows.insert(4, ("Metrics", metrics))
+    if result.condition_label is not None:
+        rows.insert(2, ("Condition", result.condition_label))
     body = "\n".join(f"  {label:<10} {value}" for label, value in rows)
     return f"{heading}\n\n{body}"
 

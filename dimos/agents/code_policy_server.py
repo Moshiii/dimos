@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Mapping
+import os
 import socket
 import subprocess
 import sys
@@ -213,8 +215,14 @@ class StandaloneCodePolicyServer:
 class StandaloneCodePolicyProcess:
     """Runner-owned standalone process plus private control client."""
 
-    def __init__(self, config: CodePolicySessionConfig) -> None:
+    def __init__(
+        self,
+        config: CodePolicySessionConfig,
+        *,
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
         self.config = config
+        self.environment = dict(environment or {})
         self.port = _available_port()
         self.mcp_url = f"http://127.0.0.1:{self.port}/mcp"
         self.control_url = f"http://127.0.0.1:{self.port}/control"
@@ -237,16 +245,23 @@ class StandaloneCodePolicyProcess:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env={**os.environ, **self.environment},
         )
         if not McpAdapter(self.mcp_url, timeout=2).wait_for_ready(timeout=timeout_s, interval=0.05):
             self.close()
             raise TimeoutError("standalone CodePolicy process did not become ready")
 
     def receipt(self) -> dict[str, Any]:
-        return self._control("receipt")
+        value = self._control("receipt")
+        if not isinstance(value, dict):
+            raise TypeError("CodePolicy receipt response is not an object")
+        return value
 
     def reset(self) -> dict[str, Any]:
-        return self._control("reset")
+        value = self._control("reset")
+        if not isinstance(value, dict):
+            raise TypeError("CodePolicy reset response is not an object")
+        return value
 
     def records(self, session_id: str | None = None) -> list[dict[str, Any]]:
         value = self._control("records", {"session_id": session_id})

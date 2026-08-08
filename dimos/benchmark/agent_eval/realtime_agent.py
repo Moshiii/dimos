@@ -29,6 +29,7 @@ from dimos.benchmark.agent_eval.case import AgentOutcome
 from dimos.benchmark.agent_eval.engine import AttemptEvidence
 from dimos.benchmark.agent_eval.pi import PiSession, PiSessionFactory, PiTurn
 from dimos.benchmark.agent_eval.pi_adapter import CodePolicyCallLog, wait_for_python_exec
+from dimos.core.global_config import global_config
 
 NEUTRAL_CONTINUATION = "Continue working on the task."
 MAX_TURNS_SAFETY_CEILING = 100
@@ -91,7 +92,8 @@ class ExternalPiWorker:
         process = StandaloneCodePolicyProcess(
             CodePolicySessionConfig(
                 environment=LiveDimosEnvironment(recording_path=str(memory_path))
-            )
+            ),
+            environment={"DIMOS_TRANSPORT": global_config.transport},
         )
         process.start(self.readiness_timeout_seconds)
         mcp = McpAdapter(process.mcp_url, timeout=int(self.readiness_timeout_seconds))

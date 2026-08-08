@@ -22,14 +22,17 @@ from pathlib import Path
 import time
 from typing import Annotated, Literal, TypeVar
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from dimos.benchmark.agent_eval.base import BaseEvalModel
 from dimos.benchmark.agent_eval.case import (
     AgentCondition,
     AgentOutcome,
     AttemptRequest,
+    BenchmarkInstructionTask,
+    BenchmarkNativeResultValidatorRef,
     EvalCase,
+    ExternalBenchmarkEpisodeSource,
     FrozenRecordingSource,
     LiveCodePolicyInteraction,
     Prediction,
@@ -54,6 +57,12 @@ from dimos.benchmark.short_horizon_qa.eval import (
     run_frozen_case,
 )
 from dimos.benchmark.short_horizon_qa.prepare import prepare_bundle
+from dimos.benchmark.vlnce_r2r.external_engine import (
+    ExternalBenchmarkAttemptEngine,
+    VlnceExternalRuntimeFactory,
+)
+from dimos.benchmark.vlnce_r2r.native_result import VlnceNativeResult
+from dimos.benchmark.vlnce_r2r.preparation import prepare_public_assets, resolve_oci_image
 from dimos.constants import CACHE_DIR, STATE_DIR
 
 DEFAULT_MODEL: Literal["gpt-5.6-luna"] = "gpt-5.6-luna"
@@ -61,7 +70,7 @@ DEFAULT_OUTPUT_ROOT = STATE_DIR / "evals"
 DEFAULT_CODEX_AUTH_PATH = Path.home() / ".pi" / "agent" / "auth.json"
 DEFAULT_OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 SINGLE_CASE_TURN_TIMEOUT_SECONDS = 600.0
-EvalModelT = TypeVar("EvalModelT", bound=BaseEvalModel)
+EvalModelT = TypeVar("EvalModelT", bound=BaseModel)
 
 
 class CodexOAuthConfig(BaseEvalModel):
@@ -89,13 +98,16 @@ class PiAgentConfig(BaseEvalModel):
 
 class EvalRunConfig(BaseEvalModel):
     agent: PiAgentConfig = Field(default_factory=PiAgentConfig)
+    render: Literal["none", "native"] = "none"
 
 
 class CompactEvalResult(BaseEvalModel):
     attempt_id: str
     case_id: str
     source: str
-    source_kind: Literal["frozen_memory", "simulator_scene"] = "frozen_memory"
+    source_kind: Literal["frozen_memory", "simulator_scene", "external_benchmark_episode"] = (
+        "frozen_memory"
+    )
     progress: float | None
     question: str
     attempt_status: Literal["completed", "failed"]
@@ -103,6 +115,8 @@ class CompactEvalResult(BaseEvalModel):
     reason: str
     prediction_status: Literal["parsed", "invalid"] | None = None
     integer_answer: int | None = None
+    official_metrics: dict[str, float] | None = None
+    condition_label: str | None = None
     agent: AgentCondition
     tool_call_count: int = Field(ge=0)
     duration_seconds: float = Field(ge=0)
@@ -120,12 +134,16 @@ def execute_single_case(
     path = case_path.expanduser().resolve()
     emit_progress(progress, StatusProgress(channel="eval", message="loading case"))
     case = EvalCase.model_validate_json(path.read_bytes())
+    if config.render == "native" and not isinstance(case.source, ExternalBenchmarkEpisodeSource):
+        raise ValueError("native rendering currently supports VLN-CE cases only")
     task = case.task
     source_name = (
         case.source.recording
         if isinstance(case.source, FrozenRecordingSource)
         else case.source.scene
         if isinstance(case.source, SimulatorSceneSource)
+        else f"{case.source.benchmark}:{case.source.episode_id}"
+        if isinstance(case.source, ExternalBenchmarkEpisodeSource)
         else case.source.runtime
     )
     emit_progress(
@@ -144,6 +162,8 @@ def execute_single_case(
     emit_progress(progress, StatusProgress(channel="eval", message="verifying validator"))
     private_goal = None
     runtime_factory = None
+    external_preparation = None
+    external_image_id = None
     if isinstance(case.source, FrozenRecordingSource):
         load_exact_integer_oracle(case, path.parent)
         emit_progress(progress, StatusProgress(channel="eval", message="preparing frozen memory"))
@@ -155,6 +175,15 @@ def execute_single_case(
         emit_progress(progress, StatusProgress(channel="eval", message="checking simulator"))
         runtime_factory.preflight(case.source)
         emit_progress(progress, StatusProgress(channel="eval", message="simulator ready"))
+    elif isinstance(case.source, ExternalBenchmarkEpisodeSource):
+        assert isinstance(case.task, BenchmarkInstructionTask)
+        emit_progress(
+            progress, StatusProgress(channel="eval", message="preparing benchmark assets")
+        )
+        external_preparation = prepare_public_assets(case.source, case.task)
+        emit_progress(progress, StatusProgress(channel="eval", message="resolving benchmark image"))
+        external_image_id = resolve_oci_image(case.source.preparation.image)
+        emit_progress(progress, StatusProgress(channel="eval", message="benchmark inputs ready"))
     else:
         raise ValueError("single-case CLI does not support legacy live_dimos sources")
     credential, binding_digest = _resolve_credential(config.agent.auth)
@@ -169,6 +198,8 @@ def execute_single_case(
         runtime_id=(
             "local-standalone-code-policy"
             if isinstance(case.source, FrozenRecordingSource)
+            else "external-vlnce-r2r"
+            if isinstance(case.source, ExternalBenchmarkEpisodeSource)
             else "case-bound-simulator-scene"
         ),
         parameters={
@@ -198,7 +229,7 @@ def execute_single_case(
             runtime_binding=runtime,
             turn_timeout_s=SINGLE_CASE_TURN_TIMEOUT_SECONDS,
         )
-    else:
+    elif isinstance(case.source, SimulatorSceneSource):
         assert (
             isinstance(case.interaction, LiveCodePolicyInteraction)
             and private_goal is not None
@@ -216,18 +247,49 @@ def execute_single_case(
             ),
             progress=progress,
         ).run()
+    else:
+        assert (
+            isinstance(case.source, ExternalBenchmarkEpisodeSource)
+            and isinstance(case.interaction, LiveCodePolicyInteraction)
+            and external_preparation is not None
+            and external_image_id is not None
+        )
+        request = AttemptRequest(case=case, agent=condition, runtime=runtime)
+        engine_result = ExternalBenchmarkAttemptEngine(
+            request=request,
+            output_root=output_root.expanduser(),
+            preparation=external_preparation,
+            image_id=external_image_id,
+            runtime_factory=VlnceExternalRuntimeFactory(render=config.render),
+            agent_factory=ExternalPiWorkerFactory(
+                pi_factory=factory,
+                turn_timeout_seconds=case.interaction.timeout_seconds,
+            ),
+            progress=progress,
+        ).run()
     duration = time.monotonic() - started
     emit_progress(progress, StatusProgress(channel="eval", message="attempt finished"))
     prediction = _optional_model(engine_result.attempt_path / "prediction.v1.json", Prediction)
     agent_outcome = _optional_model(
         engine_result.attempt_path / "agent-outcome.v1.json", AgentOutcome
     )
+    native_result = None
+    if isinstance(case.source, ExternalBenchmarkEpisodeSource):
+        assert isinstance(case.validator, BenchmarkNativeResultValidatorRef)
+        native_result = _optional_model(
+            engine_result.attempt_path / case.validator.result_filename,
+            VlnceNativeResult,
+        )
     return CompactEvalResult(
         attempt_id=engine_result.outcome.attempt_id,
         case_id=case.case_id,
         source=source_name,
         source_kind=(
-            "frozen_memory" if isinstance(case.source, FrozenRecordingSource) else "simulator_scene"
+            "frozen_memory"
+            if isinstance(case.source, FrozenRecordingSource)
+            else "external_benchmark_episode"
+            if isinstance(case.source, ExternalBenchmarkEpisodeSource)
+            else "simulator_scene"
         ),
         progress=(case.source.progress if isinstance(case.source, FrozenRecordingSource) else None),
         question=getattr(task, "prompt", ""),
@@ -236,6 +298,14 @@ def execute_single_case(
         reason=engine_result.outcome.reason,
         prediction_status=prediction.status if prediction is not None else None,
         integer_answer=prediction.integer_answer if prediction is not None else None,
+        official_metrics=(
+            native_result.metrics.model_dump(mode="json") if native_result is not None else None
+        ),
+        condition_label=(
+            case.source.condition_label
+            if isinstance(case.source, ExternalBenchmarkEpisodeSource)
+            else None
+        ),
         agent=condition,
         tool_call_count=agent_outcome.tool_call_count if agent_outcome is not None else 0,
         duration_seconds=duration,

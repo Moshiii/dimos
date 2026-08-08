@@ -69,7 +69,10 @@ def test_standalone_server_has_exact_direct_mcp_surface(tmp_path: Path) -> None:
 
 
 def test_standalone_process_control_resets_and_collects_records(tmp_path: Path) -> None:
-    process = StandaloneCodePolicyProcess(_config(tmp_path))
+    process = StandaloneCodePolicyProcess(
+        _config(tmp_path), environment={"DIMOS_TRANSPORT": "zenoh"}
+    )
+    assert process.environment == {"DIMOS_TRANSPORT": "zenoh"}
     process.start()
     adapter = McpAdapter(process.mcp_url, timeout=5)
     try:
