@@ -26,6 +26,7 @@ roboplan_planner_module = importlib.import_module(
     "dimos.manipulation.planning.planners.roboplan_planner"
 )
 
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.planners.roboplan_config import (
     RoboPlanCartesianPathConfig,
     RoboPlanPlannerConfig,
@@ -160,3 +161,36 @@ def test_real_roboplan_synchronizes_different_length_dual_arm_targets(
     assert result.timestamps is not None
     assert len(result.timestamps) == len(result.path)
     assert all(state.name == list(selection.joint_names) for state in result.path)
+
+
+def test_roboplan_generates_same_robot_group_combinations(
+    roboplan_types: tuple[type[Any], type[Any]],
+) -> None:
+    config = make_xarm6_model_config(name="arm")
+    if not Path(config.model_path).exists():
+        pytest.skip(f"xArm model is unavailable: {config.model_path}")
+    config = config.model_copy(
+        update={
+            "planning_groups": [
+                PlanningGroupDefinition(
+                    name="upper",
+                    joint_names=tuple(config.joint_names[:3]),
+                    base_link=config.base_link,
+                ),
+                PlanningGroupDefinition(
+                    name="lower",
+                    joint_names=tuple(config.joint_names[3:]),
+                    base_link=config.base_link,
+                    tip_link="link6",
+                ),
+            ]
+        }
+    )
+
+    world_type, _planner_type = roboplan_types
+    world = world_type()
+    world.add_robot(config)
+    world.finalize()
+
+    combined = world._require_model().groups.get(frozenset({"arm/upper", "arm/lower"}))
+    assert combined is not None

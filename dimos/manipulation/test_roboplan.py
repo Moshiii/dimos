@@ -1663,7 +1663,7 @@ def test_native_selected_planner_accepts_local_joint_names(
     assert result.path[-1].position == [0.2, 0.4]
 
 
-def test_native_selected_planner_rejects_multi_group_selection(
+def test_native_selected_planner_plans_same_robot_multi_group_selection(
     fake_roboplan: None, robot_config: RobotModelConfig
 ) -> None:
     config = robot_config.model_copy(
@@ -1684,8 +1684,8 @@ def test_native_selected_planner_rejects_multi_group_selection(
         JointState(name=list(selection.joint_names), position=[0.1, 0.1]),
     )
 
-    assert result.status == PlanningStatus.UNSUPPORTED
-    assert "no generated group" in result.message
+    assert result.status == PlanningStatus.SUCCESS
+    assert sorted(result.path[-1].name) == ["arm/joint1", "arm/joint2"]
 
 
 def test_native_planner_coordinates_groups_across_two_robots(

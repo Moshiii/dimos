@@ -606,13 +606,19 @@ class ManipulationModule(Module):
         expected = list(expected_names)
         waypoints: list[list[float]] = []
         for waypoint_index, state in enumerate(path):
-            if list(state.name) != expected:
-                raise ValueError(
-                    f"Waypoint {waypoint_index} joint names do not match selected order"
-                )
+            names = list(state.name)
             positions = list(state.position)
-            if len(positions) != len(expected):
+            if len(positions) != len(names):
                 raise ValueError(f"Waypoint {waypoint_index} position dimension mismatch")
+            if names != expected:
+                # Multi-group plans come back in the generated group's
+                # canonical order; reorder to the requested selection.
+                if sorted(names) != sorted(expected):
+                    raise ValueError(
+                        f"Waypoint {waypoint_index} joint names do not match the selection"
+                    )
+                by_name = dict(zip(names, positions, strict=True))
+                positions = [by_name[name] for name in expected]
             self._assert_finite_sequence(positions, f"Waypoint {waypoint_index} positions")
             waypoints.append(positions)
         return waypoints

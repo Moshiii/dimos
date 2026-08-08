@@ -210,7 +210,7 @@ def test_cartesian_plan_rejects_malformed_timed_results(
 @pytest.mark.parametrize(
     ("path", "message"),
     [
-        (_path(["left/a", "left/b"], [0.0, 0.0], [1.0, 1.0]), "joint names"),
+        (_path(["left/a", "left/c"], [0.0, 0.0], [1.0, 1.0]), "joint names"),
         (_path(["left/b", "left/a"], [0.0], [1.0]), "dimension"),
         (_path(["left/b", "left/a"], [0.0, float("nan")], [1.0, 1.0]), "non-finite"),
     ],

@@ -1064,3 +1064,24 @@ class TestIkPostureSeed:
 
         seed = JointState({"name": ["g1/elbow"], "position": [0.0]})
         assert module._seed_with_ik_posture(seed) is seed
+
+
+class TestValidateSelectedPath:
+    """Waypoint validation accepts permuted joint orders from combined groups."""
+
+    def test_permuted_waypoints_are_reordered(self, module_factory):
+        module = module_factory()
+        path = [
+            JointState({"name": ["b", "a"], "position": [1.0, 2.0]}),
+            JointState({"name": ["b", "a"], "position": [3.0, 4.0]}),
+        ]
+        assert module._validate_selected_path(path, ["a", "b"]) == [[2.0, 1.0], [4.0, 3.0]]
+
+    def test_mismatched_names_are_rejected(self, module_factory):
+        module = module_factory()
+        path = [
+            JointState({"name": ["a", "c"], "position": [1.0, 2.0]}),
+            JointState({"name": ["a", "c"], "position": [3.0, 4.0]}),
+        ]
+        with pytest.raises(ValueError, match="do not match the selection"):
+            module._validate_selected_path(path, ["a", "b"])
