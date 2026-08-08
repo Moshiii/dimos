@@ -1032,3 +1032,35 @@ class TestRobotModelConfigMapping:
         # URDF -> Coordinator
         assert config.get_coordinator_joint_name("joint1") == "left/joint1"
         assert config.get_coordinator_joint_name("unknown") == "unknown"
+
+
+class TestIkPostureSeed:
+    """Test ik_posture overlay on default IK seeds."""
+
+    def test_overlay_applies_to_configured_joints(self, module_factory):
+        config = RobotModelConfig(
+            name="g1",
+            model_path=Path("g1.urdf"),
+            joint_names=["shoulder", "elbow"],
+            ik_posture={"elbow": 1.2},
+        )
+        module = module_factory()
+        module._robots = {"g1": ("robot_id", config, MagicMock())}
+
+        seed = JointState({"name": ["g1/shoulder", "g1/elbow"], "position": [0.3, 0.0]})
+        result = module._seed_with_ik_posture(seed)
+
+        assert list(result.name) == ["g1/shoulder", "g1/elbow"]
+        assert list(result.position) == [0.3, 1.2]
+
+    def test_no_posture_returns_seed_unchanged(self, module_factory):
+        config = RobotModelConfig(
+            name="g1",
+            model_path=Path("g1.urdf"),
+            joint_names=["shoulder", "elbow"],
+        )
+        module = module_factory()
+        module._robots = {"g1": ("robot_id", config, MagicMock())}
+
+        seed = JointState({"name": ["g1/elbow"], "position": [0.0]})
+        assert module._seed_with_ik_posture(seed) is seed

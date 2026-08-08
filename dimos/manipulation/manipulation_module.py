@@ -854,6 +854,20 @@ class ManipulationModule(Module):
             check_collision=check_collision,
         )
 
+    def _seed_with_ik_posture(self, seed: JointState) -> JointState:
+        """Overlay configured robot ik_posture values onto a default IK seed."""
+        positions: list[float] = []
+        changed = False
+        for name, position in zip(seed.name, seed.position, strict=True):
+            robot_name, _, local_name = name.partition("/")
+            robot = self._robots.get(robot_name)
+            posture = robot[1].ik_posture.get(local_name) if robot else None
+            positions.append(position if posture is None else posture)
+            changed = changed or posture is not None
+        if not changed:
+            return seed
+        return JointState({"name": list(seed.name), "position": positions})
+
     @rpc
     def inverse_kinematics(
         self,
@@ -887,7 +901,9 @@ class ManipulationModule(Module):
                 current = self._world_monitor.current_global_joint_state()
                 if not current.name and not current.position:
                     return IKResult(status=IKStatus.NO_SOLUTION, message="No joint state")
-                seed_state = filter_joint_state_to_selected_joints(current, selection.joint_names)
+                seed_state = self._seed_with_ik_posture(
+                    filter_joint_state_to_selected_joints(current, selection.joint_names)
+                )
         except (KeyError, ValueError) as exc:
             return IKResult(status=IKStatus.NO_SOLUTION, message=str(exc))
         if seed_state is None:
@@ -1113,7 +1129,7 @@ class ManipulationModule(Module):
         ik = self.inverse_kinematics(
             pose_targets=stamped_targets,
             auxiliary_group_ids=auxiliary_ids,
-            seed=start,
+            seed=self._seed_with_ik_posture(start),
         )
         if not ik.is_success() or ik.joint_state is None:
             detail = f": {ik.message}" if ik.message else ""

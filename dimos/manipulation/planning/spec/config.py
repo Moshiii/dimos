@@ -82,6 +82,9 @@ class RobotModelConfig(ModuleConfig):
     tf_extra_links: list[str] = Field(default_factory=list)
     # Home/observe joint configuration for go_home skill
     home_joints: list[float] | None = None
+    # Reference posture overlay (local joint name -> position) applied to the
+    # default IK seed for pose targets; biases redundancy resolution.
+    ik_posture: dict[str, float] = Field(default_factory=dict)
     # Pre-grasp offset distance in meters (along approach direction)
     pre_grasp_offset: float = 0.10
 
