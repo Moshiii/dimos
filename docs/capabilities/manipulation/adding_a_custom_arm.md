@@ -440,7 +440,7 @@ coordinator_yourarm = ControlCoordinator.blueprint(
         HardwareComponent(
             hardware_id="arm",                        # Unique ID for this hardware
             hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("arm", 6),             # Creates ["arm_joint1", ..., "arm_joint6"]
+            joints=make_joints("arm", 6),             # Creates ["arm/joint1", ..., "arm/joint6"]
             adapter_type="yourarm",                   # Must match registry name
             address="192.168.1.100",                  # Passed to adapter __init__
             auto_enable=True,                         # Auto-enable servos on start
@@ -466,7 +466,7 @@ coordinator_yourarm = ControlCoordinator.blueprint(
 | `hardware_id` | Unique name for this hardware component. Used to route commands. |
 | `adapter_type` | Name registered with `adapter_registry` (e.g., `"yourarm"`). |
 | `address` | Connection info passed to adapter's `__init__` as `address` kwarg. |
-| `joints` | List of joint names. `make_joints("arm", 6)` creates `["arm_joint1", ..., "arm_joint6"]`. |
+| `joints` | List of joint names. `make_joints("arm", 6)` creates `["arm/joint1", ..., "arm/joint6"]`. |
 | `auto_enable` | If `True`, servos are enabled automatically when the coordinator starts. |
 | `task.name` | Name used by the ManipulationModule to invoke trajectory execution via RPC. |
 | `task.type` | Task type: `"trajectory"`, `"servo"`, `"velocity"`, or `"cartesian_ik"`. |
@@ -510,11 +510,12 @@ this backend. Formal per-joint DimOS overrides will be added separately.
 ```python skip
 from dimos.utils.data import LfsPath
 from dimos.manipulation.manipulation_module import manipulation_module
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec import RobotModelConfig
-from dimos.manipulation.planning.spec.models import PlanningGroupDefinition
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.robot.manipulators._modeling import coordinator_joint_mapping
 
 # LfsPath defers download until the path is actually accessed
 _YOURARM_URDF_PATH = LfsPath("yourarm_description/urdf/yourarm.urdf")
@@ -563,6 +564,7 @@ def _make_yourarm_config(
         xacro_args={},                  # Xacro arguments if using .xacro files
         collision_exclusion_pairs=[],   # Pairs of links that can touch (e.g., gripper fingers)
         auto_convert_meshes=True,       # Convert DAE/STL meshes for Drake
+        joint_name_mapping=coordinator_joint_mapping(name, 6),
         max_velocity=1.0,               # Max velocity scaling factor
         max_acceleration=2.0,           # Max acceleration scaling factor
     )
@@ -615,6 +617,7 @@ yourarm_planner = manipulation_module(
 | `base_pose` / `base_link` | Optional robot placement: `base_pose` places `base_link` in the world for weld/strip behavior |
 | `package_paths` | Maps `package://` URIs to filesystem paths (for xacro) |
 | `collision_exclusion_pairs` | List of `(link_a, link_b)` tuples for links that may legitimately touch (e.g., gripper fingers) |
+| `joint_name_mapping` | Maps coordinator names such as `arm/joint1` to local URDF names such as `joint1` |
 
 Coordinator-facing joint states and trajectories use global joint names derived
 mechanically as `{robot_name}/{local_joint_name}` (for example, `arm/joint1`).
@@ -628,45 +631,309 @@ See [Planning Groups](/docs/capabilities/manipulation/planning_groups.md).
 
 ### 4d. Configure Cartesian, EEF-twist, and teleop control IK
 
-Cartesian, EEF-twist, and engagement-relative teleop tasks use the direct URDF
-or Xacro in `RobotModelConfig`. Set `package_paths` and `xacro_args` when needed,
-name the end-effector link, and map coordinator joints to model joints. The task
-validates the prepared model, frame, and joint mapping at startup. Teleop uses
-the named frame and does not accept a separate model path or numeric
-end-effector joint ID.
+Cartesian, EEF-twist, and engagement-relative teleop tasks share one Pink IK
+backend. Give each task the same `RobotModelConfig` that you use for planning.
+The backend loads its URDF or Xacro, validates every controlled joint and target
+frame at startup, and solves one bounded QP per coordinator tick.
 
-Pass the same model configuration to the common helpers:
+Install the Pink, Pinocchio, and QP solver dependencies before importing these
+tasks:
+
+```bash skip
+uv sync --extra manipulation --inexact
+```
+
+#### Choose the task shape
+
+Use one task for every robot model that Pink should solve as one system:
+
+| Robot setup | Task layout |
+| --- | --- |
+| One arm | One task with one target frame |
+| Two independent robot models | One task per arm |
+| One bimanual robot model | One task with both arm joints and two target frames |
+
+A bimanual task lets Pink trade motion across both arms in one QP. Two separate
+tasks cannot coordinate a shared torso or other coupled joints. Conversely,
+independent robot models do not need a combined task.
+
+#### Add a single-arm task
+
+Pass the model, the URDF frame to control, and the coordinator joint set to a
+common task helper:
 
 ```python skip
+from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.robot.manipulators.common.blueprints import (
     cartesian_ik_task,
     eef_twist_task,
+    planner,
     teleop_ik_task,
 )
+
+robot_model = _make_yourarm_config()
+pink = PinkKinematicsConfig()
 
 cartesian_task = cartesian_ik_task(
     hardware,
     robot_model=robot_model,
+    target_frame="link6",
 )
 twist_task = eef_twist_task(
     hardware,
     robot_model=robot_model,
+    target_frame="link6",
+    pink=pink,
 )
 teleop_task = teleop_ik_task(
     hardware,
     name="teleop_arm",
-    hand="right",
     robot_model=robot_model,
+    bindings=[
+        {
+            "hand": "right",
+            "target_frame": "link6",
+        }
+    ],
+    params={"pink": pink},
 )
 ```
 
-Each tick starts from measured joints and applies model position and velocity
-limits. Twist targets are derived from measured forward kinematics. Teleop
-targets apply controller deltas to a measured engagement baseline and discard
-that baseline across disengage, timeout, stop, clear, or E-STOP. Invalid models
-or mappings fail at startup; invalid runtime output holds the measured position.
-Validate Cartesian, twist, and teleop behavior in simulation or replay before
-hardware use.
+`target_frame` must name a frame in the prepared model. Task `joint_names` are
+coordinator-facing names; `RobotModelConfig.get_urdf_joint_name()` maps them to
+URDF names. Keep hardware-native naming inside the adapter.
+
+To control a gripper from a Quest trigger, add `gripper_joint`,
+`gripper_open_position`, and `gripper_closed_position` to the binding. The
+gripper joint must appear in the connected hardware's `gripper_joints`.
+
+Teleop applies controller motion relative to the robot pose captured when the
+operator engages. A one-hand task requires that hand's primary button. A
+two-hand task requires both primary buttons, so releasing either button stops
+the bimanual task and clears its references.
+
+#### Add a bimanual task
+
+Use one `RobotModelConfig` containing both kinematic chains, and pass all arm
+joints to one task. The hand bindings select the two target frames:
+
+```python skip
+bimanual_task = teleop_ik_task(
+    dual_arm_hardware,
+    name="teleop_dual_arm",
+    robot_model=dual_arm_model,
+    joint_names=[
+        *left_arm_joint_names,
+        *right_arm_joint_names,
+    ],
+    bindings=[
+        {"hand": "left", "target_frame": "left_tool_frame"},
+        {"hand": "right", "target_frame": "right_tool_frame"},
+    ],
+    params={"pink": PinkKinematicsConfig()},
+)
+```
+
+Do not add planning-group concepts to the control task. Planning groups select
+planning requests; the control task needs only controlled joints and target
+frames.
+
+#### Tune the common Pink objective
+
+Start with `PinkKinematicsConfig`. These values configure the task objective and
+QP behavior for both single-arm and bimanual tasks:
+
+```python skip
+pink = PinkKinematicsConfig(
+    position_cost=1.0,
+    orientation_cost=0.3,
+    posture_cost=1e-3,
+    joint_limit_posture_margin=0.15,
+    lm_damping=1e-6,
+    damping=1e-8,
+    gain=0.3,
+    safety_break=True,
+)
+```
+
+| Field | Effect | Tuning direction |
+| --- | --- | --- |
+| `position_cost` | Cartesian translation tracking weight | Raise when position lags other objectives |
+| `orientation_cost` | Cartesian rotation tracking weight | Lower when orientation makes translation stiff or unreachable |
+| `posture_cost` | Preference for the current joint posture | Raise to reduce redundant motion; lower if it resists the target |
+| `joint_limit_posture_margin` | Moves the posture target inward near finite joint limits | Raise when redundant joints settle at their limits |
+| `lm_damping` | Frame-task damping near singularities | Raise gradually when motion becomes unstable near singular poses |
+| `damping` | Global QP velocity regularization | Raise to suppress large joint velocities; too much feels sluggish |
+| `gain` | Fraction of task error corrected per solve | Raise for faster response; lower to reduce oscillation or overshoot |
+| `safety_break` | Makes Pink reject invalid configurations | Keep enabled for streaming hardware control |
+
+`PinkKinematicsConfig.dt` is the default integration step for planning solves.
+Streaming control uses the coordinator's measured tick duration, so set the
+coordinator rate correctly instead of compensating with `dt`.
+
+Planning IK runs a convergence loop and uses `max_iterations`; streaming control
+takes exactly one QP step per tick and uses neither convergence retries nor
+random restarts. Pass the scalar config to the planner when you want planning
+and control to start from the same weights:
+
+```python skip
+yourarm_planner = planner(
+    robots=[robot_model],
+    kinematics=pink,
+)
+```
+
+Change one quantity at a time. Costs are relative: multiplying every cost by
+the same factor rarely changes the motion. First balance position against
+orientation, then add only enough posture cost to shape redundant joints.
+
+#### Customize the Pink task stack for one robot
+
+Scalar config is enough for many arms. Subclass `PinkPoseTargetSolver` when a
+robot needs per-joint posture weights, a manipulability objective, or another
+Pink task. Override `_create_tasks()`, call `super()`, and modify the returned
+dictionary:
+
+```python skip
+import numpy as np
+import pink
+
+from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver
+
+
+class YourArmPinkPoseTargetSolver(PinkPoseTargetSolver):
+    """Tune Pink's objective for YourArm."""
+
+    def _create_tasks(
+        self,
+        configuration: pink.Configuration,
+        target_frames: tuple[str, ...],
+    ) -> dict[str, pink.Task]:
+        tasks = super()._create_tasks(configuration, target_frames)
+
+        posture = tasks.get("posture/current")
+        if posture is None:
+            raise ValueError("YourArm requires a positive posture cost")
+        posture.cost = self.config.posture_cost * np.array(
+            [4.0, 3.0, 0.2, 2.0, 1.0, 0.5]
+        )
+
+        for frame_name in target_frames:
+            frame = tasks[f"frame/{frame_name}"]
+            frame.set_orientation_cost(0.3)
+            tasks[f"manipulability/{frame_name}"] = pink.tasks.ManipulabilityTask(
+                frame_name,
+                configuration.model,
+                cost=0.005,
+                manipulability_rate=0.05,
+                mask="position",
+            )
+        return tasks
+```
+
+The common stack uses these stable names:
+
+- `frame/<target frame>` for each required frame task
+- `posture/current` when `posture_cost > 0`
+
+You may tune or replace those values and add named auxiliary tasks. Keep every
+task instance local to the returned dictionary. Pink tasks are stateful and
+must never be shared between control-task instances.
+
+This hook also supports layered tuning. A generic bimanual solver can add the
+shared tasks; a robot-specific subclass can call `super()` and change one cost
+or task without rebuilding the stack.
+
+Pass the solver class—not an instance—to the teleop helper. The coordinator
+constructs one solver for each control task:
+
+```python skip
+teleop_task = teleop_ik_task(
+    hardware,
+    name="teleop_arm",
+    robot_model=robot_model,
+    bindings=[{"hand": "right", "target_frame": "link6"}],
+    solver_type=YourArmPinkPoseTargetSolver,
+    params={"pink": pink},
+)
+```
+
+Use `_before_solve()` and `_after_solve()` only for a genuinely temporal Pink
+task. Most robot tuning belongs in `_create_tasks()`.
+
+#### Tune the streaming safety envelope
+
+Task parameters bound the QP output against the URDF and live hardware
+feedback. They are independent of the objective weights:
+
+```python skip
+teleop_task = teleop_ik_task(
+    hardware,
+    name="teleop_arm",
+    robot_model=robot_model,
+    bindings=[{"hand": "right", "target_frame": "link6"}],
+    params={
+        "pink": pink,
+        "timeout": 0.5,
+        "max_joint_velocity_rad_s": 1.0,
+        "max_command_tracking_error_deg": 10.0,
+        "feedback_limit_tolerance": 1e-3,
+        "command_limit_margin": 1e-4,
+    },
+)
+```
+
+| Field | Purpose |
+| --- | --- |
+| `timeout` | Drops a stale controller target after this many seconds and resets the command trajectory |
+| `max_joint_velocity_rad_s` | Per-task velocity cap; the lower of this and each URDF velocity limit wins |
+| `max_command_tracking_error_deg` | Maximum per-joint distance, in degrees, between the generated command trajectory and measured hardware state |
+| `feedback_limit_tolerance` | Allows this many radians of sensor error beyond a URDF position limit before rejecting feedback |
+| `command_limit_margin` | Keeps generated commands this many radians inside finite URDF position limits |
+
+Start real-hardware tests with a conservative velocity cap, then raise it only
+after the robot tracks smoothly. Set `max_command_tracking_error_deg` high
+enough to tolerate normal execution delay but low enough to prevent the command
+trajectory from running far ahead. Keep `feedback_limit_tolerance` small: it is
+for encoder noise, not extra workspace.
+
+Each accepted command lies inside the configured/URDF velocity step, the
+measured-state tracking window, and the inward position margin. If feedback
+exceeds the configured tolerance or Pink fails, the task publishes no new
+command for that tick.
+
+#### Tune in this order
+
+1. Verify joint names, joint order, base link, target frames, and canonical
+   startup forward kinematics.
+2. Run with mock hardware. Confirm that small translation and rotation targets
+   move in the expected directions.
+3. Balance `position_cost` and `orientation_cost` with `posture_cost` near zero.
+4. Add posture weights or a manipulability task to shape redundant motion.
+5. Exercise singular poses and joint limits; adjust damping and the inward
+   posture margin.
+6. Move to real hardware with a conservative velocity cap. Tune tracking error
+   for measured latency and sensor noise.
+7. Test disengage, target timeout, preemption, stop, and E-STOP. Each must clear
+   the persistent command trajectory before re-engagement.
+
+Common symptoms usually point to one layer:
+
+| Symptom | Check first |
+| --- | --- |
+| Position moves but rotation does not | `orientation_cost` and target-frame orientation |
+| Arm barely moves | Excessive posture cost, low gain, or an unreachable target |
+| Redundant joints drift or fold poorly | Per-joint posture weights or a manipulability task |
+| Motion jitters near a singularity | `lm_damping`, QP `damping`, and gain |
+| Commands stop near a joint limit | URDF limits, feedback tolerance, command margin, and inward posture target |
+| Simulation works but hardware feels stuck | Command tracking error versus measured execution delay |
+| Hardware jumps after lag | Velocity cap and command tracking error are too permissive |
+| One side dominates a bimanual solve | Balance the two frame-task costs and inspect shared-joint posture weights |
+
+Invalid models and mappings fail during task construction. Validate the
+complete IK path with fake hardware before connecting a physical arm, then add
+a self-hosted test that loads the real model and takes bounded steps from the
+canonical startup pose.
 
 ## Step 5: Register Blueprints
 
@@ -676,7 +943,7 @@ The blueprint registry in `dimos/robot/all_blueprints.py` is **auto-generated** 
    ```bash
    pytest dimos/robot/test_all_blueprints_generation.py
    ```
-3. Now you can run your arm via CLI:
+2. Now you can run your arm via CLI:
    ```bash
    dimos run coordinator-yourarm
    dimos run yourarm-planner        # If you added a planning blueprint
