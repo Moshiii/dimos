@@ -164,6 +164,24 @@ def test_twist_routes_to_eef_twist_task(module: ArmCommandModule) -> None:
     assert out.linear.x == pytest.approx(0.2)
 
 
+def test_ui_scale_disabled_is_rejected(module: ArmCommandModule) -> None:
+    module._on_state_json(b'{"type": "teleop_scale", "scale": 0.5, "nonce": 3}')
+
+    assert _sent_acks(module) == [{"type": "cmd_ack", "nonce": 3, "ok": False}]
+    assert module.config.translation_scale == 1.0
+
+
+def test_ui_scale_updates_pose_and_keyboard_twist(module: ArmCommandModule) -> None:
+    module.config.enable_ui_scaling = True
+    module._on_state_json(b'{"type": "teleop_scale", "scale": 0.5, "nonce": 4}')
+    module._on_cmd_raw(_twist_bytes(0.2))
+
+    assert _sent_acks(module) == [{"type": "cmd_ack", "nonce": 4, "ok": True}]
+    assert module.config.translation_scale == 0.5
+    out = module.coordinator_ee_twist_command.publish.call_args.args[0]
+    assert out.linear.x == pytest.approx(0.1)
+
+
 def test_twist_dropped_while_estopped(module: ArmCommandModule) -> None:
     module._estopped = True
     module._on_cmd_raw(_twist_bytes(0.2))

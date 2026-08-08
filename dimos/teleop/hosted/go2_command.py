@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from typing import Any
 
@@ -70,6 +71,7 @@ class Go2CommandConfig(ModuleConfig):
     allow_acrobatics: bool = False
     max_linear_mps: float = 1.5
     max_angular_rps: float = 2.0
+    enable_ui_scaling: bool = False
 
 
 class Go2CommandModule(Module):
@@ -101,6 +103,8 @@ class Go2CommandModule(Module):
         self._posture = "StandReady"
         self._last_cmd_ts = 0.0
         self._last_cmd_nonzero = False
+        self._teleop_scale = 1.0
+        self._teleop_scale_lock = threading.Lock()
 
     @rpc
     def start(self) -> None:
@@ -154,6 +158,8 @@ class Go2CommandModule(Module):
             self._handle_nav_goal(msg)
         elif kind == "nav_cancel":
             self._handle_nav_cancel(msg.get("nonce"))
+        elif kind == "teleop_scale":
+            self._handle_teleop_scale(msg)
 
     # ─── E-STOP + operator-loss ───────────────────────────────────────
 
@@ -376,6 +382,24 @@ class Go2CommandModule(Module):
         logger.info("nav_cancel: plan cancelled by operator")
         self._send_ack(nonce, True)
 
+    def _handle_teleop_scale(self, msg: dict[str, Any]) -> None:
+        """Apply an opt-in UI scale to manual drive commands."""
+        nonce = msg.get("nonce")
+        if not self.config.enable_ui_scaling:
+            self._send_ack(nonce, False)
+            return
+        try:
+            scale = float(msg["scale"])
+        except (KeyError, TypeError, ValueError):
+            self._send_ack(nonce, False)
+            return
+        if not math.isfinite(scale) or scale <= 0.0:
+            self._send_ack(nonce, False)
+            return
+        with self._teleop_scale_lock:
+            self._teleop_scale = scale
+        self._send_ack(nonce, True)
+
     def _cancel_nav(self) -> None:
         try:
             msg = Bool()
@@ -406,6 +430,14 @@ class Go2CommandModule(Module):
         if not _all_finite(twist):
             logger.warning("dropping non-finite cmd_vel")
             return
+        with self._teleop_scale_lock:
+            scale = self._teleop_scale
+        twist.linear.x *= scale
+        twist.linear.y *= scale
+        twist.linear.z *= scale
+        twist.angular.x *= scale
+        twist.angular.y *= scale
+        twist.angular.z *= scale
         lin_max = self.config.max_linear_mps
         ang_max = self.config.max_angular_rps
         twist.linear.x = _clamp(twist.linear.x, -lin_max, lin_max)
@@ -430,6 +462,7 @@ class Go2CommandModule(Module):
             "obstacle_avoidance": self._obstacle_avoidance,
             "light": self._light,
             "estopped": self._estopped,
+            "teleop_scale": self._teleop_scale,
         }
 
     def _publish_robot_state(self) -> None:

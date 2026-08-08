@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 from dimos_lcm.geometry_msgs import TwistStamped as LCMTwistStamped
+from pydantic import ValidationError
 from reactivex.disposable import Disposable
 
 from dimos.control.coordinator import ControlCoordinator
@@ -45,6 +46,7 @@ logger = setup_logger()
 
 class ArmCommandConfig(ArmTeleopConfig):
     cmd_stale_after_sec: float = 0.5
+    enable_ui_scaling: bool = False
 
 
 class ArmCommandModule(ArmTeleopModule):
@@ -166,11 +168,21 @@ class ArmCommandModule(ArmTeleopModule):
         if ts <= self._last_twist_ts:  # out-of-order
             return
         self._last_twist_ts = ts
+        with self._lock:
+            scale = self.config.translation_scale
         self.coordinator_ee_twist_command.publish(
             TwistStamped(
                 frame_id=EEF_TWIST_TASK_NAME,
-                linear=[msg.linear.x, msg.linear.y, msg.linear.z],
-                angular=[msg.angular.x, msg.angular.y, msg.angular.z],
+                linear=[
+                    msg.linear.x * scale,
+                    msg.linear.y * scale,
+                    msg.linear.z * scale,
+                ],
+                angular=[
+                    msg.angular.x * scale,
+                    msg.angular.y * scale,
+                    msg.angular.z * scale,
+                ],
                 ts=msg.ts,
             )
         )
@@ -194,6 +206,8 @@ class ArmCommandModule(ArmTeleopModule):
             self._handle_estop_clear(msg.get("nonce"))
         elif kind == "operator_lost":  # synthetic, injected by the provider
             self._on_operator_lost()
+        elif kind == "teleop_scale":
+            self._handle_teleop_scale(msg)
         elif kind == "gripper" and not self._estopped:
             self.gripper_command.publish(Bool(data=bool(msg.get("closed", False))))
 
@@ -202,6 +216,19 @@ class ArmCommandModule(ArmTeleopModule):
             self.cmd_ack.publish(json.dumps({"type": "cmd_ack", "nonce": nonce, "ok": ok}).encode())
         except Exception:
             logger.warning("cmd_ack publish failed", exc_info=True)
+
+    def _handle_teleop_scale(self, msg: dict[str, Any]) -> None:
+        """Apply an opt-in UI scale to pose deltas and keyboard twists."""
+        nonce = msg.get("nonce")
+        if not self.config.enable_ui_scaling:
+            self._send_ack(nonce, False)
+            return
+        try:
+            self.set_translation_scale(float(msg["scale"]))
+        except (KeyError, TypeError, ValueError, ValidationError):
+            self._send_ack(nonce, False)
+            return
+        self._send_ack(nonce, True)
 
     # ─── E-STOP gating over the inherited control loop ────────────────
 
@@ -266,6 +293,7 @@ class ArmCommandModule(ArmTeleopModule):
                     "left": self._is_engaged[Hand.LEFT],
                     "right": self._is_engaged[Hand.RIGHT],
                 },
+                "teleop_scale": self.config.translation_scale,
             }
         try:
             self.robot_state.publish(json.dumps(state).encode())
