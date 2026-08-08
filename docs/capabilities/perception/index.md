@@ -2,12 +2,6 @@
 title: "Perception"
 ---
 
-## Detections
-
-See [Single-Frame Perception VQA](/docs/capabilities/perception/single-frame-vqa.md) for the recording-to-dataset pipeline that proposes image questions, grounds answers with private 3D perception, and evaluates image-only answers.
-
-See [Single-Frame VQA Architecture](/docs/capabilities/perception/single-frame-vqa-architecture.md) for its data flow, source layout, deterministic question execution, and dataset records.
-
 ## Experimental WorldBelief
 
 The experimental xArm6 WorldBelief stack records RGB-D observations and processes
