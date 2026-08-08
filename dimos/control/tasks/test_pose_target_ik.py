@@ -77,6 +77,8 @@ def _config(
     target_frames: tuple[str, ...] = ("tool",),
     timeout: float = 0.5,
     max_joint_velocity_rad_s: float = 5.0,
+    joint_velocity_limits_rad_s: dict[str, float] | None = None,
+    joint_command_filter_cutoff_hz: float | None = 5.0,
     max_command_tracking_error_deg: float = 10.0,
 ) -> PoseTargetIKTaskConfig:
     return PoseTargetIKTaskConfig(
@@ -85,6 +87,8 @@ def _config(
         target_frames=target_frames,
         timeout=timeout,
         max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+        joint_velocity_limits_rad_s=joint_velocity_limits_rad_s or {},
+        joint_command_filter_cutoff_hz=joint_command_filter_cutoff_hz,
         max_command_tracking_error_deg=max_command_tracking_error_deg,
     )
 
@@ -151,6 +155,8 @@ def test_pose_target_solver_advances_from_last_command_not_delayed_feedback(
     assert step.call_args_list[0].kwargs["command_state"].position == [0.0, 0.0]
     assert step.call_args_list[1].kwargs["command_state"].position == [0.1, 0.1]
     assert step.call_args_list[1].kwargs["measured_state"].position == [-0.3, -0.3]
+    assert step.call_args_list[1].kwargs["joint_command_filter_cutoff_hz"] == 5.0
+    assert step.call_args_list[1].kwargs["joint_velocity_limits_rad_s"] == {}
 
 
 def test_pose_target_solver_reset_reseeds_from_feedback(mocker: MockerFixture) -> None:
@@ -226,6 +232,25 @@ def test_constructor_rejects_invalid_joint_velocity_limit(
             _solver(mocker),
             _snapshot(),
         )
+
+
+@pytest.mark.parametrize("cutoff_hz", [0.0, -1.0, float("inf"), float("nan")])
+def test_constructor_rejects_invalid_joint_command_filter_cutoff(
+    cutoff_hz: float,
+) -> None:
+    with pytest.raises(ValueError, match="positive finite joint command filter cutoff"):
+        _config(joint_command_filter_cutoff_hz=cutoff_hz)
+
+
+@pytest.mark.parametrize("limit", [0.0, -1.0, float("inf"), float("nan")])
+def test_constructor_rejects_invalid_per_joint_velocity_limit(limit: float) -> None:
+    with pytest.raises(ValueError, match="positive finite velocity limit"):
+        _config(joint_velocity_limits_rad_s={"arm/a": limit})
+
+
+def test_constructor_rejects_velocity_limit_for_uncontrolled_joint() -> None:
+    with pytest.raises(ValueError, match="unknown joints.*arm/missing"):
+        _config(joint_velocity_limits_rad_s={"arm/missing": 1.0})
 
 
 @pytest.mark.parametrize("max_command_tracking_error_deg", [0.0, -1.0, float("inf"), float("nan")])

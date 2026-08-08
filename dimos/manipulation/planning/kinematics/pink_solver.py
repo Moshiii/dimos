@@ -156,6 +156,8 @@ class _PinkSolverCore:
         command_limit_margin: float,
         dt: float | None = None,
         max_joint_velocity_rad_s: float = 5.0,
+        joint_velocity_limits_rad_s: Mapping[str, float] | None = None,
+        joint_command_filter_cutoff_hz: float | None = None,
     ) -> JointState:
         """Perform one bounded Pink update for one robot's frame targets.
 
@@ -186,6 +188,11 @@ class _PinkSolverCore:
             raise ValueError("Pink streaming timestep must be positive and finite")
         if not np.isfinite(max_joint_velocity_rad_s) or max_joint_velocity_rad_s <= 0.0:
             raise ValueError("Pink streaming joint velocity limit must be positive and finite")
+        if joint_command_filter_cutoff_hz is not None and (
+            not np.isfinite(joint_command_filter_cutoff_hz) or joint_command_filter_cutoff_hz <= 0.0
+        ):
+            raise ValueError("Pink streaming command filter cutoff must be positive and finite")
+        joint_velocity_limits = joint_velocity_limits_rad_s or {}
 
         previous_positions = _seed_positions_for_mapping(command_state, robot_context.mapping)
         measured_positions = _seed_positions_for_mapping(measured_state, robot_context.mapping)
@@ -212,6 +219,11 @@ class _PinkSolverCore:
             dt=step_dt,
         )
         candidate_positions = self._q_to_dimos_positions(robot_context, configuration.q)
+        if joint_command_filter_cutoff_hz is not None:
+            alpha = -np.expm1(-2.0 * np.pi * joint_command_filter_cutoff_hz * step_dt)
+            candidate_positions = previous_positions + alpha * (
+                candidate_positions - previous_positions
+            )
         command_positions = self._apply_streaming_command_envelope(
             context=robot_context,
             candidate=candidate_positions,
@@ -219,6 +231,7 @@ class _PinkSolverCore:
             measured=measured_positions,
             dt=step_dt,
             max_joint_velocity=max_joint_velocity_rad_s,
+            joint_velocity_limits=joint_velocity_limits,
             max_tracking_error=max_command_tracking_error_rad,
             command_limit_margin=command_limit_margin,
         )
@@ -912,6 +925,7 @@ class _PinkSolverCore:
         measured: NDArray[np.float64],
         dt: float,
         max_joint_velocity: float,
+        joint_velocity_limits: Mapping[str, float],
         max_tracking_error: float,
         command_limit_margin: float,
     ) -> NDArray[np.float64]:
@@ -925,6 +939,10 @@ class _PinkSolverCore:
         if model_velocity.shape != (context.model.nv,):
             raise ValueError("Pink model velocity limits do not match its tangent dimension")
         velocity_limits = np.full(joint_count, max_joint_velocity, dtype=np.float64)
+        for index, joint_name in enumerate(context.mapping.dimos_joint_names):
+            override = joint_velocity_limits.get(joint_name)
+            if override is not None:
+                velocity_limits[index] = override
         for index, v_index in enumerate(context.mapping.idx_v):
             urdf_velocity = float(model_velocity[v_index])
             if np.isfinite(urdf_velocity) and 1e-10 < urdf_velocity < 1e20:

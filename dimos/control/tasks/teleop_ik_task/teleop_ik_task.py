@@ -62,6 +62,8 @@ class TeleopIKTaskConfig:
     priority: int = 10
     timeout: float = 0.5
     max_joint_velocity_rad_s: float = 5.0
+    joint_velocity_limits_rad_s: dict[str, float] = field(default_factory=dict)
+    joint_command_filter_cutoff_hz: float | None = 5.0
     max_command_tracking_error_deg: float = 10.0
     feedback_limit_tolerance: float = 1e-3
     command_limit_margin: float = 1e-4
@@ -114,6 +116,8 @@ class TeleopIKTask(PoseTargetIKTask):
                 priority=config.priority,
                 timeout=config.timeout,
                 max_joint_velocity_rad_s=config.max_joint_velocity_rad_s,
+                joint_velocity_limits_rad_s=config.joint_velocity_limits_rad_s,
+                joint_command_filter_cutoff_hz=config.joint_command_filter_cutoff_hz,
                 max_command_tracking_error_deg=config.max_command_tracking_error_deg,
                 feedback_limit_tolerance=config.feedback_limit_tolerance,
                 command_limit_margin=config.command_limit_margin,
@@ -330,6 +334,8 @@ class TeleopIKTaskParams(BaseConfig):
     solver_type: type[PinkPoseTargetSolver] = PinkPoseTargetSolver
     timeout: float = 0.5
     max_joint_velocity_rad_s: float = 5.0
+    joint_velocity_limits_rad_s: dict[str, float] = Field(default_factory=dict)
+    joint_command_filter_cutoff_hz: float | None = 5.0
     max_command_tracking_error_deg: float = 10.0
     feedback_limit_tolerance: float = 1e-3
     command_limit_margin: float = 1e-4
@@ -369,6 +375,8 @@ def create_task(
         priority=cfg.priority,
         timeout=params.timeout,
         max_joint_velocity_rad_s=params.max_joint_velocity_rad_s,
+        joint_velocity_limits_rad_s=params.joint_velocity_limits_rad_s,
+        joint_command_filter_cutoff_hz=params.joint_command_filter_cutoff_hz,
         max_command_tracking_error_deg=params.max_command_tracking_error_deg,
         feedback_limit_tolerance=params.feedback_limit_tolerance,
         command_limit_margin=params.command_limit_margin,

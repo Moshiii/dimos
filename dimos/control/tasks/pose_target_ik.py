@@ -81,6 +81,43 @@ def _positive_finite(
         raise ValueError(f"PoseTargetIKTask requires a positive finite {label}")
 
 
+def _optional_positive_finite(
+    _instance: object,
+    _attribute: attrs.Attribute[float],
+    value: float | None,
+) -> None:
+    if value is not None and (not math.isfinite(value) or value <= 0.0):
+        raise ValueError("PoseTargetIKTask requires a positive finite joint command filter cutoff")
+
+
+def _to_optional_float(value: float | None) -> float | None:
+    return None if value is None else float(value)
+
+
+def _to_joint_velocity_limits(value: Mapping[str, float]) -> dict[str, float]:
+    return {name: float(limit) for name, limit in value.items()}
+
+
+def _validate_joint_velocity_limits(
+    instance: PoseTargetIKTaskConfig,
+    _attribute: attrs.Attribute[dict[str, float]],
+    value: dict[str, float],
+) -> None:
+    unknown_joints = sorted(set(value) - set(instance.joint_names))
+    if unknown_joints:
+        raise ValueError(
+            f"PoseTargetIKTask joint velocity limits contain unknown joints: {unknown_joints}"
+        )
+    invalid_joints = sorted(
+        name for name, limit in value.items() if not math.isfinite(limit) or limit <= 0.0
+    )
+    if invalid_joints:
+        raise ValueError(
+            "PoseTargetIKTask requires a positive finite velocity limit per joint; "
+            f"invalid joints: {invalid_joints}"
+        )
+
+
 def _nonnegative_finite(
     _instance: object,
     attribute: attrs.Attribute[float],
@@ -117,6 +154,16 @@ class PoseTargetIKTaskConfig:
         default=5.0,
         converter=float,
         validator=_positive_finite,
+    )
+    joint_velocity_limits_rad_s: dict[str, float] = attrs.field(
+        factory=dict,
+        converter=_to_joint_velocity_limits,
+        validator=_validate_joint_velocity_limits,
+    )
+    joint_command_filter_cutoff_hz: float | None = attrs.field(
+        default=5.0,
+        converter=_to_optional_float,
+        validator=_optional_positive_finite,
     )
     max_command_tracking_error_deg: float = attrs.field(
         default=10.0,
@@ -183,6 +230,8 @@ class PinkPoseTargetSolver(_PinkSolverCore):
             command_limit_margin=self._control_config.command_limit_margin,
             dt=dt,
             max_joint_velocity_rad_s=self._control_config.max_joint_velocity_rad_s,
+            joint_velocity_limits_rad_s=self._control_config.joint_velocity_limits_rad_s,
+            joint_command_filter_cutoff_hz=self._control_config.joint_command_filter_cutoff_hz,
         )
         with self._command_state_lock:
             if self._command_state_generation != generation:

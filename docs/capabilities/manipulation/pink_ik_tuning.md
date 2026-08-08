@@ -145,7 +145,12 @@ teleop_task = teleop_ik_task(
     params={
         "pink": pink,
         "timeout": 0.5,
-        "max_joint_velocity_rad_s": 1.0,
+        "max_joint_velocity_rad_s": 2.0,
+        "joint_velocity_limits_rad_s": {
+            "arm/joint1": 0.5,
+            "arm/joint2": 0.5,
+        },
+        "joint_command_filter_cutoff_hz": 5.0,
         "max_command_tracking_error_deg": 10.0,
         "feedback_limit_tolerance": 1e-3,
         "command_limit_margin": 1e-4,
@@ -156,19 +161,35 @@ teleop_task = teleop_ik_task(
 | Field | Purpose |
 | --- | --- |
 | `timeout` | Drops a stale controller target and resets the command trajectory |
-| `max_joint_velocity_rad_s` | Per-task velocity cap; the lower of this and each URDF limit wins |
+| `max_joint_velocity_rad_s` | Default velocity cap for controlled joints |
+| `joint_velocity_limits_rad_s` | Optional per-joint caps keyed by coordinator joint name; each overrides the default cap |
+| `joint_command_filter_cutoff_hz` | First-order command low-pass cutoff; defaults to 5 Hz, or set `None` to disable |
 | `max_command_tracking_error_deg` | Maximum distance between the generated command trajectory and measured hardware state |
 | `feedback_limit_tolerance` | Permits small sensor error beyond a URDF position limit |
 | `command_limit_margin` | Keeps generated commands inside finite URDF position limits |
 
-Start hardware tests with a conservative velocity cap. Raise it only after the
-robot tracks smoothly. The tracking-error limit must tolerate normal execution
-delay without allowing the command trajectory to run far ahead. Keep feedback
-tolerance small: it accounts for encoder noise, not extra workspace.
+Start hardware tests with conservative velocity caps. Use the scalar as the
+fallback, then lower individual proximal or high-torque joints when they move
+too aggressively. Every effective cap is also intersected with the joint's
+URDF velocity limit. Unknown joint names and non-positive or non-finite values
+are rejected when the task is constructed.
 
-An accepted command lies inside the configured and URDF velocity step, the
-measured-state tracking window, and the inward position margin. Invalid
-feedback or a failed Pink solve produces no new command for that tick.
+The 5 Hz low-pass filter attenuates high-frequency changes in successive Pink
+solutions. It is time-aware, so changing the coordinator tick rate does not
+change its cutoff. Lower the cutoff when commands visibly oscillate; raise it
+when smooth motion feels unnecessarily delayed. Gripper commands bypass this
+filter.
+
+The tracking-error limit must tolerate normal execution delay without allowing
+the command trajectory to run far ahead. Keep feedback tolerance small: it
+accounts for encoder noise, not extra workspace.
+
+Each Pink candidate is filtered against the previous accepted command, then
+clamped to the per-joint/configured and URDF velocity step, the measured-state
+tracking window, and the inward position margin. The accepted result becomes
+the next filter state. Disengagement, timeout, preemption, and E-STOP clear that
+state, so the next session starts from measured feedback. Invalid feedback or a
+failed Pink solve produces no new command for that tick.
 
 ## Tune in order
 
@@ -180,8 +201,9 @@ feedback or a failed Pink solve produces no new command for that tick.
 4. Add posture weights or a manipulability task to shape redundant motion.
 5. Exercise singular poses and joint limits; adjust damping and the inward
    posture margin.
-6. Move to hardware with a conservative velocity cap. Tune tracking error for
-   measured latency and sensor noise.
+6. Move to hardware with conservative per-joint velocity caps. Tune the command
+   filter for oscillation, then tune tracking error for measured latency and
+   sensor noise.
 7. Test disengagement, target timeout, preemption, stop, and E-STOP. Each must
    clear the persistent command trajectory before re-engagement.
 
@@ -191,6 +213,8 @@ feedback or a failed Pink solve produces no new command for that tick.
 | Arm barely moves | Excessive posture cost, low gain, or an unreachable target |
 | Redundant joints drift or fold poorly | Per-joint posture weights or a manipulability task |
 | Motion jitters near a singularity | `lm_damping`, QP `damping`, and gain |
+| Command oscillates from tick to tick | Lower `joint_command_filter_cutoff_hz`; then inspect damping and gain |
+| Proximal joints move too aggressively | Add lower entries to `joint_velocity_limits_rad_s` |
 | Commands stop near a joint limit | URDF limits, feedback tolerance, command margin, and inward posture target |
 | Simulation works but hardware feels stuck | Command tracking error versus measured execution delay |
 | Hardware jumps after lag | Velocity cap and command tracking error are too permissive |

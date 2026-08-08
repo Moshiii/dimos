@@ -73,6 +73,8 @@ class _StreamingTestPinkIK(PinkIK):
         max_command_tracking_error_rad: float,
         dt: float | None = None,
         max_joint_velocity_rad_s: float = 5.0,
+        joint_velocity_limits_rad_s: Mapping[str, float] | None = None,
+        joint_command_filter_cutoff_hz: float | None = None,
     ) -> JointState:
         return self._step_frame_targets(
             robot_model=robot_model,
@@ -85,6 +87,8 @@ class _StreamingTestPinkIK(PinkIK):
             command_limit_margin=self.command_limit_margin,
             dt=dt,
             max_joint_velocity_rad_s=max_joint_velocity_rad_s,
+            joint_velocity_limits_rad_s=joint_velocity_limits_rad_s or {},
+            joint_command_filter_cutoff_hz=joint_command_filter_cutoff_hz,
         )
 
     def validate_frame_targets(
@@ -542,11 +546,12 @@ def test_streaming_envelope_intersects_configured_and_urdf_velocity(
         measured=np.zeros(3),
         dt=0.1,
         max_joint_velocity=3.0,
+        joint_velocity_limits={"joint_a": 0.5, "joint_b": 1.0},
         max_tracking_error=1.0,
         command_limit_margin=1e-4,
     )
 
-    assert result == pytest.approx([0.3, 0.2, 0.3])
+    assert result == pytest.approx([0.05, 0.1, 0.3])
 
 
 def test_streaming_envelope_caps_command_at_measured_tracking_distance(
@@ -562,11 +567,60 @@ def test_streaming_envelope_caps_command_at_measured_tracking_distance(
         measured=np.zeros(3),
         dt=0.1,
         max_joint_velocity=5.0,
+        joint_velocity_limits={},
         max_tracking_error=0.15,
         command_limit_margin=1e-4,
     )
 
     assert result == pytest.approx([0.15, 0.15, 0.15])
+
+
+def test_step_frame_targets_low_pass_filters_alternating_candidates(
+    mocker: MockerFixture,
+) -> None:
+    _install_fake_modules(mocker)
+    ik = _StreamingTestPinkIK(PinkIKConfig())
+    context = _combined_control_context(("tool",), ["joint_a"])
+    context.robot.model.velocityLimit[:] = 100.0
+    mocker.patch.object(ik, "_get_control_context", return_value=context)
+    candidates = iter((1.0, -1.0))
+
+    def set_candidate(**kwargs: Any) -> None:
+        configuration = kwargs["configuration"]
+        q = configuration.q.copy()
+        q[context.robot.mapping.idx_q[0]] = next(candidates)
+        configuration.update(q)
+
+    mocker.patch.object(ik, "_step_configuration", side_effect=set_candidate)
+    initial = JointState(name=["joint_a"], position=[0.0])
+    alpha = 1.0 - np.exp(-2.0 * np.pi * 5.0 * 0.01)
+
+    first = ik.step_frame_targets(
+        robot_model=_robot_config(),
+        frame_targets={"tool": PoseStamped()},
+        controlled_joints=["joint_a"],
+        command_state=initial,
+        measured_state=initial,
+        max_command_tracking_error_rad=1.0,
+        dt=0.01,
+        max_joint_velocity_rad_s=100.0,
+        joint_command_filter_cutoff_hz=5.0,
+    )
+    second = ik.step_frame_targets(
+        robot_model=_robot_config(),
+        frame_targets={"tool": PoseStamped()},
+        controlled_joints=["joint_a"],
+        command_state=first,
+        measured_state=initial,
+        max_command_tracking_error_rad=1.0,
+        dt=0.01,
+        max_joint_velocity_rad_s=100.0,
+        joint_command_filter_cutoff_hz=5.0,
+    )
+
+    assert first.position == pytest.approx([alpha])
+    assert second.position == pytest.approx([alpha + alpha * (-1.0 - alpha)])
+    assert abs(second.position[0] - first.position[0]) < 1.0
 
 
 def test_step_frame_targets_preserves_controlled_joint_order(

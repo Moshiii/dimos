@@ -49,6 +49,17 @@ from dimos.teleop.quest.quest_extensions import ArmTeleopModule
 KEYBOARD_EEF_TASK_NAME = "eef_twist_left_arm"
 OPENARM_QUEST_TASK_NAME = "teleop_openarm"
 
+_OPENARM_ARM_VELOCITY_PROFILE_RAD_S = (1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0)
+_OPENARM_JOINT_VELOCITY_LIMITS_RAD_S = {
+    joint_name: velocity_limit
+    for side in ("left", "right")
+    for joint_name, velocity_limit in zip(
+        openarm_arm_joints(side),
+        _OPENARM_ARM_VELOCITY_PROFILE_RAD_S,
+        strict=True,
+    )
+}
+
 _openarm_keyboard_hw = openarm_hardware()
 
 
@@ -195,6 +206,8 @@ _openarm_quest_task = TaskConfig(
         "timeout": 0.5,
         "max_command_tracking_error_deg": 10.0,
         "max_joint_velocity_rad_s": 2.0,
+        "joint_velocity_limits_rad_s": _OPENARM_JOINT_VELOCITY_LIMITS_RAD_S,
+        "joint_command_filter_cutoff_hz": 5.0,
     },
 )
 
