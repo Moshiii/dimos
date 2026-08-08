@@ -264,9 +264,7 @@ class ModuleCoordinator(Resource):
     def _instance_keys_of(self, module: type[ModuleBase]) -> list[str]:
         cls = self._resolve_class(module)
         return [
-            n
-            for n, c in self._instance_classes.items()
-            if issubclass(self._resolve_class(c), cls)
+            n for n, c in self._instance_classes.items() if issubclass(self._resolve_class(c), cls)
         ]
 
     def _resolve_instance_key(self, module: type[ModuleBase] | str) -> str:
