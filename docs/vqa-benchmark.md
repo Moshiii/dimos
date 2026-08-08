@@ -41,6 +41,8 @@ Constrained generation starts with an image-only OpenAI proposer that lists sali
 - distance threshold;
 - nearest left-versus-right comparison.
 
+Additional deterministic question families will be added as their private evidence programs mature.
+
 MoonDream detects or point-localizes the object, EdgeTAM produces a mask, and visible LiDAR points inside the mask establish range and direction. This mode is useful for stable, high-volume baseline data.
 
 ### Agentic
@@ -57,6 +59,8 @@ The oracle receives the frozen question and can call only direct, read-only loca
 | `estimate_ground_plane()` | Open3D RANSAC ground-plane fit, inliers, residual, and quality flags. |
 | `measure_object_height(query)` | Visible point-cloud height above the fitted ground plane, unit, tolerance, provenance, and quality flags. |
 | `measure_object_height_bucket(query)` | The same private height measurement mapped deterministically to a public height bucket. |
+
+Additional read-only oracle tools will be added as new point-cloud and map evidence capabilities become available.
 
 MoonDream, EdgeTAM, LiDAR projection, and Open3D run privately. These are direct Python tools exposed through LangChain schemas, not MCP or robot RPC tools. The oracle has a bounded tool-call budget and cannot use shell, Python execution, network access, or mutable robot skills.
 
