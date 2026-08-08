@@ -71,6 +71,7 @@ all_blueprints = {
     "go2-zenoh-raycaster": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_raycaster",
     "keyboard-teleop-a1z": "dimos.robot.manipulators.a1z.blueprints.teleop:keyboard_teleop_a1z",
     "keyboard-teleop-a750": "dimos.robot.manipulators.a750.blueprints.teleop:keyboard_teleop_a750",
+    "keyboard-teleop-gripper-xarm": "dimos.robot.grippers.blueprints.teleop:keyboard_teleop_gripper_xarm",
     "keyboard-teleop-openarm": "dimos.robot.manipulators.openarm.blueprints.teleop:keyboard_teleop_openarm",
     "keyboard-teleop-openarm-mock": "dimos.robot.manipulators.openarm.blueprints.teleop:keyboard_teleop_openarm_mock",
     "keyboard-teleop-openyam": "dimos.robot.manipulators.openyam.blueprints.teleop:keyboard_teleop_openyam",

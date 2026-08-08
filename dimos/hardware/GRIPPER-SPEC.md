@@ -1096,8 +1096,13 @@ mechanical merge rather than a reconciliation.
 | A reference standalone blueprint (mock gripper + `{hardware_id}_gripper` task) | blueprint test: task claims all joints, resolves its limits, both modes drive the mock — §7.2's demonstration pinned in CI |
 | Component invariant | unit test on `__post_init__` |
 
-The H100 validates the protocol on real hardware in step 3; nothing in this PR claims
-hardware verification.
+The H100 validates the protocol on real hardware in step 3. Before it arrives, the
+standalone path has a **hardware witness**: `grippers/xarm_gripper/` exposes an xArm's
+own gripper as a one-joint standalone device over its **own** connection — a test
+vehicle, explicitly not a production shape (R1 still governs where an integrated
+gripper lives), whose fake-SDK tests fail if the adapter ever touches the arm. Run it
+with `XARM6_IP=<ip> uv run dimos run keyboard-teleop-gripper-xarm`; there is no mock
+fallback, so a missing IP fails loudly.
 
 *Delivered.* 93 tests on the new path, 1041 across the affected tree; mypy and ruff
 clean. The parity test holds (all 14 signatures byte-identical to `ManipulatorAdapter`);
