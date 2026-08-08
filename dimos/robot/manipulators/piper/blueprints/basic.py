@@ -18,10 +18,51 @@ from __future__ import annotations
 
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.global_config import global_config
 from dimos.robot.manipulators.common.sim import mujoco_if_sim
-from dimos.robot.manipulators.piper.config import PIPER_SIM_PATH, piper_hardware
+from dimos.robot.manipulators.piper.config import (
+    PIPER_ROBOT_MODEL_PATH,
+    PIPER_SIM_PATH,
+    make_piper_sim_hardware,
+    piper_hardware,
+)
+from dimos.simulation.providers import (
+    SimulationBinding,
+    SimulationRequest,
+    load_simulation_provider,
+)
+from dimos.visualization.vis_module import vis_module
 
-_piper_hw = piper_hardware("arm")
+
+def _resolve_piper_simulation() -> SimulationBinding | None:
+    if not global_config.simulation_provider:
+        return None
+    provider = load_simulation_provider(global_config.simulation_provider)
+    return provider.build(
+        SimulationRequest(
+            robot_model="agilex_piper",
+            model_path=PIPER_ROBOT_MODEL_PATH,
+            scene_package=global_config.scene_package,
+        )
+    )
+
+
+_piper_simulation = _resolve_piper_simulation()
+if _piper_simulation is None:
+    _piper_hw = piper_hardware("arm")
+    _piper_simulation_modules = mujoco_if_sim(PIPER_SIM_PATH, len(_piper_hw.joints))
+else:
+    _piper_hw = make_piper_sim_hardware(
+        _piper_simulation.adapter_address,
+        adapter_type=_piper_simulation.adapter_type,
+    )
+    _piper_simulation_modules = (
+        _piper_simulation.backend,
+        vis_module(
+            viewer_backend=global_config.viewer,
+            rerun_config=_piper_simulation.rerun_config,
+        ),
+    )
 
 coordinator_piper = autoconnect(
     ControlCoordinator.blueprint(
@@ -35,5 +76,5 @@ coordinator_piper = autoconnect(
             )
         ],
     ),
-    *mujoco_if_sim(PIPER_SIM_PATH, len(_piper_hw.joints)),
+    *_piper_simulation_modules,
 )
