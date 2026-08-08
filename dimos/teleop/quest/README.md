@@ -104,7 +104,7 @@ browser.
 quest/
 ├── quest_teleop_module.py   # Base module
 ├── quest_extensions.py      # ArmTeleop, TwistTeleop
-├── quest_types.py           # QuestControllerState + TeleopControls normalization
+├── quest_types.py           # QuestControllerState + packed Buttons
 ├── blueprints.py
 └── web/static/index.html    # WebXR client
 ```

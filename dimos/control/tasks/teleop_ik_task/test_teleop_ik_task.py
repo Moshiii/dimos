@@ -36,7 +36,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import Buttons
 
 
 def _robot_model() -> RobotModelConfig:
@@ -106,8 +106,8 @@ def _buttons(
     right: bool = False,
     left_trigger: float = 0.0,
     right_trigger: float = 0.0,
-) -> TeleopControls:
-    buttons = TeleopControls()
+) -> Buttons:
+    buttons = Buttons()
     buttons.left_primary = left
     buttons.right_primary = right
     buttons.pack_analog_triggers(left_trigger, right_trigger)

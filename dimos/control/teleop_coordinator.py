@@ -17,7 +17,7 @@
 from dimos.control.coordinator import ControlCoordinator
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import Buttons
 
 
 class TeleopControlCoordinator(ControlCoordinator):
@@ -25,4 +25,4 @@ class TeleopControlCoordinator(ControlCoordinator):
 
     left_cartesian_command: In[PoseStamped]
     right_cartesian_command: In[PoseStamped]
-    teleop_buttons: In[TeleopControls]
+    teleop_buttons: In[Buttons]

@@ -20,7 +20,7 @@ from enum import IntEnum
 from typing import ClassVar
 
 from dimos.msgs.sensor_msgs.Joy import Joy
-from dimos.teleop.types import TeleopControls
+from dimos.msgs.std_msgs.UInt32 import UInt32
 
 
 class Hand(IntEnum):
@@ -43,7 +43,7 @@ class QuestControllerState:
     Preserves full-fidelity analog values (trigger, grip as floats, thumbstick axes)
     from the raw Joy message in a readable format. Use this when you need analog
     precision (e.g., proportional grip control). Subclasses can publish this
-    alongside TeleopControls for float access.
+    alongside Buttons for float access.
 
     Axes layout:
         0: thumbstick X, 1: thumbstick Y, 2: trigger (analog), 3: grip (analog)
@@ -97,27 +97,125 @@ class QuestControllerState:
         )
 
 
-def teleop_controls_from_controllers(
-    left: QuestControllerState | None,
-    right: QuestControllerState | None,
-) -> TeleopControls:
-    """Normalize Quest controller state into the common teleop message."""
-    controls = TeleopControls()
-    for side, controller in (("left", left), ("right", right)):
-        if controller is None:
-            continue
-        controls.set_attribute(f"{side}_trigger", controller.trigger > 0.5)
-        controls.set_attribute(f"{side}_grip", controller.grip > 0.5)
-        controls.set_attribute(f"{side}_touchpad", controller.touchpad)
-        controls.set_attribute(f"{side}_thumbstick", controller.thumbstick_press)
-        controls.set_attribute(f"{side}_primary", controller.primary)
-        controls.set_attribute(f"{side}_secondary", controller.secondary)
-        controls.set_attribute(f"{side}_menu", controller.menu)
-    controls.pack_analog_triggers(left.trigger if left else 0.0, right.trigger if right else 0.0)
-    return controls
+class Buttons(UInt32):
+    """Packed button states for both controllers in a single UInt32.
+
+    Digital buttons are collapsed to bools. Analog trigger values are packed
+    as 7-bit integers in the upper 16 bits for proportional gripper control.
+
+    Bit layout:
+        Left  (bits 0-6):   trigger, grip, touchpad, thumbstick, primary, secondary, menu
+        Right (bits 8-14):  trigger, grip, touchpad, thumbstick, primary, secondary, menu
+        Bit 7, 15:          reserved
+        Bits 16-22:         left trigger analog (7-bit, 0=0.0 … 127=1.0)
+        Bits 23-29:         right trigger analog (7-bit, 0=0.0 … 127=1.0)
+        Bits 30-31:         unused (kept clear so LCM signed int32 never overflows)
+    """
+
+    # Bit positions for digital buttons
+    BITS = {
+        "left_trigger": 0,
+        "left_grip": 1,
+        "left_touchpad": 2,
+        "left_thumbstick": 3,
+        "left_primary": 4,
+        "left_secondary": 5,
+        "left_menu": 6,
+        "right_trigger": 8,
+        "right_grip": 9,
+        "right_touchpad": 10,
+        "right_thumbstick": 11,
+        "right_primary": 12,
+        "right_secondary": 13,
+        "right_menu": 14,
+    }
+
+    # Analog trigger packing constants
+    _LEFT_TRIGGER_SHIFT: int = 16
+    _RIGHT_TRIGGER_SHIFT: int = 23
+    _ANALOG_MASK: int = 0x7F
+    _ANALOG_MAX: int = 127
+
+    @property
+    def left_trigger_analog(self) -> float:
+        """Left trigger analog value [0.0, 1.0], decoded from bits 16-22."""
+        return ((self.data >> self._LEFT_TRIGGER_SHIFT) & self._ANALOG_MASK) / self._ANALOG_MAX
+
+    @property
+    def right_trigger_analog(self) -> float:
+        """Right trigger analog value [0.0, 1.0], decoded from bits 23-29."""
+        return ((self.data >> self._RIGHT_TRIGGER_SHIFT) & self._ANALOG_MASK) / self._ANALOG_MAX
+
+    def pack_analog_triggers(self, left: float, right: float) -> None:
+        """Pack analog trigger values [0.0, 1.0] into bits 16-22 and 23-29."""
+        left_u7 = round(max(0.0, min(1.0, left)) * self._ANALOG_MAX)
+        right_u7 = round(max(0.0, min(1.0, right)) * self._ANALOG_MAX)
+        self.data = (
+            (self.data & 0x0000FFFF)  # clear bits 16-31
+            | (left_u7 << self._LEFT_TRIGGER_SHIFT)
+            | (right_u7 << self._RIGHT_TRIGGER_SHIFT)
+        )
+
+    def __getattr__(self, name: str) -> bool:
+        if name in Buttons.BITS:
+            return bool(self.data & (1 << Buttons.BITS[name]))
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+
+    def _set_bit(self, name: str, value: bool) -> None:
+        """Flip the bit for a known button (caller guarantees `name in BITS`)."""
+        if value:
+            self.data |= 1 << Buttons.BITS[name]
+        else:
+            self.data &= ~(1 << Buttons.BITS[name])
+
+    def __setattr__(self, name: str, value: bool) -> None:
+        if name in Buttons.BITS:
+            self._set_bit(name, value)
+        else:
+            super().__setattr__(name, value)
+
+    def set_attribute(self, name: str, value: bool) -> None:
+        """Set a digital button by name, validating it's a real button.
+
+        Raises on an unknown name instead of silently creating a stray attribute
+        (which a raw `setattr` would, via the `__setattr__` fall-through).
+        """
+        if name not in Buttons.BITS:
+            raise KeyError(f"unknown button {name!r}; valid buttons: {sorted(Buttons.BITS)}")
+        self._set_bit(name, value)
+
+    @classmethod
+    def from_controllers(
+        cls,
+        left: "QuestControllerState | None",
+        right: "QuestControllerState | None",
+    ) -> "Buttons":
+        """Create Buttons from two QuestControllerState instances."""
+        # Safe: cls() calls UInt32.__init__ which sets self.data = 0 before bit ops.
+        buttons = cls()
+
+        if left:
+            buttons.left_trigger = left.trigger > 0.5
+            buttons.left_grip = left.grip > 0.5
+            buttons.left_touchpad = left.touchpad
+            buttons.left_thumbstick = left.thumbstick_press
+            buttons.left_primary = left.primary
+            buttons.left_secondary = left.secondary
+            buttons.left_menu = left.menu
+
+        if right:
+            buttons.right_trigger = right.trigger > 0.5
+            buttons.right_grip = right.grip > 0.5
+            buttons.right_touchpad = right.touchpad
+            buttons.right_thumbstick = right.thumbstick_press
+            buttons.right_primary = right.primary
+            buttons.right_secondary = right.secondary
+            buttons.right_menu = right.menu
+
+        return buttons
 
 
-# Quest controller face-button labels to common control names. Callers can
+# Quest controller face-button labels → Buttons attribute names. Callers can
 # also pass a raw attribute name (e.g. "right_grip") directly where an alias is
 # accepted.
 BUTTON_ALIASES: dict[str, str] = {

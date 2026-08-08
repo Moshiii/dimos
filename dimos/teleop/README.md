@@ -16,7 +16,7 @@ Embedded FastAPI Server (HTTPS)
 TeleopModule (Quest or Phone)
     │  Frame transforms + pose/twist computation
     ▼
-PoseStamped / TwistStamped / TeleopControls outputs
+PoseStamped / TwistStamped / Buttons outputs
 ```
 
 Each teleop module embeds a `RobotWebInterface` (FastAPI + uvicorn) that:
@@ -63,7 +63,6 @@ Filters to mobile-base axes (linear.x, linear.y, angular.z) and publishes as `Tw
 
 ```
 teleop/
-├── types.py                         # Device-independent TeleopControls
 ├── quest/
 │   ├── quest_teleop_module.py   # Base Quest teleop module (local WebSocket)
 │   ├── quest_extensions.py      # ArmTeleop, TwistTeleop

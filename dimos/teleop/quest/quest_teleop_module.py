@@ -41,11 +41,10 @@ from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.Joy import Joy
 from dimos.teleop.quest.quest_types import (
+    Buttons,
     Hand,
     QuestControllerState,
-    teleop_controls_from_controllers,
 )
-from dimos.teleop.types import TeleopControls
 from dimos.teleop.utils.teleop_transforms import webxr_to_robot
 from dimos.utils.logging_config import setup_logger
 from dimos.web.robot_web_interface import RobotWebInterface
@@ -63,7 +62,7 @@ class QuestTeleopStatus:
     right_engaged: bool
     left_pose: PoseStamped | None
     right_pose: PoseStamped | None
-    buttons: TeleopControls
+    buttons: Buttons
 
 
 class QuestTeleopConfig(ModuleConfig):
@@ -86,7 +85,7 @@ class QuestTeleopModule(Module):
     Outputs:
         - left_controller_output: PoseStamped (output pose for left hand)
         - right_controller_output: PoseStamped (output pose for right hand)
-        - teleop_buttons: TeleopControls (button states for both controllers)
+        - teleop_buttons: Buttons (button states for both controllers)
     """
 
     config: QuestTeleopConfig
@@ -94,7 +93,7 @@ class QuestTeleopModule(Module):
     # Outputs: delta poses for each controller
     left_controller_output: Out[PoseStamped]
     right_controller_output: Out[PoseStamped]
-    teleop_buttons: Out[TeleopControls]
+    teleop_buttons: Out[Buttons]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -212,7 +211,7 @@ class QuestTeleopModule(Module):
                 right_engaged=self._is_engaged[Hand.RIGHT],
                 left_pose=self._current_poses.get(Hand.LEFT),
                 right_pose=self._current_poses.get(Hand.RIGHT),
-                buttons=teleop_controls_from_controllers(left, right),
+                buttons=Buttons.from_controllers(left, right),
             )
 
     @staticmethod
@@ -394,5 +393,5 @@ class QuestTeleopModule(Module):
         Override to customize button output format (e.g., different bit layout,
         keep analog values, add extra streams).
         """
-        buttons = teleop_controls_from_controllers(left, right)
+        buttons = Buttons.from_controllers(left, right)
         self.teleop_buttons.publish(buttons)

@@ -14,7 +14,7 @@
 
 """Operator-side video health snapshot, sampled in the browser via getStats().
 
-Rides on ``sensor_msgs.Joy`` positional ``axes[]`` (like ``TeleopControls`` on
+Rides on ``sensor_msgs.Joy`` positional ``axes[]`` (like ``Buttons`` on
 ``UInt32``) to stay wire-compatible with dimos_lcm without a new LCM type.
 Teleop-only, so it lives in ``teleop/utils``, not ``dimos.msgs``.
 """

@@ -52,7 +52,7 @@ from dimos.robot.manipulators.openarm.config import (
 )
 from dimos.robot.manipulators.openarm.teleop_ik import OpenArmPinkPoseTargetSolver
 from dimos.teleop.quest.quest_extensions import ArmTeleopModule
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import Buttons
 
 
 def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
@@ -202,7 +202,7 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
 
     try:
         coordinator.start()
-        buttons = TeleopControls()
+        buttons = Buttons()
         buttons.left_primary = True
         buttons.right_primary = True
         buttons.pack_analog_triggers(left=0.25, right=0.75)
@@ -231,7 +231,7 @@ def test_openarm_quest_commands_both_arms_and_grippers_through_coordinator(
         frame_poses.assert_called_once()
         step.assert_called_once()
 
-        released = TeleopControls()
+        released = Buttons()
         released.right_primary = True
         coordinator._dispatch("teleop_buttons", released)
         coordinator._tick_loop._tick()

@@ -35,7 +35,7 @@ import numpy as np
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import Buttons
 from dimos.teleop.utils.stream_stats import pcts
 from dimos.teleop.utils.video_stats import VideoStats
 from dimos.utils.logging_config import setup_logger
@@ -48,7 +48,7 @@ _STREAM_TYPES = {
     "cmd_vel_stamped": TwistStamped,
     "left_controller_output": PoseStamped,
     "right_controller_output": PoseStamped,
-    "teleop_buttons": TeleopControls,
+    "teleop_buttons": Buttons,
     "video_stats": VideoStats,
 }
 
@@ -78,7 +78,7 @@ def generate_report(db_path: Path, out_dir: Path | None = None) -> Path:
     # Per-message-stream → summary stats. video_stats is a separate shape.
     twist_streams = {n: r for n, r in records.items() if n != "video_stats" and r}
     summaries = {name: _summary(rs, stall_factor=3.0) for name, rs in twist_streams.items()}
-    # Filter on count, not rate_hz — TeleopControls has no ts (rate_hz None) and would vanish.
+    # Filter on count, not rate_hz — Buttons has no ts (rate_hz None) and would vanish.
     active = {n: s for n, s in summaries.items() if s.get("count")}
     video_summary = _summarize_video(records.get("video_stats", []))
     telemetry_summary = _summarize_telemetry(telemetry)
@@ -145,7 +145,7 @@ def _run_duration(records: dict[str, list[Any]]) -> float:
 
 def _summary(records: list[Any], stall_factor: float = 3.0) -> dict[str, Any]:
     """Stats for one twist/pose/buttons stream, from each message's ``.ts``
-    (sender stamp). TeleopControls lacks ``.ts``, so its rate/jitter are ``None``."""
+    (sender stamp). Buttons lacks ``.ts``, so its rate/jitter are ``None``."""
     count = len(records)
     tss = [float(m.ts) for m in records if getattr(m, "ts", None) is not None]
 

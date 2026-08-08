@@ -35,7 +35,7 @@ from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.protocol.service.spec import BaseConfig
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import Buttons
 
 OperatorHand = Literal["left", "right"]
 
@@ -185,7 +185,7 @@ class TeleopIKTask(PoseTargetIKTask):
             state.last_update_time = t_now
         return True
 
-    def on_teleop_buttons(self, msg: TeleopControls, t_now: float) -> bool:
+    def on_teleop_buttons(self, msg: Buttons, t_now: float) -> bool:
         """Update the all-bound-hands deadman condition and gripper targets."""
         del t_now
         primary_by_hand = {

@@ -47,7 +47,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import Buttons
 
 ARM_JOINTS = ["arm/joint1", "arm/joint2"]
 
@@ -316,7 +316,7 @@ class TestByTaskNameRouting:
         assert coordinator.get_task("eef_b").ee_twist_calls == []
 
 
-class TestTeleopControlsRouting:
+class TestButtonsRouting:
     def test_buttons_reach_teleop_task(self, make_coordinator):
         coordinator, taps = make_coordinator(
             coordinator_cls=TeleopControlCoordinator,
@@ -325,7 +325,7 @@ class TestTeleopControlsRouting:
         )
         coordinator.start()
 
-        taps["teleop_buttons"].emit(TeleopControls())
+        taps["teleop_buttons"].emit(Buttons())
 
         assert len(coordinator.get_task("teleop1").buttons_calls) == 1
 
@@ -644,7 +644,7 @@ class TestCardRoutingContract:
         coordinator.add_task(cardless)
         coordinator.start()
 
-        taps["teleop_buttons"].emit(TeleopControls())
+        taps["teleop_buttons"].emit(Buttons())
 
         assert len(coordinator.get_task("teleop1").buttons_calls) == 1
         assert cardless.buttons_calls == []

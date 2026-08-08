@@ -31,7 +31,7 @@ from dimos.memory2.module import Recorder, RecorderConfig
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import Buttons
 from dimos.teleop.utils.report import generate_report
 from dimos.teleop.utils.video_stats import VideoStats
 from dimos.utils.logging_config import setup_logger
@@ -50,7 +50,7 @@ class TeleopRecorder(Recorder):
 
     left_controller_output: In[PoseStamped]
     right_controller_output: In[PoseStamped]
-    teleop_buttons: In[TeleopControls]
+    teleop_buttons: In[Buttons]
     cmd_vel_stamped: In[TwistStamped]
     video_stats: In[VideoStats]
     robot_telemetry: In[bytes]

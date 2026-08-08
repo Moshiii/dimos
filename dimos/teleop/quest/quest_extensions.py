@@ -37,9 +37,9 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.teleop.quest.quest_teleop_module import QuestTeleopConfig, QuestTeleopModule
 from dimos.teleop.quest.quest_types import (
+    Buttons,
     Hand,
     QuestControllerState,
-    teleop_controls_from_controllers,
 )
 from dimos.utils.logging_config import setup_logger
 
@@ -99,7 +99,7 @@ class TwistTeleopModule(QuestTeleopModule):
     Outputs:
         - left_twist: TwistStamped (linear + angular velocity)
         - right_twist: TwistStamped (linear + angular velocity)
-        - buttons: TeleopControls (inherited)
+        - buttons: Buttons (inherited)
     """
 
     config: TwistTeleopConfig
@@ -158,7 +158,7 @@ class ArmTeleopModule(QuestTeleopModule):
     Outputs:
         - left_controller_output: PoseStamped (inherited)
         - right_controller_output: PoseStamped (inherited)
-        - buttons: TeleopControls (inherited)
+        - buttons: Buttons (inherited)
     """
 
     config: ArmTeleopConfig
@@ -199,8 +199,8 @@ class ArmTeleopModule(QuestTeleopModule):
         left: QuestControllerState | None,
         right: QuestControllerState | None,
     ) -> None:
-        """Publish TeleopControls with analog triggers packed into bits 16-29."""
-        buttons = teleop_controls_from_controllers(left, right)
+        """Publish Buttons with analog triggers packed into bits 16-29."""
+        buttons = Buttons.from_controllers(left, right)
         buttons.pack_analog_triggers(
             left=left.trigger if left is not None else 0.0,
             right=right.trigger if right is not None else 0.0,
@@ -238,7 +238,7 @@ class HandTeleopModule(ArmTeleopModule):
         right: QuestControllerState | None,
     ) -> None:
         """Keep downstream press-and-hold teleop tasks engaged between pinches."""
-        buttons = teleop_controls_from_controllers(left, right)
+        buttons = Buttons.from_controllers(left, right)
         buttons.pack_analog_triggers(
             left=left.trigger if left is not None else 0.0,
             right=right.trigger if right is not None else 0.0,
@@ -267,7 +267,7 @@ class VideoArmTeleopModule(ArmTeleopModule):
     Outputs:
         - left_controller_output: PoseStamped (inherited)
         - right_controller_output: PoseStamped (inherited)
-        - buttons: TeleopControls (inherited)
+        - buttons: Buttons (inherited)
     """
 
     config: VideoArmTeleopConfig

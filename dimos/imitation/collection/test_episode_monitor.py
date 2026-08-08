@@ -34,8 +34,7 @@ from dimos.imitation.collection.episode_monitor import (
     KeyPress,
 )
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
-from dimos.teleop.quest.quest_types import BUTTON_ALIASES
-from dimos.teleop.types import TeleopControls
+from dimos.teleop.quest.quest_types import BUTTON_ALIASES, Buttons
 
 
 @pytest.fixture
@@ -76,8 +75,8 @@ def _events(monitor: EpisodeMonitorModule) -> list[EpisodeStatus]:
 def _press(monitor: EpisodeMonitorModule, alias: str) -> None:
     """Rising edge: release-then-press the given Quest button alias."""
     attr = BUTTON_ALIASES[alias]
-    released = TeleopControls()
-    pressed = TeleopControls()
+    released = Buttons()
+    pressed = Buttons()
     pressed.set_attribute(attr, True)
     monitor._on_buttons(released)
     monitor._on_buttons(pressed)
@@ -127,7 +126,7 @@ def test_no_event_without_rising_edge(
     make_monitor: Callable[..., EpisodeMonitorModule],
 ) -> None:
     m = make_monitor()
-    pressed = TeleopControls()
+    pressed = Buttons()
     pressed.right_secondary = True  # B held
     m._on_buttons(pressed)
     m._on_buttons(pressed)  # still held — no new edge
