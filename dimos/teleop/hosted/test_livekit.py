@@ -72,7 +72,9 @@ def module(monkeypatch: pytest.MonkeyPatch) -> LiveKitTestModule:
 
 
 def test_state_packets_fan_out_to_command_and_camera_selection(module: LiveKitTestModule) -> None:
-    module._on_data("state_reliable", b'{"type":"camera_select"}')
+    module._on_data(
+        "state_reliable", b'{"type":"camera_select"}', SimpleNamespace(identity="op-user")
+    )
 
     module.state_json.publish.assert_called_once_with(b'{"type":"camera_select"}')
     module.camera_select.publish.assert_called_once_with(b'{"type":"camera_select"}')
@@ -84,7 +86,7 @@ def test_command_packets_reach_raw_and_typed_command_ports(
     command = MagicMock(spec=TwistStamped)
     mocker.patch.object(TwistStamped, "lcm_decode", return_value=command)
 
-    module._on_data("cmd_unreliable", b"command")
+    module._on_data("cmd_unreliable", b"command", SimpleNamespace(identity="op-user"))
 
     module.cmd_raw.publish.assert_called_once_with(b"command")
     module.cmd_vel_in.publish.assert_called_once_with(command)
@@ -95,9 +97,16 @@ def test_non_twist_command_still_reaches_raw_port(
 ) -> None:
     mocker.patch.object(TwistStamped, "lcm_decode", side_effect=ValueError("not a twist"))
 
-    module._on_data("cmd_unreliable", b"arm-command")
+    module._on_data("cmd_unreliable", b"arm-command", SimpleNamespace(identity="op-user"))
 
     module.cmd_raw.publish.assert_called_once_with(b"arm-command")
+    module.cmd_vel_in.publish.assert_not_called()
+
+
+def test_viewer_packets_are_ignored(module: LiveKitTestModule) -> None:
+    module._on_data("cmd_unreliable", b"command", SimpleNamespace(identity="viewer-user-1234"))
+
+    module.cmd_raw.publish.assert_not_called()
     module.cmd_vel_in.publish.assert_not_called()
 
 
@@ -208,9 +217,12 @@ def test_connect_registers_data_and_operator_lifecycle(
 
     room.on.side_effect = on
     mocker.patch("livekit.rtc.Room", return_value=room)
+    disconnected = asyncio.Event()
 
     asyncio.run(
-        module._connect_room(LiveKitSession("session", "wss://livekit.example", "jwt", "room"))
+        module._connect_room(
+            LiveKitSession("session", "wss://livekit.example", "jwt", "room"), disconnected
+        )
     )
 
     assert set(handlers) == {
@@ -219,10 +231,16 @@ def test_connect_registers_data_and_operator_lifecycle(
         "participant_disconnected",
         "disconnected",
     }
-    handlers["data_received"](SimpleNamespace(topic="state_reliable", data=b"state"))  # type: ignore[operator]
-    room.remote_participants = {"operator": SimpleNamespace(identity="operator")}
+    handlers["data_received"](  # type: ignore[operator]
+        SimpleNamespace(
+            topic="state_reliable", data=b"state", participant=SimpleNamespace(identity="op-user")
+        )
+    )
+    room.remote_participants = {"operator": SimpleNamespace(identity="op-user")}
     module._operator_present = True
-    handlers["participant_disconnected"](SimpleNamespace(identity="operator"))  # type: ignore[operator]
+    handlers["participant_disconnected"](SimpleNamespace(identity="op-user"))  # type: ignore[operator]
+    handlers["disconnected"](None)  # type: ignore[operator]
+    assert disconnected.is_set()
     assert [call.args[0] for call in module.state_json.publish.call_args_list] == [
         b"state",
         b'{"type": "operator_lost"}',
