@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from contextlib import nullcontext
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -31,6 +30,10 @@ from dimos.agents.skill_result import SkillResult
 from dimos.core.coordination.blueprints import BlueprintAtom, autoconnect
 from dimos.core.coordination.module_coordinator import _resolve_single_ref
 from dimos.core.module import ModuleBase
+from dimos.manipulation.box_filling_pick_and_place_module import (
+    BoxFillingPickAndPlaceModule,
+    BoxFillingPickAndPlaceModuleConfig,
+)
 from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
 from dimos.manipulation.pick_and_place_module import (
     GraspVerificationConfig,
@@ -73,6 +76,7 @@ def _make_det_object(
         class_id=0,
         confidence=1.0,
         ts=0.0,
+        frame_id="world",
         image=Image(),
     )
 
@@ -193,6 +197,42 @@ class TestPlaceBack:
         assert result.error_code == "NO_PRIOR_POSE"
         assert "pick" in result.message.lower()
 
+    def test_place_contact_legs_use_unchecked_linear_motion(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        robot_config = SimpleNamespace(pre_grasp_offset=0.1)
+        mocker.patch.object(
+            module,
+            "_get_robot",
+            return_value=("arm", "robot-id", robot_config, None),
+        )
+        mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
+        approach = mocker.patch.object(module, "plan_to_pose", return_value=True)
+        mocker.patch.object(module, "_preview_execute_wait", return_value=SkillResult.ok())
+        linear = mocker.patch.object(
+            module,
+            "_execute_linear_motion",
+            return_value=SkillResult.ok(),
+        )
+        mocker.patch.object(module, "_set_gripper_position", return_value=True)
+        mocker.patch("dimos.manipulation.pick_and_place_module.time.sleep")
+        place_pose = Pose(Vector3(0.5, 0.0, 0.2), Quaternion())
+
+        result = module._place_with_orientation(
+            place_pose.position.x,
+            place_pose.position.y,
+            place_pose.position.z,
+            place_pose.orientation,
+        )
+
+        assert result.is_success()
+        approach.assert_called_once()
+        pre_place_pose = approach.call_args.args[0]
+        assert linear.call_args_list == [
+            mocker.call(place_pose, "arm", 0.03, check_collision=False),
+            mocker.call(pre_place_pose, "arm", 0.03, check_collision=False),
+        ]
+
 
 def test_grasp_pipeline_error_agent_encoding_is_structured() -> None:
     result = SkillResult[ManipulationSkillError].fail("PICK_BUSY", "pick in progress")
@@ -302,9 +342,7 @@ class TestProposalSelection:
         module._grasp_generator = generator
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now + 0.1)
 
-        candidates = module._provider_candidates(
-            detection, SimpleNamespace(proposal_source="grasp_provider")
-        )
+        candidates = module._provider_candidates(detection)
 
         generator.propose_grasps.assert_called_once_with(cloud)
         assert [(candidate.pose.position.x, candidate.score) for candidate in candidates] == [
@@ -327,9 +365,7 @@ class TestProposalSelection:
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=100.0)
 
         with pytest.raises(RuntimeError, match="point cloud"):
-            module._provider_candidates(
-                _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-            )
+            module._provider_candidates(_make_det_object())
 
     @pytest.mark.parametrize(
         ("cloud_frame", "proposal_frame"),
@@ -356,9 +392,7 @@ class TestProposalSelection:
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now)
 
         with pytest.raises(RuntimeError, match="frame"):
-            module._provider_candidates(
-                _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-            )
+            module._provider_candidates(_make_det_object())
 
     def test_provider_preserves_stable_order_for_equal_scores(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -375,32 +409,13 @@ class TestProposalSelection:
         module._grasp_generator = generator
         mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now)
 
-        candidates = module._provider_candidates(
-            _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-        )
+        candidates = module._provider_candidates(_make_det_object())
 
         assert [candidate.pose.position.x for candidate in candidates] == [0.2, 0.3, 0.1]
 
-    def test_explicit_heuristic_fallback_identifies_source(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> None:
-        module.config.heuristic_grasp_fallback = True
-        transaction = SimpleNamespace(proposal_source="grasp_provider")
-        pose = Pose(0.4, 0.0, 0.2)
-        mocker.patch.object(module, "_generate_grasps_for_pick", return_value=[pose])
-
-        candidates = module._provider_candidates(_make_det_object(), transaction)
-
-        assert transaction.proposal_source == "heuristic"
-        assert [(candidate.pose, candidate.score) for candidate in candidates] == [(pose, 0.0)]
-
-    def test_provider_is_required_when_fallback_is_disabled(
-        self, module: PickAndPlaceModule
-    ) -> None:
-        with pytest.raises(RuntimeError, match="fallback is disabled"):
-            module._provider_candidates(
-                _make_det_object(), SimpleNamespace(proposal_source="grasp_provider")
-            )
+    def test_provider_is_required(self, module: PickAndPlaceModule) -> None:
+        with pytest.raises(RuntimeError, match="No grasp proposal provider"):
+            module._provider_candidates(_make_det_object())
 
     def test_selection_skips_higher_scored_infeasible_candidate(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -411,20 +426,30 @@ class TestProposalSelection:
             "_check_connected_pose_sequence",
             side_effect=[(0, None), (None, endpoint)],
         )
+        ik_sequence = mocker.patch.object(
+            module,
+            "_check_pose_ik_sequence",
+            return_value=(None, endpoint),
+        )
         plan_motion = mocker.patch.object(module, "plan_to_pose")
         command_gripper = mocker.patch.object(module, "_set_gripper_position")
-        transaction = SimpleNamespace(rejections=Counter())
+        transaction = SimpleNamespace(rejections=Counter(), object_id="abc12345")
 
         selected = module._select_feasible_grasp(
             [_candidate(0.4, 0.9), _candidate(0.5, 0.8)],
             "arm",
-            0.1,
             transaction,
         )
 
         assert selected.rank == 2
         assert selected.candidate.score == 0.8
         assert plan_sequence.call_count == 2
+        ik_sequence.assert_called_once_with(
+            (selected.candidate.pose, selected.retreat_pose),
+            "arm",
+            start=endpoint,
+            check_collision=False,
+        )
         assert transaction.rejections == {"pre_grasp_infeasible": 1}
         plan_motion.assert_not_called()
         command_gripper.assert_not_called()
@@ -444,17 +469,22 @@ class TestProposalSelection:
         failed_index: int,
         expected_rejection: str,
     ) -> None:
-        mocker.patch.object(
-            module,
-            "_check_connected_pose_sequence",
-            return_value=(failed_index, None),
-        )
+        pre_grasp = mocker.patch.object(module, "_check_connected_pose_sequence")
+        contact = mocker.patch.object(module, "_check_pose_ik_sequence")
+        if failed_index == 0:
+            pre_grasp.return_value = (0, None)
+        else:
+            endpoint = JointState(name=["arm/joint1"], position=[0.1])
+            pre_grasp.return_value = (None, endpoint)
+            contact.return_value = (failed_index - 1, None)
         transaction = SimpleNamespace(rejections=Counter())
 
         with pytest.raises(RuntimeError, match="No feasible grasp among 1"):
-            module._select_feasible_grasp([_candidate(0.4, 0.9)], "arm", 0.1, transaction)
+            module._select_feasible_grasp([_candidate(0.4, 0.9)], "arm", transaction)
 
         assert transaction.rejections == {expected_rejection: 1}
+        if failed_index == 0:
+            contact.assert_not_called()
 
     def test_selection_rejects_malformed_candidate_and_honors_limit(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -463,19 +493,50 @@ class TestProposalSelection:
         invalid = _candidate(0.4, 0.9)
         invalid.pose.orientation.w = 0.0
         plan_sequence = mocker.patch.object(module, "_check_connected_pose_sequence")
+        ik_sequence = mocker.patch.object(module, "_check_pose_ik_sequence")
         transaction = SimpleNamespace(rejections=Counter())
 
         with pytest.raises(RuntimeError, match="No feasible grasp among 1"):
-            module._select_feasible_grasp([invalid, _candidate(0.5, 0.8)], "arm", 0.1, transaction)
+            module._select_feasible_grasp([invalid, _candidate(0.5, 0.8)], "arm", transaction)
 
         plan_sequence.assert_not_called()
+        ik_sequence.assert_not_called()
         assert transaction.rejections == {"invalid": 1}
+
+    def test_pre_grasp_uses_fixed_configured_offset(self, module: PickAndPlaceModule) -> None:
+        module.config.grasp_pre_grasp_offset = 0.25
+        grasp = Pose(Vector3(0.4, 0.0, 0.3), Quaternion())
+
+        result = module._compute_pre_grasp_pose(
+            grasp,
+            float(module.config.grasp_pre_grasp_offset),
+            Vector3(0.0, 0.0, -1.0),
+        )
+
+        assert result == Pose(Vector3(0.4, 0.0, 0.05), grasp.orientation)
+
+    def test_retreat_moves_back_with_world_up_bias(self, module: PickAndPlaceModule) -> None:
+        module.config.grasp_retreat_offset = 0.10
+        module.config.grasp_retreat_lift_offset = 0.01
+        half_sqrt = 2**-0.5
+        grasp = Pose(
+            Vector3(0.4, 0.0, 0.2),
+            Quaternion(0.0, half_sqrt, 0.0, half_sqrt),
+        )
+
+        retreat = module._compute_retreat_pose(
+            grasp,
+            Vector3(0.0, 0.0, -1.0),
+        )
+
+        assert retreat.position.x == pytest.approx(0.3)
+        assert retreat.position.y == pytest.approx(0.0)
+        assert retreat.position.z == pytest.approx(0.21)
+        assert retreat.orientation == grasp.orientation
 
 
 class TestPickTransaction:
-    def _arrange_success(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> tuple[GraspCandidate, SimpleNamespace]:
+    def _arrange_success(self, module: PickAndPlaceModule, mocker: MockerFixture) -> GraspCandidate:
         detection = _make_det_object()
         candidate = _candidate(0.4, 0.9)
         selected = _FeasibleGrasp(candidate, 1, Pose(0.4, 0.0, 0.3), Pose(0.4, 0.0, 0.3))
@@ -490,22 +551,20 @@ class TestPickTransaction:
         mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
         mocker.patch.object(module, "plan_to_pose", return_value=True)
         mocker.patch.object(module, "_preview_execute_wait", return_value=SkillResult.ok())
+        mocker.patch.object(module, "_execute_linear_motion", return_value=SkillResult.ok())
         mocker.patch.object(module, "_set_gripper_position", return_value=True)
         mocker.patch.object(
             module,
             "_verify_grasp",
             return_value=_GraspVerification(True, 0.1, "verified"),
         )
-        suppression = SimpleNamespace(cleanup_error=None)
-        world = mocker.Mock()
-        world.suppress_object_obstacle.return_value = nullcontext(suppression)
-        module._world_monitor = world
-        return candidate, suppression
+        module._world_monitor = mocker.Mock()
+        return candidate
 
     def test_success_executes_ordered_pick_and_records_metadata(
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
-        candidate, _ = self._arrange_success(module, mocker)
+        candidate = self._arrange_success(module, mocker)
 
         result = module.pick("cup", object_id="abc12345")
 
@@ -519,9 +578,12 @@ class TestPickTransaction:
         ]
         assert module.plan_to_pose.call_args_list == [
             mocker.call(Pose(0.4, 0.0, 0.3), "arm"),
-            mocker.call(candidate.pose, "arm"),
-            mocker.call(Pose(0.4, 0.0, 0.3), "arm"),
         ]
+        assert module._execute_linear_motion.call_args_list == [
+            mocker.call(candidate.pose, "arm", 0.03, check_collision=False),
+            mocker.call(Pose(0.4, 0.0, 0.3), "arm", 0.03, check_collision=False),
+        ]
+        assert module._world_monitor.method_calls == []
 
     def test_no_safety_lift_validates_candidates_from_current_state(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -533,7 +595,7 @@ class TestPickTransaction:
 
         assert result.is_success()
         check_sequence.assert_not_called()
-        assert module._select_feasible_grasp.call_args.args[4] is None
+        assert module._select_feasible_grasp.call_args.args[3] is None
 
     def test_safety_lift_endpoint_is_shared_with_candidate_validation(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -552,7 +614,7 @@ class TestPickTransaction:
 
         assert result.is_success()
         check_sequence.assert_called_once_with((lift_pose,), "arm")
-        assert module._select_feasible_grasp.call_args.args[4] is lift_endpoint
+        assert module._select_feasible_grasp.call_args.args[3] is lift_endpoint
 
     def test_safety_lift_planning_failure_aborts_prepare_without_candidate_rejection(
         self, module: PickAndPlaceModule, mocker: MockerFixture
@@ -581,7 +643,10 @@ class TestPickTransaction:
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         self._arrange_success(module, mocker)
-        module.plan_to_pose.side_effect = [True, True, False]
+        module._execute_linear_motion.side_effect = [
+            SkillResult.ok(),
+            SkillResult.fail("PLANNING_FAILED", "linear planning failed"),
+        ]
 
         result = module.pick("cup", object_id="abc12345")
 
@@ -598,7 +663,6 @@ class TestPickTransaction:
         mocker: MockerFixture,
     ) -> None:
         get_robot = mocker.patch.object(module, "_get_robot")
-        log = mocker.patch("dimos.agents.annotation.logger.info")
         module._pick_guard.acquire()
         try:
             result = module.pick("cup")
@@ -607,35 +671,6 @@ class TestPickTransaction:
 
         assert result.error_code == "PICK_BUSY"
         get_robot.assert_not_called()
-        log.assert_called_once()
-        assert log.call_args.args[:3] == (
-            "SKILL %s result=%s duration_ms=%.1f",
-            "pick",
-            "PICK_BUSY",
-        )
-
-    def test_cleanup_failure_does_not_hide_primary_failure(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> None:
-        _, suppression = self._arrange_success(module, mocker)
-        suppression.cleanup_error = "restore failed"
-        module.plan_to_pose.side_effect = [False]
-
-        result = module.pick("cup", object_id="abc12345")
-
-        assert result.error_code == "PLANNING_FAILED"
-        assert "cleanup: restore failed" in result.message
-
-    def test_cleanup_failure_turns_success_into_scene_failure(
-        self, module: PickAndPlaceModule, mocker: MockerFixture
-    ) -> None:
-        _, suppression = self._arrange_success(module, mocker)
-        suppression.cleanup_error = "restore failed"
-
-        result = module.pick("cup", object_id="abc12345")
-
-        assert result.error_code == "WORLD_MONITOR_UNAVAILABLE"
-        assert "restore failed" in result.message
 
     @pytest.mark.parametrize(
         ("setup", "expected_code", "expected_phase"),
@@ -644,12 +679,10 @@ class TestPickTransaction:
             ("open", "GRIPPER_FAILED", "PREPARE"),
             ("approach_planning", "PLANNING_FAILED", "APPROACH"),
             ("approach_execution", "EXECUTION_FAILED", "APPROACH"),
-            ("grasp_planning", "PLANNING_FAILED", "GRASP"),
-            ("grasp_execution", "EXECUTION_FAILED", "GRASP"),
+            ("grasp_motion", "PLANNING_FAILED", "GRASP"),
             ("close", "GRIPPER_FAILED", "CLOSE"),
             ("verification", "GRASP_VERIFICATION_FAILED", "VERIFY"),
-            ("retreat_planning", "PLANNING_FAILED", "RETREAT"),
-            ("retreat_execution", "EXECUTION_FAILED", "RETREAT"),
+            ("retreat_motion", "EXECUTION_FAILED", "RETREAT"),
         ],
     )
     def test_phase_failures_stop_the_pipeline(
@@ -671,22 +704,16 @@ class TestPickTransaction:
             module._preview_execute_wait.side_effect = [
                 SkillResult.fail("EXECUTION_FAILED", "rejected")
             ]
-        elif setup == "grasp_planning":
-            module.plan_to_pose.side_effect = [True, False]
-        elif setup == "grasp_execution":
-            module._preview_execute_wait.side_effect = [
-                SkillResult.ok(),
-                SkillResult.fail("EXECUTION_FAILED", "rejected"),
+        elif setup == "grasp_motion":
+            module._execute_linear_motion.side_effect = [
+                SkillResult.fail("PLANNING_FAILED", "linear planning failed")
             ]
         elif setup == "close":
             module._set_gripper_position.side_effect = [True, False]
         elif setup == "verification":
             module._verify_grasp.return_value = _GraspVerification(False, 0.0, "empty close")
-        elif setup == "retreat_planning":
-            module.plan_to_pose.side_effect = [True, True, False]
         else:
-            module._preview_execute_wait.side_effect = [
-                SkillResult.ok(),
+            module._execute_linear_motion.side_effect = [
                 SkillResult.ok(),
                 SkillResult.fail("EXECUTION_FAILED", "rejected"),
             ]
@@ -720,14 +747,23 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
         "_check_connected_pose_sequence",
         side_effect=[(0, None), (None, JointState())],
     )
+    ik_sequence = mocker.patch.object(
+        module,
+        "_check_pose_ik_sequence",
+        return_value=(None, JointState()),
+    )
     mocker.patch.object(module, "_safety_lift_pose", return_value=None)
     mocker.patch.object(module, "_lift_if_low", return_value=SkillResult.ok())
+    mocker.patch.object(
+        module,
+        "_verify_grasp",
+        return_value=_GraspVerification(True, 0.1, "verified"),
+    )
     plan = mocker.patch.object(module, "plan_to_pose", return_value=True)
     execute = mocker.patch.object(module, "_preview_execute_wait", return_value=SkillResult.ok())
+    linear = mocker.patch.object(module, "_execute_linear_motion", return_value=SkillResult.ok())
     gripper = mocker.patch.object(module, "_set_gripper_position", return_value=True)
-    suppression = SimpleNamespace(cleanup_error=None)
     world = mocker.Mock()
-    world.suppress_object_obstacle.return_value = nullcontext(suppression)
     module._world_monitor = world
     mocker.patch("dimos.manipulation.pick_and_place_module.time.time", return_value=now)
 
@@ -740,11 +776,12 @@ def test_full_pick_pipeline_uses_real_messages_and_fake_boundary_providers(
     assert result.metadata["rejections"] == {"pre_grasp_infeasible": 1}
     scene.get_object_pointcloud_by_object_id.assert_called_once_with("abc12345")
     generator.propose_grasps.assert_called_once_with(scene.get_object_pointcloud_by_object_id())
-    world.suppress_object_obstacle.assert_called_once_with("abc12345")
-    assert world.method_calls == [mocker.call.suppress_object_obstacle("abc12345")]
+    assert world.method_calls == []
     assert plan_sequence.call_count == 2
-    assert plan.call_count == 3
-    assert execute.call_count == 3
+    assert ik_sequence.call_count == 1
+    assert plan.call_count == 1
+    assert execute.call_count == 1
+    assert linear.call_count == 2
     assert gripper.call_args_list == [mocker.call(0.85, "arm"), mocker.call(0.0, "arm")]
 
 
@@ -753,7 +790,6 @@ class TestGraspVerification:
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         module.config.grasp_verification = GraspVerificationConfig(
-            enabled=True,
             timeout=1.0,
             poll_interval=0.1,
             held_threshold=0.02,
@@ -772,7 +808,6 @@ class TestGraspVerification:
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         module.config.grasp_verification = GraspVerificationConfig(
-            enabled=True,
             timeout=1.0,
             poll_interval=0.1,
             held_threshold=0.02,
@@ -793,7 +828,6 @@ class TestGraspVerification:
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         module.config.grasp_verification = GraspVerificationConfig(
-            enabled=True,
             timeout=1.0,
             poll_interval=0.1,
             held_threshold=0.02,
@@ -813,7 +847,6 @@ class TestGraspVerification:
         self, module: PickAndPlaceModule, mocker: MockerFixture
     ) -> None:
         module.config.grasp_verification = GraspVerificationConfig(
-            enabled=True,
             timeout=1.0,
             poll_interval=0.1,
             held_threshold=0.02,
@@ -828,3 +861,108 @@ class TestGraspVerification:
         result = module._verify_grasp("arm")
 
         assert result == _GraspVerification(False, None, "gripper feedback was unavailable")
+
+
+class TestNumberedSelectionApi:
+    def test_select_object_pins_snapshot_and_provider_order(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        detection = _make_det_object()
+        candidates = [_candidate(0.4, 0.9), _candidate(0.5, 0.8)]
+        module._replace_detection_snapshot([detection])
+        provider = mocker.patch.object(module, "_provider_candidates", return_value=candidates)
+
+        result = module.select_object(1)
+
+        assert result.is_success()
+        provider.assert_called_once_with(detection)
+        assert module._prepared_pick is not None
+        assert module._prepared_pick.snapshot_version == module._snapshot_version
+        assert module._prepared_pick.detection is detection
+        assert module._prepared_pick.candidates == tuple(candidates)
+
+    def test_new_scan_invalidates_prepared_selection(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        module._replace_detection_snapshot([_make_det_object()])
+        mocker.patch.object(module, "_provider_candidates", return_value=[_candidate(0.4, 0.9)])
+        assert module.select_object(1).is_success()
+
+        module._replace_detection_snapshot([_make_det_object(name="bottle")])
+
+        assert module._prepared_pick is None
+
+    def test_pick_selected_rejects_expired_preparation_without_robot_access(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        module._replace_detection_snapshot([_make_det_object()])
+        mocker.patch.object(module, "_provider_candidates", return_value=[_candidate(0.4, 0.9)])
+        mocker.patch("dimos.manipulation.pick_and_place_module.time.monotonic", return_value=0.0)
+        assert module.select_object(1).is_success()
+        module.config.preparation_timeout = 1.0
+        get_robot = mocker.patch.object(module, "_get_robot")
+
+        with patch(
+            "dimos.manipulation.pick_and_place_module.time.monotonic", return_value=2.0
+        ):
+            result = module.pick_selected()
+
+        assert result.error_code == "INVALID_STATE"
+        get_robot.assert_not_called()
+
+    def test_place_at_converts_object_reference_to_tcp_target(
+        self, module: PickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        quarter_turn = Quaternion.from_euler(Vector3(0.0, 0.0, np.pi / 2.0))
+        module._held_object_orientation = quarter_turn
+        module._held_object_to_tcp = Pose(Vector3(0.1, 0.0, 0.0), Quaternion())
+        module._held_object_size = Vector3(0.05, 0.05, 0.1)
+        place = mocker.patch.object(module, "_place_with_orientation", return_value=SkillResult.ok())
+
+        result = module.place_at(0.5, 0.2, 0.3)
+
+        assert result.is_success()
+        target = place.call_args.args
+        assert target[0] == pytest.approx(0.5)
+        assert target[1] == pytest.approx(0.3)
+        assert target[2] == pytest.approx(0.3)
+        assert target[3] == quarter_turn
+        assert module._held_object_to_tcp is None
+
+
+@pytest.fixture
+def box_module() -> BoxFillingPickAndPlaceModule:
+    with patch.object(ModuleBase, "__init__", lambda self, config_args: None):
+        result = BoxFillingPickAndPlaceModule()
+    result.config = BoxFillingPickAndPlaceModuleConfig()
+    return result
+
+
+class TestBoxFillingPolicy:
+    def test_destination_policy_computes_fit_checked_object_target(
+        self, box_module: BoxFillingPickAndPlaceModule, mocker: MockerFixture
+    ) -> None:
+        box_module._replace_detection_snapshot(
+            [_make_det_object(name="box", center=(0.6, 0.1, 0.1), size=(0.3, 0.2, 0.2))]
+        )
+        assert box_module.select_destination_container(1).is_success()
+        box_module._held_object_size = Vector3(0.05, 0.04, 0.10)
+        place = mocker.patch.object(box_module, "place_at", return_value=SkillResult.ok())
+
+        result = box_module.place_in_destination("arm")
+
+        assert result.is_success()
+        place.assert_called_once_with(0.6, 0.1, pytest.approx(0.27), "arm")
+
+    def test_destination_policy_rejects_object_that_does_not_fit(
+        self, box_module: BoxFillingPickAndPlaceModule
+    ) -> None:
+        box_module._replace_detection_snapshot(
+            [_make_det_object(name="box", size=(0.1, 0.1, 0.2))]
+        )
+        assert box_module.select_destination_container(1).is_success()
+        box_module._held_object_size = Vector3(0.2, 0.04, 0.05)
+
+        result = box_module.place_in_destination()
+
+        assert result.error_code == "INVALID_INPUT"

@@ -78,7 +78,6 @@ _TALL_OBJECT_MIN_HEIGHT = 0.06
 class GraspVerificationConfig(BaseConfig):
     """Robot-specific gripper closure verification settings."""
 
-    enabled: bool = False
     open_position: FiniteFloat = 0.85
     closed_position: FiniteFloat = 0.0
     held_threshold: FiniteFloat = 0.02
@@ -101,13 +100,17 @@ class GraspVerificationConfig(BaseConfig):
 class PickAndPlaceModuleConfig(ManipulationModuleConfig):
     """Configuration for PickAndPlaceModule."""
 
-    heuristic_grasp_fallback: bool = False
     planning_frame: str = "world"
     max_object_pointcloud_age: FiniteFloat = Field(default=10.0, gt=0.0)
     max_grasp_candidates_to_check: int = Field(default=5, gt=0)
-    grasp_pre_grasp_offset: FiniteFloat | None = Field(default=None, gt=0.0)
-    grasp_retreat_offset: FiniteFloat | None = Field(default=None, gt=0.0)
+    grasp_pre_grasp_offset: FiniteFloat = Field(default=0.25, gt=0.0)
+    grasp_retreat_offset: FiniteFloat = Field(default=0.10, gt=0.0)
+    grasp_retreat_lift_offset: FiniteFloat = Field(default=0.01, ge=0.0)
     grasp_approach_vector: tuple[FiniteFloat, FiniteFloat, FiniteFloat] = (0.0, 0.0, -1.0)
+    grasp_linear_speed: FiniteFloat = Field(default=0.03, gt=0.0)
+    preparation_timeout: FiniteFloat = Field(default=30.0, gt=0.0)
+    use_mesh_obstacles: bool = False
+    perception_obstacle_padding: FiniteFloat = Field(default=0.01, ge=0.0)
     grasp_verification: GraspVerificationConfig = Field(default_factory=GraspVerificationConfig)
 
     @model_validator(mode="after")
@@ -159,11 +162,21 @@ class _GraspVerification:
 class _PickTransaction:
     object_id: str = ""
     object_name: str = ""
-    proposal_source: Literal["grasp_provider", "heuristic"] = "grasp_provider"
+    proposal_source: Literal["grasp_provider"] = "grasp_provider"
     phase: _PickPhase = _PickPhase.RESOLVE
     selected: _FeasibleGrasp | None = None
     rejections: Counter[str] = field(default_factory=Counter)
     gripper_closed: bool = False
+
+
+@dataclass(frozen=True)
+class _PreparedPick:
+    """Immutable object and proposal selection tied to one scan snapshot."""
+
+    snapshot_version: int
+    detection: DetObject
+    candidates: tuple[GraspCandidate, ...]
+    prepared_at: float
 
 
 class _PickPipelineError(RuntimeError):
@@ -198,6 +211,14 @@ class PickAndPlaceModule(ManipulationModule):
         # The live detection cache is volatile (labels change every frame),
         # so pick/place use this stable snapshot instead.
         self._detection_snapshot: list[DetObject] = []
+        self._snapshot_version = 0
+        self._prepared_pick: _PreparedPick | None = None
+        self._objects_condition = threading.Condition()
+        self._objects_version = 0
+        self._latest_objects: tuple[DetObject, ...] = ()
+        self._held_object_to_tcp: Pose | None = None
+        self._held_object_orientation: Quaternion | None = None
+        self._held_object_size: Vector3 | None = None
         self._pick_guard = threading.Lock()
 
     @rpc
@@ -212,7 +233,10 @@ class PickAndPlaceModule(ManipulationModule):
 
         # Start obstacle monitor for perception integration
         if self._world_monitor is not None:
-            self._world_monitor.start_obstacle_monitor()
+            self._world_monitor.start_obstacle_monitor(
+                use_mesh_obstacles=self.config.use_mesh_obstacles,
+                obstacle_padding=float(self.config.perception_obstacle_padding),
+            )
 
         logger.info("PickAndPlaceModule started")
 
@@ -221,6 +245,10 @@ class PickAndPlaceModule(ManipulationModule):
         try:
             if self._world_monitor is not None:
                 self._world_monitor.on_objects(objects)
+            with self._objects_condition:
+                self._latest_objects = tuple(objects)
+                self._objects_version += 1
+                self._objects_condition.notify_all()
         except Exception as e:
             logger.error(f"Exception in _on_objects: {e}")
 
@@ -234,11 +262,16 @@ class PickAndPlaceModule(ManipulationModule):
             return []
         result = self._world_monitor.refresh_obstacles(min_duration)
         # Snapshot detections at refresh time — the live cache is volatile
-        self._detection_snapshot = self._world_monitor.get_cached_objects()
+        self._replace_detection_snapshot(self._world_monitor.get_cached_objects())
         logger.info(f"Detection snapshot: {[d.name for d in self._detection_snapshot]}")
         return result
 
-    @skill
+    def _replace_detection_snapshot(self, objects: list[DetObject]) -> None:
+        """Atomically replace numbered detections and invalidate prior selection."""
+        self._detection_snapshot = list(objects)
+        self._snapshot_version += 1
+        self._prepared_pick = None
+
     def clear_perception_obstacles(self) -> SkillResult[ManipulationSkillError]:
         """Clear all perception obstacles from the planning world.
 
@@ -462,7 +495,6 @@ class PickAndPlaceModule(ManipulationModule):
             return None
         return det.center.x, det.center.y, det.center.z
 
-    @skill
     def get_scene_info(self, robot_name: str | None = None) -> SkillResult[ManipulationSkillError]:
         """Get current robot state, detected objects, and scene information.
 
@@ -521,7 +553,6 @@ class PickAndPlaceModule(ManipulationModule):
 
         return SkillResult.ok("\n".join(lines))
 
-    @skill
     def look(self, robot_name: str | None = None) -> SkillResult[ManipulationSkillError]:
         """Quick check of what objects are visible from the current camera position.
 
@@ -551,42 +582,61 @@ class PickAndPlaceModule(ManipulationModule):
     @skill
     def scan_objects(
         self,
-        min_duration: float = 0.0,
-        robot_name: str | None = None,
+        object_names: list[str],
     ) -> SkillResult[ManipulationSkillError]:
-        """Scan for objects — moves to init position first for a clear camera view, \
-then refreshes perception obstacles.
-
-        Use this before pick/place operations or after a failed attempt.
+        """Scan one RGB-D frame for named objects and create a numbered snapshot.
 
         Args:
-            min_duration: Minimum time an object must be seen to be included.
-            robot_name: Robot context (only needed for multi-arm setups).
+            object_names: Simple object names to detect, one noun phrase per item.
         """
-        # Go to init for a clear camera view
-        init_result = self.go_init(robot_name)
-        if not init_result.is_success():
-            return init_result
-
-        obstacles = self.refresh_obstacles(min_duration)
-
+        names = [name.strip() for name in object_names if name.strip()]
+        if not names:
+            return SkillResult.fail("INVALID_INPUT", "At least one object name is required")
+        if self._object_scene is None:
+            return SkillResult.fail("PERCEPTION_FAILED", "No object-scene provider is connected")
+        with self._objects_condition:
+            objects_version = self._objects_version
+        try:
+            self._object_scene.set_prompts(names)
+            self._object_scene.scan_scene()
+        except RuntimeError as exc:
+            return SkillResult.fail("PERCEPTION_FAILED", str(exc))
+        with self._objects_condition:
+            received = self._objects_condition.wait_for(
+                lambda: self._objects_version > objects_version,
+                timeout=5.0,
+            )
+            objects = list(self._latest_objects)
+        if not received:
+            return SkillResult.fail(
+                "PERCEPTION_FAILED",
+                "Timed out waiting for the detected-object snapshot",
+            )
+        self._replace_detection_snapshot(objects)
+        obstacles = self._world_monitor.refresh_obstacles(0.0) if self._world_monitor else []
         detections = self._detection_snapshot
         if not detections:
-            # See look(): an empty scan is a valid observation, not a failure.
             return SkillResult.ok("No objects detected in scene")
 
         lines = [f"Detected {len(detections)} object(s):"]
-        for det in detections:
+        numbered: list[dict[str, object]] = []
+        for number, det in enumerate(detections, start=1):
             c = det.center
             lines.append(
-                f"  - {det.name} [id={det.object_id[:8]}]: "
-                f"({c.x:.3f}, {c.y:.3f}, {c.z:.3f}) [{det.detections_count} views]"
+                f"  {number}. {det.name}: ({c.x:.3f}, {c.y:.3f}, {c.z:.3f})"
+            )
+            numbered.append(
+                {
+                    "number": number,
+                    "name": det.name,
+                    "confidence": det.confidence,
+                }
             )
 
         if obstacles:
             lines.append(f"\n{len(obstacles)} obstacle(s) added to planning world")
 
-        return SkillResult.ok("\n".join(lines))
+        return SkillResult.ok("\n".join(lines), objects=numbered, queried_names=names)
 
     def _require_pick_object(self, object_name: str, object_id: str | None) -> DetObject:
         detection = self._find_object_in_detections(object_name, object_id)
@@ -598,23 +648,12 @@ then refreshes perception obstacles.
             f"No unique current detection matches {selector}; scan again and use an object ID",
         )
 
-    def _provider_candidates(
-        self, detection: DetObject, transaction: _PickTransaction
-    ) -> list[GraspCandidate]:
+    def _provider_candidates(self, detection: DetObject) -> list[GraspCandidate]:
         if self._grasp_generator is None:
-            if not self.config.heuristic_grasp_fallback:
-                raise _PickPipelineError(
-                    "GRASP_PROVIDER_UNAVAILABLE",
-                    "No grasp proposal provider is connected and heuristic fallback is disabled",
-                )
-            transaction.proposal_source = "heuristic"
-            poses = self._generate_grasps_for_pick(detection.name, detection.object_id)
-            if not poses:
-                raise _PickPipelineError(
-                    "GRASP_GENERATION_FAILED",
-                    f"Heuristic grasp generation failed for '{detection.name}'",
-                )
-            return [GraspCandidate(pose=pose, score=0.0) for pose in poses]
+            raise _PickPipelineError(
+                "GRASP_PROVIDER_UNAVAILABLE",
+                "No grasp proposal provider is connected",
+            )
 
         if self._object_scene is None:
             raise _PickPipelineError(
@@ -668,6 +707,114 @@ then refreshes perception obstacles.
             )
         return sorted(proposals.candidates, key=lambda candidate: candidate.score, reverse=True)
 
+    @skill
+    def select_object(self, number: int) -> SkillResult[ManipulationSkillError]:
+        """Prepare grasp proposals for one object in the latest numbered snapshot.
+
+        Args:
+            number: One-based object number returned by the latest scan_objects call.
+        """
+        if number < 1 or number > len(self._detection_snapshot):
+            return SkillResult.fail("INVALID_INPUT", f"No detected object numbered {number}")
+        detection = self._detection_snapshot[number - 1]
+        if detection.frame_id != "world":
+            return SkillResult.fail(
+                "GRASP_FRAME_MISMATCH",
+                f"Object frame '{detection.frame_id}' does not match required frame 'world'",
+            )
+        try:
+            candidates = self._provider_candidates(detection)
+        except _PickPipelineError as exc:
+            return SkillResult.fail(exc.code, str(exc))
+        self._prepared_pick = _PreparedPick(
+            snapshot_version=self._snapshot_version,
+            detection=detection,
+            candidates=tuple(candidates),
+            prepared_at=time.monotonic(),
+        )
+        return SkillResult.ok(
+            f"Selected {number}. {detection.name}; prepared {len(candidates)} grasp candidate(s)",
+            number=number,
+            object_id=detection.object_id,
+            candidate_count=len(candidates),
+        )
+
+    @skill
+    def pick_selected(
+        self, robot_name: str | None = None
+    ) -> SkillResult[ManipulationSkillError]:
+        """Pick the object prepared by select_object using fresh feasibility checks.
+
+        Args:
+            robot_name: Robot to use (only needed for multi-arm setups).
+        """
+        prepared = self._prepared_pick
+        if prepared is None:
+            return SkillResult.fail("INVALID_STATE", "Select an object before starting a pick")
+        if prepared.snapshot_version != self._snapshot_version:
+            self._prepared_pick = None
+            return SkillResult.fail("INVALID_STATE", "Selection is stale; scan and select again")
+        if time.monotonic() - prepared.prepared_at > self.config.preparation_timeout:
+            self._prepared_pick = None
+            return SkillResult.fail("INVALID_STATE", "Selection timed out; select the object again")
+        if prepared.detection.frame_id != "world":
+            self._prepared_pick = None
+            return SkillResult.fail("GRASP_FRAME_MISMATCH", "Selected object is not in world frame")
+        if not self._pick_guard.acquire(blocking=False):
+            return SkillResult.fail("PICK_BUSY", "Another pick transaction is active")
+
+        transaction = _PickTransaction(
+            object_id=prepared.detection.object_id,
+            object_name=prepared.detection.name,
+            phase=_PickPhase.SELECT,
+        )
+        try:
+            robot = self._get_robot(robot_name)
+            if robot is None:
+                return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
+            rname, _, _, _ = robot
+            sequence_start = None
+            lift_pose = self._safety_lift_pose(rname)
+            if lift_pose is not None:
+                transaction.phase = _PickPhase.PREPARE
+                failed_index, sequence_start = self._check_connected_pose_sequence(
+                    (lift_pose,), rname
+                )
+                if failed_index is not None:
+                    raise _PickPipelineError(
+                        "PLANNING_FAILED", "Required safety-lift planning failed"
+                    )
+            transaction.phase = _PickPhase.SELECT
+            transaction.selected = self._select_feasible_grasp(
+                list(prepared.candidates),
+                rname,
+                transaction,
+                sequence_start,
+            )
+            result = self._execute_selected_pick(transaction, rname)
+            if result.is_success():
+                self._held_object_to_tcp = self._relative_pose(
+                    prepared.detection.pose,
+                    transaction.selected.candidate.pose,
+                )
+                self._held_object_orientation = Quaternion(prepared.detection.pose.orientation)
+                self._held_object_size = Vector3(prepared.detection.size)
+                self._prepared_pick = None
+            return result
+        except _PickPipelineError as exc:
+            return self._phase_failure(transaction, exc.code, str(exc))
+        finally:
+            self._pick_guard.release()
+
+    @staticmethod
+    def _relative_pose(parent: Pose, child: Pose) -> Pose:
+        """Return child expressed in parent coordinates."""
+        inverse_orientation = parent.orientation.inverse()
+        return Pose(
+            inverse_orientation.rotate_vector(child.position - parent.position),
+            inverse_orientation * child.orientation,
+        )
+
     @staticmethod
     def _valid_candidate(candidate: GraspCandidate) -> bool:
         pose = candidate.pose
@@ -693,33 +840,43 @@ then refreshes perception obstacles.
         self,
         candidates: list[GraspCandidate],
         robot_name: str,
-        robot_pre_grasp_offset: float,
         transaction: _PickTransaction,
         sequence_start: JointState | None = None,
     ) -> _FeasibleGrasp:
         vector = Vector3(self.config.grasp_approach_vector)
-        pre_offset = self.config.grasp_pre_grasp_offset or robot_pre_grasp_offset
-        retreat_offset = self.config.grasp_retreat_offset or pre_offset
         limit = min(len(candidates), self.config.max_grasp_candidates_to_check)
 
         for rank, candidate in enumerate(candidates[:limit], start=1):
             if not self._valid_candidate(candidate):
                 transaction.rejections[_CandidateRejection.INVALID.value] += 1
                 continue
-            pre_grasp = self._compute_pre_grasp_pose(candidate.pose, pre_offset, vector)
-            retreat = self._compute_pre_grasp_pose(candidate.pose, retreat_offset, vector)
-            rejections = (
-                _CandidateRejection.PRE_GRASP_INFEASIBLE,
-                _CandidateRejection.GRASP_INFEASIBLE,
-                _CandidateRejection.RETREAT_INFEASIBLE,
+            pre_grasp = self._compute_pre_grasp_pose(
+                candidate.pose,
+                float(self.config.grasp_pre_grasp_offset),
+                vector,
             )
-            failed_index, _ = self._check_connected_pose_sequence(
-                (pre_grasp, candidate.pose, retreat),
+            retreat = self._compute_retreat_pose(candidate.pose, vector)
+            failed_index, endpoint = self._check_connected_pose_sequence(
+                (pre_grasp,),
                 robot_name,
                 start=sequence_start,
             )
             if failed_index is not None:
-                transaction.rejections[rejections[failed_index].value] += 1
+                transaction.rejections[_CandidateRejection.PRE_GRASP_INFEASIBLE.value] += 1
+                continue
+            failed_index, _ = self._check_pose_ik_sequence(
+                (candidate.pose, retreat),
+                robot_name,
+                start=endpoint,
+                check_collision=False,
+            )
+            if failed_index is not None:
+                rejection = (
+                    _CandidateRejection.GRASP_INFEASIBLE
+                    if failed_index == 0
+                    else _CandidateRejection.RETREAT_INFEASIBLE
+                )
+                transaction.rejections[rejection.value] += 1
                 continue
             return _FeasibleGrasp(candidate, rank, pre_grasp, retreat)
 
@@ -731,11 +888,24 @@ then refreshes perception obstacles.
             f"No feasible grasp among {limit} candidate(s)" + (f" ({summary})" if summary else ""),
         )
 
+    def _compute_retreat_pose(self, grasp_pose: Pose, approach_vector: Vector3) -> Pose:
+        """Retract opposite the grasp approach with a small world-up bias."""
+        retracted = self._compute_pre_grasp_pose(
+            grasp_pose,
+            float(self.config.grasp_retreat_offset),
+            approach_vector,
+        )
+        return Pose(
+            Vector3(
+                retracted.position.x,
+                retracted.position.y,
+                retracted.position.z + float(self.config.grasp_retreat_lift_offset),
+            ),
+            retracted.orientation,
+        )
+
     def _verify_grasp(self, robot_name: str) -> _GraspVerification:
         verification = self.config.grasp_verification
-        if not verification.enabled:
-            return _GraspVerification(True, None, "gripper feedback verification disabled")
-
         deadline = time.monotonic() + verification.timeout
         last_position: float | None = None
         while time.monotonic() < deadline:
@@ -824,9 +994,12 @@ then refreshes perception obstacles.
             )
 
         transaction.phase = _PickPhase.GRASP
-        if not self.plan_to_pose(selected.candidate.pose, robot_name):
-            return self._phase_failure(transaction, "PLANNING_FAILED", "grasp planning failed")
-        execution = self._preview_execute_wait(robot_name)
+        execution = self._execute_linear_motion(
+            selected.candidate.pose,
+            robot_name,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
         if not execution.is_success():
             return self._phase_failure(
                 transaction, execution.error_code or "EXECUTION_FAILED", execution.message
@@ -843,9 +1016,12 @@ then refreshes perception obstacles.
             return self._phase_failure(transaction, "GRASP_VERIFICATION_FAILED", verified.detail)
 
         transaction.phase = _PickPhase.RETREAT
-        if not self.plan_to_pose(selected.retreat_pose, robot_name):
-            return self._phase_failure(transaction, "PLANNING_FAILED", "retreat planning failed")
-        execution = self._preview_execute_wait(robot_name)
+        execution = self._execute_linear_motion(
+            selected.retreat_pose,
+            robot_name,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
         if not execution.is_success():
             return self._phase_failure(
                 transaction, execution.error_code or "EXECUTION_FAILED", execution.message
@@ -864,7 +1040,6 @@ then refreshes perception obstacles.
             rejections=dict(transaction.rejections),
         )
 
-    @skill
     def pick(
         self,
         object_name: str,
@@ -885,54 +1060,43 @@ then refreshes perception obstacles.
             return SkillResult.fail("PICK_BUSY", "Another pick transaction is active")
 
         transaction = _PickTransaction()
-        suppression = None
-        result: SkillResult[ManipulationSkillError]
         try:
             robot = self._get_robot(robot_name)
             if robot is None:
                 return SkillResult.fail("ROBOT_NOT_FOUND", "Robot not found")
-            rname, _, robot_config, _ = robot
+            rname, _, _, _ = robot
 
             detection = self._require_pick_object(object_name, object_id)
             transaction.object_id = detection.object_id
             transaction.object_name = detection.name
             transaction.phase = _PickPhase.PROPOSE
-            candidates = self._provider_candidates(detection, transaction)
+            candidates = self._provider_candidates(detection)
 
             if self._world_monitor is None:
                 raise _PickPipelineError(
                     "WORLD_MONITOR_UNAVAILABLE", "Planning world monitor is unavailable"
                 )
 
-            with self._world_monitor.suppress_object_obstacle(detection.object_id) as suppression:
-                sequence_start = None
-                lift_pose = self._safety_lift_pose(rname)
-                if lift_pose is not None:
-                    transaction.phase = _PickPhase.PREPARE
-                    failed_index, sequence_start = self._check_connected_pose_sequence(
-                        (lift_pose,), rname
-                    )
-                    if failed_index is not None:
-                        raise _PickPipelineError(
-                            "PLANNING_FAILED",
-                            "Required safety-lift planning failed",
-                        )
-                transaction.phase = _PickPhase.SELECT
-                transaction.selected = self._select_feasible_grasp(
-                    candidates,
-                    rname,
-                    robot_config.pre_grasp_offset,
-                    transaction,
-                    sequence_start,
+            sequence_start = None
+            lift_pose = self._safety_lift_pose(rname)
+            if lift_pose is not None:
+                transaction.phase = _PickPhase.PREPARE
+                failed_index, sequence_start = self._check_connected_pose_sequence(
+                    (lift_pose,), rname
                 )
-                result = self._execute_selected_pick(transaction, rname)
-            if suppression.cleanup_error is not None:
-                if result.is_success():
-                    return self._phase_failure(
-                        transaction, "WORLD_MONITOR_UNAVAILABLE", suppression.cleanup_error
+                if failed_index is not None:
+                    raise _PickPipelineError(
+                        "PLANNING_FAILED",
+                        "Required safety-lift planning failed",
                     )
-                result.message = f"{result.message}; cleanup: {suppression.cleanup_error}"
-            return result
+            transaction.phase = _PickPhase.SELECT
+            transaction.selected = self._select_feasible_grasp(
+                candidates,
+                rname,
+                transaction,
+                sequence_start,
+            )
+            return self._execute_selected_pick(transaction, rname)
         except _PickPipelineError as exc:
             return self._phase_failure(transaction, exc.code, str(exc))
         except RuntimeError as exc:
@@ -941,6 +1105,40 @@ then refreshes perception obstacles.
             self._pick_guard.release()
 
     @skill
+    def place_at(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        robot_name: str | None = None,
+    ) -> SkillResult[ManipulationSkillError]:
+        """Place the held object's reference point at a world-frame position.
+
+        Args:
+            x: Held-object reference X position in world, in meters.
+            y: Held-object reference Y position in world, in meters.
+            z: Held-object reference Z position in world, in meters.
+            robot_name: Robot to use (only needed for multi-arm setups).
+        """
+        object_to_tcp = self._held_object_to_tcp
+        object_orientation = self._held_object_orientation
+        if object_to_tcp is None or object_orientation is None:
+            return SkillResult.fail("INVALID_STATE", "No verified held object is available to place")
+        desired_object_pose = Pose(Vector3(x, y, z), object_orientation)
+        target_tcp = desired_object_pose + object_to_tcp
+        result = self._place_with_orientation(
+            target_tcp.position.x,
+            target_tcp.position.y,
+            target_tcp.position.z,
+            target_tcp.orientation,
+            robot_name,
+        )
+        if result.is_success():
+            self._held_object_to_tcp = None
+            self._held_object_orientation = None
+            self._held_object_size = None
+        return result
+
     def place(
         self,
         x: float,
@@ -1001,10 +1199,13 @@ then refreshes perception obstacles.
             return exec_result
 
         # 2. Lower to place position
-        logger.info("Lowering to place position...")
-        if not self.plan_to_pose(place_pose, rname):
-            return SkillResult.fail("PLANNING_FAILED", "Place pose planning failed")
-        exec_result = self._preview_execute_wait(rname)
+        logger.info("Lowering to place position with collision checking disabled...")
+        exec_result = self._execute_linear_motion(
+            place_pose,
+            rname,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
         if not exec_result.is_success():
             return exec_result
 
@@ -1014,16 +1215,18 @@ then refreshes perception obstacles.
         time.sleep(1.0)
 
         # 4. Retract
-        logger.info("Retracting...")
-        if not self.plan_to_pose(pre_place_pose, rname):
-            return SkillResult.fail("PLANNING_FAILED", "Retract planning failed")
-        exec_result = self._preview_execute_wait(rname)
+        logger.info("Retracting with collision checking disabled...")
+        exec_result = self._execute_linear_motion(
+            pre_place_pose,
+            rname,
+            float(self.config.grasp_linear_speed),
+            check_collision=False,
+        )
         if not exec_result.is_success():
             return exec_result
 
         return SkillResult.ok(f"Place complete — object released at ({x:.3f}, {y:.3f}, {z:.3f})")
 
-    @skill
     def place_back(self, robot_name: str | None = None) -> SkillResult[ManipulationSkillError]:
         """Place the held object back at its original pick position.
 
@@ -1043,7 +1246,6 @@ then refreshes perception obstacles.
         logger.info(f"Placing back at original position ({p.x:.3f}, {p.y:.3f}, {p.z:.3f})...")
         return self._place_with_orientation(p.x, p.y, p.z, o, robot_name)
 
-    @skill
     def drop_on(
         self,
         target_object_name: str,
@@ -1073,7 +1275,6 @@ then refreshes perception obstacles.
         )
         return self.place(x, y, z, robot_name)
 
-    @skill
     def pick_and_place(
         self,
         object_name: str,

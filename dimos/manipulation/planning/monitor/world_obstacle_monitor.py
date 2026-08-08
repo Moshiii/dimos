@@ -40,6 +40,8 @@ from dimos.manipulation.planning.spec.models import (
     Obstacle,
 )
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -84,6 +86,7 @@ class WorldObstacleMonitor:
         parent: WorldMonitor,
         detection_timeout: float = 2.0,
         use_mesh_obstacles: bool = False,
+        obstacle_padding: float = 0.0,
     ) -> None:
         """Create a world obstacle monitor.
 
@@ -96,6 +99,7 @@ class WorldObstacleMonitor:
         self._lock = parent._lock
         self._detection_timeout = detection_timeout
         self._use_mesh_obstacles = use_mesh_obstacles
+        self._obstacle_padding = obstacle_padding
 
         # Track obstacles from different sources
         self._collision_objects: dict[str, str] = {}  # msg_id -> obstacle_id
@@ -728,11 +732,24 @@ class WorldObstacleMonitor:
             except Exception as e:
                 logger.debug(f"Convex hull failed for {name}, falling back to box: {e}")
 
-        # Default: bounding box
+        # Real perception uses a conservative upright box. Preserve measured
+        # horizontal yaw while discarding noisy roll/pitch from partial views.
+        yaw = obj.pose.orientation.to_euler().z
+        pose = PoseStamped(
+            ts=obj.ts,
+            frame_id=obj.frame_id,
+            position=obj.center,
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
+        )
+        padding = self._obstacle_padding * 2.0
         return Obstacle(
             name=name,
             obstacle_type=ObstacleType.BOX,
-            pose=obj.pose or PoseStamped(position=obj.center),
-            dimensions=(float(obj.size.x), float(obj.size.y), float(obj.size.z)),
+            pose=pose,
+            dimensions=(
+                float(obj.size.x) + padding,
+                float(obj.size.y) + padding,
+                float(obj.size.z) + padding,
+            ),
             color=(0.2, 0.8, 0.2, 0.6),
         )

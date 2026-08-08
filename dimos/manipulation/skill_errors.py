@@ -30,6 +30,7 @@ from dimos.agents.skill_result import CommonSkillError
 ManipulationError = Literal[
     "NO_PRIOR_POSE",
     "OBJECT_NOT_DETECTED",
+    "PERCEPTION_FAILED",
     "IK_FAILED",
     "PLANNING_FAILED",
     "COLLISION_AT_START",
