@@ -36,6 +36,13 @@ plain numbers. Nothing here imports torch, a store, a message type, or a
 module system, so the same code runs offline over a recording, live on a robot,
 or in a notebook against a CSV.
 
+**What was measured, and what it ruled out**, is in
+``docs/capabilities/perception/tracklet_reid.md``. The short version: pairwise
+association scores 99% recall at 100% precision, and every way of chaining those
+pairs into groups -- transitive closure offline, id assignment online -- lands
+between 24% and 39% precision. So :func:`find_merges` returns pairs and
+:func:`connected` is something a caller opts into knowing that.
+
 That is why it sits in ``dimos/utils`` rather than beside the belief layer that
 prompted it: nothing in it is about belief. Tracklets, positions and times are
 what any tracker produces, and the half that knows about stores and crops lives
@@ -123,8 +130,15 @@ class ReidPolicy:
     #: exactly what re-identification is most often for: measured on an
     #: 8-minute capture, 30 tracked objects moved further than ``max_move_m``
     #: and could never be rejoined however obviously they matched. Zero
-    #: restores the old behaviour -- nothing may move at all.
+    #: restores a fixed radius -- nothing may move at all.
     max_speed_mps: float = 1.5
+
+    #: Ceiling on how far the speed allowance may reach, whatever the gap. A
+    #: budget that grows without limit stops being a constraint: on a 16 m
+    #: office, a six-second gap already reaches 11 m, and a minute reaches past
+    #: every wall. Beyond the space the robot works in, "it could have got
+    #: there" is true of everything and vetoes nothing.
+    max_reach_m: float = 8.0
 
     #: Metres a whole merged group may span. A pairwise check cannot see this:
     #: a-b within range and b-c within range puts a and c twice as far apart,
@@ -233,7 +247,9 @@ def _veto(a: Tracklet, b: Tracklet, policy: ReidPolicy) -> tuple[str | None, flo
     # How far it could have got: placement error, plus travel over the time
     # nobody was watching. A fixed radius would refuse every person who walked
     # away and came back, which is the case this exists for.
-    reachable = policy.max_move_m + policy.max_speed_mps * gap_between(a, b)
+    reachable = min(
+        policy.max_move_m + policy.max_speed_mps * gap_between(a, b), policy.max_reach_m
+    )
     if distance > reachable:
         return "too_far", distance
     return None, distance
@@ -339,3 +355,182 @@ def connected(
 
     for root in {find(k) for k in parent}:
         yield frozenset(members[root])
+
+
+@dataclass(frozen=True, slots=True)
+class OnlinePolicy:
+    """What an online associator needs beyond :class:`ReidPolicy`.
+
+    Batch re-identification sees every tracklet before deciding anything. A
+    robot does not: it has to answer "which thing is this" while the thing is
+    still being seen, and revise nothing it has already said out loud. The two
+    fields here are what that costs.
+    """
+
+    #: Views kept per track. Unbounded, a robot that runs for a day holds every
+    #: crop it ever embedded; the comparison reads the best few anyway, so what
+    #: is dropped is the middle of a distribution rather than its shape.
+    max_views: int = 200
+
+    #: Tracks kept before the oldest is forgotten. A long shift produces
+    #: thousands, and a track last seen an hour ago is not a candidate for
+    #: something visible now -- the speed veto would refuse it regardless.
+    max_tracks: int = 500
+
+
+class OnlineAssociator:
+    """Assign long-term ids to tracks as their sightings arrive.
+
+    The same decisions as :func:`find_merges`, made one observation at a time.
+    Nothing here re-implements the policy: state accumulates into
+    :class:`Tracklet` views and the same ``_veto`` and :func:`group_similarity`
+    run against them, so a change to what counts as the same thing takes effect
+    in both halves at once.
+
+    **Deciding late is allowed; deciding twice is not.** :meth:`resolve` returns
+    ``None`` while a track has too little evidence to be matched, rather than
+    inventing an id it would have to take back. A caller that needs an answer
+    now treats ``None`` as "a new thing, provisionally"; a caller writing
+    identity claims simply waits, because a claim it never made needs no
+    retraction.
+
+    Memory is bounded on both axes -- views per track and tracks retained -- so
+    this runs for a shift rather than for a recording.
+    """
+
+    def __init__(self, policy: ReidPolicy | None = None, online: OnlinePolicy | None = None):
+        self.policy = policy or ReidPolicy()
+        self.online = online or OnlinePolicy()
+        self._views: dict[str, list[NDArray[np.float64]]] = {}
+        self._points: dict[str, list[tuple[float, float, float]]] = {}
+        self._span: dict[str, tuple[float, float]] = {}
+        self._label: dict[str, str | None] = {}
+        self._assigned: dict[str, str] = {}
+        self._excluded: dict[str, set[str]] = {}
+        self._order: list[str] = []
+        self._counter = 0
+
+    def observe(
+        self,
+        track: str,
+        *,
+        embedding: NDArray[np.float64] | None = None,
+        position: tuple[float, float, float] | None = None,
+        ts: float,
+        label: str | None = None,
+    ) -> None:
+        """Add one sighting's evidence to a track."""
+        if track not in self._span:
+            self._order.append(track)
+            self._forget_old()
+        first, last = self._span.get(track, (ts, ts))
+        self._span[track] = (min(first, ts), max(last, ts))
+        self._label.setdefault(track, label)
+        if embedding is not None:
+            vector = np.asarray(embedding, float).ravel()
+            norm = float(np.linalg.norm(vector))
+            if norm:
+                views = self._views.setdefault(track, [])
+                views.append(vector / norm)
+                if len(views) > self.online.max_views:
+                    # Drop from the middle: the first views establish the track
+                    # and the newest reflect it now, so neither end is the part
+                    # to lose.
+                    del views[len(views) // 2]
+        if position is not None:
+            x, y, z = (float(v) for v in position)
+            self._points.setdefault(track, []).append((x, y, z))
+
+    def co_occurring(self, tracks: Iterable[str]) -> None:
+        """Record that these tracks were visible at one instant.
+
+        Two things seen at once are two things, whatever they look like. The
+        batch path derives this from overlapping spans; live, a caller that
+        knows which tracks shared a frame can say so directly and get the veto
+        before either track is long enough to compare.
+        """
+        keys = list(tracks)
+        for a in keys:
+            self._excluded.setdefault(a, set()).update(k for k in keys if k != a)
+
+    def _tracklet(self, track: str) -> Tracklet:
+        first, last = self._span[track]
+        points = self._points.get(track)
+        views = self._views.get(track)
+        return Tracklet(
+            key=track,
+            t_start=first,
+            t_end=last,
+            positions=np.asarray(points, float) if points else None,
+            embeddings=np.stack(views) if views else None,
+            label=self._label.get(track),
+        )
+
+    def resolve(self, track: str) -> str | None:
+        """The long-term id for ``track``, or None while the evidence is thin.
+
+        Once a track has an id it keeps it: revising an identity a caller has
+        already acted on is worse than having been slow to give one.
+        """
+        if track in self._assigned:
+            return self._assigned[track]
+        views = self._views.get(track)
+        if views is None or len(views) < self.policy.min_views:
+            return None
+
+        query = self._tracklet(track)
+        if query.embeddings is None:
+            return None
+        best_key, best_score = None, self.policy.similarity
+        centroid = query.centroid()
+        for other in self._order:
+            if other == track or other not in self._assigned:
+                continue
+            if other in self._excluded.get(track, ()):
+                continue
+            candidate = self._tracklet(other)
+            if candidate.embeddings is None or len(candidate.embeddings) < self.policy.min_views:
+                continue
+            if _veto(query, candidate, self.policy)[0] is not None:
+                continue
+            # What the group would span once this track joined it. The pairwise
+            # distance cannot see this and the batch path checks it in
+            # `connected`; without it here, 388 pieces of one capture collapsed
+            # into a single id, each link legal and the chain across the room.
+            if centroid is not None and self._spread_with(self._assigned[other], centroid) > (
+                self.policy.max_spread_m
+            ):
+                continue
+            score = group_similarity(
+                query.embeddings, candidate.embeddings, top_frac=self.policy.top_frac
+            )
+            if score >= best_score:
+                best_key, best_score = other, score
+
+        # A single best match, not every match above the threshold: chaining is
+        # what put a room of identical chairs into one entity, and online there
+        # is no second pass to catch it.
+        self._counter += 1
+        assigned = self._assigned[best_key] if best_key else f"entity-{self._counter}"
+        self._assigned[track] = assigned
+        return assigned
+
+    def _spread_with(self, entity: str, point: NDArray[np.float64]) -> float:
+        """How far a group would span with ``point`` added to it."""
+        points = [point]
+        for track, assigned in self._assigned.items():
+            if assigned != entity:
+                continue
+            centre = self._tracklet(track).centroid()
+            if centre is not None:
+                points.append(centre)
+        if len(points) < 2:
+            return 0.0
+        stacked = np.stack(points)
+        return float(np.linalg.norm(stacked.max(axis=0) - stacked.min(axis=0)))
+
+    def _forget_old(self) -> None:
+        while len(self._order) > self.online.max_tracks:
+            gone = self._order.pop(0)
+            for store in (self._views, self._points, self._span, self._label, self._excluded):
+                store.pop(gone, None)

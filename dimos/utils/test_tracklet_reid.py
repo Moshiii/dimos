@@ -18,6 +18,8 @@ import numpy as np
 
 from dimos.utils.tracklet_reid import (
     Merge,
+    OnlineAssociator,
+    OnlinePolicy,
     ReidPolicy,
     Tracklet,
     connected,
@@ -94,13 +96,27 @@ class TestAThingIsAllowedToHaveMoved:
 
     def test_a_walk_within_reach_of_the_gap_merges(self):
         a = tracklet("a", 0.0, 10.0, xy=(0.0, 0.0), label="person")
-        b = tracklet("b", 40.0, 50.0, xy=(20.0, 0.0), label="person")
+        b = tracklet("b", 40.0, 50.0, xy=(6.0, 0.0), label="person")
 
-        # 30 s unobserved at 1.5 m/s reaches 45 m; 20 m is inside it.
+        # 30 s at 1.5 m/s reaches 47 m, capped to 8 m; 6 m is inside it.
         merges, _ = find_merges([a, b], ReidPolicy(max_move_m=2.0, max_speed_mps=1.5))
 
         assert len(merges) == 1
         assert merges[0].gap_s == 30.0
+
+    def test_the_allowance_stops_growing_at_the_ceiling(self):
+        """A budget that grows without limit stops being a constraint."""
+        a = tracklet("a", 0.0, 10.0, xy=(0.0, 0.0))
+        b = tracklet("b", 300.0, 310.0, xy=(30.0, 0.0))
+
+        # 290 s of walking reaches 437 m -- further than any room the robot
+        # works in, so past the ceiling nothing would ever be refused.
+        merges, report = find_merges(
+            [a, b], ReidPolicy(max_move_m=2.0, max_speed_mps=1.5, max_reach_m=8.0)
+        )
+
+        assert merges == []
+        assert report.rejected == {"too_far": 1}
 
     def test_a_walk_beyond_reach_of_the_gap_does_not(self):
         a = tracklet("a", 0.0, 10.0, xy=(0.0, 0.0), label="person")
@@ -250,3 +266,61 @@ class TestSimilarityAggregation:
         # Orthogonal views: every pair scores 0 except the five matching ones.
         assert group_similarity(a, b, top_frac=0.2) == 1.0
         assert group_similarity(a, b, top_frac=0.8) < 0.3
+
+
+class TestOnlineDecidesLateRatherThanTwice:
+    """A robot has to answer while the thing is still being seen.
+
+    The cost of that is deciding on partial evidence. The associator pays it by
+    declining to answer rather than by answering and revising -- a caller that
+    acted on an identity cannot un-act on it.
+    """
+
+    def feed(self, assoc, track, direction, n, t0, xy=(0.0, 0.0)):
+        for i, vector in enumerate(views(direction, n=n)):
+            assoc.observe(
+                track,
+                embedding=vector,
+                position=(xy[0], xy[1], 0.0),
+                ts=t0 + i * 0.1,
+            )
+
+    def test_a_thin_track_gets_no_id_rather_than_a_wrong_one(self):
+        assoc = OnlineAssociator(ReidPolicy(min_views=5))
+        self.feed(assoc, "a", (1.0, 0.0), n=2, t0=0.0)
+
+        assert assoc.resolve("a") is None
+
+    def test_an_id_once_given_does_not_change(self):
+        assoc = OnlineAssociator(ReidPolicy(min_views=5))
+        self.feed(assoc, "a", (1.0, 0.0), n=10, t0=0.0)
+        first = assoc.resolve("a")
+
+        self.feed(assoc, "a", (0.0, 1.0), n=10, t0=5.0)
+
+        assert assoc.resolve("a") == first
+
+    def test_the_same_thing_seen_again_gets_the_same_id(self):
+        assoc = OnlineAssociator(ReidPolicy(min_views=5, similarity=0.9))
+        self.feed(assoc, "a", (1.0, 0.0), n=10, t0=0.0, xy=(0.0, 0.0))
+        self.feed(assoc, "b", (1.0, 0.0), n=10, t0=30.0, xy=(0.5, 0.0))
+
+        assert assoc.resolve("a") == assoc.resolve("b")
+
+    def test_things_seen_at_once_never_share_an_id(self):
+        assoc = OnlineAssociator(ReidPolicy(min_views=5, similarity=0.9))
+        self.feed(assoc, "a", (1.0, 0.0), n=10, t0=0.0)
+        self.feed(assoc, "b", (1.0, 0.0), n=10, t0=0.0)  # identical, simultaneous
+        assoc.co_occurring(["a", "b"])
+
+        assert assoc.resolve("a") != assoc.resolve("b")
+
+    def test_memory_is_bounded_on_both_axes(self):
+        assoc = OnlineAssociator(
+            ReidPolicy(min_views=2), OnlinePolicy(max_views=8, max_tracks=3)
+        )
+        for n in range(6):
+            self.feed(assoc, f"t{n}", (1.0, 0.0), n=20, t0=n * 100.0)
+
+        assert len(assoc._order) <= 3
+        assert all(len(v) <= 8 for v in assoc._views.values())
