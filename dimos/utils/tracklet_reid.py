@@ -47,7 +47,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import itertools
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -112,10 +112,19 @@ class ReidPolicy:
     #: overlap in time give different-object pairs, so it needs no labelling.
     similarity: float = 0.925
 
-    #: Metres a thing may be found from where it was and still be the same
-    #: thing. This is the veto that keeps two identical chairs apart. Checked
-    #: between two tracklets; see ``max_spread_m`` for the group it lands in.
+    #: Metres a thing may be found from where it was even with no time to move
+    #: in. Absorbs the placement error, not real motion. This is the veto that
+    #: keeps two identical chairs apart; see ``max_spread_m`` for the group a
+    #: chain of them lands in.
     max_move_m: float = 2.0
+
+    #: Metres per second a thing may travel while unobserved. Without this the
+    #: distance check treats a chair and a walking person alike, and a person is
+    #: exactly what re-identification is most often for: measured on an
+    #: 8-minute capture, 30 tracked objects moved further than ``max_move_m``
+    #: and could never be rejoined however obviously they matched. Zero
+    #: restores the old behaviour -- nothing may move at all.
+    max_speed_mps: float = 1.5
 
     #: Metres a whole merged group may span. A pairwise check cannot see this:
     #: a-b within range and b-c within range puts a and c twice as far apart,
@@ -131,10 +140,13 @@ class ReidPolicy:
     #: side of a merge decision is not evidence.
     min_views: int = 5
 
-    #: Similarities averaged when comparing two tracklets. Comparing means
-    #: washes out the informative views; comparing maxima trusts a single lucky
-    #: pair. The mean of the best few is neither.
-    top_k: int = 20
+    #: Fraction of the pairwise similarities averaged when comparing two
+    #: tracklets. A fraction rather than a count because a count degenerates:
+    #: two five-view tracklets make 25 pairs, and taking the best 20 of them is
+    #: the mean -- which is what the aggregation exists to avoid. Comparing
+    #: means washes out the informative views; comparing maxima trusts a single
+    #: lucky pair. The best fifth is neither, at any tracklet size.
+    top_frac: float = 0.2
 
     #: Whether a tracklet with no position may be merged. False refuses rather
     #: than guessing -- a sighting with no depth could be anywhere, so nothing
@@ -181,8 +193,10 @@ class Report:
         return f"{len(self.merges)} merges; rejected: {parts or 'none'}"
 
 
-def group_similarity(a: NDArray[np.float64], b: NDArray[np.float64], *, top_k: int) -> float:
-    """Mean of the top-k cosine similarities between two sets of views.
+def group_similarity(
+    a: NDArray[np.float64], b: NDArray[np.float64], *, top_frac: float
+) -> float:
+    """Mean of the best ``top_frac`` of cosine similarities between two view sets.
 
     Both sides are assumed L2-normalised, so the product is the cosine. The
     aggregation is the whole decision in one line, and the reason it is neither
@@ -190,8 +204,14 @@ def group_similarity(a: NDArray[np.float64], b: NDArray[np.float64], *, top_k: i
     """
     sims = np.asarray(a, float) @ np.asarray(b, float).T
     flat = sims.ravel()
-    k = min(top_k, flat.size)
+    k = max(1, min(flat.size, round(top_frac * flat.size)))
     return float(np.mean(np.partition(flat, -k)[-k:]))
+
+
+def gap_between(a: Tracklet, b: Tracklet) -> float:
+    """Seconds between one tracklet ending and the other beginning."""
+    earlier, later = (a, b) if a.t_end <= b.t_start else (b, a)
+    return max(0.0, later.t_start - earlier.t_end)
 
 
 def _veto(a: Tracklet, b: Tracklet, policy: ReidPolicy) -> tuple[str | None, float | None]:
@@ -210,7 +230,11 @@ def _veto(a: Tracklet, b: Tracklet, policy: ReidPolicy) -> tuple[str | None, flo
         return None, None
 
     distance = float(np.linalg.norm(ca - cb))
-    if distance > policy.max_move_m:
+    # How far it could have got: placement error, plus travel over the time
+    # nobody was watching. A fixed radius would refuse every person who walked
+    # away and came back, which is the case this exists for.
+    reachable = policy.max_move_m + policy.max_speed_mps * gap_between(a, b)
+    if distance > reachable:
         return "too_far", distance
     return None, distance
 
@@ -240,18 +264,17 @@ def find_merges(
             report.note("too_few_views")
             continue
 
-        score = group_similarity(a.embeddings, b.embeddings, top_k=policy.top_k)
+        score = group_similarity(a.embeddings, b.embeddings, top_frac=policy.top_frac)
         if score < policy.similarity:
             report.note("below_threshold")
             continue
 
-        earlier, later = (a, b) if a.t_end <= b.t_start else (b, a)
         report.merges.append(
             Merge(
                 keys=(a.key, b.key),
                 similarity=score,
                 distance_m=distance,
-                gap_s=max(0.0, later.t_start - earlier.t_end),
+                gap_s=gap_between(a, b),
             )
         )
     return report.merges, report
@@ -262,48 +285,57 @@ def connected(
     tracklets: Iterable[Tracklet] | None = None,
     policy: ReidPolicy | None = None,
 ) -> Iterator[frozenset[str]]:
-    """Take the transitive closure of pairwise merges into groups.
+    """Close pairwise merges into groups, strongest link first.
 
-    A different and weaker claim than the pairs it is built from. Chaining a-b
-    and b-c asserts a-c on evidence nobody checked, and one wrong pair collapses
-    two objects into one group.
+    A different and weaker claim than the pairs it is built from: chaining a-b
+    and b-c asserts a-c on evidence nobody checked, and one wrong pair can
+    collapse two objects into one group.
 
-    Passing ``tracklets`` checks each closed group against
-    ``policy.max_spread_m`` and drops the ones that span more than a real object
-    could -- the only place that error is visible, because every pair inside
-    such a group passed its own distance check. Without them the closure is
-    returned unchecked, which is what a caller wanting the raw chaining gets.
+    Given ``tracklets``, a link is taken only if the group it would create still
+    spans less than ``policy.max_spread_m``. Refusing the *link* rather than the
+    finished group is what keeps one bad pair from costing every good merge
+    around it -- an earlier version dropped whole groups and lost several
+    hundred correct merges to a single bad chain. Taking links in descending
+    similarity means the ones refused are the weakest evidence in the group,
+    not whichever happened to be considered last.
+
+    Without ``tracklets`` the closure is unchecked, which is what a caller
+    wanting the raw chaining gets.
     """
+    policy = policy or ReidPolicy()
+    centroids: dict[str, Any] = {}
+    if tracklets is not None:
+        centroids = {t.key: t.centroid() for t in tracklets}
+
     parent: dict[str, str] = {}
+    members: dict[str, set[str]] = {}
 
     def find(x: str) -> str:
         parent.setdefault(x, x)
+        members.setdefault(x, {x})
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
-    for merge in merges:
-        roots = [find(k) for k in merge.keys]
-        for other in roots[1:]:
-            parent[other] = roots[0]
+    def spread(keys: set[str]) -> float:
+        points = [c for c in (centroids.get(k) for k in keys) if c is not None]
+        if len(points) < 2:
+            return 0.0
+        stacked = np.stack(points)
+        return float(np.linalg.norm(stacked.max(axis=0) - stacked.min(axis=0)))
 
-    groups: dict[str, set[str]] = {}
-    for key in list(parent):
-        groups.setdefault(find(key), set()).add(key)
+    for merge in sorted(merges, key=lambda m: -m.similarity):
+        roots = {find(k) for k in merge.keys}
+        if len(roots) < 2:
+            continue
+        joined: set[str] = set().union(*(members[r] for r in roots))
+        if centroids and spread(joined) > policy.max_spread_m:
+            continue
+        keep = roots.pop()
+        for other in roots:
+            parent[other] = keep
+        members[keep] = joined
 
-    if tracklets is None:
-        for members in groups.values():
-            yield frozenset(members)
-        return
-
-    policy = policy or ReidPolicy()
-    centroids = {t.key: t.centroid() for t in tracklets}
-    for members in groups.values():
-        points = [c for c in (centroids.get(k) for k in members) if c is not None]
-        if len(points) > 1:
-            stacked = np.stack(points)
-            spread = float(np.linalg.norm(stacked.max(axis=0) - stacked.min(axis=0)))
-            if spread > policy.max_spread_m:
-                continue
-        yield frozenset(members)
+    for root in {find(k) for k in parent}:
+        yield frozenset(members[root])
