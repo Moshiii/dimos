@@ -15,8 +15,10 @@
 """The one place that says how sightings become the views questions are asked of.
 
 Three folds over one input: identity claims tie sightings together, entities are
-sightings grouped by identity, and annotations are sightings regrouped by the
-frame they were drawn on.
+sightings grouped by identity, and annotations regroup sightings by the frame
+they were drawn on. The third answers no query -- ``SELECTS`` does not cover it
+-- and exists so a viewer can box the detections on the camera image, which is
+the only way to check by eye whether a detection was of what it claims.
 
 **Why this is a module and not a script.** The same folds have to run twice: once
 offline over a finished recording, once on a robot that is still driving. If each
@@ -87,6 +89,8 @@ def build_views(
     out: Any,
     session: str,
     params: ViewParams | None = None,
+    reid: Callable[[Any], Any] | None = None,
+    policy: Any = None,
     report: Callable[[str], None] | None = None,
 ) -> dict[str, int]:
     """Write identity, entity and annotation streams into ``out``.
@@ -120,6 +124,23 @@ def build_views(
         claims += 1
     counts["identity"] = claims
     say(f"identity: {claims} claims over {len({s[1] for s in sightings})} tracks")
+
+    # Appended after the tracker's claims and before the entity fold, because
+    # `resolve_identity` lets a later claim win: a reid claim naming several
+    # tracks as one entity overrides the per-track claims without removing
+    # them, so the merge stays inspectable and retractable.
+    if reid is not None:
+        from dimos.experimental.memory_belief.reid_pass import merge_claims, tracklets_from
+
+        tracklets = tracklets_from(belief, reid, report=report)
+        merged = 0
+        for claim in merge_claims(
+            belief, tracklets, session=session, policy=policy, report=report
+        ):
+            append_identity(identity_out, claim)
+            merged += 1
+        counts["reid_groups"] = merged
+        say(f"reid: {merged} groups merged")
 
     entity_out = derived_stream(out, ENTITY_STREAM_NAME, Entity)
     entities = 0

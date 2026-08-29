@@ -48,6 +48,7 @@ from dimos.experimental.memory_belief.identity import IDENTITY_STREAM_NAME
 from dimos.experimental.memory_belief.pipeline import ViewParams, build_views
 from dimos.experimental.memory_belief.types import STREAM_NAME as BELIEF_STREAM_NAME
 from dimos.memory.store.sqlite import SqliteStore
+from dimos.utils.tracklet_reid import ReidPolicy
 
 #: Read the defaults off an instance, not off the class: ViewParams uses slots,
 #: so its class attributes are descriptors rather than the values.
@@ -58,9 +59,60 @@ DEFAULTS = ViewParams()
 DERIVED = (IDENTITY_STREAM_NAME, ENTITY_STREAM_NAME, ANNOTATION_STREAM_NAME)
 
 
+def _embedder(name: str):  # type: ignore[no-untyped-def]
+    """A callable taking one crop and returning a vector.
+
+    Imported here rather than at module scope: these pull torch, and a run
+    without ``--reid`` should not pay for it.
+    """
+    from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+
+    if name == "treid":
+        from dimos.models.embedding.treid import TorchReIDModel
+
+        model = TorchReIDModel()
+    elif name == "clip":
+        from dimos.models.embedding.clip import CLIPModel
+
+        model = CLIPModel()
+    else:
+        raise SystemExit(f"unknown embedding model {name!r}; expected 'clip' or 'treid'")
+    model.start()
+
+    def embed(crop):  # type: ignore[no-untyped-def]
+        import numpy as np
+
+        image = Image(data=np.ascontiguousarray(crop), format=ImageFormat.RGB, frame_id="crop")
+        return model.embed(image)
+
+    return embed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("store", type=Path, help="a recording holding belief_observation")
+    parser.add_argument(
+        "--reid",
+        default=None,
+        metavar="MODEL",
+        help="merge tracklets the tracker lost, using this embedding model "
+        "('clip' or 'treid'). Off by default: it needs a GPU pass over the "
+        "crops, and the similarity threshold belongs to the model",
+    )
+    parser.add_argument(
+        "--similarity",
+        type=float,
+        default=None,
+        help="cosine similarity two tracklets need to merge. Defaults to the "
+        "value measured for CLIP; re-measure for another model",
+    )
+    parser.add_argument(
+        "--max-move",
+        type=float,
+        default=None,
+        help="metres a thing may be found from where it was and still be the "
+        "same thing. The veto that keeps two identical chairs apart",
+    )
     parser.add_argument(
         "--static-threshold",
         type=float,
@@ -70,6 +122,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     params = ViewParams(static_threshold_m=args.static_threshold)
+    reid = _embedder(args.reid) if args.reid else None
+    policy_overrides = {
+        k: v
+        for k, v in (("similarity", args.similarity), ("max_move_m", args.max_move))
+        if v is not None
+    }
+    if policy_overrides and not reid:
+        parser.error("--similarity and --max-move only mean anything with --reid")
     started = time.perf_counter()
     store = SqliteStore(path=str(args.store), must_exist=True)
     try:
@@ -90,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
             out=store,
             session=args.store.stem,
             params=params,
+            reid=reid,
+            policy=ReidPolicy(**policy_overrides) if policy_overrides else None,
             report=print,
         )
     finally:

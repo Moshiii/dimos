@@ -18,13 +18,14 @@
 whatever converts. That leaves two things it cannot know, and both are here
 rather than in the record types, so ``import rerun`` stays out of them.
 
+**Where a detection belongs.** A frame's boxes go under the image they were
+drawn on, not at the world origin -- seeing the box on the picture is the only
+way to check by eye that a detection was of what it claims.
+
 **Accumulation.** A viewer that shows only the newest record of each stream
 shows a room one object at a time. Entities log per ``entity_id`` (in
 ``entity.py``) so they coexist; lidar logs per time chunk so the map builds up
 instead of replacing itself.
-
-**Where a detection belongs.** A frame's boxes go under the image they were
-drawn on, not at the world origin.
 
 Nothing here is static. Static means "true before it was seen", which is right
 for a robot's own dimensions and wrong for everything this layer records.
