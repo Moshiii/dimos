@@ -54,7 +54,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
 # The one robot-specific import. The camera mount belongs in the recording's
 # `tf` stream; reading it from there would make this producer platform-neutral.
-from dimos.robot.unitree.go2.connection import BASE_TO_OPTICAL, GO2Connection
+from dimos.robot.unitree.go2.connection import GO2Connection
 
 #: Read the defaults off an instance: DetectParams uses slots, so its class
 #: attributes are descriptors rather than the values.
@@ -228,7 +228,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             source=source,
             params=params,
             camera=locator,
-            world_from_base=BASE_TO_OPTICAL,
             stride=args.stride,
             limit=args.limit,
             on_skip=lambda: dark.__setitem__(0, dark[0] + 1),

@@ -14,6 +14,12 @@
 
 """Giving a 2D detection a place in the world, or refusing to.
 
+``world_from_camera`` is the camera's own pose, already in the world frame. A
+``camera_pose_in_world`` helper stood here that composed a robot pose with a
+static mount; every caller was passing a frame pose the recorder had *already*
+resolved through tf as ``world <- camera_optical``, so the mount went in twice
+and every detection landed as though the camera had been yawed 90 degrees.
+
 **Refusing is a result.** Too few lidar returns in the box gets ``None``, not a
 guessed depth: everything downstream treats a present position as evidence.
 
@@ -194,12 +200,3 @@ def locate_detections(
             depth_m=float(np.median(vis_depth[near])),
         )
     return out
-
-
-def camera_pose_in_world(
-    robot_pose: Any, base_to_optical: Any, *, world_frame: str = "world"
-) -> Any:
-    """Compose the robot's world pose with its static camera mount."""
-    from dimos.msgs.geometry_msgs.Transform import Transform
-
-    return Transform.from_pose(world_frame, robot_pose) + base_to_optical

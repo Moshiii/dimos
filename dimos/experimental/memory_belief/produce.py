@@ -40,7 +40,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from dimos.experimental.memory_belief.detect import bright_enough, detect_to_belief
-from dimos.experimental.memory_belief.locate import camera_pose_in_world, locate_detections
+from dimos.experimental.memory_belief.locate import locate_detections
+from dimos.msgs.geometry_msgs.Transform import Transform
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -86,7 +87,6 @@ def detect_stream(
     source: str,
     params: DetectParams | None = None,
     camera: Any = None,
-    world_from_base: Any = None,
     stride: int = 1,
     limit: int | None = None,
     on_skip: Callable[[], None] | None = None,
@@ -98,6 +98,13 @@ def detect_stream(
     ``camera`` is given the frames are expected to be image/scan pairs, as
     produced by aligning a camera stream against lidar; without it they are bare
     image observations and every record is written with no position.
+
+    The pose carried by each frame is used as the camera's world pose directly,
+    not composed with a mount transform. A recorded frame's pose is resolved by
+    the recorder as ``world <- frame_id``, and the go2 stamps its images with
+    ``camera_optical`` -- so the mount is already in it. Composing again applied
+    the optical rotation and the 0.3 m offset twice, which put every detection
+    in the map as though the camera had been yawed 90 degrees.
 
     ``vocabulary`` is recorded verbatim on every record, which is what lets a
     later question about an unlisted term answer OUT_OF_VOCABULARY rather than
@@ -136,7 +143,10 @@ def detect_stream(
         return locate_detections(
             detections,
             np.asarray(points).reshape(-1, 3),
-            world_from_camera=camera_pose_in_world(pose, world_from_base),
+            # The frame's own pose, as a transform. Not composed with a camera
+            # mount: the recorder already resolved this pose as
+            # `world <- camera_optical`, so the mount is in it.
+            world_from_camera=Transform.from_pose("world", pose),
             camera=camera,
             min_points=params.min_points,
             depth_band_m=params.depth_band_m,
