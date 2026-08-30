@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from dimos.experimental.memory_belief.api import QueryError, execute
+from dimos.experimental.memory_belief.api import DEFAULT_LIMIT, QueryError, execute
 from dimos.experimental.memory_belief.entity import ENTITY_STREAM_NAME, Entity, append_entity
 from dimos.experimental.memory_belief.types import (
     SCHEMA_VERSION,
@@ -210,3 +210,48 @@ class TestTheAnswerCarriesItsOwnTrustworthiness:
         # its centroid would be a position invented from nothing.
         assert out["status"] == "unknown"
         assert out["reason"] == "INCOHERENT"
+
+
+class TestTheRowBoundIsAppliedBeforeTheRowsAreRead:
+    @pytest.fixture
+    def crowded(self, tmp_path):
+        s = SqliteStore(path=str(tmp_path / "crowded.db"))
+        es = derived_stream(s, ENTITY_STREAM_NAME, Entity)
+        for i in range(DEFAULT_LIMIT + 25):
+            append_entity(es, entity(f"e{i}", "chair", T0 + i))
+        yield s
+        s.stop()
+
+    def test_an_unbounded_query_still_reads_a_bounded_number_of_rows(self, crowded):
+        """The bound belongs to the query, not to the projection.
+
+        Capping the positions after the fact left the store reading every
+        matching row to build an answer that never used them, and reporting the
+        discarded ones in ``rows`` as though they were part of it.
+        """
+        out = execute(crowded, {"select": "entities", "as_of": T0 + 1000})
+
+        assert out["quality"]["rows"] == DEFAULT_LIMIT
+        assert len(out["result"]["positions"]) == DEFAULT_LIMIT
+
+    def test_an_explicit_limit_is_honoured(self, crowded):
+        out = execute(crowded, {"select": "entities", "as_of": T0 + 1000, "limit": 7})
+
+        assert out["quality"]["rows"] == 7
+        assert len(out["result"]["positions"]) == 7
+
+    def test_a_limit_of_zero_or_less_is_refused_rather_than_ignored(self, crowded):
+        # Both used to read as "no limit" through a truthiness test, which is
+        # the opposite of what either asks for.
+        for value in (0, -1):
+            with pytest.raises(QueryError, match="at least 1"):
+                execute(crowded, {"select": "entities", "as_of": T0 + 1000, "limit": value})
+
+    def test_a_non_numeric_limit_says_so(self, crowded):
+        with pytest.raises(QueryError, match="limit must be a whole number"):
+            execute(crowded, {"select": "entities", "as_of": T0 + 1000, "limit": "lots"})
+
+    def test_omitting_the_projection_answers_with_the_only_one(self, store):
+        # The default named a projection that does not exist, so a query that
+        # left `project` out was rejected as if it had asked for something.
+        assert execute(store, {"select": "entities", "as_of": T0 + 100})["status"] == "ok"

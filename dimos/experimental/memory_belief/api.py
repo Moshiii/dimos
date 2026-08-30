@@ -55,6 +55,11 @@ SELECTS = ("entities",)
 #: absent one, because a caller reads it as an answer.
 PROJECTIONS = ("locate",)
 
+#: How many rows one question brings back when it does not say. The bound has to
+#: live in the stream chain: capping the projection instead let a broad query
+#: read every matching row out of the store and then throw most of them away.
+DEFAULT_LIMIT = 50
+
 #: Streams backing each ``select``. Raw streams are queried directly; the rest
 #: are materialised views built by the producers in this package.
 #: Imported lazily and by path because the producers pull in numpy and scipy,
@@ -188,7 +193,25 @@ class _NoReferencePointError(Exception):
     """
 
 
-def _project(kind: str, rows: Sequence[Any], query: dict[str, Any]) -> dict[str, Any]:
+def _limit(query: dict[str, Any]) -> int:
+    """The row bound, validated, before any row is read.
+
+    ``limit`` was previously read for truth, so ``0`` and ``-1`` both fell
+    through to "no limit" -- the opposite of what either asks for. Neither is a
+    sensible number of answers, so both are refused rather than reinterpreted.
+    """
+    if query.get("limit") is None:
+        return DEFAULT_LIMIT
+    try:
+        limit = int(query["limit"])
+    except (TypeError, ValueError) as exc:
+        raise QueryError(f"limit must be a whole number, got {query['limit']!r}") from exc
+    if limit < 1:
+        raise QueryError(f"limit must be at least 1, got {limit}")
+    return limit
+
+
+def _project(kind: str, rows: Sequence[Any]) -> dict[str, Any]:
     payloads = [_payload(r) for r in rows]
 
     if kind == "locate":
@@ -206,7 +229,7 @@ def _project(kind: str, rows: Sequence[Any], query: dict[str, Any]) -> dict[str,
                     "dispersion_m": round(getattr(p, "dispersion_m", 0.0) or 0.0, 3),
                     "place_ref": getattr(p, "place_ref", None),
                 }
-                for p, xyz in positioned[: int(query.get("limit") or 50)]
+                for p, xyz in positioned
             ]
         }
 
@@ -349,6 +372,10 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
     answer -- "where is the backpack" differs at t=30 s and t=400 s -- and a
     default would silently pick one, which is the failure the wall-clock
     staleness bug produced in every recorded trace.
+
+    ``limit`` is defaulted, at ``DEFAULT_LIMIT``, because the alternative is
+    reading a whole recording's worth of rows to answer a question about a
+    handful of them.
     """
     select = query.get("select")
     if select is None:
@@ -365,7 +392,11 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
     # reads as an empty world. Neither is a moment.
     if not math.isfinite(as_of):
         raise QueryError(f"as_of must be a finite time, got {as_of}")
-    projection = query.get("project", "list")
+    # "locate" is the only projection, and the previous default named one that
+    # does not exist -- so a query that simply omitted `project` was rejected as
+    # if it had asked for something.
+    projection = query.get("project") or PROJECTIONS[0]
+    limit = _limit(query)
 
     where = query.get("where") or []
     _check_shape(where)
@@ -410,8 +441,9 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
     stream = stream.before(as_of + 1e-9)
     if query.get("order_by"):
         stream = stream.order_by(query["order_by"], desc=bool(query.get("desc")))
-    if query.get("limit"):
-        stream = stream.limit(int(query["limit"]))
+    # Bounded here rather than in the projection: `to_list` below reads every row
+    # the stream still holds, and rows discarded after that were paid for.
+    stream = stream.limit(limit)
 
     rows = stream.to_list()
     if not rows:
@@ -426,7 +458,7 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
         }
 
     try:
-        result = _project(projection, rows, query)
+        result = _project(projection, rows)
     except _NoReferencePointError:
         return {
             "status": "unknown",

@@ -139,6 +139,7 @@ class BeliefQuerySkills(MemoryModule):
                 ``project``: ``locate`` -- the only one. Position, label,
                 support and dispersion per thing.
                 ``as_of``: defaults to the latest record.
+                ``limit``: how many rows to read, 50 by default.
         """
         payload = dict(query or {})
         # Clamped, not defaulted. Asking about an earlier moment is a real
