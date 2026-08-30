@@ -37,6 +37,7 @@ import math
 import statistics
 from typing import TYPE_CHECKING, Any
 
+from dimos.experimental.memory_belief.entity import COHERENT
 from dimos.experimental.memory_belief.write import derived_stream
 
 if TYPE_CHECKING:
@@ -451,7 +452,7 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
     status, reason = "ok", None
     if projection == "locate" and not result:
         status, reason = "unknown", "NO_CAPABILITY"
-    elif quality.get("coherence") is not None and quality["coherence"] < 0.2:
+    elif quality.get("coherence") is not None and quality["coherence"] < COHERENT:
         status, reason = "unknown", "INCOHERENT"
 
     return {

@@ -17,7 +17,12 @@ from __future__ import annotations
 import pytest
 
 from dimos.experimental.memory_belief.api import DEFAULT_LIMIT, QueryError, execute
-from dimos.experimental.memory_belief.entity import ENTITY_STREAM_NAME, Entity, append_entity
+from dimos.experimental.memory_belief.entity import (
+    COHERENT,
+    ENTITY_STREAM_NAME,
+    Entity,
+    append_entity,
+)
 from dimos.experimental.memory_belief.types import (
     SCHEMA_VERSION,
     BeliefObservation,
@@ -195,6 +200,27 @@ class TestTheAnswerCarriesItsOwnTrustworthiness:
         # anyway, because the field is what stops a caller reading a result as a
         # count of sightings if raw observations are ever queryable again.
         assert out["quality"]["deduplicated"] is True
+
+    def test_the_threshold_is_the_one_the_fold_defines(self, store):
+        """One definition of "coherent enough", not two that disagree.
+
+        `entity.COHERENT` says 0.5 and the status check here said 0.2, so a
+        grouping the fold called incoherent was reported as a usable answer.
+        """
+        es = derived_stream(store, ENTITY_STREAM_NAME, Entity)
+        append_entity(es, entity("e9", "lamp", T0 + 50, coh=(COHERENT + 0.2) / 2))
+        out = execute(
+            store,
+            {
+                "select": "entities",
+                "as_of": T0 + 100,
+                "where": [{"op": "label", "value": "lamp"}],
+                "project": "locate",
+            },
+        )
+
+        assert out["status"] == "unknown"
+        assert out["reason"] == "INCOHERENT"
 
     def test_low_coherence_downgrades_the_status(self, store):
         out = execute(
