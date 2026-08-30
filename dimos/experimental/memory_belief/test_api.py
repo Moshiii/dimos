@@ -122,6 +122,16 @@ class TestFiltersComposeInOneCall:
         assert len(one["result"]["positions"]) == 2
         assert len(two["result"]["positions"]) == 1
 
+    def test_a_malformed_clause_is_a_fixable_error_not_a_traceback(self, store):
+        """A model that sends ["chair"] has to be told, not crashed on.
+
+        Validation read `clause.get` before anything checked the clause was an
+        object, so a wrong shape raised AttributeError out of the middle of the
+        query -- which ends the turn instead of prompting a retry.
+        """
+        with pytest.raises(QueryError, match="each where clause must be an object"):
+            execute(store, {"select": "entities", "as_of": T0, "where": ["chair"]})
+
     def test_an_unknown_operator_raises_rather_than_being_skipped(self, store):
         with pytest.raises(QueryError, match="bogus"):
             execute(

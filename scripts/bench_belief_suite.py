@@ -21,7 +21,9 @@ import uuid
 
 from dotenv import load_dotenv
 
-load_dotenv("/home/dimos/Desktop/dimensional/dimos/.env", override=True)
+from dimos.constants import DIMOS_PROJECT_ROOT
+
+load_dotenv(DIMOS_PROJECT_ROOT / ".env", override=True)
 # The repo's .env names the endpoint LANGFUSE_BASE_URL; the SDK reads LANGFUSE_HOST.
 if os.environ.get("LANGFUSE_BASE_URL") and not os.environ.get("LANGFUSE_HOST"):
     os.environ["LANGFUSE_HOST"] = os.environ["LANGFUSE_BASE_URL"]
@@ -110,7 +112,10 @@ def build_tool(store, as_of, counter):  # type: ignore[no-untyped-def]
     def belief_query(query: dict) -> str:
         counter["calls"] += 1
         q = dict(query or {})
-        q.setdefault("as_of", as_of)
+        # Forced, not defaulted. `setdefault` let the model supply its own
+        # asking time, and a model that asks about a moment after the one it
+        # was asked at answers from observations that had not happened.
+        q["as_of"] = as_of
         try:
             envelope = execute(store, q)
         except QueryError as exc:

@@ -107,6 +107,26 @@ def _payload(observation: Any) -> Any:
     return getattr(observation, "data", observation)
 
 
+def _check_shape(where: Any) -> None:
+    """Reject a malformed ``where`` as a fixable error, not an AttributeError.
+
+    Runs before anything reads a clause. A model that sends ``["chair"]``
+    instead of ``[{"op": "label", ...}]`` should get a message saying so and
+    retry; a traceback out of the middle of validation tells it nothing and
+    ends the turn.
+    """
+    if isinstance(where, (str, bytes)) or not isinstance(where, (list, tuple)):
+        raise QueryError(
+            f"where must be a list of clause objects, got {type(where).__name__}; "
+            'example: [{"op": "label", "value": "chair"}]'
+        )
+    for clause in where:
+        if not isinstance(clause, dict):
+            raise QueryError(
+                f"each where clause must be an object, got {type(clause).__name__}: {clause!r}"
+            )
+
+
 def _apply(stream: Any, where: Sequence[dict[str, Any]]) -> Any:
     """Build the filter chain. Composition happens here, not across turns.
 
@@ -114,17 +134,7 @@ def _apply(stream: Any, where: Sequence[dict[str, Any]]) -> Any:
     widens the result set, and a caller reading the answer has no way to tell
     that the constraint it asked for was never applied.
     """
-    if isinstance(where, (str, bytes)) or not isinstance(where, (list, tuple)):
-        raise QueryError(
-            f"where must be a list of clause objects, got {type(where).__name__}; "
-            'example: [{"op": "label", "value": "chair"}]'
-        )
     for clause in where or ():
-        if not isinstance(clause, dict):
-            raise QueryError(
-                f"each where clause must be an object, got {type(clause).__name__}: "
-                f"{clause!r}"
-            )
         op = clause.get("op")
         if op == "label":
             stream = stream.tags(label=clause["value"])
@@ -348,6 +358,7 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
     projection = query.get("project", "list")
 
     where = query.get("where") or []
+    _check_shape(where)
     # Validated before the stream is touched: an argument the store cannot honour
     # must not come back looking like an absence of observation.
     out_of_vocab = _validate(store, select, where)
