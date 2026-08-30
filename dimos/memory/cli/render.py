@@ -191,7 +191,11 @@ def render_store(
                     # A static factory that positions its own entity owns that
                     # path's parenting; attaching it again by frame_id would give
                     # the frame two parents, which rerun rejects outright.
-                    if tf_tree is not None and not isinstance(data, rr.Transform3D) and path not in statics:
+                    if (
+                        tf_tree is not None
+                        and not isinstance(data, rr.Transform3D)
+                        and path not in statics
+                    ):
                         frame_id = getattr(obs.data, "frame_id", None)
                         if frame_id and attached.get(path) != frame_id:
                             rr.log(path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))

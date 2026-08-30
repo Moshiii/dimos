@@ -231,7 +231,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             stride=args.stride,
             limit=args.limit,
             on_skip=lambda: dark.__setitem__(0, dark[0] + 1),
-                ):
+        ):
             if record.target_pose is not None:
                 placed += 1
             if ident_stream is not None and record.identity_basis:

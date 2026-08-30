@@ -98,19 +98,21 @@ class Entity:
         # Saturating at ten sightings: past that the entity is well supported and
         # the difference between 10 and 300 is not what anyone is looking for.
         alpha = 55 + int(200 * min(self.support, 10) / 10)
-        return [(
-            key,
-            rr.Boxes3D(
-                centers=[list(self.position)],
-                half_sizes=[list(half)],
-                colors=[(*colour, alpha)],
-                # The label as written. A glyph table stood here, mapping each term
-                # to an emoji; it cost 1,979 lines of lookup data inside dimos/ to
-                # say less than the word does, and an unmapped term read as a
-                # placeholder rather than as itself.
-                labels=[self.label or "?"],
-            ),
-        )]
+        return [
+            (
+                key,
+                rr.Boxes3D(
+                    centers=[list(self.position)],
+                    half_sizes=[list(half)],
+                    colors=[(*colour, alpha)],
+                    # The label as written. A glyph table stood here, mapping each term
+                    # to an emoji; it cost 1,979 lines of lookup data inside dimos/ to
+                    # say less than the word does, and an unmapped term read as a
+                    # placeholder rather than as itself.
+                    labels=[self.label or "?"],
+                ),
+            )
+        ]
 
 
 #: Which tier each field rests on. An ``Entity`` is by construction a tier-2
@@ -136,7 +138,6 @@ FIELD_TIER: dict[str, EvidenceTier] = {
     "motion": "entity",
     "identity_basis": "entity",
 }
-
 
 
 def append_entity(stream: Any, entity: Entity) -> Any:
@@ -189,9 +190,7 @@ class _Accumulator:
 
 
 def _summarise(entity_id: str, acc: _Accumulator, *, static_threshold_m: float) -> Entity:
-    label, label_n = (
-        max(acc.labels.items(), key=lambda kv: kv[1]) if acc.labels else (None, 0)
-    )
+    label, label_n = max(acc.labels.items(), key=lambda kv: kv[1]) if acc.labels else (None, 0)
     place = max(acc.places.items(), key=lambda kv: kv[1])[0] if acc.places else None
 
     position = extent = None
@@ -204,9 +203,7 @@ def _summarise(entity_id: str, acc: _Accumulator, *, static_threshold_m: float) 
         centre = (sum(xs) / len(xs), sum(ys) / len(ys), sum(zs) / len(zs))
         spread = sorted(math.dist(centre, p) for p in acc.positions)
         dispersion = spread[len(spread) // 2]
-        displacement = max(
-            (math.dist(acc.positions[0], p) for p in acc.positions), default=0.0
-        )
+        displacement = max((math.dist(acc.positions[0], p) for p in acc.positions), default=0.0)
         position = centre
         extent = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
         # Sightings spread thinly over a wide area describe several things, or

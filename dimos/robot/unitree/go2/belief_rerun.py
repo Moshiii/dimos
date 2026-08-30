@@ -73,6 +73,4 @@ def robot_body(rr: Any) -> list[Any]:
 
 def go2_belief_rerun_config() -> dict[str, Any]:
     """The belief view, with the go2's body and camera added."""
-    return belief_rerun_config(
-        static={"color_image": camera_frustum, "robot_body": robot_body}
-    )
+    return belief_rerun_config(static={"color_image": camera_frustum, "robot_body": robot_body})

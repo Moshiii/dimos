@@ -99,7 +99,6 @@ def resolve_identity(claims: Iterable[Any]) -> dict[str, str]:
     return mapping
 
 
-
 def claims_from_tracks(
     sightings: Iterable[tuple[str, Any, float]],
     *,

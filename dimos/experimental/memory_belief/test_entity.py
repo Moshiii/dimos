@@ -78,7 +78,7 @@ class TestWhereTheSensorWasIsNotWhereTheThingIs:
 
 class TestFoldingIsByIdentityNotByLabel:
     def test_a_sighting_no_claim_covers_is_skipped(self):
-        """"Seen once" and "followed and lost" are different states.
+        """ "Seen once" and "followed and lost" are different states.
 
         A singleton entity per unassociated detection would bury the second
         under a crowd of the first.

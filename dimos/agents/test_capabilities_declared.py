@@ -77,9 +77,7 @@ class TestCentralRegistry:
                     stray.append(f"{path.relative_to(ROOT)}: {line.strip()}")
         assert not stray, f"declare these in agents/capabilities.py instead: {stray}"
 
-    @pytest.mark.parametrize(
-        "name", ["CAP_MOVEMENT", "CAP_PAYLOAD"]
-    )
+    @pytest.mark.parametrize("name", ["CAP_MOVEMENT", "CAP_PAYLOAD"])
     def test_the_expected_capabilities_exist(self, name):
         assert isinstance(getattr(caps, name), str)
 
@@ -93,4 +91,3 @@ class TestCentralRegistry:
 class TestContendingSkillsDeclare:
     def test_every_referenced_capability_is_a_real_constant(self):
         assert _all_uses() <= set(vars(caps)) | {"CAP_MOVEMENT"}
-

@@ -30,7 +30,6 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from dimos.experimental.memory_belief.types import STREAM_NAME, BeliefObservation, belief_tags
 
 if TYPE_CHECKING:
-
     from dimos.memory.store.base import Store
     from dimos.memory.stream import Stream
     from dimos.memory.type.observation import Observation

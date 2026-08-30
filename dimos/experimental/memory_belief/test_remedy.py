@@ -68,6 +68,7 @@ class TestNothingHardcodesASkill:
         assert legged.act(incoherent) == "walked"
         assert arm.act(incoherent) == "turned"
 
+
 class TestMissingProvidersAreReported:
     def test_an_unprovided_capability_is_not_actionable(self):
         remedy = RemedyResolver().plan_for(UnknownReason.NEVER_COVERED)
@@ -124,9 +125,7 @@ class TestRevisitIsDistinguished:
         assert remedy.actionable
         assert not remedy.needs_revisit
 
-    @pytest.mark.parametrize(
-        "reason", [UnknownReason.INCOHERENT, UnknownReason.NEVER_COVERED]
-    )
+    @pytest.mark.parametrize("reason", [UnknownReason.INCOHERENT, UnknownReason.NEVER_COVERED])
     def test_the_others_do(self, reason):
         every = {
             r.suggested_capability: (lambda **kw: None)
@@ -148,6 +147,7 @@ class TestRegistration:
         resolver = RemedyResolver({"sweep_place": lambda **kw: None})
 
         assert resolver.capabilities == frozenset({"sweep_place"})
+
 
 class TestEveryReasonTheEngineEmitsCanBeResolved:
     """The gap this closes cost a KeyError at the skill boundary.

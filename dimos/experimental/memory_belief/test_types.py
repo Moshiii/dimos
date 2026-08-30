@@ -260,7 +260,6 @@ class TestPersistence:
         assert reread == rec(vocabulary=("chair",))
 
     def test_stored_bytes_are_readable_json(self, tmp_path):
-
         path = str(tmp_path / "belief.db")
         s = SqliteStore(path=path)
         append_belief(belief_stream(s), rec())

@@ -69,6 +69,7 @@ def _fit(envelope: dict, budget: int = BUDGET) -> str:
     positions is how "where are the chairs" becomes "where are the first twenty
     chairs found", with nothing in the answer to say so.
     """
+
     def dump(env: dict) -> str:
         return json.dumps(env, ensure_ascii=False, default=str)
 
@@ -85,8 +86,11 @@ def _fit(envelope: dict, budget: int = BUDGET) -> str:
     if not lists:
         # Nothing list-shaped to shrink: drop the result entirely rather than
         # return a broken envelope, and say that is what happened.
-        trimmed = {**envelope, "result": None,
-                   "truncated": {"result": "omitted, too large to send"}}
+        trimmed = {
+            **envelope,
+            "result": None,
+            "truncated": {"result": "omitted, too large to send"},
+        }
         return dump(trimmed)
 
     for keep in (200, 100, 50, 25, 12, 6, 3, 1):
@@ -104,8 +108,7 @@ def _fit(envelope: dict, budget: int = BUDGET) -> str:
         text = dump(trimmed)
         if len(text) <= budget:
             return text
-    return dump({**envelope, "result": None,
-                 "truncated": {"result": "omitted, too large to send"}})
+    return dump({**envelope, "result": None, "truncated": {"result": "omitted, too large to send"}})
 
 
 def build_tool(store, as_of, counter):  # type: ignore[no-untyped-def]
@@ -131,15 +134,15 @@ def build_tool(store, as_of, counter):  # type: ignore[no-untyped-def]
         description=f"""Ask where things are. ONE call carries the whole question.
 
 THIS RECORDING'S CONSTANTS -- read from the store, not assumed:
-  time: {facts['time_unit']}
-        this recording spans {facts['t_start']:.0f} .. {facts['t_end']:.0f}
-  vocabulary: {facts['vocabulary_size']} terms; a term outside it returns
+  time: {facts["time_unit"]}
+        this recording spans {facts["t_start"]:.0f} .. {facts["t_end"]:.0f}
+  vocabulary: {facts["vocabulary_size"]} terms; a term outside it returns
         OUT_OF_VOCABULARY with the nearest terms, which are worth retrying
 
 select: "entities" -- the only one. A thing, not one sighting of it.
 where: a list of clauses, ANDed. Two operators:
   {{"op":"label","value":"chair"}}
-  {{"op":"time_range","t1":{facts['t_start']:.0f},"t2":{facts['t_end']:.0f}}}
+  {{"op":"time_range","t1":{facts["t_start"]:.0f},"t2":{facts["t_end"]:.0f}}}
 project: "locate" -- the only one. Position, label, support, dispersion per thing.
 
 Returns an envelope: status(ok|unknown|error), reason, result, quality(rows,
@@ -207,10 +210,13 @@ def main(argv: list[str] | None = None) -> int:
         }
         results.append(row)
         mark = "!" if error else ("." if counter["calls"] else "0")
-        print(f"  [{i:3d}/{len(suite)}] {task['id']} {mark} {counter['calls']}call "
-              f"{row['seconds']}s", flush=True)
-        args.out.write_text(json.dumps({"run_id": run_id, "results": results},
-                                       ensure_ascii=False, indent=1))
+        print(
+            f"  [{i:3d}/{len(suite)}] {task['id']} {mark} {counter['calls']}call {row['seconds']}s",
+            flush=True,
+        )
+        args.out.write_text(
+            json.dumps({"run_id": run_id, "results": results}, ensure_ascii=False, indent=1)
+        )
 
     store.stop()
     # Flush before exiting: traces are batched, and a process that ends first

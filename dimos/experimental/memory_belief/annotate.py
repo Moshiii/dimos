@@ -69,7 +69,9 @@ class FrameAnnotation:
             colors=[(80, 220, 120) if p else (160, 160, 160) for p in self.placed],
             labels=[
                 f"{label} {conf:.2f}" + ("" if placed else " (unplaced)")
-                for label, conf, placed in zip(self.labels, self.confidences, self.placed, strict=True)
+                for label, conf, placed in zip(
+                    self.labels, self.confidences, self.placed, strict=True
+                )
             ],
         )
 
