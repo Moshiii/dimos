@@ -170,10 +170,15 @@ def locate_detections(
             rows = np.clip(vis_uv[:, 1].astype(int), 0, m.shape[0] - 1)
             cols = np.clip(vis_uv[:, 0].astype(int), 0, m.shape[1] - 1)
             on_mask = m[rows, cols] > 0
-            # Fall back to the box if the mask and the returns do not overlap at
-            # all, rather than discarding a detection over a resolution mismatch.
-            if on_mask.sum() >= min_points:
-                inside = inside & on_mask
+            # Counted inside the box, not across the frame. `on_mask` covers
+            # every visible return, so a mask with enough hits elsewhere passed
+            # this guard while leaving the box nearly empty -- and the narrowed
+            # selection then fell under `min_points` and dropped a detection the
+            # box alone would have placed. That is the discard this is meant to
+            # prevent, not cause.
+            narrowed = inside & on_mask
+            if narrowed.sum() >= min_points:
+                inside = narrowed
 
         n = int(inside.sum())
         if n < min_points:

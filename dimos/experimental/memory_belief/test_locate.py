@@ -90,9 +90,7 @@ class TestPlacementIsMeasured:
     def test_position_matches_the_cube_it_was_built_from(self, camera, identity_pose):
         points = _cube((0.0, 0.0, 3.0), 0.25)
         det = FakeDetection(bbox=(0, 0, 640, 480))
-        (placed,) = locate_detections(
-            [det], points, world_from_camera=identity_pose, camera=camera
-        )
+        (placed,) = locate_detections([det], points, world_from_camera=identity_pose, camera=camera)
         assert placed is not None
         assert placed.position == pytest.approx((0.0, 0.0, 3.0), abs=0.05)
         assert placed.depth_m == pytest.approx(3.0, abs=0.05)
@@ -100,9 +98,7 @@ class TestPlacementIsMeasured:
     def test_extent_is_reported_not_just_a_point(self, camera, identity_pose):
         points = _cube((0.0, 0.0, 3.0), 0.25)
         det = FakeDetection(bbox=(0, 0, 640, 480))
-        (placed,) = locate_detections(
-            [det], points, world_from_camera=identity_pose, camera=camera
-        )
+        (placed,) = locate_detections([det], points, world_from_camera=identity_pose, camera=camera)
         assert placed is not None
         # A 0.5 m cube, so every side should measure about half a metre. Without
         # extent, "the bottle is on the desk" cannot be derived at query time.
@@ -111,9 +107,7 @@ class TestPlacementIsMeasured:
     def test_support_counts_the_inliers(self, camera, identity_pose):
         points = _cube((0.0, 0.0, 3.0), 0.25, n=5)
         det = FakeDetection(bbox=(0, 0, 640, 480))
-        (placed,) = locate_detections(
-            [det], points, world_from_camera=identity_pose, camera=camera
-        )
+        (placed,) = locate_detections([det], points, world_from_camera=identity_pose, camera=camera)
         assert placed is not None
         assert placed.support == len(points)
 
@@ -144,8 +138,25 @@ class TestBoxIsNotTheOnlyEvidence:
         mask = np.zeros((480, 640), np.uint8)
         mask[:, :320] = 1  # only the left half of the image
         det = FakeDetection(bbox=(0, 0, 640, 480), mask=mask)
-        (placed,) = locate_detections(
-            [det], points, world_from_camera=identity_pose, camera=camera
-        )
+        (placed,) = locate_detections([det], points, world_from_camera=identity_pose, camera=camera)
         assert placed is not None
         assert placed.position[0] < 0.0
+
+    def test_a_mask_that_misses_the_box_falls_back_to_it(self, camera, identity_pose):
+        """The fallback has to measure the overlap it is named for.
+
+        The guard counted mask hits across the whole frame, so a mask covering
+        a different object passed it while leaving this box nearly empty. The
+        narrowed selection then fell under `min_points` and the detection was
+        dropped -- the box alone would have placed it.
+        """
+        subject = _cube((0.0, 0.0, 3.0), 0.15)
+        elsewhere = _cube((2.0, 0.0, 3.0), 0.15)
+        points = np.vstack([subject, elsewhere])
+        # Covers only where `elsewhere` projects, far to the right of the box.
+        mask = np.zeros((480, 640), np.uint8)
+        mask[:, 560:] = 1
+        box = FakeDetection(bbox=(280, 200, 360, 280), mask=mask)
+        (placed,) = locate_detections([box], points, world_from_camera=identity_pose, camera=camera)
+        assert placed is not None, "a mask covering another object dropped this detection"
+        assert placed.position[0] == pytest.approx(0.0, abs=0.2)
