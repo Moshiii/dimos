@@ -80,7 +80,9 @@ class MissingStreamError(LookupError):
     """
 
     def __init__(self, select: str, stream_name: str) -> None:
-        super().__init__(f"select {select!r} needs stream {stream_name!r}, which this store has none of")
+        super().__init__(
+            f"select {select!r} needs stream {stream_name!r}, which this store has none of"
+        )
         self.select = select
         self.stream_name = stream_name
 
@@ -97,8 +99,8 @@ def _open(store: Any, select: str) -> Any:
     # expected.
     if select in PROJECTIONS:
         raise QueryError(
-            f"{select!r} is a projection, not a stream: pass it as \"project\", "
-            f"and choose a \"select\" from {SELECTS}"
+            f'{select!r} is a projection, not a stream: pass it as "project", '
+            f'and choose a "select" from {SELECTS}'
         )
     raise QueryError(f"unknown select {select!r}; expected one of {SELECTS}")
 
@@ -246,9 +248,7 @@ def _place_refs(store: Any) -> set[str]:
     if ENTITY_STREAM_NAME not in store.streams:
         return set()
     return {
-        ref
-        for o in store.streams[ENTITY_STREAM_NAME]
-        if (ref := (o.tags or {}).get("place_ref"))
+        ref for o in store.streams[ENTITY_STREAM_NAME] if (ref := (o.tags or {}).get("place_ref"))
     }
 
 
@@ -289,9 +289,7 @@ def describe_store(store: Any) -> dict[str, Any]:
         "t_end": max((b for _, b in spans), default=None),
         "place_refs": sorted(_place_refs(store)),
         "vocabulary_size": len(vocab),
-        "labelled_streams": sorted(
-            s for s in SELECTS if "label" in _tags_of(store, s)
-        ),
+        "labelled_streams": sorted(s for s in SELECTS if "label" in _tags_of(store, s)),
         "streams": sorted(s for s in SELECTS if _tags_of(store, s) or s in SELECTS),
     }
 
@@ -319,8 +317,11 @@ def _validate(store: Any, select: str, where: Sequence[dict[str, Any]]) -> str |
         op = str(clause.get("op") or "")
         needed = _TAG_FOR_OP.get(op)
         if needed and not (set(needed) & tags if isinstance(needed, tuple) else {needed} & tags):
-            usable = sorted(s for s in SELECTS if _tags_of(store, s) & (
-                set(needed) if isinstance(needed, tuple) else {needed}))
+            usable = sorted(
+                s
+                for s in SELECTS
+                if _tags_of(store, s) & (set(needed) if isinstance(needed, tuple) else {needed})
+            )
             raise QueryError(
                 f"select {select!r} carries no {op!r} information, so that clause "
                 f"can only ever match nothing. Streams that do: {usable or 'none'}."
@@ -354,7 +355,16 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
         raise QueryError("select is required")
     if "as_of" not in query:
         raise QueryError("as_of is required: the asking time determines the answer")
-    as_of = float(query["as_of"])
+    try:
+        as_of = float(query["as_of"])
+    except (TypeError, ValueError) as exc:
+        raise QueryError(f"as_of must be a number, got {query['as_of']!r}") from exc
+    # `inf` passes every `before` comparison, so it does not merely widen the
+    # window -- it removes it, and the answer covers the whole recording while
+    # still reporting a time base. `nan` fails every comparison instead and
+    # reads as an empty world. Neither is a moment.
+    if not math.isfinite(as_of):
+        raise QueryError(f"as_of must be a finite time, got {as_of}")
     projection = query.get("project", "list")
 
     where = query.get("where") or []
@@ -472,4 +482,3 @@ def _diagnose(store: Any, query: dict[str, Any]) -> dict[str, Any]:
         if after == 0:
             break
     return {"per_clause": steps, "hint": "relax the clause whose rows_after is 0"}
-

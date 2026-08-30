@@ -21,10 +21,12 @@ that degrades to prose on the way out, the agent is back to guessing.
 
 from __future__ import annotations
 
+import math
 import time
 
 import pytest
 
+from dimos.experimental.memory_belief import skills as skills_module
 from dimos.experimental.memory_belief.answer import UnknownReason
 from dimos.experimental.memory_belief.skills import BeliefQuerySkills
 from dimos.experimental.memory_belief.types import SCHEMA_VERSION, BeliefObservation, EvidenceRef
@@ -80,6 +82,42 @@ class TestTheSkillCannotContradictTheEvidence:
         assert result.retryable is not UnknownReason.NEVER_COVERED.is_terminal
 
 
+class TestTheAgentCannotAskAboutTheFuture:
+    """The asking time is the robot's, not the model's.
+
+    ``as_of`` used to be a `setdefault`, so a model could name any moment it
+    liked. Combined with a query engine that accepted `inf`, a runtime agent
+    could answer a question about now from observations not yet made.
+    """
+
+    @staticmethod
+    def _as_of_reaching_the_engine(skills, monkeypatch, asked):
+        """The value `execute` is actually called with, not the one asked for."""
+        seen = {}
+
+        def spy(store, payload):
+            seen["as_of"] = payload["as_of"]
+            return {"status": "unknown", "reason": "NEVER_COVERED", "quality": {}}
+
+        monkeypatch.setattr(skills_module, "execute", spy)
+        skills.query({"select": "entities", "as_of": asked, "project": "locate"})
+        return seen["as_of"]
+
+    def test_a_later_as_of_is_clamped_to_now(self, skills, monkeypatch):
+        asked = time.time() + 86_400
+        assert self._as_of_reaching_the_engine(skills, monkeypatch, asked) < asked
+
+    def test_an_earlier_as_of_is_honoured(self, skills, monkeypatch):
+        """Looking back is a real question and must keep working."""
+        asked = time.time() - 3600
+        got = self._as_of_reaching_the_engine(skills, monkeypatch, asked)
+        assert got == pytest.approx(asked)
+
+    def test_a_non_finite_as_of_falls_back_to_now(self, skills, monkeypatch):
+        got = self._as_of_reaching_the_engine(skills, monkeypatch, float("inf"))
+        assert math.isfinite(got)
+
+
 class TestReadOnly:
     def test_the_query_skill_holds_no_capabilities(self):
         """Nothing here moves the robot or writes belief, so a query can never
@@ -111,7 +149,6 @@ class TestARefusalCarriesWhatWouldFixIt:
         assert "sweep_place" in remedy["note"]
 
     def test_a_provided_capability_becomes_actionable(self, tmp_path):
-
         store = SqliteStore(path=str(tmp_path / "r.db"))
         append_belief(belief_stream(store), record(valid_ts=time.time()))
         module = BeliefQuerySkills(store=store, remedies={"sweep_place": lambda: None})

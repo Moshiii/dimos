@@ -49,7 +49,6 @@ def entity(eid, label, ts, *, position=(1.0, 1.0, 0.0), support=10, place="cell(
     )
 
 
-
 @pytest.fixture
 def store(tmp_path):
     s = SqliteStore(path=str(tmp_path / "views.db"))
@@ -84,6 +83,21 @@ class TestTheAskingTimeIsRequired:
     def test_as_of_is_not_defaulted(self, store):
         with pytest.raises(QueryError, match="as_of"):
             execute(store, {"select": "entities"})
+
+    def test_a_non_finite_as_of_is_refused(self, store):
+        """`inf` does not widen the window, it removes it.
+
+        Every `before` comparison passes, so the answer covers the whole
+        recording while still reporting a time base -- the one failure this
+        layer exists to prevent, wearing the shape of a valid answer.
+        """
+        for value in (float("inf"), float("-inf"), float("nan"), "Infinity"):
+            with pytest.raises(QueryError, match="finite"):
+                execute(store, {"select": "entities", "as_of": value})
+
+    def test_a_non_numeric_as_of_says_so(self, store):
+        with pytest.raises(QueryError, match="as_of must be a number"):
+            execute(store, {"select": "entities", "as_of": "lunchtime"})
 
     def test_select_is_not_defaulted(self, store):
         with pytest.raises(QueryError, match="select"):

@@ -25,6 +25,7 @@ than parse prose. Read-only by construction: the skill declares no capabilities.
 
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +44,6 @@ if TYPE_CHECKING:
 
 
 logger = setup_logger()
-
 
 
 class BeliefQueryConfig(MemoryModuleConfig):
@@ -141,7 +141,16 @@ class BeliefQuerySkills(MemoryModule):
                 ``as_of``: defaults to the latest record.
         """
         payload = dict(query or {})
-        payload.setdefault("as_of", self._now())
+        # Clamped, not defaulted. Asking about an earlier moment is a real
+        # question -- "where was it a minute ago" -- but a model that picks a
+        # later one answers from observations that have not happened, and the
+        # answer reads exactly as well as a correct one.
+        now = self._now()
+        try:
+            asked = float(payload.get("as_of", now))
+        except (TypeError, ValueError):
+            asked = now
+        payload["as_of"] = min(asked, now) if math.isfinite(asked) else now
         try:
             envelope = execute(self.store, payload)
         except QueryError as exc:
