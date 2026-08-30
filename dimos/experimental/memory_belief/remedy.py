@@ -63,21 +63,9 @@ class RemedyResolver:
     def __init__(self, providers: Mapping[str, Callable[..., Any]] | None = None) -> None:
         self._providers: dict[str, Callable[..., Any]] = dict(providers or {})
 
-    def register(self, capability: str, provider: Callable[..., Any]) -> None:
-        self._providers[capability] = provider
-
     @property
     def capabilities(self) -> frozenset[str]:
         return frozenset(self._providers)
-
-    def unmet(self) -> frozenset[str]:
-        """Capabilities some reason may ask for that nothing here provides.
-
-        Worth surfacing at startup: an agent discovering mid-task that nothing
-        can sweep a room has already wasted the task.
-        """
-        wanted = {r.suggested_capability for r in UnknownReason if r.suggested_capability}
-        return frozenset(wanted - set(self._providers))
 
     def plan_for(self, reason: UnknownReason | None) -> Remedy | None:
         """What to do about one reason.
@@ -117,17 +105,3 @@ class RemedyResolver:
             needs_revisit=reason.needs_revisit,
             note=f"{capability} is provided by {getattr(provider, '__name__', provider)}",
         )
-
-    def act(self, reason: UnknownReason | None, **kwargs: Any) -> Any:
-        """Run the remedy for ``reason``. Raises if there is nothing to run.
-
-        Deliberately not silent: an agent that called this expects the world or
-        the belief to change, and returning None on a missing provider would
-        look like a remedy that did not help.
-        """
-        remedy = self.plan_for(reason)
-        if remedy is None:
-            raise ValueError("nothing to remedy: the query was answered")
-        if not remedy.actionable:
-            raise LookupError(remedy.note)
-        return self._providers[remedy.capability](**kwargs)  # type: ignore[index]

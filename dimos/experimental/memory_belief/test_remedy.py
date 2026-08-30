@@ -31,15 +31,6 @@ ANSWERED = None
 
 
 class TestTheLoopCloses:
-    def test_a_failed_query_names_something_runnable(self):
-        ran = []
-        resolver = RemedyResolver({"sweep_place": lambda **kw: ran.append(kw) or "swept"})
-
-        result = resolver.act(UnknownReason.NEVER_COVERED, place="kitchen")
-
-        assert result == "swept"
-        assert ran == [{"place": "kitchen"}]
-
     def test_the_plan_says_which_provider_would_run(self):
         def sweep(**kwargs):
             return None
@@ -52,21 +43,24 @@ class TestTheLoopCloses:
     def test_an_answered_query_has_nothing_to_remedy(self):
         assert RemedyResolver().plan_for(ANSWERED) is None
 
-    def test_acting_on_an_answered_query_is_an_error(self):
-        with pytest.raises(ValueError, match="nothing to remedy"):
-            RemedyResolver().act(ANSWERED)
-
 
 class TestNothingHardcodesASkill:
     def test_the_same_reason_resolves_differently_per_robot(self):
         """A legged robot walks there; an arm turns its wrist."""
-        legged = RemedyResolver({"observe_place": lambda **kw: "walked"})
-        arm = RemedyResolver({"observe_place": lambda **kw: "turned"})
+
+        def walk(**kwargs):
+            return None
+
+        def turn_wrist(**kwargs):
+            return None
 
         incoherent = UnknownReason.INCOHERENT
 
-        assert legged.act(incoherent) == "walked"
-        assert arm.act(incoherent) == "turned"
+        assert RemedyResolver({"observe_place": walk}).plan_for(incoherent).provider == "walk"
+        assert (
+            RemedyResolver({"observe_place": turn_wrist}).plan_for(incoherent).provider
+            == "turn_wrist"
+        )
 
 
 class TestMissingProvidersAreReported:
@@ -75,27 +69,6 @@ class TestMissingProvidersAreReported:
 
         assert not remedy.actionable
         assert "sweep_place" in remedy.note
-
-    def test_acting_without_a_provider_raises_rather_than_no_ops(self):
-        """A silent no-op looks like a remedy that did not help."""
-        with pytest.raises(LookupError, match="sweep_place"):
-            RemedyResolver().act(UnknownReason.NEVER_COVERED)
-
-    def test_unmet_capabilities_can_be_listed_up_front(self):
-        """Finding out mid-task that nothing can sweep has already cost the task."""
-        resolver = RemedyResolver({"observe_place": lambda **kw: None})
-
-        assert "sweep_place" in resolver.unmet()
-        assert "observe_place" not in resolver.unmet()
-
-    def test_a_fully_provisioned_robot_has_nothing_unmet(self):
-        every = {
-            r.suggested_capability: (lambda **kw: None)
-            for r in UnknownReason
-            if r.suggested_capability
-        }
-
-        assert RemedyResolver(every).unmet() == frozenset()
 
 
 class TestTerminalReasons:
@@ -137,12 +110,6 @@ class TestRevisitIsDistinguished:
 
 
 class TestRegistration:
-    def test_providers_can_be_added_after_construction(self):
-        resolver = RemedyResolver()
-        resolver.register("sweep_place", lambda **kw: "late")
-
-        assert resolver.act(UnknownReason.NEVER_COVERED) == "late"
-
     def test_registered_capabilities_are_listable(self):
         resolver = RemedyResolver({"sweep_place": lambda **kw: None})
 

@@ -30,13 +30,11 @@ import tempfile
 import pytest
 
 from dimos.experimental.memory_belief.types import (
-    EVIDENTIAL,
     SCHEMA_VERSION,
     BeliefObservation,
     Confidence,
     EvidenceRef,
     belief_tags,
-    replace,
 )
 from dimos.experimental.memory_belief.write import append_belief, belief_stream
 from dimos.experimental.world_belief.absence import (
@@ -94,14 +92,6 @@ class TestEvidenceIsMandatory:
 class TestVisibilitySemantics:
     """absent is a claim; occluded and out_of_view are admissions."""
 
-    @pytest.mark.parametrize("verdict", ["present", "absent"])
-    def test_evidential_verdicts_support_a_claim(self, verdict):
-        assert rec(visibility=verdict).is_evidential
-
-    @pytest.mark.parametrize("verdict", ["occluded", "out_of_view"])
-    def test_ignorance_verdicts_do_not(self, verdict):
-        assert not rec(visibility=verdict).is_evidential
-
     def test_the_four_verdicts_stay_in_step_with_the_geometry(self):
         """These strings must equal the ones classify_visibility() emits.
 
@@ -112,7 +102,6 @@ class TestVisibilitySemantics:
 
         for verdict in (PRESENT, ABSENT, OCCLUDED, OUT_OF_VIEW):
             rec(visibility=verdict)  # must not raise
-        assert EVIDENTIAL == {PRESENT, ABSENT}
 
 
 class TestVantagePointIsNotLocation:
@@ -281,12 +270,3 @@ class TestPersistence:
 
         with pytest.raises(Exception, match="from_the_future"):
             codec.decode(payload)
-
-
-class TestReplace:
-    def test_replace_revalidates(self):
-        with pytest.raises(ValueError, match="evidence"):
-            replace(rec(), evidence=())
-
-    def test_replace_keeps_untouched_fields(self):
-        assert replace(rec(), visibility="absent").target_ref == "chair-17"

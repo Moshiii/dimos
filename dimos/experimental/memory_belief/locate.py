@@ -43,6 +43,11 @@ from numpy.typing import NDArray
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+#: Where in a box's depth distribution the foreground surface sits. A box frames
+#: an object in front of its background, so the near end is the object; the
+#: median lands in the empty air between the two when they are of similar size.
+SEED_PERCENTILE = 25.0
+
 
 @dataclass(frozen=True, slots=True)
 class Placement:
@@ -125,16 +130,15 @@ def locate_detections(
     camera: PinholeFisheye,
     min_points: int = 8,
     depth_band_m: float = 0.6,
-    seed_percentile: float = 25.0,
-    use_mask: bool = True,
 ) -> list[Placement | None]:
     """Place each detection in the world, or return ``None`` for that detection.
 
     ``points_world`` is ``(N, 3)`` in the world frame and ``world_from_camera``
     maps back via its ``inverse()``. Below ``min_points`` inliers a detection
     gets no position; returns further than ``depth_band_m`` from the box's
-    median depth are dropped as background. ``use_mask`` prefers a segmentation
-    mask when present -- a box around a chair contains a lot of floor.
+    median depth are dropped as background. A segmentation mask is preferred
+    when the detection carries one -- a box around a chair contains a lot of
+    floor.
     """
     out: list[Placement | None] = [None] * len(detections)
     pts = np.asarray(points_world, np.float64).reshape(-1, 3)
@@ -164,7 +168,7 @@ def locate_detections(
             & (vis_uv[:, 1] >= y1)
             & (vis_uv[:, 1] <= y2)
         )
-        mask = getattr(det, "mask", None) if use_mask else None
+        mask = getattr(det, "mask", None)
         if mask is not None and np.ndim(mask) == 2 and np.any(inside):
             m = np.asarray(mask)
             rows = np.clip(vis_uv[:, 1].astype(int), 0, m.shape[0] - 1)
@@ -189,7 +193,7 @@ def locate_detections(
         # object in front of its background, so the foreground surface is the
         # near end of the depth distribution -- and when the two are of similar
         # size, the median lands in the empty air between them and excludes both.
-        seed = float(np.percentile(depths, seed_percentile))
+        seed = float(np.percentile(depths, SEED_PERCENTILE))
         near = inside.copy()
         near[inside] = np.abs(depths - seed) <= depth_band_m
         if int(near.sum()) < min_points:

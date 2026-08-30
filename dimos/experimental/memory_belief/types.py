@@ -29,38 +29,16 @@ cannot be one blended score.
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic import ConfigDict
-
-#: What a value rests on, ordered by how much it can be trusted. Each tier can
-#: only be as good as the one below it: an entity is sightings that were
-#: associated, and an event is entities whose state changed, so a broken
-#: association makes every count and every event wrong while leaving geometry
-#: untouched.
-#:
-#: Measured on the reference recording, and the reason this is a type rather
-#: than a note: ``geometry`` and ``sighting`` hold up, ``entity`` does not
-#: (median lifetime 1.2 s, 70% of things that cannot move appearing to move more
-#: than half a metre), and ``event`` is therefore unavailable rather than merely
-#: noisy. A reader given ``occupancy`` with no tier has no way to know that.
-EvidenceTier = Literal["geometry", "sighting", "entity", "event"]
-
-#: Ascending order, so a caller can say "nothing above this" in one comparison.
-TIER_ORDER: tuple[EvidenceTier, ...] = ("geometry", "sighting", "entity", "event")
-
 
 SCHEMA_VERSION = "1"
 STREAM_NAME = "belief_observation"
 
 Visibility = Literal["present", "absent", "occluded", "out_of_view"]
 IdentityStatus = Literal["none", "tentative", "confirmed"]
-
-#: Verdicts that positively support a claim about the target's whereabouts.
-#: Everything else is an admission of ignorance, not a negative answer.
-EVIDENTIAL: frozenset[str] = frozenset({"present", "absent"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,11 +145,6 @@ class BeliefObservation:
                 "without a declared frame cannot be compared with anything."
             )
 
-    @property
-    def is_evidential(self) -> bool:
-        """Whether this record supports any claim, rather than admitting ignorance."""
-        return self.visibility in EVIDENTIAL
-
 
 def belief_tags(record: BeliefObservation) -> dict[str, Any]:
     """The indexed projection of a record.
@@ -197,8 +170,3 @@ def belief_tags(record: BeliefObservation) -> dict[str, Any]:
     if record.identity_status is not None:
         tags["identity_status"] = record.identity_status
     return tags
-
-
-def replace(record: BeliefObservation, **changes: Any) -> BeliefObservation:
-    """Derive a modified copy, re-running validation."""
-    return dataclasses.replace(record, **changes)

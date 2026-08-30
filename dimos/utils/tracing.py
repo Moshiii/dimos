@@ -116,15 +116,12 @@ def agent_trace(name: str, **metadata: Any) -> Iterator[Any]:
         try:
             yield root
         finally:
-            # Never let tracing teardown mask a business exception, and never
-            # suppress that exception by returning the manager's boolean.
+            # Never let tracing teardown mask a business exception -- an
+            # exception from the caller's body has to reach the eval runner, or
+            # an infrastructure failure scores as a valid refusal -- and never
+            # suppress it by returning the manager's boolean.
             with contextlib.suppress(Exception):
                 manager.__exit__(*sys.exc_info())
-    except Exception:
-        # This is an exception from the caller's body, not from tracing. It must
-        # reach the eval runner so infrastructure failures cannot score as valid
-        # refusals.
-        raise
     finally:
         _ACTIVE.on = previous
         with contextlib.suppress(Exception):
@@ -142,7 +139,7 @@ def span(name: str, *, as_type: str = "span", **attributes: Any) -> Iterator[Any
     generic span, which is what it is.
     """
     if not enabled():
-        yield _Null()
+        yield _Recorder()
         return
     client = _client()
     manager: Any = None
@@ -151,7 +148,7 @@ def span(name: str, *, as_type: str = "span", **attributes: Any) -> Iterator[Any
         handle = manager.__enter__()
     except Exception as exc:
         logger.debug("span %s failed (%s)", name, exc)
-        yield _Null()
+        yield _Recorder()
         return
 
     recorder = _Recorder(handle)
@@ -166,20 +163,18 @@ def span(name: str, *, as_type: str = "span", **attributes: Any) -> Iterator[Any
             manager.__exit__(*sys.exc_info())
 
 
-class _Null:
-    """Stands in when nothing is being recorded, so callers need no branches."""
-
-    def set(self, **attributes: Any) -> None:
-        return
-
-
 class _Recorder:
-    def __init__(self, handle: Any) -> None:
+    """Attaches attributes to a span, or to nothing when none is open.
+
+    A null handle rather than a second class, so callers need no branches.
+    """
+
+    def __init__(self, handle: Any = None) -> None:
         self._handle = handle
 
     def set(self, **attributes: Any) -> None:
         cleaned = _clean(attributes)
-        if not cleaned:
+        if self._handle is None or not cleaned:
             return
         with contextlib.suppress(Exception):
             self._handle.update(metadata=cleaned)

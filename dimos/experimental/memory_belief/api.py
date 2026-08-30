@@ -184,15 +184,6 @@ def _quality(rows: Sequence[Any]) -> dict[str, Any]:
     }
 
 
-class _NoReferencePointError(Exception):
-    """``distance`` asked for, with nothing to measure against.
-
-    An exception rather than a return value because ``_project`` returns the
-    result body, and this has to change the envelope's status -- which only
-    ``execute`` may do.
-    """
-
-
 def _limit(query: dict[str, Any]) -> int:
     """The row bound, validated, before any row is read.
 
@@ -439,8 +430,6 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
     # The asking time bounds every query. Nothing after it is knowable yet, which
     # is true of a live stream and must stay true of a replayed one.
     stream = stream.before(as_of + 1e-9)
-    if query.get("order_by"):
-        stream = stream.order_by(query["order_by"], desc=bool(query.get("desc")))
     # Bounded here rather than in the projection: `to_list` below reads every row
     # the stream still holds, and rows discarded after that were paid for.
     stream = stream.limit(limit)
@@ -457,21 +446,7 @@ def execute(store: Any, query: dict[str, Any]) -> dict[str, Any]:
             "query": query,
         }
 
-    try:
-        result = _project(projection, rows)
-    except _NoReferencePointError:
-        return {
-            "status": "unknown",
-            "reason": "NO_CAPABILITY",
-            "result": None,
-            "quality": {"rows": len(rows)},
-            "time_base": {"as_of": as_of, "unit": "seconds"},
-            "diagnostic": {
-                "note": "project=distance needs against_positions: a list of [x, y, z] to measure to",
-                "remedy": "supply against_positions, or use project=locate to get positions first",
-            },
-            "query": query,
-        }
+    result = _project(projection, rows)
     quality = _quality(rows)
     status, reason = "ok", None
     if projection == "locate" and not result:

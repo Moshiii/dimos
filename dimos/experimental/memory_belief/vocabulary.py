@@ -28,14 +28,6 @@ list drifts.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-#: Where ultralytics keeps its dataset definitions. LVIS ships with it, so no
-#: download is needed.
-_LVIS_YAML = "ultralytics/cfg/datasets/lvis.yaml"
 
 
 def _clean(name: str) -> str:
@@ -100,22 +92,3 @@ def resolve(spec: str | None) -> tuple[str, ...] | None:
     if spec.lower() == "lvis":
         return lvis_names()
     return from_file(spec)
-
-
-def coverage(labels: Iterable[str], vocabulary: Iterable[str]) -> dict[str, object]:
-    """How much of what was seen the vocabulary could name.
-
-    Reported after a run so the cost of constraining is visible rather than
-    assumed: a vocabulary that names 40% of what a previous open run saw has
-    either removed noise or gone blind, and only the label list says which.
-    """
-    seen = list(labels)
-    known = set(vocabulary)
-    inside = [label for label in seen if label in known]
-    return {
-        "labels_seen": len(set(seen)),
-        "labels_in_vocabulary": len(set(inside)),
-        "detections": len(seen),
-        "detections_in_vocabulary": len(inside),
-        "ratio": (len(inside) / len(seen)) if seen else 0.0,
-    }

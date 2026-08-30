@@ -27,6 +27,7 @@ and what the store believes.
 
 from __future__ import annotations
 
+from itertools import groupby
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ConfigDict
@@ -97,46 +98,30 @@ def append_annotation(stream: Any, annotation: FrameAnnotation) -> Any:
 def fold_annotations(observations: Iterable[Any]) -> Iterator[FrameAnnotation]:
     """Group sightings back into the frames they were drawn on.
 
-    Emitted per frame, so memory is bounded by one frame's detections. Relies on
-    sightings arriving in timestamp order; out-of-order input degrades into
-    duplicate frame records rather than lost boxes.
+    Grouped on consecutive runs, so memory is bounded by one frame's detections
+    and the input has to arrive in timestamp order; out-of-order input degrades
+    into duplicate frame records rather than lost boxes.
 
     Sightings without a ``bbox`` are skipped -- inventing a rectangle would put a
     fabricated overlay on a real photograph.
     """
-    key: tuple[str, int] | None = None
-    ts = 0.0
-    boxes: list[tuple[float, float, float, float]] = []
-    labels: list[str] = []
-    confidences: list[float] = []
-    placed: list[bool] = []
-
-    def flush() -> Iterator[FrameAnnotation]:
-        if key is not None and boxes:
-            yield FrameAnnotation(
-                schema_version=SCHEMA_VERSION,
-                frame_stream=key[0],
-                frame_observation_id=key[1],
-                ts=ts,
-                boxes=tuple(boxes),
-                labels=tuple(labels),
-                confidences=tuple(confidences),
-                placed=tuple(placed),
-            )
-
-    for item in observations:
-        record = getattr(item, "data", item)
-        if not record.bbox or not record.evidence:
-            continue
-        source = record.evidence[0]
-        current = (source.stream, source.observation_id)
-        if current != key:
-            yield from flush()
-            key, ts = current, source.ts
-            boxes, labels, confidences, placed = [], [], [], []
-        boxes.append(tuple(record.bbox))
-        labels.append(record.label or "?")
-        confidences.append(float(record.confidence.detection or 0.0))
-        placed.append(record.target_pose is not None)
-
-    yield from flush()
+    drawn = (
+        record
+        for item in observations
+        if (record := getattr(item, "data", item)).bbox and record.evidence
+    )
+    for _, frame in groupby(
+        drawn, key=lambda r: (r.evidence[0].stream, r.evidence[0].observation_id)
+    ):
+        records = list(frame)
+        source = records[0].evidence[0]
+        yield FrameAnnotation(
+            schema_version=SCHEMA_VERSION,
+            frame_stream=source.stream,
+            frame_observation_id=source.observation_id,
+            ts=source.ts,
+            boxes=tuple(tuple(r.bbox) for r in records),
+            labels=tuple(r.label or "?" for r in records),
+            confidences=tuple(float(r.confidence.detection or 0.0) for r in records),
+            placed=tuple(r.target_pose is not None for r in records),
+        )

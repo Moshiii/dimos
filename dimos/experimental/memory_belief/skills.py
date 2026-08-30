@@ -35,7 +35,6 @@ from dimos.core.core import rpc
 from dimos.experimental.memory_belief.answer import UnknownReason
 from dimos.experimental.memory_belief.api import QueryError, execute
 from dimos.experimental.memory_belief.remedy import RemedyResolver
-from dimos.experimental.memory_belief.write import belief_stream
 from dimos.memory.module import MemoryModule, MemoryModuleConfig
 from dimos.utils.logging_config import setup_logger
 
@@ -89,19 +88,6 @@ class BeliefQuerySkills(MemoryModule):
     @rpc
     def start(self) -> None:
         super().start()
-
-    def _records(self) -> list[Any]:
-        """Every belief record, or none when nothing has written any yet.
-
-        An empty list is a legitimate state, not a failure: a robot that has not
-        observed anything answers NEVER_COVERED, which is true. Asking whether
-        the stream exists is the way to distinguish that from a broken store --
-        catching the access error instead would swallow real store faults under
-        the same "no belief here" reading.
-        """
-        if self.config.belief_stream_name not in self.store.streams:
-            return []
-        return belief_stream(self.store, name=self.config.belief_stream_name).to_list()
 
     def _now(self) -> float:
         """The asking time, in the same base as the records.

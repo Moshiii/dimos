@@ -177,11 +177,6 @@ class TestTimeAxes:
 
         assert record.valid_ts == 123.0
 
-    def test_observed_time_can_record_a_later_backfill(self):
-        (record,) = produce([frame(ts=123.0)], observed_ts=lambda ts: ts + 9000.0)
-
-        assert record.observed_ts == pytest.approx(9123.0)
-
     def test_observed_time_defaults_to_valid_time(self):
         (record,) = produce([frame(ts=123.0)])
 
@@ -209,8 +204,3 @@ class TestPlaceResolution:
         (record,) = produce([frame()], place_size_m=1.0)
 
         assert record.capture_place_ref == "cell(2,7)"
-
-    def test_a_caller_may_supply_its_own_resolver(self):
-        (record,) = produce([frame()], place_of=lambda pose: "reception")
-
-        assert record.capture_place_ref == "reception"

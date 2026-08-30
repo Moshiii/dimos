@@ -27,7 +27,7 @@ OUT_OF_VOCABULARY instead of a confident and wrong "no".
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -40,12 +40,6 @@ from dimos.experimental.memory_belief.types import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence
-
-
-class Detector(Protocol):
-    """The slice of a detector this module needs. Any 2D detector fits."""
-
-    def process_image(self, image: Any) -> Any: ...
 
 
 def bright_enough(observation: Any, *, min_mean: float = 40.0) -> bool:
@@ -100,20 +94,19 @@ def _bbox_of(detection: Any) -> tuple[float, float, float, float] | None:
 
 def detect_to_belief(
     observations: Iterable[Any],
-    detector: Detector,
+    detector: Any,
     *,
     stream_name: str,
     vocabulary: tuple[str, ...] | None,
     source: str,
     min_confidence: float = 0.0,
     place_size_m: float = 5.0,
-    place_of: Callable[[Any], str | None] | None = None,
     frame_filter: Callable[[Any], bool] | None = None,
-    observed_ts: Callable[[float], float] | None = None,
     locate: Callable[[Any, Any], Sequence[Any]] | None = None,
-    world_frame: str = "world",
 ) -> Iterator[BeliefObservation]:
     """Run ``detector`` over observations, yielding one record per detection.
+
+    ``detector`` needs only ``process_image``, so any 2D detector fits.
 
     ``vocabulary`` is recorded verbatim on every record -- it is what lets a
     later "is there a mug here" answer OUT_OF_VOCABULARY rather than "no" --
@@ -121,12 +114,8 @@ def detect_to_belief(
 
     Detections below ``min_confidence`` are dropped rather than recorded with a
     low score, since a record that exists at all is evidence downstream.
-    ``observed_ts`` maps a frame's valid time to when this run processed it;
-    supply it when backfilling so the two time axes stay honest.
     """
-    resolve_place = place_of or (lambda pose: _cell_place(pose, size_m=place_size_m))
     keep_frame = frame_filter or (lambda _obs: True)
-    processed_at = observed_ts or (lambda ts: ts)
 
     for observation in observations:
         if not keep_frame(observation):
@@ -135,7 +124,7 @@ def detect_to_belief(
         evidence = (
             EvidenceRef(stream=stream_name, observation_id=observation.id, ts=observation.ts),
         )
-        capture_place = resolve_place(getattr(observation, "pose", None))
+        capture_place = _cell_place(getattr(observation, "pose", None), size_m=place_size_m)
         detections = tuple(getattr(result, "detections", ()))
         # A locator that cannot place a detection returns None for it, and that
         # None is carried through rather than smoothed over: a position inferred
@@ -159,7 +148,7 @@ def detect_to_belief(
                 label=detection.name,
                 visibility="present",
                 valid_ts=observation.ts,
-                observed_ts=processed_at(observation.ts),
+                observed_ts=observation.ts,
                 source=source,
                 capture_place_ref=capture_place,
                 # `place_ref` comes from where the *entity* is, never from where
@@ -172,7 +161,7 @@ def detect_to_belief(
                     _cell_place_xy(placed.position, size_m=place_size_m) if placed else None
                 ),
                 target_pose=placed.position if placed else None,
-                frame_id=world_frame if placed else None,
+                frame_id="world" if placed else None,
                 identity_status="tentative" if track_id is not None else "none",
                 identity_basis=(f"tracker:{track_id}" if track_id is not None else None),
                 vocabulary=vocabulary,

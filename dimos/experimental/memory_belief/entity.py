@@ -25,14 +25,16 @@ would make ``near(x, y, r)`` quietly answer a different question.
 
 from __future__ import annotations
 
+from collections import Counter
 import math
+import statistics
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 from dimos.experimental.memory_belief.identity import resolve_identity
-from dimos.experimental.memory_belief.types import SCHEMA_VERSION, EvidenceTier
+from dimos.experimental.memory_belief.types import SCHEMA_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -115,31 +117,6 @@ class Entity:
         ]
 
 
-#: Which tier each field rests on. An ``Entity`` is by construction a tier-2
-#: object -- it exists only because sightings were associated -- so its identity
-#: fields inherit whatever the association is worth. The geometry it carries is
-#: better than that: ``position`` is the centroid of sightings that were each
-#: placed independently, and stays meaningful even where the grouping is wrong,
-#: which is why ``dispersion_m`` and ``coherence`` sit at the sighting tier and
-#: are the honest way to notice that the grouping *is* wrong.
-FIELD_TIER: dict[str, EvidenceTier] = {
-    "first_seen_ts": "sighting",
-    "last_seen_ts": "sighting",
-    "label": "sighting",
-    "label_agreement": "sighting",
-    "position": "sighting",
-    "extent": "sighting",
-    "dispersion_m": "sighting",
-    "coherence": "sighting",
-    "place_ref": "sighting",
-    "entity_id": "entity",
-    "support": "entity",
-    "displacement_m": "entity",
-    "motion": "entity",
-    "identity_basis": "entity",
-}
-
-
 def append_entity(stream: Any, entity: Entity) -> Any:
     """Append one snapshot, indexed by valid time and the entity's own position.
 
@@ -164,16 +141,15 @@ def append_entity(stream: Any, entity: Entity) -> Any:
 class _Accumulator:
     """Running state for one entity. Bounded by entity count, not by sightings."""
 
-    __slots__ = ("basis", "extents", "first", "labels", "last", "n", "places", "positions")
+    __slots__ = ("basis", "first", "labels", "last", "n", "places", "positions")
 
     def __init__(self) -> None:
         self.n = 0
         self.first = math.inf
         self.last = -math.inf
-        self.labels: dict[str, int] = {}
-        self.places: dict[str, int] = {}
+        self.labels: Counter[str] = Counter()
+        self.places: Counter[str] = Counter()
         self.positions: list[tuple[float, float, float]] = []
-        self.extents: list[tuple[float, float, float]] = []
         self.basis: str | None = None
 
     def add(self, record: Any) -> None:
@@ -181,17 +157,17 @@ class _Accumulator:
         self.first = min(self.first, record.valid_ts)
         self.last = max(self.last, record.valid_ts)
         if record.label:
-            self.labels[record.label] = self.labels.get(record.label, 0) + 1
+            self.labels[record.label] += 1
         if record.place_ref:
-            self.places[record.place_ref] = self.places.get(record.place_ref, 0) + 1
+            self.places[record.place_ref] += 1
         if record.target_pose is not None:
             self.positions.append(tuple(record.target_pose))
         self.basis = self.basis or record.identity_basis
 
 
 def _summarise(entity_id: str, acc: _Accumulator, *, static_threshold_m: float) -> Entity:
-    label, label_n = max(acc.labels.items(), key=lambda kv: kv[1]) if acc.labels else (None, 0)
-    place = max(acc.places.items(), key=lambda kv: kv[1])[0] if acc.places else None
+    label, label_n = acc.labels.most_common(1)[0] if acc.labels else (None, 0)
+    place = acc.places.most_common(1)[0][0] if acc.places else None
 
     position = extent = None
     dispersion = displacement = 0.0
@@ -201,8 +177,7 @@ def _summarise(entity_id: str, acc: _Accumulator, *, static_threshold_m: float) 
         ys = [p[1] for p in acc.positions]
         zs = [p[2] for p in acc.positions]
         centre = (sum(xs) / len(xs), sum(ys) / len(ys), sum(zs) / len(zs))
-        spread = sorted(math.dist(centre, p) for p in acc.positions)
-        dispersion = spread[len(spread) // 2]
+        dispersion = statistics.median(math.dist(centre, p) for p in acc.positions)
         displacement = max((math.dist(acc.positions[0], p) for p in acc.positions), default=0.0)
         position = centre
         extent = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
@@ -238,14 +213,11 @@ def fold_entities(
     identities: Iterable[Any],
     *,
     static_threshold_m: float = 0.5,
-    emit_every: int | None = None,
 ) -> Iterator[Entity]:
     """Fold sightings and identity claims into entity snapshots.
 
     Consumes ``observations`` as an iterator and never materialises it, so this
-    runs against a live stream. ``emit_every`` emits an interim snapshot every N
-    sightings so a long-running stream produces history; ``None`` emits once per
-    entity at the end, which is what a finished recording wants.
+    runs against a live stream. One snapshot per entity, emitted at the end.
 
     A sighting no identity claim covers is skipped rather than made its own
     entity -- "seen once" and "followed and lost" are different, and a singleton
@@ -261,9 +233,6 @@ def fold_entities(
             continue
         acc = accs.setdefault(entity_id, _Accumulator())
         acc.add(record)
-        if emit_every and acc.n % emit_every == 0:
-            yield _summarise(entity_id, acc, static_threshold_m=static_threshold_m)
 
     for entity_id, acc in accs.items():
-        if not emit_every or acc.n % emit_every:
-            yield _summarise(entity_id, acc, static_threshold_m=static_threshold_m)
+        yield _summarise(entity_id, acc, static_threshold_m=static_threshold_m)
