@@ -235,7 +235,7 @@ SUITE: Suite = [
         "belief_q068_teddy_room",
         "Which room is the teddy bear in? A: Kitchen; B: Bedroom; C: Bathroom; "
         "D: Living room. Return only A, B, C, or D.",
-        _parsed(_LETTER, lambda value: exact("D", value)),
+        _parsed(_LETTER, lambda value: exact("B", value)),
         tags=frozenset({"object-location", "single-choice"}),
     ),
     _case(
@@ -311,7 +311,7 @@ SUITE: Suite = [
         "belief_q234_teddy_room_after_search",
         "Search until you locate the teddy bear. Which room is it in? "
         "A: Kitchen; B: Bedroom; C: Bathroom; D: Living room. Return only A, B, C, or D.",
-        _parsed(_LETTER, lambda value: exact("D", value)),
+        _parsed(_LETTER, lambda value: exact("B", value)),
         tags=frozenset({"object-location", "single-choice", "search"}),
     ),
     _case(
