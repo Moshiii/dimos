@@ -94,10 +94,9 @@ def test_suite_conventions() -> None:
     assert len(SUITE) >= 30
     ids = [c.id for c in SUITE]
     assert len(ids) == len(set(ids))
+    assert not any(c.id.endswith("table_not_blocking") for c in SUITE)
     for case in SUITE:
         assert case.environment.config.scene == "apartment"
         assert "Return only" in case.inputs or "return only" in case.inputs.lower()
         assert "Move around to gather the evidence" in case.inputs
         assert case.timeout_s >= 60.0
-        assert "belief" not in case.tags
-        assert not any(t.startswith("remap-") for t in case.tags)

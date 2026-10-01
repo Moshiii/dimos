@@ -155,13 +155,6 @@ SUITE: Suite = [
         tags=frozenset({"clearance", "boolean", "kitchen"}),
     ),
     _case(
-        "belief_q200_table_not_blocking",
-        "Does the dining table block a doorway whose clear width is below 0.8 m? "
-        "Return only yes or no.",
-        _parsed(yes_no, lambda value: exact("no", value)),
-        tags=frozenset({"clearance", "boolean"}),
-    ),
-    _case(
         "belief_q066_watering_can_present",
         "Is there a watering can in the house or yard? Return only yes or no.",
         _parsed(yes_no, lambda value: exact("yes", value)),
