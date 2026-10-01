@@ -86,7 +86,6 @@ def _case(
 
 
 SUITE: Suite = [
-    # --- existence / boolean (closed) ---
     _case(
         "belief_q051_microwave_in_kitchen",
         "Is there a microwave in the kitchen? Return only yes or no.",
@@ -166,7 +165,6 @@ SUITE: Suite = [
         _parsed(yes_no, lambda value: exact("yes", value)),
         tags=frozenset({"existence", "boolean", "bathroom"}),
     ),
-    # --- single choice / location ---
     _case(
         "belief_q049_laptop_room",
         "Which room contains the laptop? A: Kitchen; B: Bathroom; C: Living room; "
@@ -238,7 +236,6 @@ SUITE: Suite = [
         _parsed(_SAME_DIFF, lambda value: exact("different", value)),
         tags=frozenset({"object-count", "comparison"}),
     ),
-    # --- counts / numeric ---
     _case(
         "belief_q071_wine_glass_count",
         "How many wine glasses are in the house? Return only the count.",
@@ -279,7 +276,6 @@ SUITE: Suite = [
         _parsed(yes_no, lambda value: exact("no", value)),
         tags=frozenset({"clearance", "boolean"}),
     ),
-    # --- explore / search style (still answer-only grades) ---
     _case(
         "belief_q058_watering_can_yard",
         "Search the living room and outdoor yard area for a watering can. "
