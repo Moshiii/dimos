@@ -12,25 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Belief closed-world questions remapped onto the DimSim apartment.
-
-Office-recording questions rewritten for this static furnished scene.
-People / occupancy-timeline items are omitted.
-
-Room labels match ``dimsim_apartment_qa`` (Kitchen, Bedroom, Bathroom, Living room).
-Object facts come from ``misc/DimSim/scenes/apartment/objects/manifest.json`` and the
-apartment QA reference answers.
-
-Human-verified against the live apartment scene / XZ wall map (2026-09-30):
-
-- Rooms: laptop Bedroom; TV Living; teddy Bedroom; wine glass Living;
-  dining table Living; smartphone Bedroom; laundry hamper in bathroom.
-- States: at least one floor lamp ON; television OFF; no fridge/cabinet doors open.
-- Geometry: doorway max robot radius 0.5 m (no doorway clear width < 0.8 m);
-  kitchen doorway→sink passable at radius 0.25 m; dining table does not block a
-  sub-0.8 m doorway; farthest from spawn among fridge/bathtub/table/TV is fridge;
-  closest to sofa among fridge/table/desk is dining table.
-
+"""Answer-only QA cases for the DimSim apartment scene.
 
     DIMOS_TRANSPORT=lcm VIEWER=none DIMSIM_HEADLESS=true \\
         dimos evals run dimos.evals.suites.belief_apartment_qa \\
